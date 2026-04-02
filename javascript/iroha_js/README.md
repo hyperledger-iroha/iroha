@@ -40,11 +40,13 @@ build is unavailable), run tests with `npm run test:js`, which sets
 binding when present.
 
 In JS-only mode `noritoEncodeInstruction`/`noritoDecodeInstruction` still emit
-canonical binary Norito for the currently supported fallback instruction slice:
-`Mint.Asset`, `Mint.TriggerRepetitions`, `Burn.Asset`,
-`Burn.TriggerRepetitions`, `Transfer.Asset`, and `ExecuteTrigger`. Other
-instruction families still require the native module for canonical binary
-encoding/decoding.
+canonical binary Norito for the current JS builder surface, including the
+mint/burn families, `Register.Domain`, `Register.Account`, the supported
+`Transfer.*` variants, `ExecuteTrigger`, canonical `Custom` payloads plus the
+multisig alias inputs, and the current Kaigi / governance / social /
+smart-contract / zk / RWA direct-instruction helpers. When the native binding
+is present but rejects one of those supported shapes, the SDK now falls back to
+the pure-JS encoder automatically so callers still get canonical Norito bytes.
 
 > **ESM-only:** The package ships as pure ESM. Use dynamic `import()` from
 > CommonJS (`const { ToriiClient } = await import("@iroha/iroha-js/torii");`)
@@ -132,6 +134,21 @@ console.log(address.toI105());
 const formats = address.displayFormats(753);
 console.log(formats.i105);
 console.log(formats.i105Warning);
+```
+
+Optional controller families remain opt-in in the JS codec. Enable them before
+encoding or decoding account ids that use `ml-dsa`, `gost*`, `sm2`, or
+feature-gated `bls_*` public keys:
+
+```js
+import { configureCurveSupport } from "@iroha/iroha-js";
+
+configureCurveSupport({
+  allowMlDsa: true,
+  allowGost: true,
+  allowSm2: true,
+  allowBls: true,
+});
 ```
 
 > ℹ️ When showing addresses in wallets, explorers, or SDK samples, follow the

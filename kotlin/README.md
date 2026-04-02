@@ -143,7 +143,7 @@ Kotlin is the default language for Android development. Migrating from Java make
 
 ### Java 8 bytecode safety
 
-Android libraries must target Java 8 bytecode. Java 11+ API calls (`String.isBlank()`, `List.of()`, `Files.readString()`) compile fine but crash at runtime on older Android devices. Kotlin's standard library provides equivalent functions that are safe across all API levels, eliminating this class of runtime failures.
+Android libraries must target Java 8 bytecode. Java 11+ API calls (`String.isBlank()`, `List.of()`, `Files.readString()`) crash at runtime on older Android devices. All modules enforce JDK 8 API compatibility at compile time via `-Xjdk-release=8` — using JDK 9+ APIs is a compilation error, not a silent runtime failure. Kotlin's standard library provides equivalent functions that are safe across all API levels.
 
 ### Reflection-free
 

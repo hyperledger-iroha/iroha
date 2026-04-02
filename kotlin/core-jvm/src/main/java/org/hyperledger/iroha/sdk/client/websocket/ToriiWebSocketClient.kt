@@ -3,7 +3,6 @@ package org.hyperledger.iroha.sdk.client.websocket
 import java.net.URI
 import java.net.URLEncoder
 import java.nio.ByteBuffer
-import java.nio.charset.StandardCharsets
 import java.util.LinkedHashMap
 import java.util.concurrent.CompletableFuture
 import org.hyperledger.iroha.sdk.client.ClientObserver
@@ -166,7 +165,7 @@ class ToriiWebSocketClient private constructor(builder: Builder) {
 
         private fun encodeQuery(params: Map<String, String>): String =
             params.entries.joinToString("&") { (k, v) ->
-                "${URLEncoder.encode(k, StandardCharsets.UTF_8)}=${URLEncoder.encode(v, StandardCharsets.UTF_8)}"
+                "${URLEncoder.encode(k, "UTF-8")}=${URLEncoder.encode(v, "UTF-8")}"
             }
 
         private fun toWebSocketUri(httpUri: URI): URI {

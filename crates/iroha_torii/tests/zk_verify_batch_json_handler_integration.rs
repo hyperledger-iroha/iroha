@@ -35,6 +35,9 @@ async fn zk_verify_batch_endpoint_accepts_json_b64_vec() {
         public: nh::poly_open_public::<PallasBackend>(params.n(), z, t, p_g),
         proof: nh::proof_to_wire(&proof),
         transcript_label: "torii-batch-json".to_string(),
+        vk_commitment: None,
+        public_inputs_schema_hash: None,
+        domain_tag: None,
     };
     let mut bad_pub = env_ok.public.clone();
     bad_pub.t[0] = bad_pub.t[0].wrapping_add(1);

@@ -2,6 +2,7 @@ package org.hyperledger.iroha.sdk.offline
 
 import java.io.IOException
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.time.Instant
 import java.util.Base64
 import java.util.Locale
@@ -425,9 +426,7 @@ class OfflineWallet : Any {
     fun buildSafetyDetectPlatformTokenSnapshot(certificateIdHex: String): Optional<PlatformTokenSnapshot> {
         if (!safetyDetectEnabled) return Optional.empty()
         val normalized = normalizeHex(certificateIdHex)
-        val verdict = verdictJournal.find(normalized)
-        if (verdict.isEmpty) return Optional.empty()
-        val metadata = verdict.get()
+        val metadata = verdictJournal.find(normalized).orElse(null) ?: return Optional.empty()
         if ("hms_safety_detect" != metadata.integrityPolicy) return Optional.empty()
         val hmsMetadata = metadata.hmsSafetyDetect ?: return Optional.empty()
         val token = metadata.hmsSafetyDetectToken ?: return Optional.empty()
@@ -443,9 +442,7 @@ class OfflineWallet : Any {
     fun buildPlayIntegrityPlatformTokenSnapshot(certificateIdHex: String): Optional<PlatformTokenSnapshot> {
         if (!playIntegrityEnabled) return Optional.empty()
         val normalized = normalizeHex(certificateIdHex)
-        val verdict = verdictJournal.find(normalized)
-        if (verdict.isEmpty) return Optional.empty()
-        val metadata = verdict.get()
+        val metadata = verdictJournal.find(normalized).orElse(null) ?: return Optional.empty()
         if ("play_integrity" != metadata.integrityPolicy) return Optional.empty()
         val playIntegrity = metadata.playIntegrity ?: return Optional.empty()
         val token = metadata.playIntegrityToken ?: return Optional.empty()
@@ -522,11 +519,11 @@ class OfflineWallet : Any {
     companion object {
         private fun deriveVerdictJournalPath(auditLogPath: Path?): Path =
             auditLogPath?.resolveSibling("offline_verdict_journal.json")
-                ?: Path.of("offline_verdict_journal.json")
+                ?: Paths.get("offline_verdict_journal.json")
 
         private fun deriveCounterJournalPath(auditLogPath: Path?): Path =
             auditLogPath?.resolveSibling("offline_counter_journal.json")
-                ?: Path.of("offline_counter_journal.json")
+                ?: Paths.get("offline_counter_journal.json")
 
         private fun defaultVerdictJournal(logger: OfflineAuditLogger): OfflineVerdictJournal =
             try { OfflineVerdictJournal(deriveVerdictJournalPath(logger.logFile)) }

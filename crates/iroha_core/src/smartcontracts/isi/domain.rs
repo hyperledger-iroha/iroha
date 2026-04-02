@@ -237,6 +237,22 @@ pub mod isi {
         }
     }
 
+    fn account_created_event_domain(
+        state_transaction: &StateTransaction<'_, '_>,
+        account_id: &AccountId,
+    ) -> DomainId {
+        state_transaction
+            .world
+            .alias_domains_for_account(account_id)
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| {
+                crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS
+                    .parse()
+                    .expect("reserved universal dataspace alias must parse as DomainId")
+            })
+    }
+
     fn ensure_asset_definition_human_fields(
         asset_definition: &AssetDefinition,
     ) -> Result<(), InstructionExecutionError> {
@@ -861,8 +877,15 @@ pub mod isi {
                 ));
             }
 
-            // TODO: Emit a dedicated domainless account-created event once the event model
-            // stops requiring a concrete origin domain.
+            // Account lifecycle events still require a domain wrapper in the current event model.
+            // Prefer a concrete alias domain when one exists and otherwise use the stable
+            // universal dataspace alias as synthetic context for domainless accounts.
+            let created_domain = account_created_event_domain(state_transaction, &account_id);
+            state_transaction
+                .world
+                .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
+                    AccountCreated::new(account, created_domain),
+                ))));
 
             Ok(())
         }
@@ -3128,6 +3151,76 @@ mod tests {
             tx.world.account_aliases.get(&account_label),
             Some(&account_id)
         );
+    }
+
+    #[test]
+    fn register_domainless_account_emits_created_event_with_universal_domain() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut tx)
+            .expect("register domainless account");
+
+        let expected_domain: DomainId = crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS
+            .parse()
+            .expect("reserved universal dataspace alias should parse as domain");
+        let created = tx
+            .world
+            .internal_event_buf
+            .iter()
+            .find_map(|event| match event.as_ref() {
+                DataEvent::Domain(DomainEvent::Account(AccountEvent::Created(created)))
+                    if created.account.id() == &account_id =>
+                {
+                    Some(created.clone())
+                }
+                _ => None,
+            })
+            .expect("account created event");
+
+        assert_eq!(created.domain, expected_domain);
+    }
+
+    #[test]
+    fn register_account_with_label_emits_created_event_with_alias_domain() {
+        let mut state = test_state();
+        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let authority = (*ALICE_ID).clone();
+        seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
+
+        let account_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
+        seed_account_alias_lease(&mut tx, &authority, &account_label);
+        Register::account(Account::new(account_id.clone()).with_label(Some(account_label)))
+            .execute(&authority, &mut tx)
+            .expect("register account with label");
+
+        let created = tx
+            .world
+            .internal_event_buf
+            .iter()
+            .find_map(|event| match event.as_ref() {
+                DataEvent::Domain(DomainEvent::Account(AccountEvent::Created(created)))
+                    if created.account.id() == &account_id =>
+                {
+                    Some(created.clone())
+                }
+                _ => None,
+            })
+            .expect("account created event");
+
+        assert_eq!(created.domain, domain_id);
     }
 
     #[test]

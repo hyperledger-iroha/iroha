@@ -11,6 +11,8 @@ import java.util.LinkedHashMap
 import java.util.Optional
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionException
+import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.function.Function
@@ -46,6 +48,12 @@ class HttpClientTransport(
         executor = executor, baseUri = config.sorafsGatewayUri(), timeout = config.requestTimeout(),
         defaultHeaders = config.defaultHeaders(), observers = config.observers())
     private val deviceProfileEmitted = AtomicBoolean(false)
+    private val lazyScheduler = lazy {
+        Executors.newSingleThreadScheduledExecutor { r ->
+            Thread(r, "iroha-http-retry").apply { isDaemon = true }
+        }
+    }
+    private val scheduler: ScheduledExecutorService by lazyScheduler
 
     override fun submitTransaction(transaction: SignedTransaction): CompletableFuture<ClientResponse> {
         val hashHex = SignedTransactionHasher.hashHex(transaction)
@@ -61,7 +69,10 @@ class HttpClientTransport(
     }
 
     fun config(): ClientConfig = config
-    fun invalidateAndCancel() { executor.invalidateAndCancel() }
+    fun invalidateAndCancel() {
+        executor.invalidateAndCancel()
+        if (lazyScheduler.isInitialized()) scheduler.shutdownNow()
+    }
     fun newNoritoRpcClient(): NoritoRpcClient = config.toNoritoRpcClient(executor)
     fun newEventStreamClient(): ToriiEventStreamClient = ToriiEventStreamClient.builder().setBaseUri(config.baseUri()).setTransportExecutor(executor).defaultHeaders(config.defaultHeaders()).observers(config.observers()).build()
     fun newSorafsGatewayClient(): SorafsGatewayClient = newSorafsGatewayClient(config.sorafsGatewayUri())
@@ -185,7 +196,13 @@ class HttpClientTransport(
         val delay = config.retryPolicy().delayForAttempt(attempt)
         val delayMillis = maxOf(0L, minOf(delay.toMillis(), Long.MAX_VALUE))
         emitRetryTelemetry(request, attempt, delayMillis, lastResponse, lastError)
-        return CompletableFuture.supplyAsync({ null }, CompletableFuture.delayedExecutor(delayMillis, TimeUnit.MILLISECONDS)).thenCompose { submitWithRetryInternal(transaction, hashHex, attempt + 1, true) }
+        val retryFuture = CompletableFuture<ClientResponse>()
+        scheduler.schedule({
+            submitWithRetryInternal(transaction, hashHex, attempt + 1, true).whenComplete { result, error ->
+                if (error != null) retryFuture.completeExceptionally(error) else retryFuture.complete(result)
+            }
+        }, delayMillis, TimeUnit.MILLISECONDS)
+        return retryFuture
     }
 
     private fun enqueuePending(transaction: SignedTransaction) {
@@ -195,9 +212,9 @@ class HttpClientTransport(
     }
 
     private fun maybeAttachExportBundle(transaction: SignedTransaction): SignedTransaction {
-        if (transaction.keyAlias().isEmpty || transaction.exportedKeyBundle().isPresent) return transaction
+        val alias = transaction.keyAlias().orElse(null)
+        if (alias == null || transaction.exportedKeyBundle().isPresent) return transaction
         val exportOptions = config.exportOptions() ?: return transaction
-        val alias = transaction.keyAlias().get()
         val passphrase = exportOptions.passphraseForAlias(alias)
         if (passphrase.isEmpty()) return transaction
         try {
@@ -214,41 +231,41 @@ class HttpClientTransport(
 
     private fun recordPendingQueueDepth(queue: PendingTransactionQueue?) {
         if (queue == null || !config.telemetryOptions().enabled) return
-        val sink = config.telemetrySink(); if (sink.isEmpty) return
+        val sink = config.telemetrySink().orElse(null) ?: return
         val depth: Int = try { queue.size() } catch (_: IOException) { return }
-        sink.get().emitSignal("android.pending_queue.depth", mapOf("queue" to queue.telemetryQueueName(), "depth" to Integer.toUnsignedLong(depth)))
+        sink.emitSignal("android.pending_queue.depth", mapOf("queue" to queue.telemetryQueueName(), "depth" to Integer.toUnsignedLong(depth)))
     }
 
     private fun emitDeviceProfileTelemetry() {
         if (!config.telemetryOptions().enabled || !deviceProfileEmitted.compareAndSet(false, true)) return
-        val sink = config.telemetrySink(); if (sink.isEmpty) return
+        val sink = config.telemetrySink().orElse(null) ?: return
         val provider = config.deviceProfileProvider() ?: return
-        val profile = provider.snapshot(); if (profile.isEmpty) return
-        sink.get().emitSignal("android.telemetry.device_profile", mapOf("profile_bucket" to profile.get().bucket))
+        val profile = provider.snapshot().orElse(null) ?: return
+        sink.emitSignal("android.telemetry.device_profile", mapOf("profile_bucket" to profile.bucket))
     }
 
     private fun emitNetworkContextTelemetry() {
         if (!config.telemetryOptions().enabled) return
-        val sink = config.telemetrySink(); if (sink.isEmpty) return
-        val context = config.networkContextProvider().snapshot(); if (context.isEmpty) return
-        sink.get().emitSignal("android.telemetry.network_context", context.get().toTelemetryFields())
+        val sink = config.telemetrySink().orElse(null) ?: return
+        val context = config.networkContextProvider().snapshot().orElse(null) ?: return
+        sink.emitSignal("android.telemetry.network_context", context.toTelemetryFields())
     }
 
     private fun emitRetryTelemetry(request: TransportRequest, attempt: Int, delayMillis: Long, lastResponse: ClientResponse?, lastError: Throwable?) {
-        if (!config.telemetryOptions().enabled) return; val sink = config.telemetrySink(); if (sink.isEmpty) return
+        if (!config.telemetryOptions().enabled) return; val sink = config.telemetrySink().orElse(null) ?: return
         val fields = LinkedHashMap<String, Any>()
-        maybePutAuthorityHash(fields, request, sink.get(), RETRY_SIGNAL_ID)
+        maybePutAuthorityHash(fields, request, sink, RETRY_SIGNAL_ID)
         fields["route"] = resolveRoute(request); fields["retry_count"] = attempt; fields["error_code"] = buildRetryErrorCode(lastResponse, lastError); fields["backoff_ms"] = delayMillis
-        sink.get().emitSignal(RETRY_SIGNAL_ID, fields)
+        sink.emitSignal(RETRY_SIGNAL_ID, fields)
     }
 
     private fun emitPipelineStatusTelemetry(request: TransportRequest, transactionHash: String?, statusKind: String?, isSuccess: Boolean, isFailure: Boolean, attempts: Int) {
-        if (!config.telemetryOptions().enabled) return; val sink = config.telemetrySink(); if (sink.isEmpty) return
+        if (!config.telemetryOptions().enabled) return; val sink = config.telemetrySink().orElse(null) ?: return
         val fields = LinkedHashMap<String, Any>()
-        maybePutAuthorityHash(fields, request, sink.get(), PIPELINE_STATUS_SIGNAL)
+        maybePutAuthorityHash(fields, request, sink, PIPELINE_STATUS_SIGNAL)
         if (!transactionHash.isNullOrBlank()) fields["tx_hash"] = transactionHash
         fields["status_kind"] = statusKind ?: ""; fields["outcome"] = if (isSuccess) "success" else if (isFailure) "failure" else "pending"; fields["attempts"] = attempts
-        sink.get().emitSignal(PIPELINE_STATUS_SIGNAL, fields)
+        sink.emitSignal(PIPELINE_STATUS_SIGNAL, fields)
     }
 
     private fun maybePutAuthorityHash(fields: MutableMap<String, Any>, request: TransportRequest, sink: TelemetrySink, signalId: String) {
@@ -292,10 +309,7 @@ class HttpClientTransport(
         val interval = options.intervalMillis
         val task = Runnable { pollPipelineStatus(hashHex, options, deadline, attemptsSoFar, lastPayload, future) }
         if (interval <= 0L) { task.run(); return }
-        CompletableFuture.runAsync({}, CompletableFuture.delayedExecutor(minOf(interval, Long.MAX_VALUE), TimeUnit.MILLISECONDS)).whenComplete { _, delayError ->
-            if (delayError != null) future.completeExceptionally(if (delayError is CompletionException) delayError.cause else delayError)
-            else task.run()
-        }
+        scheduler.schedule({ task.run() }, minOf(interval, Long.MAX_VALUE), TimeUnit.MILLISECONDS)
     }
 
     @Suppress("UNCHECKED_CAST")

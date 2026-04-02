@@ -112,7 +112,7 @@ object AndroidKeystoreAttestationHarness {
     }
 
     private fun readCertificates(file: Path): List<X509Certificate> {
-        val bytes = Files.newInputStream(file).use { it.readAllBytes() }
+        val bytes = Files.newInputStream(file).use { it.readBytes() }
         return readCertificates(bytes)
     }
 
@@ -143,7 +143,7 @@ object AndroidKeystoreAttestationHarness {
             while (entry != null) {
                 if (!entry.isDirectory && isCertificateFilename(entry.name)) {
                     val buffer = ByteArrayOutputStream()
-                    zip.transferTo(buffer)
+                    zip.copyTo(buffer)
                     roots.addAll(readCertificates(buffer.toByteArray()))
                     added = true
                 }

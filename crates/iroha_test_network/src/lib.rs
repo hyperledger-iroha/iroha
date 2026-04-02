@@ -139,7 +139,7 @@ fn test_domain_register_request(
         owner: owner.clone(),
         controllers: vec![test_domain_name_controller(owner)?],
         term_years: 1,
-        pricing_class_hint: Some(0),
+        pricing_class_hint: None,
         payment: PaymentProofV1 {
             asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
             gross_amount: 120,

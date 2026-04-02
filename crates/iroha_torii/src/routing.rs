@@ -4088,12 +4088,13 @@ pub fn signed_find_proof_by_id(
 }
 
 #[cfg(feature = "app_api")]
-/// POST /v1/zk/verify — minimal demo endpoint that accepts either Norito
+/// POST /v1/zk/verify — minimal demo decode endpoint that accepts either Norito
 /// (`application/x-norito`) or JSON and returns `{ "ok": true|false }`.
 ///
 /// This is a convenience, non-consensus-critical handler intended for quick
-/// end-to-end demos. It does not perform cryptographic verification; it only
-/// checks the body decodes under the declared content type.
+/// end-to-end demos. It does not perform cryptographic verification or any
+/// VK/circuit/schema binding checks; it only checks that the body decodes under
+/// the declared content type.
 pub async fn handle_v1_zk_verify(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
@@ -5193,7 +5194,8 @@ pub async fn handle_v1_sumeragi_params(
 ///
 /// This is a convenience, non-consensus-critical handler intended for quick
 /// end-to-end demos. It does not perform cryptographic verification or durable
-/// storage. The returned `id` is a deterministic Blake2b-32 hash of the raw
+/// storage, and it does not imply that the payload would pass the runtime ZK
+/// verifier. The returned `id` is a deterministic Blake2b-32 hash of the raw
 /// request body bytes (after any JSON serialization).
 pub async fn handle_v1_zk_submit_proof(
     headers: axum::http::HeaderMap,
@@ -5230,12 +5232,19 @@ pub async fn handle_v1_zk_submit_proof(
 }
 
 #[cfg(feature = "zk-verify-batch")]
-/// POST /v1/zk/verify-batch — verify a batch of OpenVerify envelopes (transparent IPA)
-/// and return JSON `{ "ok": true, "statuses": [true|false, ...] }`.
+/// POST /v1/zk/verify-batch — verify a batch of standalone native IPA
+/// polynomial-opening envelopes and return JSON
+/// `{ "ok": true, "statuses": [true|false, ...] }`.
+///
+/// This endpoint is intentionally narrower than the ledger/runtime verifier:
+/// it replays `iroha_zkp_halo2::OpenVerifyEnvelope` proofs directly and does
+/// not consult the WSV VK registry or enforce circuit/schema policy. It is
+/// useful for native poly-open diagnostics, but it is not equivalent to
+/// `iroha_core::zk::verify_backend_with_timing_guardrails`.
 ///
 /// Content types:
 /// - `application/x-norito`: request body is a Norito-encoded `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>`.
-/// - `application/json`: currently not supported by this minimal handler (returns ok=false).
+/// - `application/json`: array of base64-encoded Norito envelopes.
 pub async fn handle_v1_zk_verify_batch(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,

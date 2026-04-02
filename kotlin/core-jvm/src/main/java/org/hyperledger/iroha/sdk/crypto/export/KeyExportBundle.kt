@@ -5,6 +5,7 @@ package org.hyperledger.iroha.sdk.crypto.export
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.nio.ByteBuffer
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
@@ -117,7 +118,7 @@ class KeyExportBundle internal constructor(
         fun decode(encoded: ByteArray): KeyExportBundle {
             try {
                 ByteArrayInputStream(encoded).use { input ->
-                    val magic = input.readNBytes(MAGIC.size)
+                    val magic = readExactly(input,MAGIC.size)
                     if (!MAGIC.contentEquals(magic)) {
                         throw KeyExportException("Key export bundle magic mismatch")
                     }
@@ -128,12 +129,12 @@ class KeyExportBundle internal constructor(
                         )
                     }
                     val aliasLength = readShort(input)
-                    val aliasBytes = input.readNBytes(aliasLength)
+                    val aliasBytes = readExactly(input,aliasLength)
                     if (aliasBytes.size != aliasLength) {
                         throw KeyExportException("Unexpected end of stream while reading alias")
                     }
                     val pubKeyLength = readShort(input)
-                    val pubKey = input.readNBytes(pubKeyLength)
+                    val pubKey = readExactly(input,pubKeyLength)
                     if (pubKey.size != pubKeyLength) {
                         throw KeyExportException("Unexpected end of stream while reading public key")
                     }
@@ -146,12 +147,12 @@ class KeyExportBundle internal constructor(
                             "Nonce length mismatch: expected $EXPECTED_NONCE_LENGTH_BYTES bytes, found $nonceLength"
                         )
                     }
-                    val nonce = input.readNBytes(nonceLength)
+                    val nonce = readExactly(input,nonceLength)
                     if (nonce.size != nonceLength) {
                         throw KeyExportException("Unexpected end of stream while reading nonce")
                     }
                     val cipherLength = readShort(input)
-                    val cipher = input.readNBytes(cipherLength)
+                    val cipher = readExactly(input,cipherLength)
                     if (cipher.size != cipherLength) {
                         throw KeyExportException("Unexpected end of stream while reading ciphertext")
                     }
@@ -159,7 +160,7 @@ class KeyExportBundle internal constructor(
                     if (saltLength < 0) {
                         throw KeyExportException("Unexpected end of stream while reading salt length")
                     }
-                    val salt = input.readNBytes(saltLength)
+                    val salt = readExactly(input,saltLength)
                     if (salt.size != saltLength) {
                         throw KeyExportException("Unexpected end of stream while reading salt")
                     }
@@ -172,7 +173,7 @@ class KeyExportBundle internal constructor(
                     if (kdfKind < 0) {
                         throw KeyExportException("Unexpected end of stream while reading kdf kind")
                     }
-                    val workFactorBytes = input.readNBytes(4)
+                    val workFactorBytes = readExactly(input,4)
                     if (workFactorBytes.size != 4) {
                         throw KeyExportException("Unexpected end of stream while reading kdf work factor")
                     }
@@ -202,8 +203,19 @@ class KeyExportBundle internal constructor(
         private fun intBytes(value: Int): ByteArray =
             ByteBuffer.allocate(4).putInt(value).array()
 
+        private fun readExactly(input: InputStream, length: Int): ByteArray {
+            val buffer = ByteArray(length)
+            var offset = 0
+            while (offset < length) {
+                val read = input.read(buffer, offset, length - offset)
+                if (read < 0) break
+                offset += read
+            }
+            return if (offset == length) buffer else buffer.copyOf(offset)
+        }
+
         private fun readShort(input: ByteArrayInputStream): Int {
-            val buffer = input.readNBytes(2)
+            val buffer = readExactly(input,2)
             if (buffer.size != 2) {
                 throw IOException("Unexpected end of stream while reading length")
             }

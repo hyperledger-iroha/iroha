@@ -157,7 +157,14 @@ class OfflineJournal @Throws(OfflineJournalException::class) constructor(
             val entries = ArrayList(pending.values)
             entries.sortWith(Comparator.comparing(
                 { it.txId },
-                { a, b -> java.util.Arrays.compareUnsigned(a, b) },
+                Comparator { a, b ->
+                    val len = minOf(a.size, b.size)
+                    for (i in 0 until len) {
+                        val cmp = (a[i].toInt() and 0xFF) - (b[i].toInt() and 0xFF)
+                        if (cmp != 0) return@Comparator cmp
+                    }
+                    a.size - b.size
+                },
             ))
             return entries.toList()
         } finally {

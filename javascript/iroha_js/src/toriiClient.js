@@ -33,6 +33,7 @@ import {
 import { buildCanonicalRequestHeaders } from "./canonicalRequest.js";
 import { blake2b256 } from "./blake2b.js";
 import { SM2_DEFAULT_DISTINGUISHED_ID, verifyEd25519, verifySm2 } from "./crypto.js";
+import { getCurveEntryByPublicKeyMulticodec } from "./curveRegistry.js";
 
 const DEFAULT_PAGE_SIZE = 100;
 
@@ -25961,25 +25962,13 @@ function decodeIdentifierReceiptPublicKey(value, context) {
   if (payload.length !== digestLength.value) {
     throw new Error(`${context} multihash payload length does not match its digest header`);
   }
-  let algorithm;
-  switch (functionCode.value) {
-    case 0xed:
-      algorithm = "ed25519";
-      break;
-    case 0x1306:
-      algorithm = "sm2";
-      break;
-    case 0xe7:
-      algorithm = "secp256k1";
-      break;
-    case 0xee:
-      algorithm = "ml-dsa";
-      break;
-    default:
-      throw new Error(
-        `${context} uses unsupported multihash code 0x${functionCode.value.toString(16)}`,
-      );
+  const entry = getCurveEntryByPublicKeyMulticodec(functionCode.value);
+  if (!entry) {
+    throw new Error(
+      `${context} uses unsupported multihash code 0x${functionCode.value.toString(16)}`,
+    );
   }
+  const algorithm = entry.algorithm;
   if (
     prefixedAlgorithm &&
     prefixedAlgorithm !== algorithm &&

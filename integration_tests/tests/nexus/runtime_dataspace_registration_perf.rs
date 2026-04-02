@@ -3,6 +3,8 @@
 
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fs,
+    path::PathBuf,
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
@@ -13,8 +15,9 @@ use futures_util::StreamExt;
 use integration_tests::sandbox;
 use iroha::{
     client::{Client, UaidManifestQuery, UaidManifestStatus, UaidManifestStatusFilter},
-    crypto::Hash,
+    crypto::{Algorithm, Hash, KeyPair},
     data_model::{
+        account::AccountId,
         block::consensus::SumeragiStatusWire,
         events::{
             EventBox,
@@ -30,7 +33,11 @@ use iroha::{
             LaneConfig, LaneId, LaneLifecyclePlan, LaneVisibility, ManifestEffect, ManifestEntry,
             ManifestVersion, UniversalAccountId,
         },
+        peer::PeerId,
+        permission::Permission,
         prelude::Numeric,
+        query::builder::prelude::QueryBuilderExt,
+        query::permission::prelude::FindPermissionsByAccountId,
         transaction::SignedTransaction,
     },
 };
@@ -54,6 +61,8 @@ const BASE_LANE_ID: u32 = 10;
 const NEXUS_ALIAS: &str = "nexus";
 const BENCH_MANIFEST_DATASPACE: DataSpaceId = DataSpaceId::new(4_096);
 const BENCH_MANIFEST_ACTIVATION_EPOCH: u64 = 4_096;
+const BENCH_NETWORK_BASE_SEED: &str = "runtime-registration-benchmark";
+const BENCH_MANIFEST_LANE_ALIAS: &str = "runtime-benchmark-lane";
 const STATUS_WAIT_TIMEOUT: Duration = Duration::from_secs(45);
 const STATUS_POLL_INTERVAL: Duration = Duration::from_millis(200);
 const COMMITTED_TX_OUTCOME_TIMEOUT: Duration = Duration::from_secs(30);
@@ -76,10 +85,75 @@ fn benchmark_iterations() -> usize {
     )
 }
 
+fn benchmark_lane_manifest_dir() -> PathBuf {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    std::env::temp_dir().join(format!(
+        "iroha_runtime_registration_manifest_{}_{}",
+        std::process::id(),
+        millis
+    ))
+}
+
+fn benchmark_lane_manifest_peer_bindings() -> Vec<(String, String)> {
+    let mut seed = format!("{BENCH_NETWORK_BASE_SEED}-peer-0").into_bytes();
+    seed.extend_from_slice(b":bls");
+    let peer_key_pair = KeyPair::from_seed(seed, Algorithm::BlsNormal);
+    vec![(
+        ALICE_ID.to_string(),
+        PeerId::from(peer_key_pair.public_key().clone()).to_string(),
+    )]
+}
+
+fn write_benchmark_lane_manifest(manifest_dir: &PathBuf) {
+    fs::create_dir_all(manifest_dir).expect("create benchmark manifest directory");
+    let validators = benchmark_lane_manifest_peer_bindings()
+        .into_iter()
+        .map(|(validator, peer_id)| {
+            let mut entry = norito::json::Map::new();
+            entry.insert(
+                "validator".to_owned(),
+                norito::json::to_value(&validator).expect("encode benchmark validator"),
+            );
+            entry.insert(
+                "peer_id".to_owned(),
+                norito::json::to_value(&peer_id).expect("encode benchmark peer id"),
+            );
+            JsonValue::Object(entry)
+        })
+        .collect::<Vec<_>>();
+    let mut manifest = norito::json::Map::new();
+    manifest.insert(
+        "lane".to_owned(),
+        norito::json::to_value(BENCH_MANIFEST_LANE_ALIAS).expect("encode benchmark lane alias"),
+    );
+    manifest.insert(
+        "version".to_owned(),
+        norito::json::to_value(&1_u32).expect("encode benchmark manifest version"),
+    );
+    manifest.insert("validators".to_owned(), JsonValue::Array(validators));
+    manifest.insert(
+        "quorum".to_owned(),
+        norito::json::to_value(&1_u32).expect("encode benchmark manifest quorum"),
+    );
+    let manifest_bytes = norito::json::to_vec_pretty(&JsonValue::Object(manifest))
+        .expect("encode benchmark lane manifest");
+    fs::write(
+        manifest_dir.join(format!("{BENCH_MANIFEST_LANE_ALIAS}.manifest.json")),
+        manifest_bytes,
+    )
+    .expect("write benchmark lane manifest");
+}
+
 fn runtime_registration_builder() -> NetworkBuilder {
+    let manifest_dir = benchmark_lane_manifest_dir();
+    write_benchmark_lane_manifest(&manifest_dir);
     NetworkBuilder::new()
         .with_peers(TOTAL_PEERS)
-        .with_config_layer(|layer| {
+        .with_base_seed(BENCH_NETWORK_BASE_SEED)
+        .with_config_layer(move |layer| {
             let mut lane_nexus = Table::new();
             lane_nexus.insert("index".into(), TomlValue::Integer(0));
             lane_nexus.insert("alias".into(), TomlValue::String("lane-nexus".to_owned()));
@@ -89,6 +163,19 @@ fn runtime_registration_builder() -> NetworkBuilder {
             );
             lane_nexus.insert("visibility".into(), TomlValue::String("public".to_owned()));
             lane_nexus.insert("metadata".into(), TomlValue::Table(Table::new()));
+
+            let mut lane_benchmark = Table::new();
+            lane_benchmark.insert("index".into(), TomlValue::Integer(1));
+            lane_benchmark.insert(
+                "alias".into(),
+                TomlValue::String(BENCH_MANIFEST_LANE_ALIAS.to_owned()),
+            );
+            lane_benchmark.insert(
+                "dataspace".into(),
+                TomlValue::String("runtime-benchmark".to_owned()),
+            );
+            lane_benchmark.insert("visibility".into(), TomlValue::String("public".to_owned()));
+            lane_benchmark.insert("metadata".into(), TomlValue::Table(Table::new()));
 
             let mut ds_nexus = Table::new();
             ds_nexus.insert("alias".into(), TomlValue::String(NEXUS_ALIAS.to_owned()));
@@ -141,10 +228,19 @@ fn runtime_registration_builder() -> NetworkBuilder {
 
             layer
                 .write(["nexus", "enabled"], true)
-                .write(["nexus", "lane_count"], 1_i64)
+                // Dataspace-scoped manifest grants and publish/revoke ISI route canonically to a
+                // lane bound to the target dataspace, so the benchmark dataspace needs one too.
+                .write(["nexus", "lane_count"], 2_i64)
+                .write(
+                    ["nexus", "registry", "manifest_directory"],
+                    TomlValue::String(manifest_dir.display().to_string()),
+                )
                 .write(
                     ["nexus", "lane_catalog"],
-                    TomlValue::Array(vec![TomlValue::Table(lane_nexus)]),
+                    TomlValue::Array(vec![
+                        TomlValue::Table(lane_nexus),
+                        TomlValue::Table(lane_benchmark),
+                    ]),
                 )
                 .write(
                     ["nexus", "dataspace_catalog"],
@@ -217,6 +313,40 @@ fn wait_for_all_peers_lane_visibility(
 
     Err(eyre!(
         "{context}: timed out waiting for lane {lane_id} visibility on peers {pending:?}; last errors {last_errors:?}"
+    ))
+}
+
+fn wait_for_lane_authoritative_binding(
+    client: &Client,
+    lane_id: LaneId,
+    context: &str,
+) -> Result<JsonValue> {
+    let started = Instant::now();
+    let mut last_snapshot = None;
+    let mut last_error = None;
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        match client.get_public_lane_validators(lane_id) {
+            Ok(snapshot) => {
+                if snapshot
+                    .get("total")
+                    .and_then(JsonValue::as_u64)
+                    .unwrap_or(0)
+                    > 0
+                {
+                    return Ok(snapshot);
+                }
+                last_snapshot = Some(snapshot);
+                last_error = None;
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+
+    Err(eyre!(
+        "{context}: timed out waiting for authoritative bindings on lane {lane_id}; last snapshot {last_snapshot:?}; last error {last_error:?}"
     ))
 }
 
@@ -447,17 +577,65 @@ fn wait_for_all_peers_manifest_status(
     ))
 }
 
-fn ensure_publish_manifest_permission(client: &Client, dataspace: DataSpaceId) -> Result<()> {
+fn wait_for_account_permissions(
+    client: &Client,
+    account_id: &AccountId,
+    required_permissions: &[Permission],
+    context: &str,
+) -> Result<()> {
+    let started = Instant::now();
+    let mut last_observed = Vec::new();
+    let mut last_error: Option<String> = None;
+    while started.elapsed() <= STATUS_WAIT_TIMEOUT {
+        match client
+            .query(FindPermissionsByAccountId::new(account_id.clone()))
+            .execute_all()
+        {
+            Ok(permissions) => {
+                let all_present = required_permissions
+                    .iter()
+                    .all(|required| permissions.iter().any(|permission| permission == required));
+                last_observed = permissions;
+                if all_present {
+                    return Ok(());
+                }
+                last_error = None;
+            }
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+        thread::sleep(STATUS_POLL_INTERVAL);
+    }
+
+    let suffix = last_error
+        .map(|err| format!("; last permission query error: {err}"))
+        .unwrap_or_default();
+    Err(eyre!(
+        "{context}: timed out waiting for permissions on {account_id}; required {required_permissions:?}; last observed {last_observed:?}{suffix}"
+    ))
+}
+
+async fn ensure_publish_manifest_permission(client: &Client, dataspace: DataSpaceId) -> Result<()> {
+    let required_permission = Permission::from(CanPublishSpaceDirectoryManifest { dataspace });
     let grant_instruction = InstructionBox::from(Grant::account_permission(
-        CanPublishSpaceDirectoryManifest { dataspace },
+        required_permission.clone(),
         client.account.clone(),
     ));
     let grant_tx = client.build_transaction([grant_instruction], Metadata::default());
-    client
-        .submit_transaction_blocking(&grant_tx)
-        .map_err(|err| eyre!(err))
-        .wrap_err("grant CanPublishSpaceDirectoryManifest permission")
-        .map(|_| ())
+    submit_and_wait_for_tx_approval(
+        client,
+        grant_tx,
+        "grant CanPublishSpaceDirectoryManifest permission transaction",
+    )
+    .await
+    .wrap_err("grant CanPublishSpaceDirectoryManifest permission transaction did not reach Approved state")?;
+    wait_for_account_permissions(
+        client,
+        &client.account,
+        &[required_permission],
+        "wait for CanPublishSpaceDirectoryManifest permission visibility",
+    )
 }
 
 async fn submit_and_wait_for_tx_approval(
@@ -1013,6 +1191,11 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
         let client = peer.client();
         let _baseline_lane = wait_for_lane_visibility(&client, LaneId::new(0), "baseline lane")
             .wrap_err_with(|| format!("wait for baseline lane visibility on peer {peer_index}"))?;
+        let _benchmark_manifest_lane =
+            wait_for_lane_authoritative_binding(&client, LaneId::new(1), "benchmark manifest lane")
+                .wrap_err_with(|| {
+                    format!("wait for benchmark manifest lane visibility on peer {peer_index}")
+                })?;
     }
 
     let http = reqwest::Client::builder()
@@ -1024,14 +1207,16 @@ fn runtime_nexus_registration_reports_lane_lifecycle_costs() -> Result<()> {
     let grant_probe_client = network.peer().client();
     let grant_peer_index = leader_or_highest_height_peer_index(&network, &grant_probe_client);
     let grant_client = network.peers()[grant_peer_index].client();
-    ensure_publish_manifest_permission(&grant_client, BENCH_MANIFEST_DATASPACE).wrap_err_with(
-        || {
-            format!(
-                "grant CanPublishSpaceDirectoryManifest on peer {grant_peer_index} for dataspace {}",
-                BENCH_MANIFEST_DATASPACE.as_u64()
-            )
-        },
-    )?;
+    rt.block_on(ensure_publish_manifest_permission(
+        &grant_client,
+        BENCH_MANIFEST_DATASPACE,
+    ))
+    .wrap_err_with(|| {
+        format!(
+            "grant CanPublishSpaceDirectoryManifest on peer {grant_peer_index} for dataspace {}",
+            BENCH_MANIFEST_DATASPACE.as_u64()
+        )
+    })?;
 
     let mut lane_submit_samples = Vec::with_capacity(bench_iterations);
     let mut lane_commit_apply_samples = Vec::with_capacity(bench_iterations);

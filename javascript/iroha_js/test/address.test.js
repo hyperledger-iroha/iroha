@@ -11,11 +11,24 @@ import {
   AccountAddressError,
   AccountAddressErrorCode,
   canonicalizeDomainLabel,
+  curveIdFromAlgorithm,
   decodeI105AccountAddress,
   encodeI105AccountAddress,
   inspectAccountId,
   configureCurveSupport,
 } from "../src/address.js";
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+const FIXTURE_PATH = path.resolve(__dirname, "../../../fixtures/account/address_vectors.json");
+const ML_DSA_FIXTURE_PATH = path.resolve(
+  __dirname,
+  "../../../fixtures/account/ml_dsa_public_key.hex",
+);
+const GOST256_FIXTURE_PATH = path.resolve(
+  __dirname,
+  "../../../fixtures/account/gost256a_public_key.hex",
+);
 
 function hexToBytes(hex) {
   const body = hex.replace(/^0x/i, "");
@@ -61,14 +74,13 @@ const INVALID_I105_CHAR_LITERAL = `${DEFAULT_PUBLIC_KEY_I105.slice(0, -1)}!`;
 const ALT_PUBLIC_KEY = hexToBytes(
   "3B77A042F1DE02F6D5F418F36A20FD68C8329FE3BBFBECD26A2D72878CD827F8",
 );
-const GOST256_PUBLIC_KEY = hexToBytes(
-  "6b167e468ada39cfbdeecb3ac490d130624c68dc8b8454ed836b7b19ae383fef9f116838fb5b1cf548ea5913827d4a0636b64537f05b13d6fecb121eac4fbaea",
-);
+const ML_DSA_PUBLIC_KEY = hexToBytes(fs.readFileSync(ML_DSA_FIXTURE_PATH, "utf8").trim());
+const GOST256_PUBLIC_KEY = hexToBytes(fs.readFileSync(GOST256_FIXTURE_PATH, "utf8").trim());
 const SM2_PUBLIC_KEY = hexToBytes(
   "04361255A512347E76EA947EBB416C12D4C07E30B150C0EC2047ECC5E142907499B8D99C4C5CF69BFF6527E7B67396B55E42EF98625B339696DBEF9A3AABBFC06F",
 );
 const MULTISIG_CANONICAL_HEX =
-  "0x0a0101000303010001002068f4b6017d0f876a55c80a82b8388a54aad264d367269e2de8be079c935b5f9601000100207ea0e3bd52e207c9d3b0eba65c0704e66fca2d8e165a175218b174fc4160e4130100020020884b8857f4eaa1613c61504db34d4beaf346517a0e31de3cddd4d9b4201d9d0b";
+  "0x0a010100030003010001002068f4b6017d0f876a55c80a82b8388a54aad264d367269e2de8be079c935b5f9601000100207ea0e3bd52e207c9d3b0eba65c0704e66fca2d8e165a175218b174fc4160e4130100020020884b8857f4eaa1613c61504db34d4beaf346517a0e31de3cddd4d9b4201d9d0b";
 const MULTISIG_CANONICAL_BYTES = hexToBytes(MULTISIG_CANONICAL_HEX);
 
 test("configureCurveSupport validates options and gating toggles", () => {
@@ -101,7 +113,7 @@ test("configureCurveSupport validates options and gating toggles", () => {
         /options\.allowSm2 must be a boolean/.test(error.message),
     );
     assert.throws(
-      () => configureCurveSupport({ allowMlDsa: true, extra: true }),
+      () => configureCurveSupport({ allowMlDsa: true, allowBls: true, extra: true }),
       (error) =>
         error instanceof TypeError &&
         /unsupported fields: extra/.test(error.message),
@@ -118,10 +130,27 @@ test("configureCurveSupport validates options and gating toggles", () => {
     );
 
     configureCurveSupport({ allowMlDsa: true });
-    const mlDsaAddress = AccountAddress.fromAccount({
-      publicKey: DEFAULT_PUBLIC_KEY,
-      algorithm: "ml-dsa",
-    });
+    assert.throws(
+      () =>
+        AccountAddress.fromAccount({
+          publicKey: ML_DSA_PUBLIC_KEY,
+          algorithm: "ml-dsa",
+        }).toI105(),
+      (error) =>
+        error instanceof AccountAddressError &&
+        error.code === AccountAddressErrorCode.KEY_PAYLOAD_TOO_LONG,
+    );
+    const mlDsaAddress = new AccountAddress(
+      { version: 0, classId: 1, normVersion: 1, extFlag: false },
+      {
+        tag: 1,
+        version: 1,
+        threshold: 1,
+        members: [
+          { curve: curveIdFromAlgorithm("ml-dsa"), weight: 1, publicKey: ML_DSA_PUBLIC_KEY },
+        ],
+      },
+    );
     assert.ok(mlDsaAddress.toI105().startsWith("sora"));
     assert.throws(
       () =>
@@ -162,8 +191,8 @@ test("multisig policies enforce core validation rules", () => {
   }, "ZeroThreshold");
 
   mutateAndExpect((bytes) => {
-    bytes[7] = 0x00;
     bytes[8] = 0x00;
+    bytes[9] = 0x00;
   }, "MemberWeightZero");
 
   mutateAndExpect((bytes) => {
@@ -172,7 +201,7 @@ test("multisig policies enforce core validation rules", () => {
   }, "ThresholdExceedsTotal");
 
   mutateAndExpect((bytes) => {
-    bytes.set(bytes.subarray(48, 80), 85);
+    bytes.set(bytes.subarray(49, 81), 86);
   }, "DuplicateMember");
 });
 
@@ -689,10 +718,6 @@ test("fromI105 normalizes expectedPrefix inputs", () => {
       error.code === AccountAddressErrorCode.UNEXPECTED_NETWORK_PREFIX,
   );
 });
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const FIXTURE_PATH = path.resolve(__dirname, "../../../fixtures/account/address_vectors.json");
 
 test("account address compliance vectors", () => {
   const fixture = JSON.parse(fs.readFileSync(FIXTURE_PATH, "utf8"));

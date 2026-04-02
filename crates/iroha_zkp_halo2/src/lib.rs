@@ -61,7 +61,10 @@ pub use envelope::{
     Halo2ProofEnvelopeHeader, PCS_IPA, PUBLIC_INPUT_STRIDE, TRANSCRIPT_BLAKE2B,
 };
 pub use errors::Error;
-pub use norito_types::{IpaParams, IpaProofData, OpenVerifyEnvelope, PolyOpenPublic, ZkCurveId};
+pub use norito_types::{
+    IpaParams, IpaProofData, OpenVerifyEnvelope, PolyOpenPublic, PolyOpenTranscriptMetadata,
+    ZkCurveId,
+};
 pub use transcript::Transcript;
 
 /// Crate constants and domain separation tags.
@@ -414,6 +417,7 @@ pub mod batch {
     fn verify_single(env: &OpenVerifyEnvelope) -> Result<bool, Error> {
         let decoded = norito_helpers::decode_envelope(env)?;
         let mut transcript = Transcript::new(&env.transcript_label);
+        let metadata = env.transcript_metadata();
         let result = match decoded {
             DecodedEnvelope::Pallas {
                 params,
@@ -421,13 +425,14 @@ pub mod batch {
                 z,
                 t,
                 p_g,
-            } => backend::pallas::Polynomial::verify_open(
+            } => backend::pallas::Polynomial::verify_open_with_metadata(
                 params.as_ref(),
                 &mut transcript,
                 z,
                 p_g,
                 t,
                 proof.as_ref(),
+                metadata,
             ),
             DecodedEnvelope::Bn254 {
                 params,
@@ -435,13 +440,14 @@ pub mod batch {
                 z,
                 t,
                 p_g,
-            } => backend::bn254::Polynomial::verify_open(
+            } => backend::bn254::Polynomial::verify_open_with_metadata(
                 params.as_ref(),
                 &mut transcript,
                 z,
                 p_g,
                 t,
                 proof.as_ref(),
+                metadata,
             ),
             #[cfg(feature = "goldilocks_backend")]
             DecodedEnvelope::Goldilocks {
@@ -450,13 +456,14 @@ pub mod batch {
                 z,
                 t,
                 p_g,
-            } => backend::goldilocks::Polynomial::verify_open(
+            } => backend::goldilocks::Polynomial::verify_open_with_metadata(
                 params.as_ref(),
                 &mut transcript,
                 z,
                 p_g,
                 t,
                 proof.as_ref(),
+                metadata,
             ),
             #[cfg(not(feature = "goldilocks_backend"))]
             DecodedEnvelope::Goldilocks => {

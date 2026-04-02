@@ -2,6 +2,57 @@
 
 Last updated: 2026-04-02
 
+Latest sync (2026-04-02 repo-wide ZK hardening tranche):
+the standalone native IPA helper now binds the full claimed statement into the
+transcript, FASTPQ verifies every carried `PublicIO` claim explicitly, and the
+Torii/IVM/docs surfaces now describe the real verifier boundaries instead of
+blurring demo endpoints with ledger verification.
+
+- shipped in the ZK stack:
+  - metadata-bound native IPA opening verification in
+    `crates/iroha_zkp_halo2`, with the stricter path wired through
+    `iroha_core`, IVM batch verification, and Torii `/v1/zk/verify-batch`;
+  - full FASTPQ `PublicIO` equality checks in `fastpq_prover::verify`;
+  - regression tests for tampered IPA statement fields and FASTPQ public claims;
+    and
+  - a new `docs/source/zk_audit_matrix.md` plus tightened `/v1/zk/*`
+    documentation/comments.
+
+Open work for this slice now remains:
+- rerun the broader workspace verification gates (`cargo test --workspace`,
+  `cargo clippy --workspace --all-targets -- -D warnings`) in a clean slot once
+  the unrelated active worktree churn settles; this hardening pass is being
+  validated with focused crate/test targets first.
+
+Latest sync (2026-04-02 JS Norito parity tranche):
+the JS SDK pure-JS Norito path now covers the current builder surface instead
+of the old narrow mint/burn/transfer/`ExecuteTrigger` slice, and supported
+native-encode failures now bridge through the JS encoder automatically.
+
+- shipped in `javascript/iroha_js`:
+  - broader JS encode coverage for `Register.Domain`, `Register.Account`, the
+    supported `Transfer.*` variants, canonical `Custom` payloads plus the
+    multisig alias inputs, and the current Kaigi / governance / social /
+    smart-contract / zk / RWA helper families;
+  - canonical cache normalization so JS-only decode matches native decode for
+    supported fallback families instead of reflecting raw builder input;
+  - `MultisigSpec` / `Map` JSON normalization for canonical `Custom.payload.*`
+    bytes; and
+  - automatic native-to-JS encode fallback when the host rejects an instruction
+    shape that the JS fallback can now encode canonically.
+- focused verification is green, including the new
+  `javascript/iroha_js/test/norito_fallback_matrix.test.js` parity matrix and
+  the JS-only fallback rerun.
+
+Open work for this slice now remains:
+- add dedicated pure-JS decoders for the broader direct-instruction families so
+  arbitrary canonical bytes do not need the round-trip cache for decode parity;
+- decide whether to teach the Rust host the remaining optional controller/key
+  variants directly or to keep the current JS fallback bridge as the intended
+  compatibility layer; and
+- expand beyond the current builder surface when new JS instruction helpers are
+  added.
+
 Latest sync (2026-04-02 JS ExecuteTrigger / multisig helper layer):
 the JS SDK now has first-class helper builders for the canonical
 `ExecuteTrigger` path, the wrapped multisig proposal flow, and the normalized
@@ -30,6 +81,66 @@ Open work for this slice now remains:
   currently exercised ed25519-centric path; and
 - extend the higher-level helper surface if/when more Kotodama trigger schemas
   or proposal lifecycle helpers become stable enough to expose as presets.
+
+Latest sync (2026-04-02 multisig SNS-lease repair):
+the reported multisig integration failures now use SNS-valid runtime-domain
+setup and the cancel-route coverage matches the current Torii public contract.
+
+- `integration_tests/tests/multisig.rs` now provisions runtime domains through
+  the lease-aware `iroha_test_network` helper and uses hyphenated SNS-valid
+  test domain labels instead of underscore labels that can never acquire a
+  domain-name lease;
+- `crates/iroha_test_network/src/lib.rs` now leaves
+  `pricing_class_hint` unset for synthetic SNS lease registration so the helper
+  follows the registrar's real pricing-tier selection instead of assuming tier
+  `0`; and
+- the cancel-route regression now waits on `/v1/multisig/cancel` to expose
+  `APPROVE` mode rather than querying hidden cancel-wrapper proposals through
+  `/v1/multisig/proposals/get`, while still asserting the target proposal lands
+  in terminal `CANCELED` state and remains visible in canceled listings.
+
+Open work for this slice now remains:
+- rerun `cargo test -p integration_tests --test multisig -- --nocapture --test-threads=1`
+  in a clean, non-overlapped slot using the warmed binary reuse path
+  (`IROHA_TEST_SKIP_BUILD=1`, `TEST_NETWORK_BIN_IROHAD`, `TEST_NETWORK_BIN_IROHA`)
+  so the executor-upgrade variants can finish without the extra local parallel
+  network load introduced during this repair session.
+
+Latest sync (2026-04-02 `iroha_cli` live-test profile alignment follow-up):
+the reported Soracloud HF `iroha_cli` failure slice is green again after
+pinning the test daemon and CLI to the same debug profile before network
+startup.
+
+- `integration_tests/tests/iroha_cli.rs` now initializes the CLI test
+  environment ahead of every live network-backed test, so `Program::Irohad`
+  no longer resolves from the default `release` profile before `program()`
+  later forces the CLI onto `debug`;
+- added a small value-level regression for the default build-profile helper;
+  and
+- fresh reruns are green for the helper unit tests, the parallel
+  `soracloud_hf_` slice, the full `iroha_cli` test target under the default
+  runner, and the same target when serialized with `--test-threads=1`.
+
+Open work for this slice now remains:
+- none for this `iroha_cli` profile-alignment slice; broader repo-wide gates
+  remain tracked in the older roadmap entries below.
+
+Latest sync (2026-04-02 targeted integration-test repair follow-up):
+the reported `connected_peers`, runtime Nexus registration benchmark, and
+account-created trigger regressions are green again on targeted reruns.
+
+- restored `AccountEvent::Created` emission for account registration so the
+  non-intersecting data-trigger path fires again;
+- hardened the connected-peers integration helper to sample roster visibility
+  across the cluster instead of failing on a single lagging probe peer; and
+- gave the runtime registration benchmark its own routed dataspace lane plus a
+  deterministic admin-managed manifest binding, then waited for authoritative
+  binding and permission visibility before running the report-only benchmark.
+
+Open work for this slice now remains:
+- replay the broader `integration_tests --test mod` shard, or the next larger
+  workspace gate that covers these paths, on a fresh binary; this fix set was
+  verified with targeted reruns only.
 
 Latest sync (2026-04-01 Nexus routing / cross-dataspace localnet recovery):
 the reported Nexus and DA/RBC regression set is green again on a fresh rebuilt

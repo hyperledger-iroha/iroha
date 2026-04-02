@@ -94,6 +94,7 @@ export interface AccountAddressDisplay {
 
 export interface CurveSupportOptions {
   allowMlDsa?: boolean;
+  allowBls?: boolean;
   allowGost?: boolean;
   allowSm2?: boolean;
 }
@@ -257,6 +258,25 @@ export interface MultisigContractCallProposeRequest extends MultisigAccountSelec
   signatureB64?: string | null;
   creationTimeMs?: number | string | bigint | null;
   privateKey?: string | BinaryLike | null;
+  privateKeyHex?: string | null;
+  privateKeyMultihash?: string | null;
+  privateKeyBytes?: BinaryLike | number[] | null;
+  privateKeyAlgorithm?: string | null;
+  multisig_account_id?: string;
+  multisig_account_alias?: string;
+  signer_account_id?: string;
+  contract_id?: string;
+  gas_asset_id?: string | null;
+  fee_sponsor?: string | null;
+  gas_limit?: number | string | bigint | null;
+  public_key_hex?: string | null;
+  signature_b64?: string | null;
+  creation_time_ms?: number | string | bigint | null;
+  private_key?: string | BinaryLike | null;
+  private_key_hex?: string | null;
+  private_key_multihash?: string | null;
+  private_key_bytes?: BinaryLike | number[] | null;
+  private_key_algorithm?: string | null;
 }
 
 export interface MultisigContractCallProposePayload {
@@ -284,6 +304,23 @@ export interface MultisigContractCallApproveRequest extends MultisigAccountSelec
   signatureB64?: string | null;
   creationTimeMs?: number | string | bigint | null;
   privateKey?: string | BinaryLike | null;
+  privateKeyHex?: string | null;
+  privateKeyMultihash?: string | null;
+  privateKeyBytes?: BinaryLike | number[] | null;
+  privateKeyAlgorithm?: string | null;
+  multisig_account_id?: string;
+  multisig_account_alias?: string;
+  signer_account_id?: string;
+  proposal_id?: string | null;
+  instructions_hash?: string | null;
+  public_key_hex?: string | null;
+  signature_b64?: string | null;
+  creation_time_ms?: number | string | bigint | null;
+  private_key?: string | BinaryLike | null;
+  private_key_hex?: string | null;
+  private_key_multihash?: string | null;
+  private_key_bytes?: BinaryLike | number[] | null;
+  private_key_algorithm?: string | null;
 }
 
 export interface MultisigContractCallApprovePayload {

@@ -4,6 +4,14 @@ import { Buffer } from "node:buffer";
 import { domainToASCII } from "node:url";
 import { blake2b256 } from "./blake2b.js";
 import { getNativeBinding } from "./native.js";
+import {
+  canonicalCurveAlgorithm,
+  CURVE_PUBLIC_KEY_LENGTH,
+  CurveFeature,
+  CurveId,
+  getCurveEntryByAlgorithm,
+  getCurveEntryById,
+} from "./curveRegistry.js";
 const DEFAULT_I105_DISCRIMINANT = 0x02f1;
 const I105_DISCRIMINANT_MAX = 0xffff;
 const HEADER_VERSION_V1 = 0;
@@ -102,58 +110,10 @@ const AddressClass = Object.freeze({
 
 const CONTROLLER_TAG_SINGLE = 0x00;
 const CONTROLLER_TAG_MULTISIG = 0x01;
-const MULTISIG_MEMBER_MAX = 0xff;
+const MULTISIG_MEMBER_MAX = 0xffff;
 const MULTISIG_POLICY_VERSION = 1;
 const HEX_BODY_RE = /^[0-9a-fA-F]+$/;
-
-const CurveFeature = Object.freeze({
-  NONE: null,
-  ML_DSA: "ml-dsa",
-  GOST: "gost",
-  SM2: "sm",
-});
-
-const CurveId = Object.freeze({
-  ED25519: 1,
-  MLDSA: 2,
-  GOST_256_A: 10,
-  GOST_256_B: 11,
-  GOST_256_C: 12,
-  GOST_512_A: 13,
-  GOST_512_B: 14,
-  SM2: 15,
-});
-
-const CURVE_REGISTRY = [
-  { id: CurveId.ED25519, feature: CurveFeature.NONE, aliases: ["ed25519", "ed"] },
-  { id: CurveId.MLDSA, feature: CurveFeature.ML_DSA, aliases: ["ml-dsa", "mldsa", "ml_dsa"] },
-  {
-    id: CurveId.GOST_256_A,
-    feature: CurveFeature.GOST,
-    aliases: ["gost256a", "gost-256-a"],
-  },
-  {
-    id: CurveId.GOST_256_B,
-    feature: CurveFeature.GOST,
-    aliases: ["gost256b", "gost-256-b"],
-  },
-  {
-    id: CurveId.GOST_256_C,
-    feature: CurveFeature.GOST,
-    aliases: ["gost256c", "gost-256-c"],
-  },
-  {
-    id: CurveId.GOST_512_A,
-    feature: CurveFeature.GOST,
-    aliases: ["gost512a", "gost-512-a"],
-  },
-  {
-    id: CurveId.GOST_512_B,
-    feature: CurveFeature.GOST,
-    aliases: ["gost512b", "gost-512-b"],
-  },
-  { id: CurveId.SM2, feature: CurveFeature.SM2, aliases: ["sm2", "sm-2"] },
-];
+const SM2_DEFAULT_DISTINGUISHED_ID = "1234567812345678";
 
 const ED25519_FIELD_MODULUS = BigInt("0x7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffed");
 const ED25519_SMALL_ORDER_ENCODINGS = [
@@ -167,37 +127,16 @@ const ED25519_SMALL_ORDER_ENCODINGS = [
   "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac03fa",
 ].map((hex) => normalizeBytes(hex));
 
-const CURVE_NAME_TO_ENTRY = new Map();
-const CURVE_ID_TO_ENTRY = new Map();
-for (const entry of CURVE_REGISTRY) {
-  CURVE_ID_TO_ENTRY.set(entry.id, entry);
-  for (const alias of entry.aliases) {
-    CURVE_NAME_TO_ENTRY.set(alias, entry);
-  }
-}
-
-let enabledCurveIds = new Set([CurveId.ED25519]);
 let enabledFeatures = new Set();
-
-const CURVE_PUBLIC_KEY_LENGTH = new Map([
-  [CurveId.ED25519, 32],
-  [CurveId.MLDSA, 32],
-  [CurveId.GOST_256_A, 64],
-  [CurveId.GOST_256_B, 64],
-  [CurveId.GOST_256_C, 64],
-  [CurveId.GOST_512_A, 128],
-  [CurveId.GOST_512_B, 128],
-  [CurveId.SM2, 65],
-]);
 
 function normalizeCurveSupportOptions(options) {
   if (options === undefined) {
-    return { allowMlDsa: false, allowGost: false, allowSm2: false };
+    return { allowMlDsa: false, allowGost: false, allowSm2: false, allowBls: false };
   }
   if (!isPlainObject(options)) {
     throw new TypeError("configureCurveSupport options must be an object");
   }
-  const allowedKeys = new Set(["allowMlDsa", "allowGost", "allowSm2"]);
+  const allowedKeys = new Set(["allowMlDsa", "allowGost", "allowSm2", "allowBls"]);
   const extras = Object.keys(options).filter((key) => !allowedKeys.has(key));
   if (extras.length > 0) {
     throw new TypeError(
@@ -222,32 +161,34 @@ function normalizeCurveSupportOptions(options) {
   ) {
     throw new TypeError("configureCurveSupport options.allowSm2 must be a boolean");
   }
+  if (
+    Object.prototype.hasOwnProperty.call(options, "allowBls") &&
+    typeof options.allowBls !== "boolean"
+  ) {
+    throw new TypeError("configureCurveSupport options.allowBls must be a boolean");
+  }
   return {
     allowMlDsa: options.allowMlDsa === true,
     allowGost: options.allowGost === true,
     allowSm2: options.allowSm2 === true,
+    allowBls: options.allowBls === true,
   };
 }
 
 export function configureCurveSupport(options) {
-  const { allowMlDsa, allowGost, allowSm2 } = normalizeCurveSupportOptions(options);
-  enabledCurveIds = new Set([CurveId.ED25519]);
+  const { allowMlDsa, allowGost, allowSm2, allowBls } = normalizeCurveSupportOptions(options);
   enabledFeatures = new Set();
   if (allowMlDsa) {
-    enabledCurveIds.add(CurveId.MLDSA);
     enabledFeatures.add(CurveFeature.ML_DSA);
   }
   if (allowGost) {
     enabledFeatures.add(CurveFeature.GOST);
-    enabledCurveIds.add(CurveId.GOST_256_A);
-    enabledCurveIds.add(CurveId.GOST_256_B);
-    enabledCurveIds.add(CurveId.GOST_256_C);
-    enabledCurveIds.add(CurveId.GOST_512_A);
-    enabledCurveIds.add(CurveId.GOST_512_B);
   }
   if (allowSm2) {
-    enabledCurveIds.add(CurveId.SM2);
     enabledFeatures.add(CurveFeature.SM2);
+  }
+  if (allowBls) {
+    enabledFeatures.add(CurveFeature.BLS);
   }
 }
 
@@ -259,7 +200,7 @@ function isFeatureEnabled(feature) {
 
 function ensureCurveEnabled(entry, context) {
   if (!isFeatureEnabled(entry.feature)) {
-    const label = entry.aliases[0];
+    const label = entry.algorithm;
     throw new AccountAddressError(
       AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
       `${context ?? "curve"} disabled by configuration: ${label}`,
@@ -269,7 +210,7 @@ function ensureCurveEnabled(entry, context) {
 }
 
 function ensureCurveIdEnabled(curveId, context) {
-  const entry = CURVE_ID_TO_ENTRY.get(curveId);
+  const entry = getCurveEntryById(curveId);
   if (!entry) {
     throw new AccountAddressError(
       AccountAddressErrorCode.UNKNOWN_CURVE,
@@ -328,6 +269,23 @@ function assertEd25519NotSmallOrder(keyBytes, context) {
 
 function validatePublicKeyForCurve(curveId, keyBytes, context = "public key") {
   const entry = ensureCurveIdEnabled(curveId, context);
+  if (entry.id === CurveId.SM2) {
+    const rawSm2Length = CURVE_PUBLIC_KEY_LENGTH.get(entry.id);
+    if (keyBytes.length === rawSm2Length) {
+      return;
+    }
+    if (keyBytes.length >= 2 + rawSm2Length) {
+      const distidLength = (keyBytes[0] << 8) | keyBytes[1];
+      if (keyBytes.length === 2 + distidLength + rawSm2Length) {
+        return;
+      }
+    }
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_PUBLIC_KEY,
+      `invalid ${entry.algorithm} ${context}: expected raw ${rawSm2Length}-byte SEC1 data or canonical payload`,
+      { details: { curveId: entry.id, length: keyBytes.length, expectedLength: rawSm2Length } },
+    );
+  }
   const expectedLength = CURVE_PUBLIC_KEY_LENGTH.get(entry.id);
   if (expectedLength === undefined) {
     throw new AccountAddressError(
@@ -337,7 +295,7 @@ function validatePublicKeyForCurve(curveId, keyBytes, context = "public key") {
     );
   }
   if (keyBytes.length !== expectedLength) {
-    const label = entry.aliases?.[0] ?? `curve id ${entry.id}`;
+    const label = entry.algorithm ?? `curve id ${entry.id}`;
     throw new AccountAddressError(
       AccountAddressErrorCode.INVALID_PUBLIC_KEY,
       `invalid ${label} ${context}: expected ${expectedLength} bytes`,
@@ -348,6 +306,30 @@ function validatePublicKeyForCurve(curveId, keyBytes, context = "public key") {
     assertEd25519CanonicalEncoding(keyBytes, context);
     assertEd25519NotSmallOrder(keyBytes, context);
   }
+}
+
+function normalizeControllerPublicKeyForCurve(curveId, keyBytes, context = "public key") {
+  validatePublicKeyForCurve(curveId, keyBytes, context);
+  if (curveId !== CurveId.SM2) {
+    return keyBytes;
+  }
+  const rawSm2Length = CURVE_PUBLIC_KEY_LENGTH.get(CurveId.SM2);
+  if (keyBytes.length !== rawSm2Length) {
+    return keyBytes;
+  }
+  const distidBytes = Buffer.from(SM2_DEFAULT_DISTINGUISHED_ID, "utf8");
+  if (distidBytes.length > 0xffff) {
+    throw new AccountAddressError(
+      AccountAddressErrorCode.INVALID_PUBLIC_KEY,
+      "SM2 distid exceeds canonical payload limits",
+    );
+  }
+  const payload = new Uint8Array(2 + distidBytes.length + keyBytes.length);
+  payload[0] = (distidBytes.length >> 8) & 0xff;
+  payload[1] = distidBytes.length & 0xff;
+  payload.set(distidBytes, 2);
+  payload.set(keyBytes, 2 + distidBytes.length);
+  return payload;
 }
 
 function invalidMultisigPolicy(policyError, message, extraDetails) {
@@ -390,13 +372,17 @@ function normalizeMultisigMembers(members) {
       throw new TypeError("multisig member weight must fit in a 16-bit unsigned integer");
     }
     const publicKey = normalizeBytes(member.publicKey);
-    validatePublicKeyForCurve(curve, publicKey, `multisig member ${index} public key`);
+    const canonicalPublicKey = normalizeControllerPublicKeyForCurve(
+      curve,
+      publicKey,
+      `multisig member ${index} public key`,
+    );
     const sortKey = Buffer.concat([
       Buffer.from(curveIdToAlgorithm(curve), "ascii"),
       Buffer.from([0]),
-      Buffer.from(publicKey),
+      Buffer.from(canonicalPublicKey),
     ]);
-    return { curve, weight, publicKey, sortKey };
+    return { curve, weight, publicKey: canonicalPublicKey, sortKey };
   });
   normalized.sort((left, right) => left.sortKey.compare(right.sortKey));
   for (let index = 1; index < normalized.length; index += 1) {
@@ -509,8 +495,7 @@ function blake2b256Personalized(data, personalization, includeZeroKeyBlock = fal
 }
 
 function curveIdFromAlgorithm(algorithm) {
-  const key = String(algorithm).trim().toLowerCase();
-  const entry = CURVE_NAME_TO_ENTRY.get(key);
+  const entry = getCurveEntryByAlgorithm(algorithm);
   if (!entry) {
     throw new AccountAddressError(
       AccountAddressErrorCode.UNSUPPORTED_ALGORITHM,
@@ -563,19 +548,23 @@ function decodeHeader(byte) {
 
 function encodeController(controller) {
   if (controller.tag === CONTROLLER_TAG_SINGLE) {
-    validatePublicKeyForCurve(controller.curve, controller.publicKey, "controller public key");
-    if (controller.publicKey.length > 0xff) {
+    const keyBytes = normalizeControllerPublicKeyForCurve(
+      controller.curve,
+      controller.publicKey,
+      "controller public key",
+    );
+    if (keyBytes.length > 0xff) {
       throw new AccountAddressError(
         AccountAddressErrorCode.KEY_PAYLOAD_TOO_LONG,
-        `key payload too long: ${controller.publicKey.length} bytes`,
-        { details: { length: controller.publicKey.length } },
+        `key payload too long: ${keyBytes.length} bytes`,
+        { details: { length: keyBytes.length } },
       );
     }
-    const out = new Uint8Array(3 + controller.publicKey.length);
+    const out = new Uint8Array(3 + keyBytes.length);
     out[0] = controller.tag;
     out[1] = controller.curve;
-    out[2] = controller.publicKey.length;
-    out.set(controller.publicKey, 3);
+    out[2] = keyBytes.length;
+    out.set(keyBytes, 3);
     return out;
   }
 
@@ -594,15 +583,18 @@ function encodeController(controller) {
     parts.push(normalized.version);
     const threshold = normalized.threshold;
     parts.push((threshold >> 8) & 0xff, threshold & 0xff);
-    parts.push(members.length);
+    parts.push((members.length >> 8) & 0xff, members.length & 0xff);
     for (const member of members) {
       const curve = member.curve ?? CurveId.ED25519;
       ensureCurveIdEnabled(curve, "multisig member");
       parts.push(curve);
       const weight = member.weight ?? 0;
       parts.push((weight >> 8) & 0xff, weight & 0xff);
-      const keyBytes = normalizeBytes(member.publicKey);
-      validatePublicKeyForCurve(curve, keyBytes, "multisig member public key");
+      const keyBytes = normalizeControllerPublicKeyForCurve(
+        curve,
+        normalizeBytes(member.publicKey),
+        "multisig member public key",
+      );
       if (keyBytes.length > 0xffff) {
         throw new AccountAddressError(
           AccountAddressErrorCode.KEY_PAYLOAD_TOO_LONG,
@@ -660,8 +652,11 @@ function decodeController(bytes, cursor) {
     if (cursor >= bytes.length) {
       throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
     }
-    const memberCount = bytes[cursor];
-    cursor += 1;
+    if (cursor + 1 >= bytes.length) {
+      throw new AccountAddressError(AccountAddressErrorCode.INVALID_LENGTH, "invalid length for address payload");
+    }
+    const memberCount = (bytes[cursor] << 8) | bytes[cursor + 1];
+    cursor += 2;
     if (memberCount > MULTISIG_MEMBER_MAX) {
       throw new AccountAddressError(
         AccountAddressErrorCode.MULTISIG_MEMBER_OVERFLOW,
@@ -811,7 +806,7 @@ function cborAppendBytes(parts, bytes) {
 
 function curveIdToAlgorithm(curveId) {
   const entry = ensureCurveIdEnabled(curveId, `curve id ${curveId}`);
-  return entry.aliases[0];
+  return canonicalCurveAlgorithm(entry.id) ?? entry.algorithm;
 }
 
 function bytesToHex(bytes) {
@@ -973,8 +968,7 @@ export class AccountAddress {
       extFlag: false,
     };
     const curve = curveIdFromAlgorithm(algorithm);
-    const keyBytes = normalizeBytes(publicKey);
-    validatePublicKeyForCurve(curve, keyBytes, "public key");
+    const keyBytes = normalizeControllerPublicKeyForCurve(curve, normalizeBytes(publicKey), "public key");
     const controller = { tag: CONTROLLER_TAG_SINGLE, curve, publicKey: keyBytes };
     return new AccountAddress(header, controller);
   }

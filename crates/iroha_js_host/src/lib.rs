@@ -73,10 +73,10 @@ use iroha_data_model::{
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     isi::{
         Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, ExecuteTrigger,
-        Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox, RecordKaigiUsage, Register,
-        RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop, RemoveKeyValue,
-        ReportKaigiRelayHealth, SetKaigiRelayManifest, SetKeyValue, Transfer, TransferBox,
-        Unregister, UnregisterBox,
+        Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
+        RecordKaigiUsage, Register, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
+        RemoveKeyValue, ReportKaigiRelayHealth, SetKaigiRelayManifest, SetKeyValue, Transfer,
+        TransferBox, Unregister, UnregisterBox,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
@@ -6197,16 +6197,16 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "abi_version", "ProposeDeployContract")?,
                     "ProposeDeployContract.abi_version",
                 )?;
-                let window = fields
-                    .remove("window")
-                    .map(|value| json::from_value(value).map_err(norito_to_napi))
-                    .transpose()?;
+                let window = match fields.remove("window") {
+                    None | Some(json::Value::Null) => None,
+                    Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
+                };
                 let mode =
                     parse_optional_voting_mode(fields.remove("mode"), "ProposeDeployContract")?;
-                let manifest_provenance = fields
-                    .remove("manifest_provenance")
-                    .map(|value| json::from_value(value).map_err(norito_to_napi))
-                    .transpose()?;
+                let manifest_provenance = match fields.remove("manifest_provenance") {
+                    None | Some(json::Value::Null) => None,
+                    Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
+                };
                 let instruction = ProposeDeployContract {
                     namespace,
                     contract_id,

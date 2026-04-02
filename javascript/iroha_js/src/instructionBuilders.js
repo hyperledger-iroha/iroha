@@ -666,6 +666,63 @@ function normalizeMultisigAccountSelectorInput(source, context) {
   };
 }
 
+function normalizeDetachedPrivateKeyForMultisigRequest(source, context) {
+  const direct = source.privateKey ?? source.private_key;
+  if (direct !== undefined && direct !== null) {
+    if (
+      typeof direct !== "string" &&
+      !Buffer.isBuffer(direct) &&
+      !ArrayBuffer.isView(direct) &&
+      !(direct instanceof ArrayBuffer)
+    ) {
+      fail(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.privateKey must be a string or binary payload`,
+        `${context}.privateKey`,
+      );
+    }
+    return direct;
+  }
+
+  const multihash = source.privateKeyMultihash ?? source.private_key_multihash;
+  if (multihash !== undefined && multihash !== null) {
+    return assertString(multihash, `${context}.privateKeyMultihash`);
+  }
+
+  const rawHex = source.privateKeyHex ?? source.private_key_hex;
+  if (rawHex !== undefined && rawHex !== null) {
+    return formatDetachedPrivateKeyAlgorithmPrefixedHex(
+      rawHex,
+      source,
+      context,
+      "privateKeyHex",
+    );
+  }
+
+  const rawBytes = source.privateKeyBytes ?? source.private_key_bytes;
+  if (rawBytes !== undefined && rawBytes !== null) {
+    return formatDetachedPrivateKeyAlgorithmPrefixedHex(
+      Buffer.from(normalizeByteArray(rawBytes, `${context}.privateKeyBytes`)).toString("hex"),
+      source,
+      context,
+      "privateKeyBytes",
+    );
+  }
+
+  return null;
+}
+
+function formatDetachedPrivateKeyAlgorithmPrefixedHex(value, source, context, label) {
+  const normalizedHex = normalizeOptionalHexString(value, `${context}.${label}`);
+  const algorithm = assertString(
+    source.privateKeyAlgorithm ??
+      source.private_key_algorithm ??
+      "ed25519",
+    `${context}.privateKeyAlgorithm`,
+  ).toLowerCase();
+  return `${algorithm}:${normalizedHex}`;
+}
+
 function normalizeOptionalHexString(value, name) {
   const literal = assertString(value, name);
   const compact = literal.replace(/^0x/i, "");
@@ -2798,20 +2855,11 @@ export function buildMultisigContractCallProposeRequest(options) {
       "multisigContractCallPropose.creationTimeMs",
     );
   }
-  const privateKey = source.privateKey ?? source.private_key;
-  if (privateKey !== undefined && privateKey !== null) {
-    if (
-      typeof privateKey !== "string" &&
-      !Buffer.isBuffer(privateKey) &&
-      !ArrayBuffer.isView(privateKey) &&
-      !(privateKey instanceof ArrayBuffer)
-    ) {
-      fail(
-        ValidationErrorCode.INVALID_OBJECT,
-        "multisigContractCallPropose.privateKey must be a string or binary payload",
-        "multisigContractCallPropose.privateKey",
-      );
-    }
+  const privateKey = normalizeDetachedPrivateKeyForMultisigRequest(
+    source,
+    "multisigContractCallPropose",
+  );
+  if (privateKey !== null) {
     payload.private_key = privateKey;
   }
   return payload;
@@ -2877,20 +2925,11 @@ export function buildMultisigContractCallApproveRequest(options) {
       "multisigContractCallApprove.creationTimeMs",
     );
   }
-  const privateKey = source.privateKey ?? source.private_key;
-  if (privateKey !== undefined && privateKey !== null) {
-    if (
-      typeof privateKey !== "string" &&
-      !Buffer.isBuffer(privateKey) &&
-      !ArrayBuffer.isView(privateKey) &&
-      !(privateKey instanceof ArrayBuffer)
-    ) {
-      fail(
-        ValidationErrorCode.INVALID_OBJECT,
-        "multisigContractCallApprove.privateKey must be a string or binary payload",
-        "multisigContractCallApprove.privateKey",
-      );
-    }
+  const privateKey = normalizeDetachedPrivateKeyForMultisigRequest(
+    source,
+    "multisigContractCallApprove",
+  );
+  if (privateKey !== null) {
     payload.private_key = privateKey;
   }
   return payload;

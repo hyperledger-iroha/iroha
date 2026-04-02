@@ -604,10 +604,7 @@ fn wait_for_lane_peers_commit_qc_at_least(
         if polls % tick_every_polls == 0 {
             let _ = tick_submitter.submit(Log::new(
                 Level::INFO,
-                format!(
-                    "{context} lane tick {}",
-                    polls / tick_every_polls
-                ),
+                format!("{context} lane tick {}", polls / tick_every_polls),
             ));
         }
         thread::sleep(STATUS_POLL_INTERVAL);
@@ -2134,8 +2131,8 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             submitter.transaction_status_timeout = SWAP_BLOCKING_CONFIRMATION_TIMEOUT;
             match submitter.submit_transaction_blocking(&reverse_swap_tx) {
                 Ok(_) => {
-                    reverse_swap_synced_status = Some(
-                        wait_for_committed_success_or_height_fallback(
+                    reverse_swap_synced_status =
+                        Some(wait_for_committed_success_or_height_fallback(
                             &bob_on_ds2,
                             &bob_on_ds2,
                             reverse_swap_entry_hash.clone(),
@@ -2144,8 +2141,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                             reverse_swap_pre_barrier_height,
                             SWAP_COMMITTED_OUTCOME_TIMEOUT,
                             SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
-                        )?,
-                    );
+                        )?);
                 }
                 Err(err) => {
                     let error_text = err.to_string();

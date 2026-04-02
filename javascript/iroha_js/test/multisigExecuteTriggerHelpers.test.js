@@ -244,3 +244,59 @@ test("buildMultisigContractCallApproveRequest normalizes selector and lookup key
     signature_b64: "AQ==",
   });
 });
+
+test("buildMultisigContractCallProposeRequest accepts detached private key variants", () => {
+  const fromHex = buildMultisigContractCallProposeRequest({
+    multisigAccountId: CONTROLLER_ID,
+    signerAccountId: ALICE_ID,
+    namespace: "apps",
+    contractId: "mint",
+    entrypoint: "execute",
+    trigger: "staged_mint_request_hbl",
+    args: { request_id: "req-7" },
+    privateKeyHex: "AA".repeat(32),
+    privateKeyAlgorithm: "ml-dsa",
+  });
+  assert.equal(fromHex.private_key, `ml-dsa:${"aa".repeat(32)}`);
+
+  const fromBytes = buildMultisigContractCallProposeRequest({
+    multisigAccountAlias: "mintops@hbl",
+    signerAccountId: ALICE_ID,
+    namespace: "apps",
+    contractId: "mint",
+    entrypoint: "execute",
+    trigger: "staged_mint_request_hbl",
+    args: { request_id: "req-8" },
+    privateKeyBytes: Buffer.alloc(32, 0x11),
+  });
+  assert.equal(fromBytes.private_key, `ed25519:${"11".repeat(32)}`);
+
+  const multihash = buildMultisigContractCallProposeRequest({
+    multisigAccountAlias: "mintops@hbl",
+    signerAccountId: ALICE_ID,
+    namespace: "apps",
+    contractId: "mint",
+    entrypoint: "execute",
+    trigger: "staged_mint_request_hbl",
+    args: { request_id: "req-9" },
+    privateKeyMultihash: "ed25519:prebuilt",
+  });
+  assert.equal(multihash.private_key, "ed25519:prebuilt");
+});
+
+test("buildMultisigContractCallApproveRequest accepts snake_case detached key fields", () => {
+  const payload = buildMultisigContractCallApproveRequest({
+    multisig_account_id: CONTROLLER_ID,
+    signer_account_id: BOB_ID,
+    instructions_hash: "AA".repeat(32),
+    private_key_hex: "22".repeat(32),
+    private_key_algorithm: "sm2",
+  });
+
+  assert.deepEqual(payload, {
+    multisig_account_id: CONTROLLER_ID,
+    signer_account_id: BOB_ID,
+    instructions_hash: "aa".repeat(32),
+    private_key: `sm2:${"22".repeat(32)}`,
+  });
+});

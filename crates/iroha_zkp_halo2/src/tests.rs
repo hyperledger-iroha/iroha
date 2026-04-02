@@ -8,6 +8,7 @@ use crate::backend::IpaGroup;
 #[cfg(feature = "goldilocks_backend")]
 use crate::backend::goldilocks::{self as gold, GoldilocksBackend};
 use crate::{
+    PolyOpenTranscriptMetadata,
     backend::{
         bn254::{self as bn254, Bn254Backend},
         pallas::{self as pallas, PallasBackend},
@@ -426,5 +427,66 @@ fn decode_envelope_exposes_components() {
             assert_eq!(decoded_proof.l_vec.len(), proof.l_vec.len());
         }
         other => panic!("expected Pallas variant, got {other:?}"),
+    }
+}
+
+#[test]
+fn batch_verify_rejects_tampered_bound_public_claims() {
+    let params = pallas::Params::new(8).unwrap();
+    let coeffs = sample_pallas_coeffs(8);
+    let poly = pallas::Polynomial::from_coeffs(coeffs);
+    let commitment = poly.commit(&params).unwrap();
+    let z = pallas::Scalar::from(11u64);
+    let metadata = PolyOpenTranscriptMetadata {
+        vk_commitment: Some([0x11; 32]),
+        public_inputs_schema_hash: Some([0x22; 32]),
+        domain_tag: Some([0x33; 32]),
+    };
+    let mut transcript = Transcript::new("bound-claims");
+    let (proof, t) = poly
+        .open_with_metadata(&params, &mut transcript, z, commitment, metadata)
+        .unwrap();
+    let envelope = OpenVerifyEnvelope {
+        params: nh::params_to_wire(&params),
+        public: nh::poly_open_public::<PallasBackend>(params.n(), z, t, commitment),
+        proof: nh::proof_to_wire(&proof),
+        transcript_label: "bound-claims".into(),
+        vk_commitment: metadata.vk_commitment,
+        public_inputs_schema_hash: metadata.public_inputs_schema_hash,
+        domain_tag: metadata.domain_tag,
+    };
+
+    let ok = crate::batch::verify_open_batch(std::slice::from_ref(&envelope));
+    assert!(matches!(ok[0], Ok(true)));
+
+    let mut bad_z = envelope.clone();
+    bad_z.public.z[0] ^= 0x01;
+    let mut bad_t = envelope.clone();
+    bad_t.public.t[0] ^= 0x01;
+    let mut bad_commitment = envelope.clone();
+    bad_commitment.public.p_g[0] ^= 0x01;
+    let mut bad_label = envelope.clone();
+    bad_label.transcript_label.push_str("-tampered");
+    let mut bad_vk = envelope.clone();
+    bad_vk.vk_commitment = Some([0x44; 32]);
+    let mut bad_schema = envelope.clone();
+    bad_schema.public_inputs_schema_hash = Some([0x55; 32]);
+    let mut bad_domain = envelope.clone();
+    bad_domain.domain_tag = Some([0x66; 32]);
+
+    for tampered in [
+        bad_z,
+        bad_t,
+        bad_commitment,
+        bad_label,
+        bad_vk,
+        bad_schema,
+        bad_domain,
+    ] {
+        let result = crate::batch::verify_open_batch(std::slice::from_ref(&tampered));
+        assert!(
+            !matches!(result[0], Ok(true)),
+            "tampered envelope unexpectedly verified: {tampered:?}"
+        );
     }
 }

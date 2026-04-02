@@ -159,6 +159,11 @@ Zero‑knowledge (verification/state‑read)
 
 ZK gating & determinism
 - `CoreHost` performs full proof verification through the configured backend verifier (`iroha_core::zk::verify_backend_with_timing`), not the legacy polynomial-opening helper.
+- The standalone native IPA batch syscall keeps the current enforced-envelope
+  path: prover and verifier bind `transcript_label`, backend/domain size, `z`,
+  `t`, `p_g`, and any optional `OpenVerifyEnvelope` metadata
+  (`vk_commitment`, `public_inputs_schema_hash`, `domain_tag`) before deriving
+  Fiat-Shamir challenges.
 - Verification is bound to the VK registry before cryptographic checks:
   - envelope/backend must be supported (`backend = halo2-ipa-pasta`), `vk_hash` must be present, and payload/proof sizes must respect config caps.
   - the referenced verifying key must be active and match circuit id, schema hash (`hash(public_inputs)`), namespace, and owner manifest.

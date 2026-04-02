@@ -122,10 +122,13 @@ class ToriiWebSocketSubscription private constructor(builder: Builder) : AutoClo
     }
 
     private object NullSession : ToriiWebSocketSession {
-        override fun sendText(data: CharSequence, last: Boolean): CompletableFuture<Void> = CompletableFuture.failedFuture(IllegalStateException("session not open"))
-        override fun sendBinary(data: ByteBuffer, last: Boolean): CompletableFuture<Void> = CompletableFuture.failedFuture(IllegalStateException("session not open"))
-        override fun sendPing(message: ByteBuffer): CompletableFuture<Void> = CompletableFuture.failedFuture(IllegalStateException("session not open"))
-        override fun sendPong(message: ByteBuffer): CompletableFuture<Void> = CompletableFuture.failedFuture(IllegalStateException("session not open"))
+        override fun sendText(data: CharSequence, last: Boolean): CompletableFuture<Void> = failedFuture(IllegalStateException("session not open"))
+        override fun sendBinary(data: ByteBuffer, last: Boolean): CompletableFuture<Void> = failedFuture(IllegalStateException("session not open"))
+        override fun sendPing(message: ByteBuffer): CompletableFuture<Void> = failedFuture(IllegalStateException("session not open"))
+        override fun sendPong(message: ByteBuffer): CompletableFuture<Void> = failedFuture(IllegalStateException("session not open"))
+
+        private fun <T> failedFuture(ex: Throwable): CompletableFuture<T> =
+            CompletableFuture<T>().also { it.completeExceptionally(ex) }
         override fun close(statusCode: Int, reason: String): CompletableFuture<Void> = CompletableFuture.completedFuture(null)
         override val isOpen: Boolean get() = false
         override val subprotocol: String? get() = ""

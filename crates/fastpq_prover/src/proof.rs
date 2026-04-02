@@ -230,15 +230,11 @@ pub fn verify(batch: &TransitionBatch, proof: &Proof) -> Result<()> {
         return Err(Error::CommitmentMismatch);
     }
 
-    let expected_ordering = ordering::ordering_hash(batch)?;
-    if proof.public_io.ordering_hash != hash_norito::core::to_bytes(&expected_ordering) {
-        return Err(Error::OrderingHashMismatch);
-    }
-
     let expected_permission_hashes = collect_permission_hashes(batch)?;
-    if proof.public_io.permission_hashes != expected_permission_hashes {
-        return Err(Error::PermissionHashMismatch);
-    }
+    let expected_ordering = ordering::ordering_hash(batch)?;
+    let expected_public_io =
+        build_public_io(batch, expected_ordering, expected_permission_hashes.clone());
+    ensure_public_io_matches(&expected_public_io, &proof.public_io)?;
 
     let trace = build_trace(batch)?;
     let planner = crate::Planner::new(&params);
@@ -428,6 +424,36 @@ fn build_public_io(
         ordering_hash: hash_norito::core::to_bytes(&ordering_hash),
         permission_hashes,
     }
+}
+
+fn ensure_public_io_matches(expected: &PublicIO, actual: &PublicIO) -> Result<()> {
+    if actual.dsid != expected.dsid {
+        return Err(Error::PublicIoMismatch { field: "dsid" });
+    }
+    if actual.slot != expected.slot {
+        return Err(Error::PublicIoMismatch { field: "slot" });
+    }
+    if actual.old_root != expected.old_root {
+        return Err(Error::PublicIoMismatch { field: "old_root" });
+    }
+    if actual.new_root != expected.new_root {
+        return Err(Error::PublicIoMismatch { field: "new_root" });
+    }
+    if actual.perm_root != expected.perm_root {
+        return Err(Error::PublicIoMismatch { field: "perm_root" });
+    }
+    if actual.tx_set_hash != expected.tx_set_hash {
+        return Err(Error::PublicIoMismatch {
+            field: "tx_set_hash",
+        });
+    }
+    if actual.ordering_hash != expected.ordering_hash {
+        return Err(Error::OrderingHashMismatch);
+    }
+    if actual.permission_hashes != expected.permission_hashes {
+        return Err(Error::PermissionHashMismatch);
+    }
+    Ok(())
 }
 
 fn is_zero_bytes(bytes: &[u8]) -> bool {
@@ -654,6 +680,74 @@ mod tests {
         proof.public_io.ordering_hash[0] ^= 0x01;
         let err = verify(&batch, &proof).unwrap_err();
         assert!(matches!(err, Error::OrderingHashMismatch));
+    }
+
+    #[test]
+    fn verify_rejects_dsid_mutation() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch();
+        let mut proof = prover.prove(&batch).unwrap();
+        proof.public_io.dsid[0] ^= 0x01;
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(err, Error::PublicIoMismatch { field: "dsid" }));
+    }
+
+    #[test]
+    fn verify_rejects_slot_mutation() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch();
+        let mut proof = prover.prove(&batch).unwrap();
+        proof.public_io.slot = proof.public_io.slot.wrapping_add(1);
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(err, Error::PublicIoMismatch { field: "slot" }));
+    }
+
+    #[test]
+    fn verify_rejects_old_root_mutation() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch();
+        let mut proof = prover.prove(&batch).unwrap();
+        proof.public_io.old_root[0] ^= 0x01;
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(err, Error::PublicIoMismatch { field: "old_root" }));
+    }
+
+    #[test]
+    fn verify_rejects_new_root_mutation() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch();
+        let mut proof = prover.prove(&batch).unwrap();
+        proof.public_io.new_root[0] ^= 0x01;
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(err, Error::PublicIoMismatch { field: "new_root" }));
+    }
+
+    #[test]
+    fn verify_rejects_perm_root_mutation() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch();
+        let mut proof = prover.prove(&batch).unwrap();
+        proof.public_io.perm_root[0] ^= 0x01;
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::PublicIoMismatch { field: "perm_root" }
+        ));
+    }
+
+    #[test]
+    fn verify_rejects_tx_set_hash_mutation() {
+        let prover = Prover::canonical("fastpq-lane-balanced").unwrap();
+        let batch = sample_batch();
+        let mut proof = prover.prove(&batch).unwrap();
+        proof.public_io.tx_set_hash[0] ^= 0x01;
+        let err = verify(&batch, &proof).unwrap_err();
+        assert!(matches!(
+            err,
+            Error::PublicIoMismatch {
+                field: "tx_set_hash"
+            }
+        ));
     }
 
     #[test]

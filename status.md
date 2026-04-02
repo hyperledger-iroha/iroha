@@ -2,6 +2,72 @@
 
 Last updated: 2026-04-02
 
+## 2026-04-02 Follow-up: repo-wide ZK verifier hardening closes the standalone IPA claim-binding gap and tightens FASTPQ claim checks
+- Hardened the standalone native IPA helper in
+  `crates/iroha_zkp_halo2/src` so prover and verifier now bind the full claimed
+  statement before the first Fiat-Shamir challenge:
+  `transcript_label`, backend/domain size, `z`, `t`, `p_g`, and any optional
+  outer metadata carried in `OpenVerifyEnvelope`
+  (`vk_commitment`, `public_inputs_schema_hash`, `domain_tag`).
+- Threaded that stricter helper through every in-repo standalone consumer:
+  `iroha_core`'s `halo2/ipa/poly-open` path, the IVM batch helper/syscall path,
+  and the Torii `/v1/zk/verify-batch` diagnostics endpoint.
+- Tightened FASTPQ verification in `crates/fastpq_prover/src/proof.rs` so the
+  verifier now recomputes the expected `PublicIO` from the supplied batch and
+  rejects mismatches for every carried claim, not just the ordering and
+  permission hashes. The explicit checks now cover `dsid`, `slot`, `old_root`,
+  `new_root`, `perm_root`, `tx_set_hash`, `ordering_hash`, and
+  `permission_hashes`.
+- Added regression coverage for:
+  - native IPA tampering of `z`, `t`, `p_g`, `transcript_label`, and the
+    optional bound metadata;
+  - Torii batch verification rejecting metadata tampering;
+  - IVM batch syscall rejection of tampered bound metadata; and
+  - FASTPQ verifier rejection for each previously-unchecked `PublicIO` field.
+- Clarified the public surface docs/comments so `/v1/zk/verify` and
+  `/v1/zk/submit-proof` are explicitly marked decode-only/demo endpoints, while
+  `/v1/zk/verify-batch` is documented as a standalone native IPA verifier and
+  not a ledger-equivalent verifier.
+- Added `docs/source/zk_audit_matrix.md` to record every audited ingress and
+  its residual risk classification after the patch.
+
+## 2026-04-02 Follow-up: JS SDK Norito fallback now covers the current builder surface
+- Expanded the `javascript/iroha_js` pure-JS Norito path from the old narrow
+  mint/burn/transfer/`ExecuteTrigger` slice to the current JS builder surface:
+  - added JS encode coverage for `Register.Domain`, `Register.Account`, the
+    supported `Transfer.*` variants, canonical `Custom` payloads and multisig
+    alias inputs, plus the current Kaigi / governance / social /
+    smart-contract / zk / RWA helper families;
+  - made the instruction round-trip cache canonical instead of echoing the raw
+    builder input, so JS-only decode now matches native decode for canonical
+    `Register.Account` and the supported fallback families;
+  - normalized `MultisigSpec`/`Map` JSON before `Custom` encoding so alias
+    inputs and canonical `Custom.payload.*` instructions produce identical
+    bytes; and
+  - taught the SDK to fall back from the native encoder to the pure-JS encoder
+    when the host rejects a shape that the JS fallback now supports, which
+    closes the current optional account-controller / builder-JSON bridge gaps
+    without requiring callers to branch manually.
+- Added a broader Norito parity matrix in
+  `javascript/iroha_js/test/norito_fallback_matrix.test.js`, including:
+  - native-vs-JS parity across the current representative builder surface;
+  - canonical decode checks for the multisig alias inputs; and
+  - curve-family account-id parity coverage on the supported path, plus the
+    existing real multisig-controlled account-id regression.
+- Updated the JS README to describe the broader fallback coverage and the new
+  native-to-JS encode bridge behavior.
+- Verification:
+  - `node --test javascript/iroha_js/test/multisigExecuteTriggerHelpers.test.js javascript/iroha_js/test/norito_fallback.test.js javascript/iroha_js/test/norito_fallback_matrix.test.js javascript/iroha_js/test/multisigProposalInstruction.test.js javascript/iroha_js/test/multisigRegisterInstruction.test.js javascript/iroha_js/test/norito.test.js`
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test javascript/iroha_js/test/multisigExecuteTriggerHelpers.test.js javascript/iroha_js/test/norito_fallback.test.js javascript/iroha_js/test/norito_fallback_matrix.test.js`
+- Residual gap after this tranche:
+  - the native Rust host still does not natively accept every optional
+    controller/key variant exercised by the JS address codec, so some of that
+    parity currently lands through the new JS fallback bridge rather than
+    direct host support; and
+  - pure-JS arbitrary-byte decode for broader instruction families still relies
+    on the canonical round-trip cache unless those families get dedicated JS
+    decoders in a later tranche.
+
 ## 2026-04-02 Follow-up: JS SDK now ships first-class ExecuteTrigger and multisig helper builders
 - Added the next ergonomic layer in `javascript/iroha_js` on top of the
   canonical Norito path already proven for multisig-critical direct contract
@@ -33,6 +99,142 @@ Last updated: 2026-04-02
     instruction slice; awkward contract-call families beyond `ExecuteTrigger`
     may still need additional pure-JS coverage or explicit host bridging in
     follow-up work.
+
+## 2026-04-02 Follow-up: multisig integration setup honors SNS-backed runtime domain leases again
+- Fixed the reported `integration_tests/tests/multisig.rs` failures that started
+  rejecting runtime domain registration after the SNS lease invariant landed.
+- `integration_tests/tests/multisig.rs` now routes its runtime domain setup
+  through the lease-aware `iroha_test_network` helper and uses SNS-valid
+  hyphenated domain labels for the multisig-specific test domains.
+- `crates/iroha_test_network/src/lib.rs` no longer hard-codes
+  `pricing_class_hint: Some(0)` for synthetic domain leases; the helper now
+  lets the registrar auto-pick the valid pricing tier for the label under test.
+- The multisig cancel-route regression was deeper than the original setup
+  failure: Torii intentionally hides cancel-wrapper proposals from
+  `/v1/multisig/proposals/get`, and `/v1/multisig/cancel` now uses detached
+  signing / lane admission semantics rather than server-side signing. The test
+  now follows the public route contract by:
+  - using `/v1/multisig/cancel` in draft mode to assert the `PROPOSE`/`APPROVE`
+    transition and deterministic cancel proposal id; and
+  - submitting the equivalent `MultisigPropose(MultisigCancel(...))` /
+    `MultisigApprove(...)` instructions through the blocking client path before
+    asserting the target proposal reaches terminal `CANCELED` state and remains
+    listed there.
+- Verification:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_codex_multisig_cancel IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" TEST_NETWORK_BIN_IROHA="$PWD/target/debug/iroha" cargo test -p integration_tests --test multisig multisig_cancel_route_persists_canceled_terminal_state -- --exact --nocapture --test-threads=1` (pass)
+  - `CARGO_TARGET_DIR=target_codex_multisig_cancel IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" TEST_NETWORK_BIN_IROHA="$PWD/target/debug/iroha" cargo test -p integration_tests --test multisig -- --nocapture --test-threads=1` (replay reached green results for the originally failing non-upgrade cases before the later executor-upgrade tranche was left running alongside additional overlapping local reruns; rerun cleanly before treating the whole shard as closed)
+
+## 2026-04-02 Follow-up: `iroha_cli` live integration tests now pin the daemon and CLI to the same debug profile before network startup
+- Fixed the reported `integration_tests/tests/iroha_cli.rs` Soracloud HF
+  live-control-plane flakes by initializing the CLI test environment before
+  any test network starts. The file had been defaulting the CLI binary to
+  `target/iroha-test-network/debug/iroha` only when `program()` was first
+  called, but many tests started `iroha3d` earlier, so the daemon could come
+  from the default `release` profile while the CLI came from `debug`.
+- `integration_tests/tests/iroha_cli.rs` now shares one
+  `prepare_iroha_cli_test_environment()` helper between network startup and CLI
+  invocation, and the new value-level build-profile helper keeps the default
+  profile pinned to `debug` whenever `IROHA_TEST_BUILD_PROFILE` is unset or
+  blank.
+- Added focused helper regressions for the build-profile selection logic.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test iroha_cli iroha_cli_test_build_profile_override -- --nocapture`
+  - `cargo test -p integration_tests --test iroha_cli soracloud_hf_ -- --nocapture`
+  - `cargo test -p integration_tests --test iroha_cli -- --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test iroha_cli -- --nocapture`
+
+## 2026-04-02 Follow-up: `iroha_cli` binary reuse now pins the sibling `iroha3d` daemon to the same target/profile
+- Fixed the reported `integration_tests/tests/iroha_cli.rs`
+  Soracloud-training timeout slice by tightening the test-only binary reuse
+  helper: when the `iroha_cli` integration file opts into reusing an existing
+  `iroha` binary, it now also exports `TEST_NETWORK_BIN_IROHAD` from the
+  sibling `iroha3d` in the same target/profile when present, and falls back to
+  the same target-root search if needed.
+- This keeps the CLI and daemon on the same built artifact set during
+  `IROHA_TEST_SKIP_BUILD` / existing-binary reuse flows and avoids version skew
+  where a newer Soracloud CLI can drive an older `iroha3d` binary during the
+  live Torii control-plane tests.
+- Added focused helper regressions for daemon-path discovery and sibling
+  `iroha`/`iroha3d` pairing.
+- Verification:
+  - `cargo test -p integration_tests --test iroha_cli find_existing_binary_path_from_roots_returns_daemon_match -- --exact --test-threads=1`
+  - `cargo test -p integration_tests --test iroha_cli matching_irohad_binary_path_from_cli_path_uses_sibling_binary -- --exact --test-threads=1`
+  - `TEST_NETWORK_BIN_IROHA="$PWD/target/debug/iroha" TEST_NETWORK_BIN_IROHAD="$PWD/target/debug/iroha3d" cargo test -p integration_tests --test iroha_cli soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane -- --exact --nocapture --test-threads=1`
+
+## 2026-04-02 Follow-up: connected-peers, runtime Nexus registration, and account-created trigger regressions are green again
+- Fixed the reported `integration_tests` failure trio without broad workspace
+  churn:
+  - `crates/iroha_core/src/smartcontracts/isi/domain.rs` now emits
+    `AccountEvent::Created` again when registering an account, deriving the
+    event domain from the account's bound alias domain when present and falling
+    back to the reserved universal dataspace alias otherwise. This restores the
+    missing trigger path behind
+    `triggers::data_trigger::two_non_intersecting_execution_paths`.
+  - `integration_tests/tests/extra_functional/connected_peers.rs` now treats
+    peer-roster convergence as a cluster property instead of trusting a single
+    probe peer: when the primary roster check misses, the helper samples all
+    remaining peers before declaring failure. This removes the flaky
+    `connected_peers_with_f_1_0_1` timeout where one peer lagged at a roster
+    count of `3` while the rest of the cluster had already converged.
+  - `integration_tests/tests/nexus/runtime_dataspace_registration_perf.rs` now
+    provisions a dedicated runtime-benchmark dataspace lane plus a generated
+    admin-managed manifest whose authoritative peer binding matches the test
+    network's deterministic BLS peer id. The benchmark also waits for the
+    manifest lane binding and the publish-manifest permission grant to become
+    query-visible before continuing, which removes the earlier
+    `PRTRY:ROUTE_UNRESOLVED` / `route_unavailable` failures during the
+    report-only lifecycle benchmark.
+- Added focused `iroha_core` coverage for the restored account-created event so
+  both the domainless-account and alias-bound-account paths stay pinned.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test mod extra_functional::connected_peers::connected_peers_with_f_1_0_1 -- --nocapture`
+  - `cargo test -p integration_tests --test mod triggers::data_trigger::two_non_intersecting_execution_paths -- --nocapture`
+  - `cargo test -p iroha_core created_event_with_ -- --nocapture`
+  - `IROHA_NEXUS_RUNTIME_BENCH_ITERATIONS=1 cargo test -p integration_tests --test mod nexus::runtime_dataspace_registration_perf::runtime_nexus_registration_reports_lane_lifecycle_costs -- --nocapture`
+
+## 2026-04-02 Follow-up: `iroha_cli` binary-reuse helper tests no longer poison process-wide CLI selection
+- Fixed the reported `integration_tests/tests/iroha_cli.rs` failure pair by
+  removing process-wide `IROHA_TEST_SKIP_BUILD` mutation from the
+  `should_reuse_existing_cli_binary_for_tests_*` tests.
+- The helper now keeps its runtime env lookup, but the tests exercise the
+  parsing logic through a value-level helper instead of mutating global env
+  state in parallel. That prevents a transient truthy `IROHA_TEST_SKIP_BUILD`
+  from racing with other `iroha_cli` integration tests and forcing
+  `program()` to cache `TEST_NETWORK_BIN_IROHA` against an unintended reused
+  binary.
+- Verification:
+  - `cargo test -p integration_tests --test iroha_cli should_reuse_existing_cli_binary_for_tests -- --nocapture`
+  - `cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts -- --nocapture --exact --test-threads=1` on a fresh built binary (pass in isolated replay before/after the test-only fix)
+
+## 2026-04-02 Follow-up: app-api canonical auth smoke test matches Torii's signed request contract again
+- Fixed the reported `integration_tests/tests/app_api_canonical_auth.rs`
+  failure by updating the smoke test to send the full signed header set that
+  `iroha_torii` now requires for single-signature canonical request auth:
+  `X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, and
+  `X-Iroha-Nonce`.
+- The test now also constructs request URLs through `reqwest::Url`
+  path-segment builders before parsing them into `Uri` for signing, so the
+  signed path matches the percent-encoded on-wire request URI for canonical
+  I105 account literals with non-ASCII characters.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test app_api_canonical_auth -- --nocapture`
+
+## 2026-04-01 Follow-up: app-api canonical-auth integration smoke matches the current signed-request contract again
+- Fixed `integration_tests/tests/app_api_canonical_auth.rs` so it now signs the
+  same request-target form Torii verifies in production: the path/query portion
+  of the request, not the absolute URL.
+- The smoke test now sends the full canonical signed header set
+  (`X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`,
+  `X-Iroha-Nonce`) for both the GET `/v1/accounts/{account_id}/assets` read and
+  the POST `/v1/accounts/{account_id}/transactions/query` read, using distinct
+  nonces and the freshness-aware signature payload Torii currently requires.
+- Verification:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test app_api_canonical_auth -- --nocapture`
 
 ## 2026-04-01 Follow-up: exact-frontier known-block commit-QC repair now uses `FetchBlockBody`, and the targeted RBC recovery matrix is green
 - Fixed the remaining lagging-peer / same-height frontier recovery gap in the
