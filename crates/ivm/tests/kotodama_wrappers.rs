@@ -58,7 +58,7 @@ fn zk_verify_transfer_wrapper_positive() {
 }
 
 #[test]
-fn zk_verify_batch_wrapper_mixed_statuses() {
+fn zk_verify_batch_wrapper_reports_disabled_under_default_host() {
     if !should_run_wrappers() {
         eprintln!("Skipping: set IROHA_RUN_ZK_WRAPPERS=1 to run kotodama wrapper tests.");
         return;
@@ -106,8 +106,6 @@ fn zk_verify_batch_wrapper_mixed_statuses() {
     let mut host = DefaultHost::new().with_zk_halo2_config(cfg);
     let (status, out_ptr) =
         ivm::kotodama::std::zk_verify_batch_envs(&mut host, &mut vm, &[env_ok, env_bad]);
-    assert_eq!(status, 0);
-    let tlv = vm.memory.validate_tlv(out_ptr).unwrap();
-    let statuses: Vec<u8> = norito::decode_from_bytes(tlv.payload).unwrap();
-    assert_eq!(statuses, vec![1, 0]);
+    assert_eq!(status, ivm::host::ERR_DISABLED);
+    assert_eq!(out_ptr, 0);
 }

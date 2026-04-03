@@ -9,6 +9,8 @@ source_last_modified: "2026-01-04T10:50:53.704164+00:00"
 translation_last_reviewed: 2026-01-30
 ---
 
+> **Translation status:** The canonical, up-to-date version of this page is [zk_envelopes.md](zk_envelopes.md). This translation has not yet been refreshed for the 2026-04-02 native IPA transcript-metadata changes (`vk_commitment`, `public_inputs_schema_hash`, `domain_tag`) or the `halo2/ipa/poly-open` terminology update.
+
 # ZK Envelopes (Norito)
 
 This page specifies Norito-encoded envelopes used by native verifiers in the

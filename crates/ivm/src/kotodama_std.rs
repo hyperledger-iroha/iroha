@@ -105,8 +105,11 @@ pub fn vendor_execute_query_bytes(host: &mut dyn IVMHost, vm: &mut IVM, query_by
 /// ZK batch verify helper: serialize a slice of `OpenVerifyEnvelope` and invoke
 /// the `ZK_VERIFY_BATCH` syscall. Returns `(status, out_ptr)` where `status`
 /// is the value left in `r11` and `out_ptr` is the pointer returned in `r10`
-/// (0 if no pointer was returned). On success (`status=0`), the caller can
-/// decode `&NoritoBytes(Vec<u8>)` at `out_ptr` for per‑item results.
+/// (0 if no pointer was returned).
+///
+/// `DefaultHost` intentionally leaves this syscall disabled and reports
+/// `ERR_DISABLED`. Only `iroha_core::smartcontracts::ivm::host::CoreHost`
+/// returns per-item status bytes in `&NoritoBytes(Vec<u8>)`.
 pub fn zk_verify_batch_envs(
     host: &mut dyn IVMHost,
     vm: &mut IVM,
