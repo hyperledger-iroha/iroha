@@ -2,6 +2,40 @@
 
 Last updated: 2026-04-03
 
+## 2026-04-03 Follow-up: Kotodama `state Map` helper parameters and method-only map/json helpers landed
+- Landed the first durable-handle ergonomics pass for Kotodama:
+  - internal helper functions can now accept `state Map<K, V>` parameters,
+    preserving durable map roots across calls without falling back to forbidden
+    local state aliasing;
+  - the public helper surface now prefers method syntax for map/path/json
+    operations (`map.contains(...)`, `map.get_or(...)`, `map.ensure(...)`,
+    `base.path(...)`, `json.get_* (...)`); and
+  - direct free-call spellings for those helpers are rejected by the parser
+    with migration hints so new code cannot keep using the removed surface.
+- Updated the canonical Kotodama samples/tests/docs around that surface:
+  - `crates/kotodama_lang` parser/semantic/IR/compiler tests now use the new
+    method syntax and cover the parse-time rejection path;
+  - the durable `Map<Name, int>` runtime regression tests now exercise
+    `state Map` helper parameters and method-form map/path helpers; and
+  - the canonical English grammar/examples plus `crates/ivm/docs` now describe
+    the method-first surface.
+- Focused verification completed:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang`
+  - `cargo test -p ivm --test kotodama_state_name_map_runtime -- --nocapture`
+  - `cargo test -p ivm --test debug_contains -- --nocapture`
+  - `cargo test -p ivm kotodama_invalid_literals -- --nocapture`
+- Verification note:
+  - the current dirty workspace still has unrelated pre-existing red tests in
+    `cargo test -p ivm --test kotodama -- --nocapture`
+    (`branch_lowering_uses_short_bne_and_dual_jal`,
+    `compile_poseidon2_and_assert_eq`,
+    `manifest_includes_entrypoints_and_features`,
+    `manifest_includes_isi_access_hints_for_static_targets`,
+    `prediction_market_demo_compiles`,
+    `seiyaku_meta_controls_header`);
+    the method-helper migration itself is green in the focused slices above.
+
 ## 2026-04-03 Follow-up: multisig domain bootstrap now recovers from inconclusive submit timeouts
 - Hardened `integration_tests/tests/multisig.rs` after the remaining
   broad-workspace executor-upgrade failure reproduced only as an inconclusive

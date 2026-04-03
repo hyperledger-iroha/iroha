@@ -192,7 +192,7 @@ use crate::{
     Peers,
     block::{CommittedBlock, ValidBlock},
     compliance::LaneComplianceEngine,
-    executor::Executor,
+    executor::{Executor, parse_contract_call_execution_context},
     governance::manifest::{
         LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding,
     },
@@ -26362,6 +26362,15 @@ impl StateTransaction<'_, '_> {
             ExecutableRef::Ivm(blob_hash) => {
                 if let Some(bytecode) = self.world.triggers.get_original_contract(blob_hash) {
                     let trigger_args = self.trigger_args_from_event(&event);
+                    let contract_call_context = self
+                        .world
+                        .triggers
+                        .inspect_by_id(id, |action| action.metadata().clone())
+                        .map(|metadata| {
+                            parse_contract_call_execution_context(&metadata, bytecode.as_ref())
+                        })
+                        .transpose()?
+                        .flatten();
                     let bytecode = bytecode.clone();
                     let summary = {
                         let mut cache = self.ivm_cache.lock();
@@ -26404,6 +26413,26 @@ impl StateTransaction<'_, '_> {
                             .map_err(|e| ValidationFail::InternalError(e.to_string()))?
                     };
                     let mut vm = cached_runtime.vm;
+                    if let Some(context) = contract_call_context.as_ref()
+                        && let Some(entrypoint_pc) = context.entrypoint_pc()
+                    {
+                        vm.set_register(1, vm.memory.code_len());
+                        vm.set_program_counter(entrypoint_pc).map_err(|err| {
+                            let selector = context
+                                .runtime_context()
+                                .map(|runtime| runtime.entrypoint)
+                                .unwrap_or_else(|| "main".to_owned());
+                            ValidationFail::NotPermitted(format!(
+                                "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                            ))
+                        })?;
+                    }
+                    let host_args = contract_call_context
+                        .as_ref()
+                        .map_or(trigger_args, |context| context.args().clone());
+                    let contract_runtime_context = contract_call_context
+                        .as_ref()
+                        .and_then(|context| context.runtime_context());
                     // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
                     // which we collect after `vm.run()` and return as the trigger step.
                     let accounts = self.trigger_accounts_snapshot();
@@ -26411,7 +26440,7 @@ impl StateTransaction<'_, '_> {
                         crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
                             authority.clone(),
                             accounts,
-                            trigger_args,
+                            host_args,
                         );
                     let current_block_time_ms =
                         u64::try_from(self._curr_block.creation_time().as_millis())
@@ -26470,7 +26499,7 @@ impl StateTransaction<'_, '_> {
                     }
                     // Collect queued ISIs from the host, execute them via the executor,
                     // and return them as the step.
-                    let artifacts = host.into_execution_artifacts(None)?;
+                    let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
                     iroha_logger::info!(
                         trigger_id = %id,
                         authority = %authority,
