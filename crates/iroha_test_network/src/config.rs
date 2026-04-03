@@ -20,7 +20,7 @@ use iroha_crypto::{KeyPair, SignatureOf};
 use iroha_data_model::{
     ChainId, Registrable as _,
     account::{Account, AccountId},
-    asset::{AssetDefinitionId, id::AssetId},
+    asset::{AssetDefinitionId, definition::AssetDefinition, id::AssetId},
     consensus::HsmBinding,
     da::commitment::DaProofPolicyBundle,
     domain::{Domain, DomainId},
@@ -51,7 +51,8 @@ use iroha_executor_data_model::permission::{
 use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
 use iroha_primitives::{json::Json, numeric::NumericSpec, time::TimeSource, unique_vec::UniqueVec};
 use iroha_test_samples::{
-    ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR,
+    SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
 };
 #[cfg(test)]
 use norito::json::Value;
@@ -367,6 +368,8 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
     let genesis_id = sanitize_account_id(&genesis_account);
     let alice_id = sanitize_account_id(&ALICE_ID);
+    let bob_id = sanitize_account_id(&BOB_ID);
+    let carpenter_id = sanitize_account_id(&CARPENTER_ID);
     let ivm_dir = default_ivm_dir();
 
     let mut builder = if let Some(executor_path) = try_default_executor_path() {
@@ -544,6 +547,46 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
 
     for grant in grant_instructions {
         builder = builder.append_instruction(grant);
+    }
+
+    let agent_wallet_asset_definition = AssetDefinitionId::parse_address_literal(
+        "61CtjvNd9T3THAR65GsMVHr82Bjc",
+    )
+    .expect("soracloud agent wallet asset definition id");
+    let hf_shared_lease_asset_definition = AssetDefinitionId::parse_address_literal(
+        "5PeSrQmLNwwKtruJvDZrbrm9RuMw",
+    )
+    .expect("soracloud HF shared lease asset definition id");
+    let mut soracloud_bootstrap_accounts = BTreeSet::from([
+        alice_id.clone(),
+        bob_id.clone(),
+        carpenter_id.clone(),
+    ]);
+    soracloud_bootstrap_accounts.extend(
+        topology_vec
+            .iter()
+            .cloned()
+            .map(|peer_id| AccountId::new(peer_id.public_key().clone())),
+    );
+
+    builder = builder.next_transaction();
+    builder = builder.append_instruction(Register::asset_definition(
+        AssetDefinition::numeric(agent_wallet_asset_definition.clone())
+            .with_name("soracloud_agent_wallet".to_owned()),
+    ));
+    builder = builder.append_instruction(Register::asset_definition(
+        AssetDefinition::numeric(hf_shared_lease_asset_definition.clone())
+            .with_name("soracloud_hf_lease".to_owned()),
+    ));
+    for account_id in soracloud_bootstrap_accounts {
+        builder = builder.append_instruction(Mint::asset_numeric(
+            500_000_u32,
+            AssetId::new(agent_wallet_asset_definition.clone(), account_id.clone()),
+        ));
+        builder = builder.append_instruction(Mint::asset_numeric(
+            500_000_u32,
+            AssetId::new(hf_shared_lease_asset_definition.clone(), account_id),
+        ));
     }
 
     for tx_instr in extra_transactions.into_iter() {

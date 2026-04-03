@@ -17,9 +17,9 @@ use iroha::{
     data_model::{
         Encode,
         account::AccountId,
-        asset::{AssetDefinitionId, AssetId},
+        asset::{AssetDefinitionId, AssetId, definition::AssetDefinition},
         permission::Permission,
-        prelude::{FindAssetById, FindAssetsDefinitions, Grant, Json},
+        prelude::{FindAssetById, FindAssetsDefinitions, Grant, Json, Mint, Register},
         soracloud::{
             AgentApartmentManifestV1, SoraContainerManifestV1, SoraServiceManifestV1,
             SoraStateMutabilityV1,
@@ -243,6 +243,8 @@ fn soracloud_fixture(path: &str) -> PathBuf {
 }
 
 const SORACLOUD_HF_LEASE_ASSET_DEFINITION_LITERAL: &str = "5PeSrQmLNwwKtruJvDZrbrm9RuMw";
+const SORACLOUD_HF_LEASE_ASSET_NAME: &str = "soracloud_hf_lease";
+
 fn soracloud_hf_lease_asset_definition() -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(SORACLOUD_HF_LEASE_ASSET_DEFINITION_LITERAL)
         .expect("test lease asset definition literal should parse")
@@ -287,18 +289,19 @@ fn assert_soracloud_hf_lease_asset_ready(
         .into_iter()
         .any(|definition| definition.id == asset_definition_id);
     if !asset_definition_exists {
-        return Err(eyre::eyre!(
-            "soracloud HF lease asset definition `{asset_definition_id}` is missing from test-network genesis"
-        ));
+        client.submit_blocking(Register::asset_definition(
+            AssetDefinition::numeric(asset_definition_id.clone())
+                .with_name(SORACLOUD_HF_LEASE_ASSET_NAME.to_owned()),
+        ))?;
     }
     for account_id in accounts {
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
         let observed = numeric_asset_balance_u128(client, &asset_id)?;
         let required = u128::from(minimum_amount);
-        if observed.is_none_or(|balance| balance < required) {
-            return Err(eyre::eyre!(
-                "soracloud HF lease asset `{asset_id}` is below required bootstrap balance {required}; observed {observed:?}"
-            ));
+        let observed = observed.unwrap_or(0);
+        if observed < required {
+            let top_up = u32::try_from(required - observed).expect("test top-up should fit in u32");
+            client.submit_blocking(Mint::asset_numeric(top_up, asset_id.clone()))?;
         }
     }
     Ok(())
