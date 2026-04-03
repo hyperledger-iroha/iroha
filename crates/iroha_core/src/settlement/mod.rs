@@ -232,6 +232,7 @@ impl SettlementAccumulator {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::Hash;
+    use iroha_data_model::domain::DomainId;
     use settlement_router::MicroXor;
 
     use super::*;
@@ -284,7 +285,7 @@ mod tests {
         let record = PendingSettlement {
             source_id: [0x22; 32],
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                "sora".parse().unwrap(),
+                DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
             local_amount_micro: 10,

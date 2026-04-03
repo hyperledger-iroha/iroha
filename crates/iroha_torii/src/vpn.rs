@@ -629,7 +629,7 @@ mod tests {
     }
 
     fn world_with_accounts(accounts: &[AccountId]) -> World {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(
             accounts
                 .first()

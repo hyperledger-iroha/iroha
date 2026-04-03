@@ -105,7 +105,7 @@ pub(super) fn resolve_contract_address_target(
             let response = client
                 .post_contract_alias_resolve(&contract_alias)
                 .map_err(|err| eyre!("failed to resolve contract alias `{contract_alias}`: {err}"))?;
-            if response.status() != http::StatusCode::OK {
+            if response.status() != reqwest::StatusCode::OK {
                 return Err(eyre!(
                     "contract alias resolve request failed with HTTP {}: {}",
                     response.status(),

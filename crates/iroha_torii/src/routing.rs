@@ -5708,7 +5708,7 @@ mod zk_roots_selector_tests {
 
     fn selector_state() -> (std::sync::Arc<iroha_core::state::State>, AssetDefinitionId) {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let definition_id = AssetDefinitionId::new(
             domain_id.clone(),
             Name::from_str("usd").expect("asset name"),
@@ -6784,7 +6784,7 @@ mod multisig_guard_tests {
 
     #[test]
     fn direct_multisig_signing_rejected_during_admission() {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let chain_id: ChainId = "multisig-direct-sign-guard".parse().unwrap();
         let signer_keypair = KeyPair::random();
         let policy = MultisigPolicy::new(
@@ -6817,7 +6817,7 @@ mod multisig_guard_tests {
 
     #[test]
     fn single_signatory_with_multisig_role_is_not_rejected() {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let chain_id: ChainId = "multisig-role-guard".parse().unwrap();
         let signer = KeyPair::random();
         let signatory_id = AccountId::new(signer.public_key().clone());
@@ -6848,7 +6848,7 @@ mod multisig_guard_tests {
 
     #[test]
     fn multisig_authority_with_custom_instruction_envelope_is_not_rejected() {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let chain_id: ChainId = "multisig-custom-envelope-guard".parse().unwrap();
         let signer_keypair = KeyPair::random();
         let policy = MultisigPolicy::new(
@@ -8384,7 +8384,6 @@ pub async fn handle_post_contract_call(
                 ok: true,
                 submitted: true,
                 dataspace: namespace,
-                contract_id,
                 contract_address,
                 code_hash_hex,
                 abi_hash_hex,
@@ -8453,7 +8452,6 @@ pub async fn handle_post_contract_call(
                 ok: true,
                 submitted: true,
                 dataspace: namespace,
-                contract_id,
                 contract_address,
                 code_hash_hex,
                 abi_hash_hex,
@@ -8478,7 +8476,6 @@ pub async fn handle_post_contract_call(
                 ok: true,
                 submitted: false,
                 dataspace: namespace,
-                contract_id,
                 contract_address,
                 code_hash_hex,
                 abi_hash_hex,
@@ -8560,7 +8557,6 @@ pub async fn handle_post_contract_call_simulate(
         Ok(result) => ContractCallSimulateResponseDto {
             ok: true,
             dataspace: namespace,
-            contract_id,
             contract_address,
             code_hash_hex: hex::encode(code_hash.as_ref()),
             abi_hash_hex: hex::encode(abi_hash.as_ref()),
@@ -8576,7 +8572,6 @@ pub async fn handle_post_contract_call_simulate(
         Err(err) => ContractCallSimulateResponseDto {
             ok: false,
             dataspace: namespace,
-            contract_id,
             contract_address,
             code_hash_hex: hex::encode(code_hash.as_ref()),
             abi_hash_hex: hex::encode(abi_hash.as_ref()),
@@ -8847,7 +8842,7 @@ pub async fn handle_post_contract_view(
         abi_hash,
         manifest,
         namespace,
-        contract_id,
+        contract_id: _contract_id,
         contract_address,
     } = prepared;
     let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
@@ -8867,7 +8862,6 @@ pub async fn handle_post_contract_view(
             let body = norito::json::to_json_pretty(&ContractViewErrorResponseDto {
                 ok: false,
                 dataspace: namespace,
-                contract_id,
                 contract_address,
                 code_hash_hex: hex::encode(code_hash.as_ref()),
                 abi_hash_hex: hex::encode(abi_hash.as_ref()),
@@ -8889,7 +8883,6 @@ pub async fn handle_post_contract_view(
     let body = norito::json::to_json_pretty(&ContractViewResponseDto {
         ok: true,
         dataspace: namespace,
-        contract_id,
         contract_address,
         code_hash_hex: hex::encode(code_hash.as_ref()),
         abi_hash_hex: hex::encode(abi_hash.as_ref()),
@@ -9193,7 +9186,9 @@ fn normalize_contract_value(
             ))
         }),
         ContractSchemaType::DomainId => match value {
-            Value::String(raw) => raw.parse::<iroha_data_model::domain::DomainId>().is_ok(),
+            Value::String(raw) => {
+                iroha_data_model::domain::DomainId::parse_fully_qualified(raw).is_ok()
+            }
             _ => false,
         }
         .then(|| value.clone())
@@ -9763,8 +9758,8 @@ fn execute_contract_call_simulation(
 #[cfg(feature = "app_api")]
 fn build_contract_call_metadata(
     manifest: &manifest::ContractManifest,
-    namespace: &str,
-    contract_id: &str,
+    _namespace: &str,
+    _contract_id: &str,
     contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
     entrypoint: Option<&str>,
     payload: Option<&IrohaJson>,
@@ -9777,11 +9772,6 @@ fn build_contract_call_metadata(
         Name::from_str(manifest::MANIFEST_METADATA_KEY).expect("static manifest metadata key");
     metadata.insert(manifest_key, IrohaJson::new(manifest.clone()));
 
-    let ns_key =
-        Name::from_str("contract_namespace").expect("static metadata key `contract_namespace`");
-    metadata.insert(ns_key, IrohaJson::new(namespace.to_owned()));
-    let cid_key = Name::from_str("contract_id").expect("static metadata key `contract_id`");
-    metadata.insert(cid_key, IrohaJson::new(contract_id.to_owned()));
     if let Some(contract_address) = contract_address {
         let address_key =
             Name::from_str("contract_address").expect("static metadata key `contract_address`");
@@ -11441,7 +11431,7 @@ mod multisig_selector_tests {
         String,
         String,
     ) {
-        let domain_id: DomainId = "banka".parse().expect("domain");
+        let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let label_name: Name = "cbdc".parse().expect("label");
         let alias_literal = format!("{}@{}.universal", label_name, domain_id);
 
@@ -11612,7 +11602,7 @@ mod multisig_selector_tests {
         String,
         KeyPair,
     ) {
-        let domain_id: DomainId = "banka".parse().expect("domain");
+        let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let label_name: Name = "cbdc".parse().expect("label");
         let alias_literal = format!("{}@{}.universal", label_name, domain_id);
 
@@ -11856,7 +11846,7 @@ mod multisig_selector_tests {
 
     #[tokio::test]
     async fn multisig_spec_rejects_alias_bound_non_multisig_account() {
-        let domain_id: DomainId = "banka".parse().expect("domain");
+        let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let keypair = KeyPair::random();
         let scoped = dm::AccountId::new(keypair.public_key().clone());
         let authority = scoped.account().clone();
@@ -12025,7 +12015,7 @@ mod multisig_selector_tests {
 
     #[tokio::test]
     async fn multisig_spec_falls_back_to_contract_state_when_metadata_is_missing() {
-        let domain_id: DomainId = "banka".parse().expect("domain");
+        let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let label_name: Name = "cbdc".parse().expect("label");
 
         let signer_one = KeyPair::random();
@@ -13072,7 +13062,7 @@ mod multisig_selector_tests {
     #[tokio::test]
     async fn asset_transfer_control_get_returns_stored_state_and_usage() {
         let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "banka".parse().expect("domain");
+        let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let scoped_account_id = dm::AccountId::new(KeyPair::random().public_key().clone());
         let controlled_account_id: dm::AccountId = scoped_account_id.clone().into();
         let asset_definition_id = test_asset_definition_id();
@@ -16034,8 +16024,6 @@ pub struct ContractCallResponseDto {
     pub submitted: bool,
     /// Dataspace targeted by the call.
     pub dataspace: String,
-    /// Contract id targeted by the call.
-    pub contract_id: String,
     /// Canonical contract address targeted by the call, when available.
     #[norito(default)]
     pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
@@ -16070,8 +16058,6 @@ pub struct ContractCallSimulateResponseDto {
     pub ok: bool,
     /// Dataspace targeted by the call.
     pub dataspace: String,
-    /// Contract id targeted by the call.
-    pub contract_id: String,
     /// Canonical contract address targeted by the call, when available.
     #[norito(default)]
     pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
@@ -16197,8 +16183,6 @@ pub struct ContractViewResponseDto {
     pub ok: bool,
     /// Dataspace targeted by the query.
     pub dataspace: String,
-    /// Contract id targeted by the query.
-    pub contract_id: String,
     /// Canonical contract address targeted by the query, when available.
     #[norito(default)]
     pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
@@ -16251,7 +16235,6 @@ pub struct ContractViewVmDiagnosticDto {
 pub struct ContractViewErrorResponseDto {
     pub ok: bool,
     pub dataspace: String,
-    pub contract_id: String,
     #[norito(default)]
     pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
     pub code_hash_hex: String,
@@ -24060,7 +24043,7 @@ fn local8_domain_label(literal: &str) -> Option<String> {
 
     let trimmed = literal.trim();
     let (_, domain_part) = trimmed.rsplit_once('@')?;
-    let parsed: DomainId = domain_part.parse().ok()?;
+    let parsed = DomainId::parse_fully_qualified(domain_part).ok()?;
     Some(parsed.to_string())
 }
 
@@ -24259,7 +24242,7 @@ mod address_metrics_tests {
     }
 
     fn i105_literal(domain_label: &str) -> String {
-        let _domain: DomainId = domain_label.parse().expect("domain parses");
+        let _domain = DomainId::parse_fully_qualified(domain_label).expect("domain parses");
         let kp = KeyPair::random();
         let account = AccountId::new(kp.public_key().clone());
         account.to_string()
@@ -24359,7 +24342,7 @@ mod stateful_account_path_parser_tests {
 
     #[tokio::test]
     async fn stateful_account_path_parser_resolves_bound_alias_literal() {
-        let domain_id: DomainId = "banka".parse().expect("domain");
+        let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let authority = ALICE_ID.clone();
         let scoped_account_id = authority.clone();
         let alias = AccountAlias::new(
@@ -24963,7 +24946,7 @@ pub async fn handle_v1_transactions_history_get(
     let cap = app_query_page_cap(&state);
     let dataspace_domain = visibility
         .allow_dataspace_wide
-        .then(|| visibility.viewer_dataspace_id.parse::<DomainId>().ok())
+        .then(|| DomainId::parse_fully_qualified(&visibility.viewer_dataspace_id).ok())
         .flatten();
 
     let (items, total) = {
@@ -26287,7 +26270,7 @@ mod tx_query_filter_tests {
     fn kaigi_call_view_hides_host_identity_for_private_calls() {
         let (host, _) = account_with_key();
         let call_id = iroha_data_model::kaigi::KaigiId::new(
-            "kaigi".parse().expect("domain"),
+            DomainId::try_new("kaigi", "universal").expect("domain"),
             "weekly-sync".parse().expect("call name"),
         );
         let record = iroha_data_model::kaigi::KaigiRecord {
@@ -26328,7 +26311,7 @@ mod tx_query_filter_tests {
         use iroha_data_model::events::data::prelude::{DomainEvent, KaigiRosterSummary};
 
         let call_id = iroha_data_model::kaigi::KaigiId::new(
-            "kaigi".parse().expect("domain"),
+            DomainId::try_new("kaigi", "universal").expect("domain"),
             "weekly-sync".parse().expect("call name"),
         );
         let roster_event = EventBox::Data(SharedDataEvent::from(
@@ -27175,7 +27158,7 @@ mod tx_query_integration_smoke {
             .unpack(|_| {});
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
-        let domain_id: dm::DomainId = "wonderland".parse().unwrap();
+        let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
@@ -27281,7 +27264,7 @@ mod tx_query_integration_smoke {
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
 
-        let domain_id: dm::DomainId = "wonderland".parse().unwrap();
+        let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
         let kp_alice = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -27431,7 +27414,7 @@ mod tx_query_integration_smoke {
             .unpack(|_| {});
         let mut st_block0 = state.block(unverified0.header());
         let mut stx = st_block0.transaction();
-        let domain_id: dm::DomainId = "wonderland".parse().unwrap();
+        let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         // Execute with a placeholder authority; in this test we don't enforce on-chain permissions
         let kp_exec = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
@@ -27618,7 +27601,7 @@ mod tx_query_integration_smoke {
             .unpack(|_| {});
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
-        let domain_id: dm::DomainId = "wonderland".parse().unwrap();
+        let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
         dm::Register::domain(dm::Domain::new(domain_id.clone()))
@@ -27713,7 +27696,7 @@ mod tx_query_integration_smoke {
         ));
 
         // Ensure domain and accounts exist before committing txs
-        let dom_id: dm::DomainId = "wonderland".parse().unwrap();
+        let dom_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
@@ -28155,7 +28138,7 @@ mod tx_query_integration_smoke {
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let dom: dm::DomainId = "wonderland".parse().unwrap();
+        let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
 
         let (_max_clock_drift, _tx_limits) = {
@@ -28252,7 +28235,7 @@ mod tx_query_integration_smoke {
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let kp_c = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let dom: dm::DomainId = "wonderland".parse().unwrap();
+        let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
         let acc_b = dm::AccountId::new(kp_b.public_key().clone());
         let acc_c = dm::AccountId::new(kp_c.public_key().clone());
@@ -28283,7 +28266,7 @@ mod tx_query_integration_smoke {
         b3.set_creation_time(core::time::Duration::from_millis(3000));
         let signed3 = b3
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
-                "bad".parse::<dm::DomainId>().unwrap(),
+                DomainId::try_new("bad", "universal").unwrap(),
             )
             .into()])
             .sign(kp_c.private_key());
@@ -28293,7 +28276,7 @@ mod tx_query_integration_smoke {
         b4.set_creation_time(core::time::Duration::from_millis(2500));
         let signed4 = b4
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
-                "nope".parse::<dm::DomainId>().unwrap(),
+                DomainId::try_new("nope", "universal").unwrap(),
             )
             .into()])
             .sign(kp_b.private_key());
@@ -28399,7 +28382,7 @@ mod tx_query_integration_smoke {
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let kp_c = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-        let dom: dm::DomainId = "wonderland".parse().unwrap();
+        let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
         let acc_b = dm::AccountId::new(kp_b.public_key().clone());
         let acc_c = dm::AccountId::new(kp_c.public_key().clone());
@@ -28589,7 +28572,7 @@ mod tx_query_integration_smoke {
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random();
-        let dom: dm::DomainId = "wonderland".parse().unwrap();
+        let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
         let account_literal = acc_a.account().to_string();
 
@@ -28795,7 +28778,7 @@ mod tx_query_integration_smoke {
 
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random();
-        let dom: dm::domain::DomainId = "wonderland".parse().unwrap();
+        let dom: dm::domain::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_a = dm::account::AccountId::new(kp_a.public_key().clone());
         let account_literal = acc_a.account().to_string();
 
@@ -28819,7 +28802,7 @@ mod tx_query_integration_smoke {
         b2.set_creation_time(core::time::Duration::from_millis(200));
         let signed_b = b2
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
-                "nope".parse::<dm::DomainId>().unwrap(),
+                DomainId::try_new("nope", "universal").unwrap(),
             )
             .into()])
             .sign(kp_a.private_key());
@@ -28993,7 +28976,7 @@ mod tx_query_integration_smoke {
         // Accounts and chain
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_b = KeyPair::from_seed(vec![0; 32], Algorithm::Ed25519);
-        let dom: dm::DomainId = "wonderland".parse().unwrap();
+        let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_b = dm::AccountId::new(kp_b.public_key().clone());
         // Pre-register the domain and the successful authority (account B).
         {
@@ -29048,7 +29031,7 @@ mod tx_query_integration_smoke {
         let mut unregister_missing_builder =
             dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone().into());
         unregister_missing_builder.set_creation_time(core::time::Duration::from_millis(1500));
-        let fail_inst_d = dm::Unregister::domain("void".parse::<dm::DomainId>().unwrap());
+        let fail_inst_d = dm::Unregister::domain(DomainId::try_new("void", "universal").unwrap());
         let signed_d = unregister_missing_builder
             .with_instructions::<dm::InstructionBox>([fail_inst_d.into()])
             .sign(kp_b.private_key());
@@ -29170,7 +29153,7 @@ mod tx_query_integration_smoke {
         // Accounts and chain
         let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
         let kp_a = KeyPair::random();
-        let dom: dm::DomainId = "wonderland".parse().unwrap();
+        let dom: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
 
         // Pre-register domain and accounts so A exists; B and C will attempt invalid ops later
@@ -29218,7 +29201,7 @@ mod tx_query_integration_smoke {
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_b = b2
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
-                "nope".parse::<dm::DomainId>().unwrap(),
+                DomainId::try_new("nope", "universal").unwrap(),
             )
             .into()])
             .sign(kp_a.private_key());
@@ -29229,7 +29212,7 @@ mod tx_query_integration_smoke {
         b3.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_c = b3
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
-                "nada".parse::<dm::DomainId>().unwrap(),
+                DomainId::try_new("nada", "universal").unwrap(),
             )
             .into()])
             .sign(kp_a.private_key());
@@ -29871,7 +29854,7 @@ mod app_api_integration_tests {
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
         let alice_id: AccountId = AccountId::new(kp.public_key().clone());
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
         let assets = vec![
@@ -29937,7 +29920,7 @@ mod app_api_integration_tests {
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
         let alice_id: AccountId = AccountId::new(kp.public_key().clone());
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
         let assets = vec![
@@ -30054,9 +30037,9 @@ mod app_api_integration_tests {
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
         let alice_id: AccountId = AccountId::new(kp.public_key().clone());
-        let alpha: DomainId = "alpha".parse().unwrap();
-        let omega: DomainId = "omega".parse().unwrap();
-        let gamma: DomainId = "gamma".parse().unwrap();
+        let alpha: DomainId = DomainId::try_new("alpha", "universal").unwrap();
+        let omega: DomainId = DomainId::try_new("omega", "universal").unwrap();
+        let gamma: DomainId = DomainId::try_new("gamma", "universal").unwrap();
         let domain_alpha = Domain::new(alpha.clone()).build(&alice_id);
         let domain_omega = Domain::new(omega).build(&alice_id);
         let domain_gamma = Domain::new(gamma).build(&alice_id);
@@ -30281,7 +30264,7 @@ mod app_api_integration_tests {
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
         let alice_id: AccountId = AccountId::new(kp.public_key().clone());
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
         let assets = vec![
@@ -30341,7 +30324,7 @@ mod app_api_integration_tests {
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
         let alice_id: AccountId = AccountId::new(kp.public_key().clone());
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let lily_def = AssetDefinitionId::new(domain_id.clone(), "lily".parse().unwrap());
         let assets = vec![
@@ -30417,7 +30400,7 @@ mod app_api_integration_tests {
         use iroha_crypto::KeyPair;
         let kp = KeyPair::random();
         let alice_id: AccountId = AccountId::new(kp.public_key().clone());
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let assets = vec![Asset::new(
             AssetId::new(rose_def.clone(), alice_id.clone()),
@@ -30749,11 +30732,11 @@ mod app_api_integration_tests {
             pedersen_params_id: Some(11),
             pending_transition: Some(pending_transition),
         };
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let account = Account::new(alice_id.clone()).build(&alice_id);
         let asset_def = AssetDefinition::numeric(AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         ))
         .confidential_policy(policy)
@@ -31019,7 +31002,7 @@ mod app_api_integration_tests {
         let alice_id: AccountId = AccountId::new(kp_a.public_key().clone());
         let bob_id: AccountId = AccountId::new(kp_b.public_key().clone());
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
         let rose_definition = AssetDefinition::numeric(rose_def.clone())
@@ -31094,7 +31077,7 @@ mod query_endpoint_tests {
         };
         let alice_keypair = KeyPair::random();
         let alice_id: AccountId = AccountId::new(alice_keypair.public_key().clone());
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
 
         // Build a small world with a single asset for Alice.
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
@@ -40495,9 +40478,11 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    Register::domain(Domain::new("wonderland".parse().unwrap()))
-        .execute(&authority_id, &mut stx)
-        .unwrap();
+    Register::domain(Domain::new(
+        DomainId::try_new("wonderland", "universal").unwrap(),
+    ))
+    .execute(&authority_id, &mut stx)
+    .unwrap();
     Register::account(Account::new(initiator_id.clone()))
         .execute(&authority_id, &mut stx)
         .unwrap();
@@ -42271,9 +42256,13 @@ fn ensure_onboarding_signer_can_manage_alias(
 
 #[cfg(feature = "app_api")]
 fn alias_domain_to_domain_id(
-    domain: account::rekey::AccountAliasDomain,
-) -> iroha_data_model::domain::DomainId {
-    iroha_data_model::domain::DomainId::new(Name::from(domain))
+    alias: &account::rekey::AccountAlias,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+) -> Result<Option<iroha_data_model::domain::DomainId>> {
+    alias.domain_id(catalog).map_err(|err| {
+        let message = format!("invalid account alias domain scope: {err}");
+        onboarding_invalid_request(&message)
+    })
 }
 
 #[iroha_futures::telemetry_future]
@@ -42738,11 +42727,8 @@ pub async fn handle_v1_accounts_onboard_multisig(
     let transaction_ttl_ms = NonZeroU64::new(transaction_ttl_ms.unwrap_or(86_400_000).max(1))
         .ok_or_else(|| onboarding_invalid_request("transaction_ttl_ms must be positive"))?;
     let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
-    let register = MultisigRegister::with_account(
-        multisig_account.clone(),
-        alias_label.domain.clone().map(alias_domain_to_domain_id),
-        spec,
-    );
+    let alias_domain = alias_domain_to_domain_id(&alias_label, &nexus.dataspace_catalog)?;
+    let register = MultisigRegister::with_account(multisig_account.clone(), alias_domain, spec);
     let bind_alias = SetPrimaryAccountAlias {
         account: multisig_account.clone(),
         alias: Some(alias_label),
@@ -44098,7 +44084,7 @@ mod accounts_query_tests {
     async fn accounts_query_streams_without_sort() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let domain_id: dm::DomainId = "wonderland".parse().unwrap();
+        let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let exec_authority = dm::AccountId::new(
             KeyPair::random_with_algorithm(Algorithm::Ed25519)
                 .public_key()
@@ -44154,7 +44140,8 @@ mod accounts_query_tests {
      {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let domain_id: dm::DomainId = "aliases".parse().expect("valid domain");
+        let domain_id: dm::DomainId =
+            DomainId::try_new("aliases", "universal").expect("valid domain");
         let exec_authority = dm::AccountId::new(
             KeyPair::random_with_algorithm(Algorithm::Ed25519)
                 .public_key()
@@ -44337,7 +44324,8 @@ mod accounts_query_tests {
     async fn accounts_list_filter_accepts_alias_and_returns_canonical_i105_ids() {
         let kura = Kura::blank_kura_for_testing();
         let query = LiveQueryStore::start_test();
-        let domain_id: dm::DomainId = "aliases-list".parse().expect("valid domain");
+        let domain_id: dm::DomainId =
+            DomainId::try_new("aliases-list", "universal").expect("valid domain");
         let exec_authority = dm::AccountId::new(
             KeyPair::random_with_algorithm(Algorithm::Ed25519)
                 .public_key()
@@ -44453,7 +44441,8 @@ mod asset_definitions_query_tests {
 
     fn state_with_asset_definitions() -> Arc<CoreState> {
         let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: dm::DomainId = "wonderland".parse().expect("valid domain");
+        let domain_id: dm::DomainId =
+            DomainId::try_new("wonderland", "universal").expect("valid domain");
         let domain = dm::Domain::new(domain_id.clone()).build(&authority);
         let account = dm::Account::new(authority.clone()).build(&authority);
 
@@ -46756,7 +46745,7 @@ mod explorer_asset_definition_econometrics_tests {
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
 
-        let domain_id: dm::DomainId = "wonderland".parse().unwrap();
+        let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
         let kp_alice = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -47065,7 +47054,7 @@ mod explorer_asset_definition_snapshot_tests {
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
 
-        let domain_id: dm::DomainId = "wonderland".parse().unwrap();
+        let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
         let kp_alice = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -47235,7 +47224,7 @@ mod explorer_asset_definition_snapshot_tests {
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
 
-        let domain_id: dm::DomainId = "wonderland".parse().unwrap();
+        let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
         let kp_alice = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -51078,7 +51067,7 @@ mod nexus_dataspaces_summary_tests {
     #[tokio::test]
     async fn handle_v1_nexus_dataspaces_account_summary_accepts_account_alias() {
         let authority = ALICE_ID.clone();
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let state = Arc::new(CoreState::new_for_testing(
@@ -56472,7 +56461,7 @@ mod subscription_api_tests {
         plans: Vec<(AssetDefinitionId, SubscriptionPlan)>,
         subscriptions: Vec<(NftId, SubscriptionState, Option<SubscriptionInvoice>)>,
     ) -> Arc<CoreState> {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&provider);
         let provider_account = provider.clone();
         let subscriber_account = subscriber.clone();
@@ -57235,7 +57224,7 @@ mod adapter_filter_tests {
     fn defs_filter_projection_matches_name_alias_and_metadata_passthrough() {
         let authority = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
         let definition = AssetDefinition::numeric(AssetDefinitionId::new(
-            "issuer".parse().expect("domain"),
+            DomainId::try_new("issuer", "universal").expect("domain"),
             "cbdc".parse().expect("name"),
         ))
         .with_name("CBDC".to_owned())
@@ -57330,7 +57319,7 @@ mod adapter_filter_tests {
         use iroha_test_samples::ALICE_ID;
 
         let asset_def = AssetDefinitionId::new(
-            "issuer".parse().expect("domain"),
+            DomainId::try_new("issuer", "universal").expect("domain"),
             "cbdc".parse().expect("name"),
         );
         let expr = FilterExpr::Eq(
@@ -57351,7 +57340,7 @@ mod adapter_filter_tests {
         use iroha_test_samples::ALICE_ID;
 
         let asset_def = AssetDefinitionId::new(
-            "issuer".parse().expect("domain"),
+            DomainId::try_new("issuer", "universal").expect("domain"),
             "cbdc".parse().expect("name"),
         );
         let item = AssetHolderListItem {
@@ -57371,7 +57360,7 @@ mod adapter_filter_tests {
         assert!(filter_asset_holder_item(&scope_expr, &item));
 
         let other_def = AssetDefinitionId::new(
-            "issuer".parse().expect("domain"),
+            DomainId::try_new("issuer", "universal").expect("domain"),
             "usd".parse().expect("name"),
         );
         let expr2 = FilterExpr::Eq(

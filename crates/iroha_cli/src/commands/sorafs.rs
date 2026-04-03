@@ -12745,7 +12745,10 @@ mod tests {
     }
 
     fn xor_asset_id() -> AssetDefinitionId {
-        AssetDefinitionId::new("sora".parse().unwrap(), "xor".parse().unwrap())
+        AssetDefinitionId::new(
+            iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        )
     }
 
     fn sample_budget_id_hex() -> String {

@@ -17283,6 +17283,9 @@ function normalizeDeployContractRequest(input) {
       "deployContract.codeB64",
     ),
   };
+  if (record.dataspace !== undefined && record.dataspace !== null) {
+    payload.dataspace = requireNonEmptyString(record.dataspace, "deployContract.dataspace");
+  }
   const manifest = record.manifest;
   if (manifest !== undefined && manifest !== null) {
     payload.manifest = normalizeManifestPayload(manifest, "deployContract.manifest");
@@ -17292,8 +17295,31 @@ function normalizeDeployContractRequest(input) {
 
 function normalizeDeployContractResponse(payload) {
   const record = ensureRecord(payload, "deployContract response");
+  const contractAddress =
+    record.contract_address === undefined || record.contract_address === null
+      ? null
+      : requireNonEmptyString(
+          record.contract_address,
+          "deployContract.response.contract_address",
+        );
+  const dataspace =
+    record.dataspace === undefined || record.dataspace === null
+      ? null
+      : requireNonEmptyString(record.dataspace, "deployContract.response.dataspace");
+  const deployNonce =
+    record.deploy_nonce === undefined || record.deploy_nonce === null
+      ? null
+      : coerceInteger(record.deploy_nonce, "deployContract.response.deploy_nonce");
+  const txHashHex =
+    record.tx_hash_hex === undefined || record.tx_hash_hex === null
+      ? null
+      : normalizeHex32String(record.tx_hash_hex, "deployContract.response.tx_hash_hex");
   return {
     ok: Boolean(record.ok),
+    contract_address: contractAddress,
+    dataspace,
+    deploy_nonce: deployNonce,
+    tx_hash_hex: txHashHex,
     code_hash_hex: normalizeHex32String(
       record.code_hash_hex,
       "deployContract.response.code_hash_hex",
@@ -18021,10 +18047,6 @@ function normalizeContractCallResponse(payload) {
     dataspace: requireNonEmptyString(
       record.dataspace,
       "contractCall response.dataspace",
-    ),
-    contract_id: requireNonEmptyString(
-      record.contract_id,
-      "contractCall response.contract_id",
     ),
     code_hash_hex: normalizeHex32String(
       record.code_hash_hex,

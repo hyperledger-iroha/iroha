@@ -938,7 +938,12 @@ mod predicate_tests {
     use norito::json;
 
     use super::*;
-    use crate::{Registrable, account::AccountId, domain::Domain, query::json::PredicateJson};
+    use crate::{
+        Registrable,
+        account::AccountId,
+        domain::{Domain, DomainId},
+        query::json::PredicateJson,
+    };
 
     fn test_authority() -> AccountId {
         let (public_key, _private_key) =
@@ -947,7 +952,7 @@ mod predicate_tests {
     }
 
     fn sample_domain() -> Domain {
-        let domain_id = "wonderland".parse().expect("domain id");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = test_authority();
         let mut domain = Domain::new(domain_id).build(&authority);
         domain

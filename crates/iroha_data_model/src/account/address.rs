@@ -732,14 +732,22 @@ enum DomainSelector {
 
 impl DomainSelector {
     fn canonical_domain(domain: &DomainId) -> Result<String, AccountAddressError> {
-        name::canonicalize_domain_label(domain.name().as_ref())
+        name::canonicalize_domain_label(&domain.to_string())
             .map_err(|err| AccountAddressError::InvalidDomainLabel(err.reason()))
+    }
+
+    fn is_default_domain(domain: &DomainId) -> Result<bool, AccountAddressError> {
+        let canonical_name = name::canonicalize_domain_label(domain.name().as_ref())
+            .map_err(|err| AccountAddressError::InvalidDomainLabel(err.reason()))?;
+        let canonical_dataspace = name::canonicalize_domain_label(domain.dataspace().as_ref())
+            .map_err(|err| AccountAddressError::InvalidDomainLabel(err.reason()))?;
+        let default_label = default_domain_name();
+        Ok(canonical_name == default_label.as_ref() && canonical_dataspace == "universal")
     }
 
     fn from_domain(domain: &DomainId) -> Result<Self, AccountAddressError> {
         let canonical = Self::canonical_domain(domain)?;
-        let default_label = default_domain_name();
-        if canonical == default_label.as_ref() {
+        if Self::is_default_domain(domain)? {
             Ok(Self::Default)
         } else {
             Ok(Self::Local12(compute_local_digest(&canonical)))
@@ -1552,7 +1560,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::{domain::DomainId, name::Name};
+    use crate::domain::DomainId;
 
     fn ed25519_pk() -> PublicKey {
         PublicKey::from_hex(
@@ -1580,7 +1588,7 @@ mod tests {
     ];
 
     fn domain(name: &str) -> DomainId {
-        DomainId::new(Name::from_str(name).expect("valid domain name"))
+        DomainId::try_new(name, "universal").expect("valid domain id")
     }
 
     fn guard_default_label() -> DefaultDomainGuard {
@@ -1845,6 +1853,20 @@ mod tests {
             (DomainSelector::Local12(a), DomainSelector::Local12(b)) => assert_eq!(a, b),
             _ => panic!("expected Local12 selectors for non-default domains"),
         }
+    }
+
+    #[test]
+    fn domain_selector_distinguishes_dataspaces() {
+        let _guard = guard_default_label();
+        let universal = DomainSelector::from_domain(&domain("billing")).expect("selector");
+        let retail = DomainSelector::from_domain(
+            &DomainId::try_new("billing", "retail").expect("domain id"),
+        )
+        .expect("selector");
+        assert_ne!(
+            universal, retail,
+            "selectors must include the dataspace-qualified domain literal"
+        );
     }
 
     #[test]

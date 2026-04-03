@@ -1036,11 +1036,13 @@ mod tests {
     #[test]
     fn with_instructions_accepts_instruction_box() {
         let chain: ChainId = "test-chain".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
 
         // Pre-boxed instruction
-        let instruction: InstructionBox =
-            Register::domain(Domain::new("wonderland".parse().unwrap())).into();
+        let instruction: InstructionBox = Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .into();
         let expected_id = crate::isi::Instruction::id(&*instruction);
 
         // Use a known matching keypair (values from project samples)
@@ -1077,7 +1079,7 @@ mod tests {
     #[test]
     fn transaction_signature_decode_from_slice_roundtrip() {
         let chain: ChainId = "test-chain".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -1162,7 +1164,7 @@ mod tests {
     #[test]
     fn sign_overwrites_mismatched_signatory_with_signing_key_public_part() {
         let chain: ChainId = "test-chain".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let stored_public_key: iroha_crypto::PublicKey =
             "ed012004FF5B81046DDCCF19E2E451C45DFB6F53759D4EB30FA2EFA807284D1CC33016"
                 .parse()
@@ -1184,7 +1186,7 @@ mod tests {
     #[test]
     fn entrypoint_hashes_match_direct_encoding() {
         let chain: ChainId = "hash-chain".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -1214,7 +1216,7 @@ mod tests {
     #[test]
     fn verify_signature_rejects_missing_multisig_signatures() {
         let chain: ChainId = "multisig-chain".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = iroha_crypto::KeyPair::random();
 
         let member =
@@ -1256,7 +1258,7 @@ mod tests {
     #[test]
     fn verify_signature_accepts_multisig_with_quorum() {
         let chain: ChainId = "multisig-chain-ok".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = iroha_crypto::KeyPair::random();
 
         let member =
@@ -1293,7 +1295,7 @@ mod tests {
     #[test]
     fn verify_signature_ignores_multisig_bundle_for_single_controller() {
         let chain: ChainId = "single-with-multisig-bundle".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let keypair = iroha_crypto::KeyPair::random();
         let authority = AccountId::new(keypair.public_key().clone());
         let mut tx = TransactionBuilder::new(chain, authority.clone())
@@ -1322,7 +1324,7 @@ mod tests {
     #[test]
     fn verify_signature_rejects_empty_multisig_bundle() {
         let chain: ChainId = "multisig-chain-empty".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = iroha_crypto::KeyPair::random();
 
         let member =
@@ -1359,7 +1361,7 @@ mod tests {
     #[test]
     fn verify_signature_rejects_unknown_signer() {
         let chain: ChainId = "multisig-chain-unknown".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let member_key = iroha_crypto::KeyPair::random();
         let unknown_key = iroha_crypto::KeyPair::random();
 
@@ -1402,7 +1404,7 @@ mod tests {
     #[test]
     fn verify_signature_does_not_double_count_duplicates() {
         let chain: ChainId = "multisig-chain-duplicate".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = iroha_crypto::KeyPair::random();
         let other = iroha_crypto::KeyPair::random();
 
@@ -1452,7 +1454,7 @@ mod tests {
     #[test]
     fn verify_signature_accepts_mixed_algorithms() {
         let chain: ChainId = "multisig-mixed-algo".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let ed = iroha_crypto::KeyPair::random();
         let secp = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
 
@@ -1474,7 +1476,7 @@ mod tests {
     #[test]
     fn signature_count_tracks_all_multisig_entries() {
         let chain: ChainId = "multisig-count".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signer = iroha_crypto::KeyPair::random();
 
         let member =
@@ -1537,7 +1539,7 @@ mod tests {
     #[test]
     fn transaction_entrypoint_json_roundtrip() {
         let chain: ChainId = "json-chain".parse().unwrap();
-        let _domain: DomainId = "default".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("default", "universal").unwrap();
         let public_key: iroha_crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -1593,6 +1595,7 @@ mod tests {
 #[cfg(test)]
 mod ttl_tests {
     use super::*;
+    use crate::domain::DomainId;
 
     #[test]
     fn zero_ttl_is_preserved_not_none() {
@@ -1620,7 +1623,8 @@ mod ttl_tests {
     fn ingress_metadata_accessors_read_numeric_values() {
         let chain: ChainId = "ingress-chain".parse().unwrap();
         let keypair = iroha_crypto::KeyPair::random();
-        let _domain: crate::domain::DomainId = "wonderland".parse().unwrap();
+        let _domain: crate::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = AccountId::new(keypair.public_key().clone());
 
         let mut metadata = Metadata::default();
@@ -1645,7 +1649,8 @@ mod ttl_tests {
     fn ingress_metadata_accessors_propagate_decode_error() {
         let chain: ChainId = "ingress-chain-invalid".parse().unwrap();
         let keypair = iroha_crypto::KeyPair::random();
-        let _domain: crate::domain::DomainId = "wonderland".parse().unwrap();
+        let _domain: crate::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = AccountId::new(keypair.public_key().clone());
 
         let mut metadata = Metadata::default();

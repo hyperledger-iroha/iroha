@@ -1391,8 +1391,7 @@ mod tests {
             program: Some("cbdc.transfer".to_owned()),
             method: Some("transfer".to_owned()),
             asset: Some(
-                AssetDefinitionId::new(
-                    "wonderland".parse().expect("domain"),
+                AssetDefinitionId::new(iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
                     "cbdc".parse().expect("name"),
                 )
                 .to_string(),

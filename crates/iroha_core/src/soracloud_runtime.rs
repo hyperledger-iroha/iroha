@@ -1201,6 +1201,7 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         asset::AssetDefinitionId,
+        domain::DomainId,
         soracloud::{
             SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
             SORA_HF_SHARED_LEASE_POOL_VERSION_V1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
@@ -1265,7 +1266,7 @@ mod tests {
                     source_id,
                     storage_class: StorageClass::Warm,
                     lease_asset_definition_id: AssetDefinitionId::new(
-                        "wonderland".parse().expect("domain"),
+                        DomainId::try_new("wonderland", "universal").expect("domain"),
                         "xor".parse().expect("asset"),
                     ),
                     base_fee_nanos: 10_000,

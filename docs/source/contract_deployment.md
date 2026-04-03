@@ -19,7 +19,7 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
   code bytes are keyed by `code_hash`.
 - Protected namespaces can require an enacted governance proposal before a
   deployment is admitted. The admission path looks up the proposal payload and
-  enforces `(namespace, contract_id, code_hash, abi_hash)` equality when the
+  enforces `(contract_address, code_hash, abi_hash)` equality when the
   namespace is protected.
 
 ## Stored Artifacts & Retention
@@ -87,20 +87,15 @@ returns HTTP 429; any handler error increments
   `/v1/gov/protected-namespaces` and the CLI mirrors them via
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
 - Unprotected namespaces are public: any signer may register code bytes,
-  register manifests, and activate/deactivate contract instances there.
+  register manifests, and deploy address-backed public contracts there.
 - Proposals created with `ProposeDeployContract` (or the Torii
   `/v1/gov/proposals/deploy-contract` endpoint) capture
   `(contract_address, code_hash, abi_hash, abi_version)`.
 - Once the referendum passes, `EnactReferendum` marks the proposal Enacted and
   admission will accept deployments that carry matching metadata and code.
-- Transactions must include `gov_contract_address=<contract-address>` (and may
-  set matching `contract_address` / `contract_namespace` / `contract_id`
-  hints for call-time binding checks). CLI helpers populate the governance
-  metadata automatically when you pass `--contract-address` or
-  `--contract-alias`.
-- When protected namespaces are enabled, queue admission rejects attempts to
-  rebind an existing `contract_id` to a different namespace; use the enacted
-  proposal or retire the previous binding before deploying elsewhere.
+- Transactions must include `gov_contract_address=<contract-address>`. CLI
+  helpers populate the governance metadata automatically when you pass
+  `--contract-address` or `--contract-alias`.
 - If the lane manifest sets a validator quorum above one, include
   `gov_manifest_approvers` (JSON array of validator account IDs) so the queue can count
   the additional approvals alongside the transaction authority. Lanes also reject
@@ -122,8 +117,6 @@ returns HTTP 429; any handler error increments
   and optionally writes it to disk.
 - `iroha_cli app contracts code get --code-hash <hex> --out <path>` downloads
   the stored `.to` image.
-- `iroha_cli app contracts instances --namespace <ns> [--table]` lists activated
-  contract instances (manifest + metadata driven).
 - Governance helpers (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
   `iroha_cli app gov protected set/get`) orchestrate the protected-namespace workflow and
   expose JSON artefacts for auditing.

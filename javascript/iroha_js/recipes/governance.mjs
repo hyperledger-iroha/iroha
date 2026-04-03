@@ -36,8 +36,9 @@ const PRIVATE_KEY =
     ? Buffer.from(process.env.PRIVATE_KEY_HEX, "hex")
     : Buffer.alloc(32, 0x11);
 
-const SAMPLE_NAMESPACE = "apps";
-const SAMPLE_CONTRACT_ID = "demo.contract";
+const SAMPLE_CONTRACT_ADDRESS =
+  process.env.GOV_CONTRACT_ADDRESS ??
+  "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
 const SAMPLE_REFERENDUM_ID = "demo-referendum";
 const SAMPLE_REFERENDUM_HASH = Buffer.alloc(32, 0xaa);
 const SAMPLE_PROPOSAL_HASH = Buffer.alloc(32, 0xbb);
@@ -83,8 +84,7 @@ async function main() {
           chainId: CHAIN_ID,
           authority: AUTHORITY,
           proposal: {
-            namespace: SAMPLE_NAMESPACE,
-            contractId: SAMPLE_CONTRACT_ID,
+            contractAddress: SAMPLE_CONTRACT_ADDRESS,
             codeHash: Buffer.alloc(32, 0xcd),
             abiHash: Buffer.alloc(32, 0xef),
             abiVersion: "1",

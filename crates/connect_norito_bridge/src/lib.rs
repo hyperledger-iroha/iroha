@@ -576,8 +576,7 @@ enum MetadataTarget {
 
 fn parse_metadata_target(kind: u8, object: String) -> BridgeResult<MetadataTarget> {
     match kind {
-        0 => object
-            .parse::<DomainId>()
+        0 => DomainId::parse_fully_qualified(&object)
             .map(MetadataTarget::Domain)
             .map_err(|_| BridgeError::MetadataTarget),
         1 => parse_account_id(object).map(MetadataTarget::Account),
@@ -7388,7 +7387,7 @@ mod accel_tests {
 
     fn asset_definition_literal(domain: &str, name: &str) -> String {
         AssetDefinitionId::new(
-            DomainId::from_str(domain).expect("domain"),
+            DomainId::try_new(domain, "universal").expect("domain"),
             Name::from_str(name).expect("name"),
         )
         .to_string()
@@ -7407,7 +7406,7 @@ mod accel_tests {
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("parse account");
         let definition = AssetDefinitionId::new(
-            "bank".parse().expect("domain"),
+            DomainId::try_new("bank", "universal").expect("domain"),
             "usd".parse().expect("asset name"),
         );
         let asset = AssetId::new(definition.clone(), account_id.clone());
@@ -8470,7 +8469,7 @@ mod offline_challenge_tests {
         let (controller_account, controller_cstr) = account_with_cstring("bank", 21);
         let (_, receiver_cstr) = account_with_cstring("bank", 99);
         let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "bank".parse().unwrap(),
+            DomainId::try_new("bank", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_definition, controller_account.clone());
@@ -8665,8 +8664,10 @@ mod offline_fastpq_proof_tests {
         let bundle_id = Hash::new(b"bundle-fastpq");
         let certificate_id = Hash::new(b"cert-fastpq");
         let header = sample_header(bundle_id, certificate_id);
-        let asset_definition =
-            AssetDefinitionId::new("default".parse().unwrap(), "xor".parse().unwrap());
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("default", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_definition, owner);
         let receipt_amounts = vec![Numeric::new(10, 0), Numeric::new(15, 0)];
         let claimed_delta = Numeric::new(25, 0);
@@ -11075,7 +11076,7 @@ mod offline_receipt_challenge_tests {
 
     fn sample_asset_id(account: &AccountId) -> AssetId {
         let definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         AssetId::new(definition, account.clone())
@@ -12842,7 +12843,7 @@ mod tests {
 
     #[test]
     fn zk_ballot_public_inputs_rejects_noncanonical_owner() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
         let keypair = KeyPair::from_seed(vec![0xCC; 32], Algorithm::Ed25519);
         let account = AccountId::new(keypair.public_key().clone());
         let address_hex = account.to_canonical_hex().expect("canonical hex");
@@ -13852,7 +13853,7 @@ mod sorafs_tests {
         let sender = test_account_id(1);
         let receiver = test_account_id(2);
         let asset_def = iroha_data_model::asset::id::AssetDefinitionId::new(
-            "default".parse().unwrap(),
+            DomainId::try_new("default", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let asset = AssetId::new(asset_def, sender.clone());

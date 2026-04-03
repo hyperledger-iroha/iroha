@@ -20,6 +20,7 @@ use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
+    domain::DomainId,
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
         DataSpaceId, DataSpaceMetadata, ManifestEffect, ManifestEntry, ManifestVersion,
@@ -68,7 +69,7 @@ async fn space_directory_manifest_endpoint_returns_records() {
                 program: Some("cbdc.transfer".parse().unwrap()),
                 method: Some("transfer".parse().unwrap()),
                 asset: Some(AssetDefinitionId::new(
-                    "bank".parse().expect("domain id"),
+                    DomainId::try_new("bank", "universal").expect("domain id"),
                     "cbdc".parse().expect("asset definition name"),
                 )),
                 role: None,
@@ -520,7 +521,7 @@ async fn manifest_publish_endpoint_enqueues_transaction() {
                 program: Some("cbdc.transfer".parse().unwrap()),
                 method: Some("transfer".parse().unwrap()),
                 asset: Some(AssetDefinitionId::new(
-                    "bank".parse().expect("domain id"),
+                    DomainId::try_new("bank", "universal").expect("domain id"),
                     "cbdc".parse().expect("asset definition name"),
                 )),
                 role: None,
@@ -703,7 +704,7 @@ async fn api_router_registers_space_directory_manifest_mutation_routes() {
                 program: Some("cbdc.transfer".parse().unwrap()),
                 method: Some("transfer".parse().unwrap()),
                 asset: Some(AssetDefinitionId::new(
-                    "bank".parse().expect("domain id"),
+                    DomainId::try_new("bank", "universal").expect("domain id"),
                     "cbdc".parse().expect("asset definition name"),
                 )),
                 role: None,

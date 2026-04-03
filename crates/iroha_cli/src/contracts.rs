@@ -733,6 +733,56 @@ fn resolve_contract_target(
     }
 }
 
+fn resolve_optional_contract_address<C: RunContext>(
+    context: &C,
+    args: &ContractTargetArgs,
+) -> Result<Option<iroha::data_model::smart_contract::ContractAddress>> {
+    match (args.contract_address.as_deref(), args.contract_alias.as_deref()) {
+        (None, None) => Ok(None),
+        (Some(_), Some(_)) => Err(eyre!(
+            "provide exactly one contract target via --contract-address or --contract-alias"
+        )),
+        (Some(contract_address), None) => Ok(Some(
+            contract_address
+                .parse()
+                .wrap_err("invalid --contract-address canonical literal")?,
+        )),
+        (None, Some(contract_alias_raw)) => {
+            let contract_alias: iroha::data_model::smart_contract::ContractAlias = contract_alias_raw
+                .parse()
+                .wrap_err("invalid --contract-alias")?;
+            let client: Client = context.client_from_config();
+            let response = client
+                .post_contract_alias_resolve(&contract_alias)
+                .wrap_err("failed to call `/v1/contracts/aliases/resolve`")?;
+            let status = response.status();
+            let body = response.into_body();
+
+            match status {
+                StatusCode::OK => {
+                    let value: norito::json::Value =
+                        norito::json::from_slice(&body).wrap_err("decode contract alias response")?;
+                    let resolved = value
+                        .get("contract_address")
+                        .and_then(norito::json::Value::as_str)
+                        .ok_or_else(|| eyre!("contract alias response missing `contract_address`"))?;
+                    Ok(Some(
+                        resolved
+                            .parse()
+                            .wrap_err("resolved contract address is invalid")?,
+                    ))
+                }
+                StatusCode::NOT_FOUND => Err(eyre!("contract alias `{contract_alias}` not found")),
+                status => Err(eyre!(
+                    "contract alias resolve request failed with HTTP {}: {}",
+                    status,
+                    std::str::from_utf8(&body).unwrap_or("")
+                )),
+            }
+        }
+    }
+}
+
 fn load_contract_payload_value(
     payload_json: Option<&str>,
     payload_file: Option<&std::path::Path>,
@@ -1660,7 +1710,7 @@ fn validate_local_contract_value(
         },
         LocalContractSchemaType::DomainId => match value {
             norito::json::Value::String(raw) => {
-                raw.parse::<iroha_data_model::domain::DomainId>().is_ok()
+                iroha_data_model::domain::DomainId::parse_fully_qualified(raw).is_ok()
             }
             _ => false,
         },
@@ -1969,8 +2019,10 @@ mod tests {
             code_file: None,
             code_b64: Some(code_b64),
             gas_limit: 42,
-            namespace: None,
-            contract_id: None,
+            target: ContractTargetArgs {
+                contract_address: None,
+                contract_alias: None,
+            },
         };
         args.run(&mut ctx).expect("simulate");
         let output = ctx.take_output().expect("output");
@@ -2582,12 +2634,9 @@ pub struct SimulateArgs {
     /// Required `gas_limit` metadata to include in the simulated transaction
     #[arg(long)]
     pub gas_limit: u64,
-    /// Optional contract namespace metadata for call-time binding checks
-    #[arg(long)]
-    pub namespace: Option<String>,
-    /// Optional contract identifier metadata for call-time binding checks
-    #[arg(long)]
-    pub contract_id: Option<String>,
+    /// Optional canonical contract target metadata for call-time binding checks
+    #[command(flatten)]
+    pub target: ContractTargetArgs,
 }
 
 impl Run for SimulateArgs {
@@ -2597,22 +2646,17 @@ impl Run for SimulateArgs {
         let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
         let code = load_code_bytes(self.code_file.clone(), self.code_b64.clone())?;
         let summary = program_summary_from_bytes(&code)?;
+        let contract_address = resolve_optional_contract_address(context, &self.target)?;
 
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("gas_limit")?,
             iroha_primitives::json::Json::from(self.gas_limit),
         );
-        if let Some(ns) = self.namespace.as_ref() {
+        if let Some(contract_address) = contract_address.as_ref() {
             metadata.insert(
-                Name::from_str("contract_namespace")?,
-                iroha_primitives::json::Json::from(ns.as_str()),
-            );
-        }
-        if let Some(cid) = self.contract_id.as_ref() {
-            metadata.insert(
-                Name::from_str("contract_id")?,
-                iroha_primitives::json::Json::from(cid.as_str()),
+                Name::from_str("contract_address")?,
+                iroha_primitives::json::Json::from(contract_address.as_ref()),
             );
         }
 

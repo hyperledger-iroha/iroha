@@ -192,12 +192,6 @@ impl Default for QueueLimits {
     }
 }
 
-#[cfg(test)]
-static GOV_NAMESPACE_METADATA_KEY: LazyLock<Name> =
-    LazyLock::new(|| Name::from_str("gov_namespace").expect("static governance metadata key"));
-#[cfg(test)]
-static GOV_CONTRACT_ID_METADATA_KEY: LazyLock<Name> =
-    LazyLock::new(|| Name::from_str("gov_contract_id").expect("static governance metadata key"));
 static GOV_CONTRACT_ADDRESS_METADATA_KEY: LazyLock<Name> = LazyLock::new(|| {
     Name::from_str("gov_contract_address").expect("static governance metadata key")
 });
@@ -3946,6 +3940,7 @@ pub mod tests {
     #[cfg(feature = "telemetry")]
     use iroha_telemetry::metrics::Metrics;
     use iroha_test_samples::{ALICE_KEYPAIR, gen_account_in};
+    use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
     use rand::Rng as _;
 
@@ -4302,7 +4297,8 @@ pub mod tests {
         let validator_id = AccountId::new(validator_key.public_key().clone());
         let multisig_key = KeyPair::random();
         let multisig_id = AccountId::new(multisig_key.public_key().clone());
-        let domain_id: DomainId = "wonderland".parse().expect("static domain");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("static domain");
 
         let mut multisig_metadata = Metadata::default();
         multisig_metadata.insert(
@@ -4649,7 +4645,7 @@ pub mod tests {
         let (validator, keypair) = gen_account_in("wonderland");
 
         let mut protected = BTreeSet::new();
-        protected.insert(Name::from_str("apps").expect("static namespace"));
+        protected.insert(Name::from_str("universal").expect("static namespace"));
 
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
@@ -4672,15 +4668,14 @@ pub mod tests {
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         queue.install_lane_manifests(&manifests);
 
-        // Metadata referencing an unknown namespace must be rejected.
+        let allowed_contract_address = sample_contract_address(&validator, DataSpaceId::new(0), 0);
+        let rejected_contract_address = sample_contract_address(&validator, DataSpaceId::new(1), 0);
+
+        // Metadata referencing a dataspace outside the protected allowlist must be rejected.
         let mut metadata = Metadata::default();
         metadata.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("system"),
-        );
-        metadata.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("calc.v1"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(rejected_contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4710,49 +4705,11 @@ pub mod tests {
             1
         );
 
-        // Namespace within the manifest but missing contract id must be rejected.
-        let mut metadata_missing_cid = Metadata::default();
-        metadata_missing_cid.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("apps"),
-        );
-        let tx = accepted_tx_with(
-            validator.clone(),
-            &keypair,
-            &time_source,
-            vec![sample_unregister_instruction()],
-            metadata_missing_cid,
-        );
-        let err = queue
-            .push(tx, state.view())
-            .expect_err("missing contract id metadata must reject");
-        assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
-        #[cfg(feature = "telemetry")]
-        assert_eq!(
-            metrics
-                .governance_protected_namespace_total
-                .with_label_values(&["rejected"])
-                .get(),
-            2
-        );
-        #[cfg(feature = "telemetry")]
-        assert_eq!(
-            metrics
-                .governance_manifest_admission_total
-                .with_label_values(&["protected_namespace_rejected"])
-                .get(),
-            2
-        );
-
-        // Correct namespace metadata with contract id should be accepted.
+        // A canonical contract address inside the protected allowlist should be accepted.
         let mut valid_metadata = Metadata::default();
         valid_metadata.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("apps"),
-        );
-        valid_metadata.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("calc.v1"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(allowed_contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4784,7 +4741,7 @@ pub mod tests {
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
-    async fn governance_manifest_requires_metadata_for_contract_namespace_ops() {
+    async fn governance_manifest_requires_metadata_for_contract_address_ops() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         #[cfg(feature = "telemetry")]
@@ -4804,7 +4761,7 @@ pub mod tests {
         let (validator, keypair) = gen_account_in("wonderland");
 
         let mut protected = BTreeSet::new();
-        protected.insert(Name::from_str("apps").expect("static namespace"));
+        protected.insert(Name::from_str("universal").expect("static namespace"));
 
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
@@ -4827,10 +4784,13 @@ pub mod tests {
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         queue.install_lane_manifests(&manifests);
 
+        let contract_address = sample_contract_address(&validator, DataSpaceId::new(0), 0);
+        let mismatched_contract_address =
+            sample_contract_address(&validator, DataSpaceId::new(0), 1);
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let activate = InstructionBox::from(ActivateContractInstance {
-            namespace: "apps".to_string(),
-            contract_id: "calc.v1".to_string(),
+            namespace: "universal".to_string(),
+            contract_id: contract_address.to_string(),
             code_hash,
         });
 
@@ -4855,15 +4815,11 @@ pub mod tests {
             1
         );
 
-        // Metadata namespace present but contract_id mismatched should reject.
+        // A mismatched canonical contract address must reject.
         let mut metadata_mismatch = Metadata::default();
         metadata_mismatch.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("apps"),
-        );
-        metadata_mismatch.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("other"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(mismatched_contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4874,7 +4830,7 @@ pub mod tests {
         );
         let err = queue
             .push(tx, state.view())
-            .expect_err("contract_id mismatch must reject");
+            .expect_err("contract address mismatch must reject");
         assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
         #[cfg(feature = "telemetry")]
         assert_eq!(
@@ -4885,15 +4841,11 @@ pub mod tests {
             2
         );
 
-        // Matching metadata should allow the transaction.
+        // Matching canonical contract address metadata should allow the transaction.
         let mut metadata_ok = Metadata::default();
         metadata_ok.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("apps"),
-        );
-        metadata_ok.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("calc.v1"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4935,12 +4887,8 @@ pub mod tests {
 
         let mut metadata_bytes = Metadata::default();
         metadata_bytes.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("apps"),
-        );
-        metadata_bytes.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("calc.v1"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4952,76 +4900,6 @@ pub mod tests {
         queue
             .push(tx, state.view())
             .expect("contract artifact registration metadata satisfied");
-    }
-
-    #[tokio::test]
-    async fn governance_manifest_rejects_cross_namespace_rebind() {
-        let kura = Kura::blank_kura_for_testing();
-        let query_handle = LiveQueryStore::start_test();
-        let mut world = world_with_test_domains();
-        world.contract_instances.insert(
-            ("apps".to_string(), "calc.v1".to_string()),
-            Hash::new(b"demo"),
-        );
-        let state = Arc::new(State::new(world, kura.clone(), query_handle.clone()));
-        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
-
-        let queue = Arc::new(Queue::test(config_factory(), &time_source));
-        let (validator, keypair) = gen_account_in("wonderland");
-
-        let mut protected = BTreeSet::new();
-        protected.insert(Name::from_str("apps").expect("static namespace"));
-        protected.insert(Name::from_str("ops").expect("static namespace"));
-
-        let mut statuses = BTreeMap::new();
-        let rules = GovernanceRules {
-            validators: vec![validator.clone()],
-            protected_namespaces: protected,
-            ..GovernanceRules::default()
-        };
-        let status = LaneManifestStatus {
-            lane: LaneId::SINGLE,
-            alias: "gov".to_string(),
-            dataspace: DataSpaceId::GLOBAL,
-            visibility: LaneVisibility::Public,
-            storage: LaneStorageProfile::FullReplica,
-            governance: Some("parliament".to_string()),
-            manifest_path: Some(PathBuf::from("/tmp/manifest.json")),
-            governance_rules: Some(rules),
-            privacy_commitments: Vec::new(),
-        };
-        statuses.insert(LaneId::SINGLE, status);
-        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
-        queue.install_lane_manifests(&manifests);
-
-        let code_hash = iroha_crypto::Hash::new(b"demo");
-        let activate = InstructionBox::from(ActivateContractInstance {
-            namespace: "ops".to_string(),
-            contract_id: "calc.v1".to_string(),
-            code_hash,
-        });
-
-        let mut metadata = Metadata::default();
-        metadata.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("ops"),
-        );
-        metadata.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("calc.v1"),
-        );
-
-        let tx = accepted_tx_with(
-            validator.clone(),
-            &keypair,
-            &time_source,
-            vec![activate],
-            metadata,
-        );
-        let err = queue
-            .push(tx, state.view())
-            .expect_err("cross-namespace rebinding must be rejected");
-        assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
     }
 
     #[tokio::test]
@@ -5865,7 +5743,23 @@ pub mod tests {
 
     fn sample_unregister_instruction() -> InstructionBox {
         let domain_name = format!("dummy{}", rand::random::<u64>());
-        InstructionBox::from(Unregister::domain(domain_name.parse().unwrap()))
+        InstructionBox::from(Unregister::domain(
+            DomainId::try_new(&domain_name, "universal").unwrap(),
+        ))
+    }
+
+    fn sample_contract_address(
+        account_id: &AccountId,
+        dataspace_id: DataSpaceId,
+        deploy_nonce: u64,
+    ) -> iroha_data_model::smart_contract::ContractAddress {
+        iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+            account_id,
+            deploy_nonce,
+            dataspace_id,
+        )
+        .expect("sample contract address")
     }
 
     const RUNTIME_UPGRADE_ALLOWED_ID: &str = "upgrade-q1";
@@ -6021,7 +5915,7 @@ pub mod tests {
 
     /// Build a minimal world with a single domain and account for tests.
     pub fn world_with_test_domains() -> World {
-        let domain_id: DomainId = "wonderland".parse().expect("Valid");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
         let (account_id, _account_keypair) = gen_account_in("wonderland");
         let domain = Domain::new(domain_id.clone()).build(&account_id);
         let account = Account::new(account_id.clone()).build(&account_id);
@@ -6295,7 +6189,7 @@ pub mod tests {
         bind_manifest: bool,
     ) -> (World, AccountId, KeyPair) {
         let (account_id, key_pair) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("Valid");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
         let domain = Domain::new(domain_id.clone()).build(&account_id);
         let account = Account::new(account_id.clone())
             .with_uaid(Some(uaid))
@@ -8142,7 +8036,7 @@ pub mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, bob_keypair) = gen_account_in("wonderland");
         let world = {
-            let domain_id: DomainId = "wonderland".parse().expect("Valid");
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
             let domain = Domain::new(domain_id.clone()).build(&alice_id);
             let alice_account = Account::new(alice_id.clone()).build(&alice_id);
             let bob_account = Account::new(bob_id.clone()).build(&bob_id);

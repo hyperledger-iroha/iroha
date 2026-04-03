@@ -72,7 +72,7 @@ fn manifest_provenance(
 
 #[test]
 fn sora_parliament_plain_lifecycle_with_20_citizens() {
-    let domain_id: DomainId = "sora".parse().expect("domain");
+    let domain_id: DomainId = DomainId::try_new("sora", "universal").expect("domain");
     let (proposer_id, proposer_kp) = gen_account_in("sora");
     let (escrow_id, _escrow_kp) = gen_account_in("sora");
     let citizens: Vec<_> = (0..CITIZEN_COUNT)
@@ -84,7 +84,7 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
 
     let domain = Domain::new(domain_id.clone()).build(&proposer_id);
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "sora".parse().unwrap(),
+        DomainId::try_new("sora", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&proposer_id);

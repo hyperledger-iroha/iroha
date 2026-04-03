@@ -508,7 +508,7 @@ mod tests {
     #[test]
     fn debug_formats_without_recursion() {
         let kp = KeyPair::random();
-        let domain: DomainId = "domain".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
         let name: Name = "xor".parse().unwrap();
         let account: AccountId = AccountId::new(kp.public_key().clone());
         let def = AssetDefinitionId::new(domain, name);
@@ -542,7 +542,7 @@ mod tests {
         assert!(opaque.try_name().is_none());
 
         let domain_scoped = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("name"),
         );
         assert!(!domain_scoped.is_opaque_canonical());
@@ -550,7 +550,7 @@ mod tests {
             domain_scoped
                 .try_domain()
                 .expect("domain-scoped projection"),
-            &"wonderland".parse::<DomainId>().expect("domain"),
+            &DomainId::try_new("wonderland", "universal").expect("domain"),
         );
         assert_eq!(
             domain_scoped.try_name().expect("name projection"),
@@ -563,7 +563,7 @@ mod tests {
         let kp = KeyPair::random();
         let account = AccountId::new(kp.public_key().clone());
         let definition = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("name"),
         );
         let literal = format!("{definition}#{account}");
@@ -578,7 +578,7 @@ mod tests {
         let kp = KeyPair::random();
         let account = AccountId::new(kp.public_key().clone());
         let definition = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("name"),
         );
         let literal = format!("{definition}#{account}#dataspace:7");
@@ -628,7 +628,7 @@ mod tests {
     #[test]
     fn asset_definition_id_rejects_invalid_checksum() {
         let mut literal = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("name"),
         )
         .to_string()

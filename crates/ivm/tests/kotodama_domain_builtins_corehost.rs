@@ -19,13 +19,13 @@ fn kotodama_unregister_domain() {
     // Prepare WSV with the domain present and caller permitted to register domains
     let mut wsv = MockWorldStateView::new();
     // Use a caller in a different domain to allow unregistering `wonderland` (no accounts in that domain)
-    let _admin_domain: DomainId = "admin".parse().expect("domain id");
+    let _admin_domain: DomainId = DomainId::try_new("admin", "universal").expect("domain id");
     let alice: AccountId = AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
             .expect("public key"),
     );
-    let dom: DomainId = "wonderland".parse().unwrap();
+    let dom: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     wsv.add_account_unchecked(alice.clone());
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(&alice, dom));
@@ -49,7 +49,8 @@ fn kotodama_transfer_domain() {
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile kotodama");
     let mut wsv = MockWorldStateView::new();
-    let _wonderland_domain: DomainId = "wonderland".parse().expect("domain id");
+    let _wonderland_domain: DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain id");
     let alice: AccountId = AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()

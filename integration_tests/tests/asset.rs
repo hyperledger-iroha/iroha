@@ -80,7 +80,10 @@ fn unique_asset_definition_id(domain: &str, prefix: &str) -> AssetDefinitionId {
     let name: Name = format!("{prefix}{seq}")
         .parse()
         .expect("generated asset definition name should parse");
-    AssetDefinitionId::new(domain.parse().expect("domain should parse"), name)
+    AssetDefinitionId::new(
+        DomainId::parse_fully_qualified(domain).expect("domain should parse"),
+        name,
+    )
 }
 
 fn named_numeric_asset_definition(
@@ -638,8 +641,10 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
         let (dex_id, _dex_keypair) = gen_account_in("exchange");
         let (seller_id, seller_keypair) = gen_account_in("company");
         let (buyer_id, buyer_keypair) = gen_account_in("company");
-        let exchange_domain: DomainId = "exchange".parse().expect("domain should be valid");
-        let company_domain: DomainId = "company".parse().expect("domain should be valid");
+        let exchange_domain: DomainId =
+            DomainId::try_new("exchange", "universal").expect("domain should be valid");
+        let company_domain: DomainId =
+            DomainId::try_new("company", "universal").expect("domain should be valid");
         let rate_def: AssetDefinitionId = unique_asset_definition_id("exchange", "btceth");
         let btc_def: AssetDefinitionId = unique_asset_definition_id("crypto", "btc");
         let eth_def: AssetDefinitionId = unique_asset_definition_id("crypto", "eth");
@@ -815,7 +820,8 @@ fn transfer_asset_definition() -> Result<()> {
     let asset_definition_id: AssetDefinitionId = unique_asset_definition_id("wonderland", "asset");
 
     let mut builder = quiet_network_builder();
-    let domain_id: DomainId = "domain".parse().expect("domain should be valid");
+    let domain_id: DomainId =
+        DomainId::try_new("domain", "universal").expect("domain should be valid");
     builder = builder
         .with_genesis_instruction(register::domain("domain"))
         .with_genesis_instruction(register::account(new_owner_id.clone(), domain_id.clone()));
@@ -895,7 +901,8 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
             named_asset_definition(asset_definition_id.clone(), NumericSpec::integer());
 
         let mut builder = quiet_network_builder();
-        let domain_id: DomainId = "domain".parse().expect("domain should be valid");
+        let domain_id: DomainId =
+            DomainId::try_new("domain", "universal").expect("domain should be valid");
         builder = builder
             .with_genesis_instruction(register::domain("domain"))
             .with_genesis_instruction(register::account(dest_id.clone(), domain_id.clone()));
@@ -1087,7 +1094,9 @@ mod register {
     use super::*;
 
     pub fn domain(id: &str) -> Register<Domain> {
-        Register::domain(Domain::new(id.parse().expect("should parse to DomainId")))
+        Register::domain(Domain::new(
+            DomainId::parse_fully_qualified(id).expect("should parse to DomainId"),
+        ))
     }
 
     pub fn account(id: AccountId, _domain: DomainId) -> Register<Account> {

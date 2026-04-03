@@ -970,6 +970,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::domain::DomainId;
 
     fn sample_uaid() -> UniversalAccountId {
         UniversalAccountId::from_hash(Hash::new(b"uaid::sample"))
@@ -1084,7 +1085,7 @@ mod tests {
                 program: Some("cbdc.transfer".parse().expect("program id")),
                 method: Some(sample_name("transfer")),
                 asset: Some(iroha_data_model::asset::AssetDefinitionId::new(
-                    "centralbank".parse().unwrap(),
+                    DomainId::try_new("centralbank", "universal").unwrap(),
                     "CBDC".parse().unwrap(),
                 )),
                 role: Some(AmxRole::Initiator),

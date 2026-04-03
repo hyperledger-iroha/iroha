@@ -20,11 +20,6 @@ This document describes the app-facing HTTP endpoints for deploying self-describ
   - Fetches stored code bytes for a given `code_hash`.
   - Response body: `{ code_b64 }`.
 
-- GET `/v1/contracts/instances/{ns}`
-  - Lists active contract instances for `ns`. Mirrors the governance listing endpoint.
-  - Query params: `contains`, `hash_prefix`, `offset`, `limit`, `order` (same semantics as governance endpoint).
-  - Response: `{ namespace, instances: [{ contract_id, code_hash_hex }], total, offset, limit }`.
-
 ## Schemas
 
 ### DeployContractDto

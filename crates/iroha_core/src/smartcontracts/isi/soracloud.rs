@@ -10331,7 +10331,8 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
-        let wonderland: iroha_data_model::domain::DomainId = "wonderland".parse()?;
+        let wonderland: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal")?;
         Register::domain(Domain::new(wonderland.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         Register::account(Account::new(ALICE_ID.clone()))
@@ -10393,7 +10394,7 @@ mod tests {
         Register::account(Account::new(validator.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, state_transaction)?;
         let asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "stake".parse().expect("stake"),
         );
         Register::asset_definition(
@@ -10423,7 +10424,7 @@ mod tests {
             source_id,
             storage_class: StorageClass::Warm,
             lease_asset_definition_id: AssetDefinitionId::new(
-                "wonderland".parse().expect("domain"),
+                DomainId::try_new("wonderland", "universal").expect("domain"),
                 "xor".parse().expect("asset"),
             ),
             base_fee_nanos: 10_000,
@@ -11710,7 +11711,7 @@ mod tests {
         let pool_id = Hash::new(b"warmup-pool");
         let source_id = Hash::new(b"warmup-source");
         let stake_asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "stake".parse().expect("stake"),
         );
         state.nexus.get_mut().staking.stake_asset_id = stake_asset_definition_id.to_string();
@@ -11824,7 +11825,7 @@ mod tests {
         let pool_id = Hash::new(b"heartbeat-pool");
         let source_id = Hash::new(b"heartbeat-source");
         let stake_asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "stake".parse().expect("stake"),
         );
         state.nexus.get_mut().staking.stake_asset_id = stake_asset_definition_id.to_string();
@@ -11966,7 +11967,7 @@ mod tests {
         let pool_id = Hash::new(b"advert-contradiction-pool");
         let source_id = Hash::new(b"advert-contradiction-source");
         let stake_asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "stake".parse().expect("stake"),
         );
         state.nexus.get_mut().staking.stake_asset_id = stake_asset_definition_id.to_string();
@@ -12119,7 +12120,7 @@ mod tests {
         let lease_term_ms = 60_000_u64;
         let base_fee_nanos = 10_000_u128;
         let lease_asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("xor"),
         );
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
@@ -12228,7 +12229,7 @@ mod tests {
         let lease_term_ms = 60_000_u64;
         let base_fee_nanos = 10_000_u128;
         let lease_asset_definition_id = AssetDefinitionId::new(
-            "domain".parse().expect("domain"),
+            DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
         );
         let source_id = hf_source_id(repo_id, resolved_revision)?;
@@ -12316,7 +12317,7 @@ mod tests {
         let base_fee_nanos = 10_000_u128;
         let renewed_fee_nanos = 12_000_u128;
         let lease_asset_definition_id = AssetDefinitionId::new(
-            "domain".parse().expect("domain"),
+            DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
         );
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
@@ -12485,7 +12486,7 @@ mod tests {
         let base_fee_nanos = 10_000_u128;
         let renewed_fee_nanos = 12_000_u128;
         let lease_asset_definition_id = AssetDefinitionId::new(
-            "domain".parse().expect("domain"),
+            DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
         );
 
@@ -12692,7 +12693,7 @@ mod tests {
         let lease_term_ms = 60_000_u64;
         let base_fee_nanos = 10_000_u128;
         let lease_asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("xor"),
         );
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
@@ -12753,7 +12754,7 @@ mod tests {
         let lease_term_ms = 60_000_u64;
         let base_fee_nanos = 10_000_u128;
         let lease_asset_definition_id = AssetDefinitionId::new(
-            "domain".parse().expect("domain"),
+            DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
         );
 
@@ -12942,7 +12943,7 @@ mod tests {
         let base_fee_nanos = 10_000_u128;
         let renewed_fee_nanos = 12_000_u128;
         let lease_asset_definition_id = AssetDefinitionId::new(
-            "domain".parse().expect("domain"),
+            DomainId::try_new("domain", "universal").expect("domain"),
             "xor".parse().expect("xor"),
         );
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)

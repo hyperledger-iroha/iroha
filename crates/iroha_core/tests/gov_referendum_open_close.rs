@@ -34,7 +34,7 @@ fn referendum_open_and_close_by_height() {
     // Build minimal state.
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&iroha_test_samples::ALICE_ID);
     let account: Account =
         Account::new(iroha_test_samples::ALICE_ID.clone()).build(&iroha_test_samples::ALICE_ID);

@@ -389,35 +389,38 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .expect("garden_of_live_flowers domain");
     let cabbage_name: Name = "cabbage".parse().expect("cabbage asset name");
     let alice_metadata = Metadata::default();
+    let universal_dataspace: Name = "universal".parse().expect("universal dataspace");
+    let wonderland_domain =
+        DomainId::try_new(&wonderland_name, &universal_dataspace).expect("wonderland domain id");
+    let garden_domain =
+        DomainId::try_new(&garden_name, &universal_dataspace).expect("garden domain id");
 
     builder = builder
-        .domain(wonderland_name.clone())
+        .domain(wonderland_domain.clone())
         .account_with_metadata(ALICE_KEYPAIR.public_key().clone(), alice_metadata)
         .account(BOB_KEYPAIR.public_key().clone())
         .asset(rose_name, NumericSpec::default())
         .asset(camomile_name, NumericSpec::default())
         .finish_domain()
-        .domain(garden_name)
+        .domain(garden_domain.clone())
         .account(CARPENTER_KEYPAIR.public_key().clone())
         .asset(cabbage_name, NumericSpec::default())
         .finish_domain();
 
-    let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain id");
-    let garden_domain: DomainId = "garden_of_live_flowers"
-        .parse()
+    let wonderland_domain =
+        DomainId::parse_fully_qualified("wonderland.universal").expect("wonderland domain id");
+    let garden_domain = DomainId::parse_fully_qualified("garden_of_live_flowers.universal")
         .expect("garden_of_live_flowers domain id");
     let rose_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        wonderland_domain.clone(),
         "rose".parse().unwrap(),
     );
     let camomile_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        wonderland_domain.clone(),
         "camomile".parse().unwrap(),
     );
-    let cabbage_definition_id: AssetDefinitionId = AssetDefinitionId::new(
-        "garden_of_live_flowers".parse().unwrap(),
-        "cabbage".parse().unwrap(),
-    );
+    let cabbage_definition_id: AssetDefinitionId =
+        AssetDefinitionId::new(garden_domain.clone(), "cabbage".parse().unwrap());
     let rose_asset_id = AssetId::new(rose_definition_id.clone(), alice_id.clone());
     let cabbage_asset_id = AssetId::new(cabbage_definition_id.clone(), alice_id.clone());
 
@@ -431,14 +434,14 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
 
     builder = builder.next_transaction();
 
-    let test_domain_id: DomainId = "domain".parse().expect("domain id");
-    let and_domain_id: DomainId = "and".parse().expect("and domain id");
+    let test_domain_id = DomainId::parse_fully_qualified("domain.universal").expect("domain id");
+    let and_domain_id = DomainId::parse_fully_qualified("and.universal").expect("and domain id");
     let xor_asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        test_domain_id.clone(),
         "xor".parse().unwrap(),
     );
     let may_and_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "and".parse().unwrap(),
+        and_domain_id.clone(),
         "MAY".parse().unwrap(),
     );
 
@@ -1103,7 +1106,7 @@ mod tests {
         );
 
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "genesis_extra".parse().unwrap(),
         );
         let instructions = vec![InstructionBox::from(Register::asset_definition(
@@ -1764,7 +1767,7 @@ mod tests {
         );
 
         let validator_id = AccountId::new(peer_id.public_key().clone());
-        let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
+        let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
         let stake_asset_id = AssetDefinitionId::new(
             nexus_domain.clone(),
             "multilane_stake".parse().expect("stake asset name"),
@@ -1878,7 +1881,7 @@ mod tests {
         let chain_id = super::chain_id();
         let genesis_key_pair = SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone();
         let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
-        let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
+        let ivm_domain: DomainId = DomainId::try_new("ivm", "universal").expect("ivm domain");
         let gas_label: Name = "gas".parse().expect("gas label");
         let gas_account =
             Account::new(AccountId::new(KeyPair::random().public_key().clone()).clone())

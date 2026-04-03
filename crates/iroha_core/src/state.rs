@@ -50,6 +50,7 @@ use iroha_data_model::{
         commitment::DaCommitmentLocation, pin_intent::DaPinIntentWithLocation,
         types::StorageTicketId,
     },
+    error::ParseError,
     events::{
         EventBox, SharedDataEvent,
         data::{
@@ -344,6 +345,7 @@ impl<T: MvValue> CellVecExt<T> for CellTransaction<'_, '_, Vec<T>> {
 macro_rules! build_world_block {
     ($state:expr, $method:ident) => {
         WorldBlock {
+            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
             parameters: $state.parameters.$method(),
             peers: $state.peers.$method(),
             consensus_keys: $state.consensus_keys.$method(),
@@ -528,6 +530,7 @@ macro_rules! build_world_block {
 macro_rules! build_world_transaction {
     ($state:expr, $telemetry:expr, $axt_lane_config:expr, $axt_current_slot:expr) => {
         WorldTransaction {
+            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
             parameters: $state.parameters.transaction(),
             peers: $state.peers.transaction(),
             consensus_keys: $state.consensus_keys.transaction(),
@@ -1806,6 +1809,8 @@ pub struct World {
 
 /// Struct for block's aggregated changes
 pub struct WorldBlock<'world> {
+    /// Dataspace alias catalog used to qualify domain-backed aliases.
+    pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
     pub parameters: CellBlock<'world, Parameters>,
     /// Identifications of discovered peers.
@@ -2355,6 +2360,8 @@ impl<'world> WorldBlock<'world> {
 
 /// Struct for single transaction's aggregated changes
 pub struct WorldTransaction<'block, 'world> {
+    /// Dataspace alias catalog used to qualify domain-backed aliases.
+    pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
     pub(crate) parameters: CellTransaction<'block, 'world, Parameters>,
     /// Identifications of discovered peers.
@@ -3144,6 +3151,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
 /// Consistent point in time view of the [`World`]
 pub struct WorldView<'world> {
+    /// Dataspace alias catalog used to qualify domain-backed aliases.
+    pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
     pub(crate) parameters: CellView<'world, Parameters>,
     /// Identifications of discovered peers.
@@ -8362,10 +8371,13 @@ mod storage_migration_tests {
     fn domain_selector_index_tracks_default_and_local_domains() {
         let mut world = World::default();
         let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let default_domain: DomainId = iroha_data_model::account::address::DEFAULT_DOMAIN_NAME
-            .parse()
-            .expect("default domain id");
-        let local_domain: DomainId = "wonderland".parse().expect("local domain id");
+        let default_domain = DomainId::try_new(
+            iroha_data_model::account::address::DEFAULT_DOMAIN_NAME,
+            "universal",
+        )
+        .expect("default domain id");
+        let local_domain: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("local domain id");
 
         world.domains.insert(
             default_domain.clone(),
@@ -8413,7 +8425,7 @@ mod storage_migration_tests {
     fn account_alias_index_rejects_duplicates() {
         let mut world = World::default();
 
-        let domain_id: DomainId = "alias.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
         let label = alias_in_domain(&domain_id, "primary".parse::<Name>().expect("label name"));
         let first = AccountId::new(KeyPair::random().public_key().clone());
         let second = AccountId::new(KeyPair::random().public_key().clone());
@@ -8442,7 +8454,7 @@ mod storage_migration_tests {
     fn account_alias_index_rejects_phone_like_labels() {
         let mut world = World::default();
 
-        let domain_id: DomainId = "alias.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
         let label = alias_in_domain(
             &domain_id,
             "+819398553445".parse::<Name>().expect("label name"),
@@ -8467,7 +8479,7 @@ mod storage_migration_tests {
     fn account_alias_index_preserves_bound_aliases_from_storage() {
         let mut world = World::default();
 
-        let domain_id: DomainId = "alias.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
         let primary_label = alias_in_domain(
             &domain_id,
             "banking".parse::<Name>().expect("primary label name"),
@@ -8522,7 +8534,7 @@ mod storage_migration_tests {
     fn account_rekey_rebuild_backfills_alias_bound_multisig_accounts() {
         let mut world = World::default();
 
-        let domain_id: DomainId = "alias.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
         let label = alias_in_domain(&domain_id, "cbdc".parse::<Name>().expect("label name"));
         let member_a = iroha_data_model::account::MultisigMember::new(
             KeyPair::random().public_key().clone(),
@@ -8564,7 +8576,7 @@ mod storage_migration_tests {
     fn account_rekey_rebuild_repoints_stale_records_to_current_alias_binding() {
         let mut world = World::default();
 
-        let domain_id: DomainId = "alias.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
         let label = alias_in_domain(&domain_id, "treasury".parse::<Name>().expect("label name"));
         let first_id = AccountId::new(KeyPair::random().public_key().clone());
         let second_key = KeyPair::random();
@@ -9551,10 +9563,12 @@ impl DetachedStateTransactionDelta {
         }
 
         for alias in world.bound_account_aliases(account_id) {
-            let Some(alias_domain) = alias.domain.as_ref() else {
+            let Some(domain_id) = alias.domain_id(world.dataspace_catalog()).map_err(|err| {
+                ValidationFail::InstructionFailed(Error::InvariantViolation(err.to_string().into()))
+            })?
+            else {
                 continue;
             };
-            let domain_id = DomainId::new(alias_domain.name().clone());
             let domain_owner = match self.domain_owner_transfer.get(&domain_id) {
                 Some((_, to)) => to.clone(),
                 None => world
@@ -9642,10 +9656,12 @@ impl DetachedStateTransactionDelta {
         }
 
         for alias in world.bound_account_aliases(transfer.source()) {
-            let Some(alias_domain) = alias.domain.as_ref() else {
+            let Some(domain_id) = alias.domain_id(world.dataspace_catalog()).map_err(|err| {
+                ValidationFail::InstructionFailed(Error::InvariantViolation(err.to_string().into()))
+            })?
+            else {
                 continue;
             };
-            let domain_id = DomainId::new(alias_domain.name().clone());
             let source_domain_owner = match self.domain_owner_transfer.get(&domain_id) {
                 Some((_, to)) => to.clone(),
                 None => world
@@ -11410,6 +11426,7 @@ impl World {
     #[allow(clippy::too_many_lines)]
     pub fn view(&self) -> WorldView<'_> {
         WorldView {
+            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
             parameters: self.parameters.view(),
             peers: self.peers.view(),
             consensus_keys: self.consensus_keys.view(),
@@ -11587,6 +11604,8 @@ impl World {
 pub trait WorldReadOnly {
     /// Global parameters registry.
     fn parameters(&self) -> &Parameters;
+    /// Dataspace alias catalog used to qualify domain-scoped aliases.
+    fn dataspace_catalog(&self) -> &iroha_data_model::nexus::DataSpaceCatalog;
     /// Decode the `sumeragi_npos_parameters` custom payload when present.
     fn sumeragi_npos_parameters(&self) -> Option<SumeragiNposParameters> {
         sumeragi_npos_parameters_from_parameters(self.parameters())
@@ -12141,25 +12160,73 @@ pub trait WorldReadOnly {
         self.domains().iter().map(|(_, domain)| domain)
     }
 
+    /// Collect the account's dataspace -> domain hierarchy from Space Directory bindings and
+    /// bound aliases.
+    ///
+    /// Every materialized account implicitly belongs to the universal dataspace. Additional
+    /// dataspaces come from UAID bindings and bound aliases. Domains remain optional within each
+    /// dataspace, so a dataspace entry may contain an empty domain set.
+    fn account_scope_hierarchy(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<BTreeMap<DataSpaceId, BTreeSet<DomainId>>, ParseError> {
+        let mut hierarchy = BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())]);
+
+        if let Some(account) = self.accounts().get(account_id)
+            && let Some(uaid) = account.as_ref().uaid().copied()
+            && let Some(bindings) = self.uaid_dataspaces().get(&uaid)
+        {
+            for (dataspace, accounts) in bindings.iter() {
+                if accounts.contains(account_id) {
+                    hierarchy.entry(*dataspace).or_default();
+                }
+            }
+        }
+
+        for alias in self.bound_account_aliases(account_id) {
+            let domains = hierarchy.entry(alias.dataspace).or_default();
+            if let Some(domain_id) = alias.domain_id(self.dataspace_catalog())? {
+                domains.insert(domain_id);
+            }
+        }
+
+        Ok(hierarchy)
+    }
+
+    /// Collect the dataspaces linked to the account.
+    fn account_dataspaces(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<BTreeSet<DataSpaceId>, ParseError> {
+        Ok(self
+            .account_scope_hierarchy(account_id)?
+            .into_keys()
+            .collect())
+    }
+
+    /// Collect the qualified domains linked to the account across every dataspace.
+    fn account_domains(&self, account_id: &AccountId) -> Result<BTreeSet<DomainId>, ParseError> {
+        Ok(self
+            .account_scope_hierarchy(account_id)?
+            .into_values()
+            .flatten()
+            .collect())
+    }
+
     /// Return `true` when the account has any alias whose alias-domain matches `id`.
     fn account_has_alias_domain(&self, account_id: &AccountId, id: &DomainId) -> bool {
-        let matches_alias = |alias: &AccountAlias| {
-            alias
-                .domain
-                .as_ref()
-                .is_some_and(|alias_domain| alias_domain.name() == id.name())
-        };
-
-        self.account_aliases_by_account()
-            .get(account_id)
-            .into_iter()
-            .flat_map(BTreeSet::iter)
-            .any(matches_alias)
-            || self
-                .accounts()
-                .get(account_id)
-                .and_then(|value| value.as_ref().label())
-                .is_some_and(matches_alias)
+        match self.account_domains(account_id) {
+            Ok(domains) => domains.contains(id),
+            Err(error) => {
+                warn!(
+                    account = %account_id,
+                    domain = %id,
+                    ?error,
+                    "account scope hierarchy could not be resolved"
+                );
+                false
+            }
+        }
     }
 
     /// Iterate accounts in domain.
@@ -12401,8 +12468,11 @@ pub trait WorldReadOnly {
         Ok(f(account))
     }
 
-    /// Resolve the dataspace binding for a concrete account when a UAID-backed
+    /// Resolve one dataspace binding for a concrete account when a UAID-backed
     /// Space Directory entry exists.
+    ///
+    /// Prefer [`WorldReadOnly::account_scope_hierarchy`] when the caller needs the full
+    /// `1..many` dataspace and `0..many` domain view for the account.
     fn dataspace_for_account(&self, account_id: &AccountId) -> Option<DataSpaceId> {
         let account = self.account(account_id).ok()?;
         let uaid = account.value().uaid().copied()?;
@@ -12585,6 +12655,9 @@ macro_rules! impl_world_ro {
         impl WorldReadOnly for $ident {
             fn parameters(&self) -> &Parameters {
                 &self.parameters
+            }
+            fn dataspace_catalog(&self) -> &iroha_data_model::nexus::DataSpaceCatalog {
+                &self.dataspace_catalog
             }
             fn peers(&self) -> &Peers {
                 &self.peers
@@ -17202,9 +17275,11 @@ impl State {
     pub fn block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
+        let nexus_snapshot = self.nexus_snapshot();
         // Determine pre-block consensus seed and per-block gas limit before taking block locks.
         let (gas_limit_per_block, pre_block_npos_seed) = {
-            let world_view = self.world.view();
+            let mut world_view = self.world.view();
+            world_view.dataspace_catalog = nexus_snapshot.dataspace_catalog.clone();
             let gas_limit_per_block = gas_limit_from_parameters(world_view.parameters());
             let pre_block_npos_seed = crate::sumeragi::npos_seed_for_height_from_world(
                 &world_view,
@@ -17219,10 +17294,12 @@ impl State {
             self.telemetry.reset_block_fee_units();
         }
         // Acquire block hashes before the world lock to match `State::view` and avoid deadlocks.
+        let mut world = self.world.block();
+        world.dataspace_catalog = nexus_snapshot.dataspace_catalog.clone();
         let mut sb = StateBlock {
             state_ref: self,
             block_hashes: self.block_hashes.block(),
-            world: self.world.block(),
+            world,
             merge_ledger: &self.merge_ledger,
             transactions: self.transactions.block(),
             commit_topology: self.commit_topology.block(),
@@ -17766,7 +17843,9 @@ impl State {
     /// consensus paths that only need access to parameters/consensus keys.
     #[track_caller]
     pub fn world_view(&self) -> WorldView<'_> {
-        self.world.view()
+        let mut world = self.world.view();
+        world.dataspace_catalog = self.nexus_snapshot().dataspace_catalog;
+        world
     }
 
     /// Create a point-in-time snapshot tuned for query/IVM execution.
@@ -18099,8 +18178,12 @@ impl State {
         let block_hashes: Vec<HashOf<BlockHeader>> =
             self.block_hashes.view().iter().copied().collect();
         let block_hashes_wait = block_hashes_start.elapsed();
+        let nexus_start = Instant::now();
+        let nexus = self.nexus_snapshot();
+        let nexus_wait = nexus_start.elapsed();
         let world_start = Instant::now();
-        let world = self.world.view();
+        let mut world = self.world.view();
+        world.dataspace_catalog = nexus.dataspace_catalog.clone();
         let world_wait = world_start.elapsed();
         let transactions_start = Instant::now();
         let transactions = self.transactions.view();
@@ -18111,9 +18194,6 @@ impl State {
         let prev_commit_topology_start = Instant::now();
         let prev_commit_topology = self.prev_commit_topology.view();
         let prev_commit_topology_wait = prev_commit_topology_start.elapsed();
-        let nexus_start = Instant::now();
-        let nexus = self.nexus_snapshot();
-        let nexus_wait = nexus_start.elapsed();
         let _view_lock = self.view_lock.try_read().map_or_else(
             || {
                 self.note_view_lock_contention(caller);
@@ -21297,6 +21377,13 @@ impl<'state> StateBlock<'state> {
             axt_current_slot,
             self.nexus.axt.replay_retention_slots.get(),
         );
+        let mut world = self.world.trasaction(
+            #[cfg(feature = "telemetry")]
+            Some(self.telemetry),
+            self.nexus.lane_config.clone(),
+            axt_current_slot,
+        );
+        world.dataspace_catalog = self.nexus.dataspace_catalog.clone();
         StateTransaction {
             committed_fragments: &mut self.committed_fragments,
             touched_lanes: &mut self.touched_lanes,
@@ -21305,12 +21392,7 @@ impl<'state> StateBlock<'state> {
             mode_cutover_next_set_in_tx: false,
             mode_cutover_activation_set_in_tx: false,
             confidential_registry_dirty: &mut self.confidential_registry_dirty,
-            world: self.world.trasaction(
-                #[cfg(feature = "telemetry")]
-                Some(self.telemetry),
-                self.nexus.lane_config.clone(),
-                axt_current_slot,
-            ),
+            world,
             block_hashes: self.block_hashes.transaction(),
             merge_ledger: self.merge_ledger,
             commit_topology: self.commit_topology.transaction(),
@@ -22894,7 +22976,7 @@ mod transfer_transcript_tests {
         tx.tx_call_hash = Some(call_hash);
         let asset_definition: iroha_data_model::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
         let delta = TransferDeltaTranscript {
@@ -22935,7 +23017,7 @@ mod transfer_transcript_tests {
         let mut tx = block.transaction();
         let asset_definition: iroha_data_model::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
         let delta = TransferDeltaTranscript {
@@ -22984,7 +23066,7 @@ mod transfer_transcript_tests {
         let mut tx = block.transaction();
         let asset_definition: iroha_data_model::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
         let delta_a = TransferDeltaTranscript {
@@ -23061,7 +23143,8 @@ mod fastpq_tx_set_hash_tests {
     #[test]
     fn validate_and_record_transactions_sets_tx_set_hash() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("valid domain");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("valid domain");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([domain], [account], []);
@@ -23120,7 +23203,7 @@ mod fastpq_tx_set_hash_tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
             amount: Numeric::from(10u32),
@@ -23166,7 +23249,7 @@ mod fastpq_tx_set_hash_tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
             amount: Numeric::from(10u32),
@@ -23232,7 +23315,7 @@ mod fastpq_tx_set_hash_tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
             amount: Numeric::from(10u32),
@@ -23286,7 +23369,7 @@ mod block_proof_tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "block-proof-tests".parse().expect("chain id");
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx =
@@ -23851,7 +23934,7 @@ mod replay_validation_tests {
         )]);
 
         let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let user_domain_id: DomainId = "users".parse().expect("domain id");
+        let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
         let user_id = iroha_data_model::account::AccountId::new(user_keypair.public_key().clone());
         let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
             .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
@@ -23941,7 +24024,6 @@ mod replay_validation_tests {
 
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::{
-            name::Name,
             parameter::system::{Parameter, SumeragiNposParameters},
             peer::PeerId,
         };
@@ -23994,7 +24076,7 @@ mod replay_validation_tests {
                 .set_topology(topology_entries)
                 .append_parameter(Parameter::Custom(npos_params.into_custom_parameter()));
         genesis_builder = genesis_builder
-            .domain("wonderland".parse::<Name>().expect("domain id"))
+            .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
             .account(user_keypair.public_key().clone())
             .finish_domain();
         let genesis_block = genesis_builder
@@ -24067,8 +24149,7 @@ mod replay_validation_tests {
         };
         use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
         use iroha_data_model::{
-            block::BlockSignature, consensus::VALIDATOR_SET_HASH_VERSION_V1, name::Name,
-            peer::PeerId,
+            block::BlockSignature, consensus::VALIDATOR_SET_HASH_VERSION_V1, peer::PeerId,
         };
         use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
         use iroha_test_samples::{
@@ -24117,7 +24198,7 @@ mod replay_validation_tests {
             GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
                 .set_topology(topology_entries);
         genesis_builder = genesis_builder
-            .domain("wonderland".parse::<Name>().expect("domain id"))
+            .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
             .account(user_keypair.public_key().clone())
             .finish_domain();
         let genesis_block = genesis_builder
@@ -24276,7 +24357,7 @@ mod replay_validation_tests {
         let chain_id = ChainId::from("iroha:test:replay-signature-rotation-recovery");
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
         let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let user_domain: DomainId = "users".parse().expect("domain id");
+        let user_domain: DomainId = DomainId::try_new("users", "universal").expect("domain id");
         let user_id = AccountId::new(user_keypair.public_key().clone());
 
         crate::sumeragi::status::reset_commit_certs_for_tests();
@@ -24435,7 +24516,7 @@ mod permission_cache_tests {
     };
 
     fn wonderland_domain_id() -> DomainId {
-        "wonderland".parse().expect("domain id")
+        DomainId::try_new("wonderland", "universal").expect("domain id")
     }
 
     fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
@@ -24805,7 +24886,6 @@ mod permission_cache_tests {
         use std::{
             borrow::Cow,
             num::{NonZeroU64, NonZeroUsize},
-            str::FromStr,
             sync::Arc,
         };
 
@@ -24822,7 +24902,6 @@ mod permission_cache_tests {
             block::{BlockHeader, SignedBlock},
             domain::Domain,
             isi::{Grant, InstructionBox},
-            name::Name,
             prelude::PeerId,
             transaction::TransactionBuilder,
             trigger::TriggerId,
@@ -24907,7 +24986,7 @@ mod permission_cache_tests {
                     leader_pop,
                 )]);
         genesis_builder = genesis_builder
-            .domain(Name::from_str("wonderland").unwrap())
+            .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
             .account(registrar_keypair.public_key().clone())
             .account(owner_keypair.public_key().clone())
             .finish_domain();
@@ -28249,7 +28328,7 @@ mod tests {
 
     fn asset_alias_test_world() -> (World, AssetDefinitionId) {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "issuer".parse().expect("domain");
+        let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain");
         let definition_id =
             AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("asset name"));
         let definition = AssetDefinition::numeric(definition_id.clone())
@@ -28547,7 +28626,7 @@ mod tests {
         let validator = ALICE_ID.clone();
         let staker = BOB_ID.clone();
         let stake_asset_definition = AssetDefinitionId::new(
-            "wonderland".parse().expect("stake asset domain"),
+            DomainId::try_new("wonderland", "universal").expect("stake asset domain"),
             "stake".parse().expect("stake asset name"),
         );
         let reward_asset = AssetId::new(stake_asset_definition, validator.clone());
@@ -28673,7 +28752,7 @@ mod tests {
     };
 
     fn sample_domain_id() -> DomainId {
-        "wonderland".parse().expect("sample domain id")
+        DomainId::try_new("wonderland", "universal").expect("sample domain id")
     }
 
     fn new_account_in_domain(
@@ -28685,6 +28764,100 @@ mod tests {
 
     fn new_sample_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
         new_account_in_domain(account_id, &sample_domain_id())
+    }
+
+    #[test]
+    fn account_scope_hierarchy_tracks_dataspaces_and_domains() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: DataSpaceId::GLOBAL,
+                alias: "universal".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        stx.world.dataspace_catalog = dataspace_catalog;
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        Register::account(Account::new(authority.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register authority");
+        Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register account");
+
+        let universal_domain: DomainId =
+            DomainId::try_new("treasury", "universal").expect("domain");
+        let retail_domain: DomainId = DomainId::try_new("treasury", "retail").expect("domain");
+        let universal_alias = iroha_data_model::account::rekey::AccountAlias::new(
+            "rootdesk".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                universal_domain.name().clone(),
+            )),
+            DataSpaceId::GLOBAL,
+        );
+        let retail_alias = iroha_data_model::account::rekey::AccountAlias::new(
+            "retaildesk".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                retail_domain.name().clone(),
+            )),
+            retail_dataspace,
+        );
+
+        stx.world
+            .account_mut(&account_id)
+            .expect("account exists")
+            .set_label(Some(universal_alias.clone()));
+        stx.world
+            .insert_account_alias_binding(universal_alias.clone(), account_id.clone());
+        stx.world
+            .insert_account_alias_binding(retail_alias, account_id.clone());
+
+        let hierarchy = stx
+            .world
+            .account_scope_hierarchy(&account_id)
+            .expect("account hierarchy");
+        assert_eq!(
+            hierarchy.get(&DataSpaceId::GLOBAL),
+            Some(&BTreeSet::from([universal_domain.clone()])),
+            "universal dataspace should expose the bound universal domain",
+        );
+        assert_eq!(
+            hierarchy.get(&retail_dataspace),
+            Some(&BTreeSet::from([retail_domain.clone()])),
+            "retail dataspace should expose the bound retail domain",
+        );
+        assert_eq!(
+            stx.world
+                .account_dataspaces(&account_id)
+                .expect("account dataspaces"),
+            BTreeSet::from([DataSpaceId::GLOBAL, retail_dataspace]),
+            "accounts should expose the universal dataspace plus extra bindings",
+        );
+        assert_eq!(
+            stx.world
+                .account_domains(&account_id)
+                .expect("account domains"),
+            BTreeSet::from([universal_domain, retail_domain]),
+            "domains should flatten across all bound dataspaces",
+        );
     }
 
     fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -28713,8 +28886,8 @@ mod tests {
 
     #[test]
     fn trigger_args_from_asset_event_use_destination_account_domain() {
-        let recipient_domain: DomainId = "centralbank".parse().unwrap();
-        let asset_domain: DomainId = "cbuae".parse().unwrap();
+        let recipient_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
+        let asset_domain: DomainId = DomainId::try_new("cbuae", "universal").unwrap();
         let (subject, _) = gen_account_in("centralbank");
         let recipient = subject.clone();
         let asset_definition = AssetDefinitionId::new(asset_domain, "aed".parse().unwrap());
@@ -28760,8 +28933,8 @@ mod tests {
 
     #[test]
     fn trigger_args_from_asset_event_use_account_label_domain_when_subject_links_missing() {
-        let recipient_domain: DomainId = "centralbank".parse().unwrap();
-        let asset_domain: DomainId = "cbuae".parse().unwrap();
+        let recipient_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
+        let asset_domain: DomainId = DomainId::try_new("cbuae", "universal").unwrap();
         let (subject, _) = gen_account_in("ghost");
         let account_label =
             alias_in_domain(&recipient_domain, "admin1".parse().expect("valid label"));
@@ -29096,7 +29269,7 @@ mod tests {
         };
 
         let (account_id, _keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let world = World::with(
             [Domain::new(domain_id.clone()).build(&account_id)],
             [new_account_in_domain(&account_id, &domain_id).build(&account_id)],
@@ -29269,7 +29442,7 @@ mod tests {
     #[test]
     fn world_rebuild_account_indexes_populates_storage() {
         let mut world = World::default();
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let owner_id = AccountId::new(keypair.public_key().clone());
         let domain = iroha_data_model::domain::Domain {
@@ -29323,7 +29496,7 @@ mod tests {
 
         let provider_id = ProviderId::new([9_u8; 32]);
         let keypair = KeyPair::random();
-        let domain_id: DomainId = "providers".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("providers", "universal").expect("domain id");
         let owner_id = AccountId::new(keypair.public_key().clone());
         let owner_domain = iroha_data_model::domain::Domain {
             id: domain_id.clone(),
@@ -31651,7 +31824,7 @@ mod tests {
         let (base_2, base_2_kp) = bls_account_in("wonderland");
         let (extra_1, extra_1_kp) = bls_account_in("wonderland");
         let (extra_2, extra_2_kp) = bls_account_in("wonderland");
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let multisig_members = (0..5)
             .map(|_| {
                 let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -31815,7 +31988,7 @@ mod tests {
         let (base_2, base_2_kp) = bls_account_in("wonderland");
         let (extra_1, extra_1_kp) = bls_account_in("wonderland");
         let (extra_2, extra_2_kp) = bls_account_in("wonderland");
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let world = World::with(
             [Domain::new(domain.clone()).build(&ALICE_ID)],
             [
@@ -35350,7 +35523,8 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "zero-snapshot".parse().expect("domain id");
+        let domain_id: DomainId =
+            DomainId::try_new("zero-snapshot", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -36178,7 +36352,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "preserve".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("preserve", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -36302,7 +36476,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "lane-change".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("lane-change", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -36905,7 +37079,7 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::expiry"));
         let dataspace = DataSpaceId::new(11);
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -37020,7 +37194,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -37123,7 +37297,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "rotate".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("rotate", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -37245,7 +37419,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "zero-hash".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("zero-hash", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -37332,7 +37506,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -37430,7 +37604,7 @@ mod tests {
 
         let mut delta = DetachedStateTransactionDelta::default();
         let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         delta.record_mint_consumption(def_id.clone(), 1);
@@ -37440,7 +37614,7 @@ mod tests {
 
     #[test]
     fn detached_can_modify_nft_metadata_allows_domain_owner() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
@@ -37461,7 +37635,7 @@ mod tests {
 
     #[test]
     fn detached_can_modify_nft_metadata_checks_grants_and_revokes() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
@@ -37510,7 +37684,7 @@ mod tests {
 
     #[test]
     fn detached_can_modify_account_metadata_allows_domain_owner() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
@@ -37529,8 +37703,10 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_domain_denies_non_owner() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let transferred_domain_id: DomainId = "foo".parse().expect("foo domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let transferred_domain_id: DomainId =
+            DomainId::try_new("foo", "universal").expect("foo domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -37561,8 +37737,10 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_domain_considers_pending_domain_transfers() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let transferred_domain_id: DomainId = "foo".parse().expect("foo domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let transferred_domain_id: DomainId =
+            DomainId::try_new("foo", "universal").expect("foo domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -37617,8 +37795,10 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_asset_definition_denies_non_owner() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let definition_domain_id: DomainId = "defs".parse().expect("defs domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let definition_domain_id: DomainId =
+            DomainId::try_new("defs", "universal").expect("defs domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -37657,8 +37837,10 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_asset_definition_considers_pending_owner_transfer() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let definition_domain_id: DomainId = "defs".parse().expect("defs domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let definition_domain_id: DomainId =
+            DomainId::try_new("defs", "universal").expect("defs domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -37712,7 +37894,8 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_nft_denies_non_owner() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -37745,7 +37928,8 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_nft_considers_pending_domain_transfers() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -37786,7 +37970,7 @@ mod tests {
 
     #[test]
     fn detached_can_modify_account_metadata_respects_role_permission_ops() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
@@ -37846,7 +38030,7 @@ mod tests {
 
     #[test]
     fn detached_can_modify_nft_metadata_respects_role_grant_order() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
@@ -37906,7 +38090,7 @@ mod tests {
 
     #[test]
     fn detached_can_modify_nft_metadata_respects_role_permission_ops() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
@@ -37969,7 +38153,7 @@ mod tests {
     fn detached_merge_rejects_permission_revoke_without_grant() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
@@ -38011,7 +38195,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -38019,7 +38203,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38030,7 +38214,7 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");
         let other_asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "tulip".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38076,7 +38260,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -38085,7 +38269,7 @@ mod tests {
             .expect("register account");
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38135,8 +38319,8 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let wonderland: DomainId = "wonderland".parse().expect("domain id");
-        let denoland: DomainId = "denoland".parse().expect("domain id");
+        let wonderland: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let denoland: DomainId = DomainId::try_new("denoland", "universal").expect("domain id");
         for domain_id in [&wonderland, &denoland] {
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
@@ -38227,7 +38411,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -38236,7 +38420,7 @@ mod tests {
             .expect("register account");
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38295,7 +38479,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -38304,7 +38488,7 @@ mod tests {
             .expect("register account");
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38384,7 +38568,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -38393,7 +38577,7 @@ mod tests {
             .expect("register account");
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38404,7 +38588,7 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");
         let other_asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "tulip".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38464,7 +38648,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -38472,7 +38656,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38511,7 +38695,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -38519,7 +38703,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38557,11 +38741,12 @@ mod tests {
         use iroha_test_samples::ALICE_ID;
 
         fn build_world() -> (World, DomainId, AssetDefinitionId, AssetId, AccountId) {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let asset_def = {
@@ -38743,8 +38928,10 @@ mod tests {
 
         let _guard = crate::sumeragi::witness::exec_witness_guard();
         crate::sumeragi::witness::start_block();
-        let asset_def_id =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset_def_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
         crate::sumeragi::witness::record_write_asset(
             &asset_id,
@@ -38787,14 +38974,14 @@ mod tests {
 
         {
             let mut stx = state_block.transaction();
-            let domain_id: DomainId = "wonderland".parse()?;
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             Register::asset_definition({
                 let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse()?,
+                    DomainId::try_new("wonderland", "universal")?,
                     "rose".parse()?,
                 );
                 AssetDefinition::numeric(__asset_definition_id.clone())
@@ -38805,8 +38992,10 @@ mod tests {
         }
 
         let trigger_id: TriggerId = "failing_time_trigger".parse()?;
-        let asset_def_id: AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        );
         let alice_asset = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let failing_instruction: InstructionBox =
             Transfer::asset_numeric(alice_asset, 1_u32, BOB_ID.clone()).into();
@@ -38901,7 +39090,7 @@ mod tests {
         let mut state_block1 = state.block(header1);
         {
             let mut stx = state_block1.transaction();
-            let domain_id: DomainId = "wonderland".parse()?;
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             Register::account(new_sample_account(&ALICE_ID))
@@ -38992,7 +39181,8 @@ mod tests {
         let mut block1 = state.block(header1);
         {
             let mut stx = block1.transaction();
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             Register::domain(Domain::new(domain_id))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
                 .expect("register domain");
@@ -39127,7 +39317,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -39135,7 +39325,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -39225,7 +39415,7 @@ mod tests {
         let trigger_id: TriggerId = "rollback_trigger".parse().unwrap();
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
 
@@ -39236,9 +39426,11 @@ mod tests {
         {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -39248,7 +39440,7 @@ mod tests {
                 AssetDefinition::numeric(__asset_definition_id.clone())
                     .with_name(__asset_definition_id.name().to_string())
             });
-            let fail_isi = Unregister::domain("dummy".parse().unwrap());
+            let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
             let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
             let trigger = Trigger::new(
                 trigger_id.clone(),
@@ -39422,9 +39614,11 @@ mod tests {
             let mut state_block = state.block(block1.as_ref().header());
             let mut stx = state_block.transaction();
 
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -39509,7 +39703,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             domain_id.clone(),
             "rose".parse().unwrap(),
@@ -39619,7 +39813,7 @@ mod tests {
                 Permission::from(
                     iroha_executor_data_model::permission::account::CanManageAccountAlias {
                         scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                            AccountAliasDomain::new(domain_id.name().clone()),
+                            domain_id.clone(),
                         ),
                     },
                 ),
@@ -39643,7 +39837,7 @@ mod tests {
                 Permission::from(
                     iroha_executor_data_model::permission::account::CanResolveAccountAlias {
                         scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                            AccountAliasDomain::new(domain_id.name().clone()),
+                            domain_id.clone(),
                         ),
                     },
                 ),
@@ -39728,7 +39922,7 @@ mod tests {
         let trigger_id: TriggerId = "rollback_trigger_detached".parse().unwrap();
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
 
@@ -39739,9 +39933,11 @@ mod tests {
         {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -39751,7 +39947,7 @@ mod tests {
                 AssetDefinition::numeric(__asset_definition_id.clone())
                     .with_name(__asset_definition_id.name().to_string())
             });
-            let fail_isi = Unregister::domain("dummy".parse().unwrap());
+            let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
             let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
             let trigger = Trigger::new(
                 trigger_id.clone(),
@@ -39919,7 +40115,8 @@ mod tests {
             crate::executor::LoadedExecutor::load(raw).expect("load executor"),
         );
 
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID);
         let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
         let mut executor_block = world.executor.block();
@@ -39990,7 +40187,8 @@ mod tests {
         use crate::{block::BlockBuilder, tx::AcceptedTransaction};
 
         // Seed the world with a domain and ALICE account to author the trigger.
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID);
         let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
 
@@ -40002,7 +40200,7 @@ mod tests {
         let trigger_id: TriggerId = "rollback_trigger_block".parse().unwrap();
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
 
@@ -40012,7 +40210,7 @@ mod tests {
             AssetDefinition::numeric(__asset_definition_id.clone())
                 .with_name(__asset_definition_id.name().to_string())
         });
-        let fail_isi = Unregister::domain("dummy".parse().unwrap());
+        let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
         let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
         let register_trigger = Register::trigger(Trigger::new(
             trigger_id.clone(),
@@ -41045,7 +41243,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -41053,7 +41251,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -41251,9 +41449,11 @@ mod tests {
         });
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -41415,15 +41615,17 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let trigger_id: TriggerId = "time_retry_once".parse().unwrap();
-        let asset_definition_id =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "retrycoin".parse().unwrap());
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "retrycoin".parse().unwrap(),
+        );
         let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
         let retry_policy = TimeTriggerRetryPolicy {
             max_retries: NonZeroU32::new(1).unwrap(),
             retry_after_ms: NonZeroU64::new(5).unwrap(),
         };
         let world = World::with(
-            [Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID)],
+            [Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID)],
             [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
             [],
         );
@@ -41572,7 +41774,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let trigger_id: TriggerId = "time_retry_exhausted".parse().unwrap();
         let asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "exhaustcoin".parse().unwrap(),
         );
         let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
@@ -41581,7 +41783,7 @@ mod tests {
             retry_after_ms: NonZeroU64::new(5).unwrap(),
         };
         let world = World::with(
-            [Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID)],
+            [Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID)],
             [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
             [],
         );
@@ -41710,7 +41912,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let trigger_id: TriggerId = "time_retry_periodic".parse().unwrap();
         let asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "periodiccoin".parse().unwrap(),
         );
         let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
@@ -41719,7 +41921,7 @@ mod tests {
             retry_after_ms: NonZeroU64::new(5).unwrap(),
         };
         let world = World::with(
-            [Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID)],
+            [Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID)],
             [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
             [],
         );
@@ -41962,7 +42164,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -42032,9 +42234,11 @@ mod tests {
         });
         let mut state_block = state.block(block1.as_ref().header());
         let mut stx = state_block.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -42110,9 +42314,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -42182,9 +42388,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -42261,9 +42469,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -42333,9 +42543,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -42368,8 +42580,9 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
-        let event =
-            data_pre::DomainEvent::Created(Domain::new("alpha".parse().unwrap()).build(&ALICE_ID));
+        let event = data_pre::DomainEvent::Created(
+            Domain::new(DomainId::try_new("alpha", "universal").unwrap()).build(&ALICE_ID),
+        );
         stx.world
             .internal_event_buf
             .push(Arc::new(DataEvent::Domain(event)));
@@ -42404,9 +42617,11 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -42447,7 +42662,7 @@ mod tests {
         let state = State::new(World::default(), kura, query_handle);
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -42458,9 +42673,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -42549,9 +42766,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -42578,8 +42797,8 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let alpha_domain: DomainId = "alpha".parse().unwrap();
-        let beta_domain: DomainId = "beta".parse().unwrap();
+        let alpha_domain: DomainId = DomainId::try_new("alpha", "universal").unwrap();
+        let beta_domain: DomainId = DomainId::try_new("beta", "universal").unwrap();
         let event_a = data_pre::DomainEvent::Created(Domain::new(alpha_domain).build(&ALICE_ID));
         let event_b = data_pre::DomainEvent::Created(Domain::new(beta_domain).build(&ALICE_ID));
         stx.world
@@ -42685,8 +42904,8 @@ mod tests {
         let block = new_dummy_block_with_payload(|_| {});
         let mut state_block = state.block(block.as_ref().header());
 
-        let holder_domain_id: DomainId = "holders".parse().unwrap();
-        let nft_domain_id: DomainId = "nfts".parse().unwrap();
+        let holder_domain_id: DomainId = DomainId::try_new("holders", "universal").unwrap();
+        let nft_domain_id: DomainId = DomainId::try_new("nfts", "universal").unwrap();
         let holder_id = AccountId::new(KeyPair::random().into_parts().0);
         let nft_id: NftId = "ticket$nfts".parse().unwrap();
         let role_id: RoleId = "nft_cleanup_delta".parse().unwrap();
@@ -42889,7 +43108,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -42897,7 +43116,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -43023,7 +43242,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -43031,7 +43250,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -43107,7 +43326,8 @@ mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&BOB_ID);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&BOB_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
         let world = World::with([domain], [alice_account, bob_account], []);
@@ -43413,7 +43633,7 @@ mod tests {
 
     #[test]
     fn asset_account_range() {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
 
         let account_id = gen_account_in("wonderland").0;
 
@@ -43448,7 +43668,7 @@ mod tests {
 
     #[test]
     fn asset_account_definition_range_includes_all_scopes() {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = gen_account_in("wonderland").0;
         let target_definition = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let other_definition = AssetDefinitionId::new(domain_id, "tulip".parse().unwrap());
@@ -43490,7 +43710,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -43498,7 +43718,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -43548,7 +43768,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -43556,7 +43776,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -43611,9 +43831,9 @@ mod tests {
 
     #[test]
     fn detached_merge_removes_asset_metadata_on_zero_balance() {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());

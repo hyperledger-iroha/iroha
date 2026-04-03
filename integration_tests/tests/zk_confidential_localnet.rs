@@ -17,6 +17,7 @@ use iroha::{
     data_model::{
         ChainId,
         confidential::ConfidentialEncryptedPayload,
+        domain::DomainId,
         prelude::{
             AssetDefinition, AssetDefinitionId, AssetId, FindAssetById, InstructionBox, Level, Log,
             Mint, Numeric, Register, Transfer,
@@ -540,11 +541,11 @@ async fn confidential_public_and_shielded_three_hop_localnet() -> Result<()> {
     let recipient = BOB_ID.clone();
 
     let public_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkpublichop".parse().unwrap(),
     );
     let shielded_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkshieldhop".parse().unwrap(),
     );
 
@@ -782,7 +783,7 @@ async fn confidential_public_two_three_hop_sequences_allow_multiple_unshields_lo
     let source = tx_builder_client.account.clone();
     let recipient = BOB_ID.clone();
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkpublicdoubleunshield".parse().unwrap(),
     );
 
@@ -947,7 +948,7 @@ async fn confidential_shielded_asset_three_hop_localnet() -> Result<()> {
 
     let source = tx_builder_client.account.clone();
     let shielded_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkshieldedthreehop".parse().unwrap(),
     );
 
@@ -1054,7 +1055,7 @@ async fn confidential_shielded_asset_three_hop_then_unshield_and_transfer_localn
     let source = tx_builder_client.account.clone();
     let recipient = BOB_ID.clone();
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkshieldedunshieldflow".parse().unwrap(),
     );
 
@@ -1199,7 +1200,7 @@ async fn confidential_dual_restart_stress_mid_flow_localnet() -> Result<()> {
     let source = tx_builder_client.account.clone();
     let recipient = BOB_ID.clone();
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkrestartstress".parse().unwrap(),
     );
 
@@ -1382,7 +1383,7 @@ async fn confidential_combined_peer_downtime_and_timeout_pressure_localnet() -> 
     let source = tx_builder_client.account.clone();
     let recipient = BOB_ID.clone();
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkfaultpressure".parse().unwrap(),
     );
 
@@ -1538,7 +1539,7 @@ async fn confidential_unshield_rejects_corrupted_proof_bytes_localnet() -> Resul
 
     let source = tx_builder_client.account.clone();
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkbadproofbytes".parse().unwrap(),
     );
 
@@ -1665,7 +1666,7 @@ async fn confidential_unshield_rejects_corrupted_vk_bytes_localnet() -> Result<(
 
     let source = tx_builder_client.account.clone();
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkbadvkbytes".parse().unwrap(),
     );
 
@@ -1792,7 +1793,7 @@ async fn confidential_unshield_rejects_wrong_statement_hint_localnet() -> Result
 
     let source = tx_builder_client.account.clone();
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkwrongstatement".parse().unwrap(),
     );
 
@@ -1917,7 +1918,7 @@ async fn confidential_zknative_asset_three_hop_localnet() -> Result<()> {
 
     let source = tx_builder_client.account.clone();
     let zknative_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkzknativethreehop".parse().unwrap(),
     );
 
@@ -1996,7 +1997,7 @@ async fn confidential_zknative_transparent_mint_creates_public_balance_localnet(
 
     let source = tx_builder_client.account.clone();
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkzknativemintok".parse().unwrap(),
     );
 
@@ -2068,7 +2069,7 @@ async fn confidential_zknative_transparent_transfer_after_mint_rejected_localnet
     let source = tx_builder_client.account.clone();
     let recipient = BOB_ID.clone();
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkzknativetransferok".parse().unwrap(),
     );
 
@@ -2197,7 +2198,7 @@ async fn confidential_unshield_rejected_when_disabled() -> Result<()> {
     let source = tx_builder_client.account.clone();
 
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkunshielddeny".parse().unwrap(),
     );
 
@@ -2325,7 +2326,7 @@ async fn confidential_shield_rejected_when_disabled() -> Result<()> {
     let source = tx_builder_client.account.clone();
 
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkshielddeny".parse().unwrap(),
     );
 
@@ -2425,7 +2426,7 @@ async fn confidential_shield_rejected_without_zk_registration() -> Result<()> {
     let source = tx_builder_client.account.clone();
 
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zknotregistered".parse().unwrap(),
     );
 
@@ -2521,7 +2522,7 @@ async fn confidential_unshield_rejected_with_stale_root_hint() -> Result<()> {
     let source = tx_builder_client.account.clone();
 
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkstaleroot".parse().unwrap(),
     );
 
@@ -2648,7 +2649,7 @@ async fn confidential_unshield_rejected_without_zk_registration() -> Result<()> 
     let source = tx_builder_client.account.clone();
 
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkunshieldnotregistered".parse().unwrap(),
     );
 
@@ -2745,7 +2746,7 @@ async fn confidential_unshield_duplicate_nullifier_rejected() -> Result<()> {
     let source = tx_builder_client.account.clone();
 
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zkdupnullifier".parse().unwrap(),
     );
 
@@ -2897,7 +2898,7 @@ async fn confidential_shield_and_unshield_rejected_in_transparent_only_mode() ->
 
     let source = tx_builder_client.account.clone();
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zktransparentonly".parse().unwrap(),
     );
 
@@ -3052,7 +3053,7 @@ async fn confidential_transfer_rejected_in_transparent_only_mode() -> Result<()>
 
     let source = tx_builder_client.account.clone();
     let asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "zktransfertransparentonly".parse().unwrap(),
     );
 

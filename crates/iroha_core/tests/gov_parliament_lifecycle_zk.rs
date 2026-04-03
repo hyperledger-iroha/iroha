@@ -90,10 +90,10 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
         })
         .collect();
 
-    let domain_id: DomainId = "sora".parse().expect("domain");
+    let domain_id: DomainId = DomainId::try_new("sora", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&proposer_id);
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "sora".parse().unwrap(),
+        DomainId::try_new("sora", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&proposer_id);

@@ -25,7 +25,8 @@ use iroha_primitives::numeric::Numeric;
 use nonzero_ext::nonzero;
 
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
-    let domain_id = DomainId::from_str(domain).expect("default asset definition domain");
+    let domain_id =
+        DomainId::parse_fully_qualified(domain).expect("default asset definition domain");
     let asset_name = Name::from_str(name).expect("default asset definition name");
     AssetDefinitionId::new(domain_id, asset_name)
 }
@@ -101,9 +102,13 @@ pub mod crypto {
 
 /// Common configuration defaults shared across components.
 pub mod common {
-    /// Default domain label used when configuration omits the AccountAddress selector override.
+    /// Default dataspace-qualified domain used when configuration omits the AccountAddress
+    /// selector override.
     pub fn default_account_domain_label() -> String {
-        iroha_data_model::account::address::DEFAULT_DOMAIN_NAME.to_owned()
+        format!(
+            "{}.universal",
+            iroha_data_model::account::address::DEFAULT_DOMAIN_NAME
+        )
     }
 
     /// Default chain discriminant / I105 network prefix (Sora Nexus global).
@@ -576,7 +581,7 @@ pub mod oracle {
     use super::*;
 
     fn deterministic_account(seed: &[u8], domain: &str) -> AccountId {
-        let _domain_id = DomainId::from_str(domain).expect("default oracle domain");
+        let _domain_id = DomainId::parse_fully_qualified(domain).expect("default oracle domain");
         let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
         AccountId::new(keypair.public_key().clone())
     }
@@ -593,22 +598,22 @@ pub mod oracle {
 
     /// Asset credited to providers when observations are accepted.
     pub fn reward_asset() -> AssetDefinitionId {
-        super::canonical_asset_definition_id("sora", "xor")
+        super::canonical_asset_definition_id("sora.universal", "xor")
     }
 
     /// Account debited to fund oracle provider rewards.
     pub fn reward_pool() -> AccountId {
-        deterministic_account(b"oracle-reward-pool", "sora")
+        deterministic_account(b"oracle-reward-pool", "sora.universal")
     }
 
     /// Asset debited when slashing oracle providers.
     pub fn slash_asset() -> AssetDefinitionId {
-        super::canonical_asset_definition_id("sora", "xor")
+        super::canonical_asset_definition_id("sora.universal", "xor")
     }
 
     /// Account credited when penalties are collected.
     pub fn slash_receiver() -> AccountId {
-        deterministic_account(b"oracle-slash-receiver", "sora")
+        deterministic_account(b"oracle-slash-receiver", "sora.universal")
     }
 
     /// Penalty applied to outlier observations.
@@ -628,7 +633,7 @@ pub mod oracle {
 
     /// Bond asset required when opening a dispute.
     pub fn dispute_bond_asset() -> AssetDefinitionId {
-        super::canonical_asset_definition_id("sora", "xor")
+        super::canonical_asset_definition_id("sora.universal", "xor")
     }
 
     /// Bond amount required to open a dispute.
@@ -2211,7 +2216,7 @@ pub mod nexus {
 
         /// Asset definition used for staking bonds.
         pub fn stake_asset_id() -> String {
-            super::super::canonical_asset_definition_literal("nexus", "xor")
+            super::super::canonical_asset_definition_literal("nexus.universal", "xor")
         }
 
         /// Escrow account that custodies bonded stake.
@@ -2256,7 +2261,7 @@ pub mod nexus {
 
         /// Fee asset definition identifier (string form).
         pub fn fee_asset_id() -> String {
-            super::super::canonical_asset_definition_literal("universal", "xor")
+            super::super::canonical_asset_definition_literal("universal.universal", "xor")
         }
     }
 
@@ -3063,13 +3068,13 @@ pub mod governance {
 
     /// Default asset definition used for governance voting and bonds.
     pub fn voting_asset_id() -> String {
-        super::canonical_asset_definition_literal("sora", "xor")
+        super::canonical_asset_definition_literal("sora.universal", "xor")
     }
 
     fn account_id_from_public_key(public_key: &str) -> AccountId {
-        let domain: DomainId = super::common::default_account_domain_label()
-            .parse()
-            .expect("default governance account domain");
+        let domain =
+            DomainId::parse_fully_qualified(&super::common::default_account_domain_label())
+                .expect("default governance account domain");
         let public_key = public_key.parse().expect("default governance public key");
         let _ = domain;
         AccountId::new(public_key)
@@ -3179,7 +3184,7 @@ pub mod governance {
     pub const PARLIAMENT_MIN_STAKE: u128 = 1;
     /// Default stake asset definition used for council eligibility.
     pub fn parliament_eligibility_asset_id() -> String {
-        super::canonical_asset_definition_literal("stake", "SORA")
+        super::canonical_asset_definition_literal("stake.universal", "SORA")
     }
     /// Default alternates drawn per parliament term (None = committee size).
     pub const PARLIAMENT_ALTERNATE_SIZE: Option<usize> = None;

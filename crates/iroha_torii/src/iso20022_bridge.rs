@@ -1366,7 +1366,7 @@ mod tests {
 
     fn sample_asset_definition_literal() -> String {
         AssetDefinitionId::new(
-            "test".parse().expect("domain"),
+            DomainId::try_new("test", "universal").expect("domain"),
             "usd".parse().expect("name"),
         )
         .to_string()
@@ -1396,7 +1396,7 @@ mod tests {
 
     fn sample_world(asset_alias: Option<&str>) -> World {
         let (authority, _, _) = sample_account_bundle();
-        let domain_id: DomainId = "test".parse().expect("domain");
+        let domain_id: DomainId = DomainId::try_new("test", "universal").expect("domain");
         let asset_definition_id =
             AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("name"));
         let domain = Domain::new(domain_id.clone()).build(&authority);

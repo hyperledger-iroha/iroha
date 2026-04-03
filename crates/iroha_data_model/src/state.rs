@@ -264,10 +264,10 @@ mod tests {
 
     #[test]
     fn key_roundtrip_and_ordering() {
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let alice = AccountId::new(KeyPair::random().public_key().clone());
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_def.clone(), alice.clone());
@@ -353,7 +353,7 @@ mod tests {
 
     #[test]
     fn advisory_set_canonicalization_dedups() {
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let key: Name = "k".parse().unwrap();
         let a = CanonicalStateKey::Domain(domain.clone());
         let b = CanonicalStateKey::DomainMetadata(DomainMetadataKey { id: domain, key });

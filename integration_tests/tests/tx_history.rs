@@ -23,7 +23,10 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
 
     // Given
     let account_id = ALICE_ID.clone();
-    let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "xor".parse()?);
+    let asset_definition_id = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "xor".parse()?,
+    );
     let create_asset = Register::asset_definition({
         let __asset_definition_id = asset_definition_id.clone();
         AssetDefinition::numeric(__asset_definition_id.clone())
@@ -38,7 +41,10 @@ fn client_has_rejected_and_accepted_txs_should_return_tx_history() -> Result<()>
     let mint_not_existed_asset = Mint::asset_numeric(
         quantity,
         AssetId::new(
-            AssetDefinitionId::new("wonderland".parse()?, "foo".parse()?),
+            AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal")?,
+                "foo".parse()?,
+            ),
             account_id.clone(),
         ),
     );

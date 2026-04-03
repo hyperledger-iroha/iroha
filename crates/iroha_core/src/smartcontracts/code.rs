@@ -228,7 +228,7 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let kp = iroha_crypto::KeyPair::random();
         let (pubkey, _) = kp.clone().into_parts();
-        let dom: DomainId = "wonderland".parse().expect("domain id");
+        let dom: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let auth = AccountId::of(pubkey);
         let domain = Domain::new(dom.clone()).build(&auth);
         let account = Account::new(auth.clone()).build(&auth);

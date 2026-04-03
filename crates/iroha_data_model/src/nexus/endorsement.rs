@@ -150,12 +150,10 @@ pub struct DomainEndorsementRecord {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use iroha_crypto::KeyPair;
 
     use super::*;
-    use crate::{metadata::Metadata, name::Name};
+    use crate::metadata::Metadata;
 
     #[test]
     fn scope_height_checks_bounds() {
@@ -176,7 +174,7 @@ mod tests {
         let kp = KeyPair::random();
         let mut endorsement = DomainEndorsement {
             version: DOMAIN_ENDORSEMENT_VERSION_V1,
-            domain_id: DomainId::new(Name::from_str("wonderland").expect("name")),
+            domain_id: DomainId::try_new("wonderland", "universal").expect("domain id"),
             committee_id: "default".to_owned(),
             statement_hash: Hash::prehashed([0xAA; 32]),
             issued_at_height: 10,

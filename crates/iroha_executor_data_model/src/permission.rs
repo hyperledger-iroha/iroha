@@ -103,10 +103,11 @@ pub mod account {
 
     /// Scope carried by account-alias permissions.
     #[derive(Debug, Clone, PartialEq, Eq, iroha_schema::IntoSchema)]
+    #[allow(variant_size_differences)]
     #[norito(tag = "scope", content = "value", rename_all = "snake_case")]
     pub enum AccountAliasPermissionScope {
-        /// Permission scoped to a specific dataspace-local alias-domain segment.
-        Domain(iroha_data_model::account::rekey::AccountAliasDomain),
+        /// Permission scoped to a specific dataspace-qualified domain.
+        Domain(DomainId),
         /// Permission scoped to a dataspace alias segment.
         Dataspace(DataSpaceId),
     }
@@ -153,7 +154,7 @@ pub mod account {
 
             match scope {
                 "domain" => Ok(Self::Domain(
-                    <iroha_data_model::account::rekey::AccountAliasDomain as norito::json::JsonDeserialize>::json_from_value(value)?,
+                    <DomainId as norito::json::JsonDeserialize>::json_from_value(value)?,
                 )),
                 "dataspace" => Ok(Self::Dataspace(
                     <DataSpaceId as norito::json::JsonDeserialize>::json_from_value(value)?,
@@ -641,7 +642,7 @@ mod tests {
     #[test]
     fn can_register_account_serializes_as_json_string_field() {
         let perm = CanRegisterAccount {
-            domain: "wonderland".parse().expect("valid domain"),
+            domain: DomainId::try_new("wonderland", "universal").expect("valid domain"),
         };
 
         let json = norito::json::to_json(&perm).expect("serialize to JSON");

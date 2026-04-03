@@ -31,7 +31,7 @@ fn mk_state_and_authority() -> (State, iroha_data_model::account::AccountId) {
     let query = LiveQueryStore::start_test();
     let kp = KeyPair::random();
     let (pk, _) = kp.clone().into_parts();
-    let domain_id: DomainId = "apps".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("apps", "universal").unwrap();
     let account_id = AccountId::of(pk);
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);

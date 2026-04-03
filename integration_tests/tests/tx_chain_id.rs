@@ -20,8 +20,10 @@ fn send_tx_with_different_chain_id() {
     // Given
     let (sender_id, sender_keypair) = gen_account_in("wonderland");
     let (receiver_id, _receiver_keypair) = gen_account_in("wonderland");
-    let asset_definition_id =
-        AssetDefinitionId::new("wonderland".parse().unwrap(), "test_asset".parse().unwrap());
+    let asset_definition_id = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal").unwrap(),
+        "test_asset".parse().unwrap(),
+    );
     let to_transfer = numeric!(1);
 
     let create_sender_account = Register::account(Account::new(sender_id.clone()));
@@ -49,7 +51,10 @@ fn send_tx_with_different_chain_id() {
 
     let transfer_instruction = Transfer::asset_numeric(
         AssetId::new(
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "test_asset".parse().unwrap()),
+            AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "test_asset".parse().unwrap(),
+            ),
             sender_id.clone(),
         ),
         to_transfer,

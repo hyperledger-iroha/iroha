@@ -1446,7 +1446,7 @@ no environment variables need to be exported.
   success or failure with configurable intervals, terminal-state handling, and
   callbacks for UI progress indicators.
 - Contracts API wrappers (`/v1/contracts/code`, `/v1/contracts/deploy`,
-  `/v1/contracts/code-bytes/{hash}`, `/v1/contracts/instances/{ns}`) round out
+  `/v1/contracts/code-bytes/{hash}`) round out
   the Torii surface for manifest management.
 - Ship optional Norito RPC helpers (`iroha_python.norito_rpc`) so callers can
   invoke Norito-encoded RPC endpoints without vendor-specific transports.

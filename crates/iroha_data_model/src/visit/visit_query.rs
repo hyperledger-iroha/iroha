@@ -316,7 +316,7 @@ mod tests {
             .expect("valid account id");
         let asset_definition: crate::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
         let asset_id = AssetId::new(asset_definition, account_id.clone());

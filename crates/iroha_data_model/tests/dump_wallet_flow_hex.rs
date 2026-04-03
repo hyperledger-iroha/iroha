@@ -5,6 +5,7 @@ use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
     confidential::ConfidentialEncryptedPayload,
+    domain::DomainId,
     isi::zk::{Shield, Unshield, ZkTransfer},
     proof::{ProofAttachment, ProofBox, VerifyingKeyId},
 };
@@ -26,7 +27,7 @@ fn make_proof(bytes: Vec<u8>, vk_name: &str) -> ProofAttachment {
 #[test]
 fn dump_wallet_flow_hex() {
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
     let alice = AccountId::new(KeyPair::random().public_key().clone());

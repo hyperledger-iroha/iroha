@@ -15681,7 +15681,7 @@ mod torii_faucet_tests {
                 .parse()
                 .expect("public key");
         let asset_definition_id = AssetDefinitionId::new(
-            "sora".parse().expect("domain"),
+            DomainId::try_new("sora", "universal").expect("domain"),
             "xor".parse().expect("name"),
         )
         .to_string();
@@ -17900,7 +17900,7 @@ mod offline_cfg_tests {
             default_haircut_bps: 12_500,
             margin_frequency_secs: 0,
             eligible_collateral: vec![iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             )],
             collateral_substitution_matrix: BTreeMap::new(),
@@ -18054,9 +18054,11 @@ mod offline_cfg_tests {
 
     #[test]
     fn iso_bridge_json_deserializes() {
-        let asset_definition =
-            AssetDefinitionId::new("fin".parse().expect("domain"), "usd".parse().expect("name"))
-                .to_string();
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("fin", "universal").expect("domain"),
+            "usd".parse().expect("name"),
+        )
+        .to_string();
         let json = r#"{
             "enabled": true,
             "dedupe_ttl_secs": 120,
@@ -18171,14 +18173,14 @@ mod offline_cfg_tests {
         assert_eq!(
             parsed.voting_asset_id,
             iroha_data_model::asset::prelude::AssetDefinitionId::new(
-                "sora".parse().unwrap(),
+                DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap()
             )
         );
         assert_eq!(
             parsed.citizenship_asset_id,
             iroha_data_model::asset::prelude::AssetDefinitionId::new(
-                "sora".parse().unwrap(),
+                DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap()
             )
         );
@@ -18209,7 +18211,7 @@ mod offline_cfg_tests {
         assert_eq!(
             parsed.parliament_eligibility_asset_id,
             iroha_data_model::asset::prelude::AssetDefinitionId::new(
-                "stake".parse().unwrap(),
+                DomainId::try_new("stake", "universal").unwrap(),
                 "SORA".parse().unwrap()
             )
         );

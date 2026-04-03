@@ -23,7 +23,6 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Numeric;
 use norito::json::{self, Map, Value, to_writer, to_writer_pretty};
 use norito::to_bytes;
-use std::str::FromStr;
 
 const DEFAULT_TRANSFER_ROWS: usize = 2048;
 const DEFAULT_MINT_ROWS: usize = 64;
@@ -347,7 +346,7 @@ struct RowGenerator {
 
 impl RowGenerator {
     fn new(seed: u64) -> Self {
-        let domain = DomainId::from_str("lane").expect("domain id");
+        let domain = DomainId::try_new("lane", "universal").expect("domain id");
         let mut sender_accounts = Vec::with_capacity(ACCOUNT_POOL_SIZE);
         let mut receiver_accounts = Vec::with_capacity(ACCOUNT_POOL_SIZE);
         for idx in 0..ACCOUNT_POOL_SIZE {

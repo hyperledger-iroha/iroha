@@ -171,9 +171,9 @@ fn social_world_with_owner(
     let oracle_slash_receiver = defaults::oracle::slash_receiver();
     let alice = ALICE_ID.clone();
     let bob = BOB_ID.clone();
-    let wonderland_id: DomainId = "wonderland".parse().expect("domain");
-    let validators_id: DomainId = "validators".parse().expect("domain");
-    let sora_id: DomainId = "sora".parse().expect("domain");
+    let wonderland_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
+    let validators_id: DomainId = DomainId::try_new("validators", "universal").expect("domain");
+    let sora_id: DomainId = DomainId::try_new("sora", "universal").expect("domain");
 
     let wonderland: Domain = Domain::new(wonderland_id.clone()).build(&alice);
     let validators: Domain = Domain::new(validators_id.clone()).build(provider);
@@ -370,7 +370,7 @@ fn record_follow_binding(
 #[test]
 fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-viral-1"));
@@ -474,7 +474,7 @@ fn viral_reward_flow_claims_releases_escrow_and_pays_single_bonus() {
 #[test]
 fn viral_reward_respects_halt_and_deny_lists() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-viral-2"));
@@ -562,7 +562,7 @@ fn viral_reward_respects_halt_and_deny_lists() {
 #[test]
 fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-viral-send"));
@@ -660,7 +660,7 @@ fn send_to_twitter_delivers_immediately_and_pays_bonus_once() {
 #[test]
 fn viral_reward_enforces_daily_cap_per_uaid() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-viral-cap"));
@@ -763,7 +763,7 @@ fn viral_reward_enforces_daily_cap_per_uaid() {
 #[test]
 fn viral_reward_enforces_budget_limit() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-viral-budget"));
@@ -846,7 +846,7 @@ fn viral_reward_enforces_budget_limit() {
 #[test]
 fn viral_promo_window_blocks_flows_outside_schedule() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-viral-promo"));
@@ -930,7 +930,7 @@ fn viral_promo_window_blocks_flows_outside_schedule() {
 #[test]
 fn viral_follow_game_flow_releases_escrow_and_bonus() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-viral-flow"));
@@ -1031,7 +1031,7 @@ fn viral_follow_game_flow_releases_escrow_and_bonus() {
 #[test]
 fn viral_campaign_cap_limits_reward_and_bonus_spend() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-viral-cap-campaign"));

@@ -2,6 +2,44 @@
 
 Last updated: 2026-04-03
 
+## 2026-04-03 Follow-up: controlled stepped sweep is green through 100 TPS after domain-model fixes
+- Repaired the remaining stale domain-model assumptions across Izanami and the
+  test-network harness:
+  - runtime workload no longer emits obsolete `RegisterDomain` transactions;
+  - NFT ids now use fully-qualified domain strings when building workload
+    instructions;
+  - NPoS prepared-state bootstrap always registers the fee asset definition
+    when it differs from the stake asset; and
+  - inline test-network client configs now use the default account-domain
+    label instead of the removed old domain-name helper.
+- Rebuilt fresh release binaries successfully with:
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha_target_domainfix_20260403 cargo build --release -p izanami --bin izanami -p irohad --bin iroha3d`
+- Ran a fresh controlled sequential stepped sweep on those rebuilt binaries
+  with `submitters=4`, `max_inflight=256`, `duration=60s`,
+  `target_blocks=20`, `progress_timeout=45s`, and offered load
+  `10/25/50/75/100 TPS`.
+- Sweep summary:
+  - summary file:
+    `/tmp/izanami_controlsweep_20260403T172315_domainfix_controlsweep.summary`
+  - permissioned: pass at `10`, `25`, `50`, `75`, `100 TPS`
+  - NPoS: pass at `10`, `25`, `50`, `75`, `100 TPS`
+  - permissioned elapsed seconds by point:
+    `10=32.0`, `25=32.1`, `50=28.0`, `75=38.2`, `100=38.7`
+  - NPoS elapsed seconds by point:
+    `10=18.0`, `25=18.0`, `50=18.1`, `75=18.0`, `100=18.0`
+- Clean-sweep markers on the top-level control logs:
+  - no `route_unavailable`;
+  - no `no strict block height progress`;
+  - no `target progress monitoring failed`; and
+  - no `peer startup failed`.
+- Remaining caveat:
+  - the NPoS control logs still retain peer-stderr `sumeragi-commit` thread
+    panics during shutdown/teardown on
+    `opaque canonical asset definition ids do not carry a domain projection`;
+  - the permissioned control logs do not show the same panic; and
+  - the sweep therefore proves the domain-workload and startup blockers are
+    gone, but it does not yet prove NPoS teardown is fully clean.
+
 ## 2026-04-03 Follow-up: Izanami no longer emits obsolete runtime domain-registration traffic
 - Updated `crates/izanami/src/instructions.rs` so runtime workload recipes no
   longer schedule `RecipeKind::RegisterDomain` under the SNS-backed domain
@@ -209,6 +247,147 @@ Last updated: 2026-04-03
   a faulty peer is subjected to repeated restart / wipe / partition-style
   disruption, both permissioned and NPoS devolve into tolerated-outlier lag,
   ingress backpressure, and eventual no-progress aborts.
+
+## 2026-04-03 Follow-up: explicit `DomainId` construction is now clean across checked Rust code
+- Finished the remaining first-release `DomainId` cleanup outside the earlier
+  runtime slice:
+  - `iroha_cli` clap commands that previously relied on `DomainId: FromStr`
+    now use explicit `value_parser` hooks for fully qualified
+    `domain.dataspace` literals;
+  - the last integration-test helpers that still built domains via `.parse()`
+    were migrated to `DomainId::try_new(...)` or
+    `DomainId::parse_fully_qualified(...)`;
+  - `connect_norito_bridge` now parses metadata targets and test asset
+    literals through the explicit `DomainId` APIs instead of implicit string
+    parsing; and
+  - the primary English docs were updated to show dataspace-qualified domain
+    construction (`docs/source/data_model.md`,
+    `docs/portal/docs/sdks/rust.md`).
+- A focused grep over executable Rust code is now clean for the removed parser
+  shapes: `DomainId::from_str(...)`, `let _: DomainId = "...".parse()`,
+  `Domain::new("...".parse())`, and
+  `AssetDefinitionId::new(domain.parse(), ...)` under `crates/` and
+  `integration_tests/`.
+- Verification completed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p iroha_cli --tests`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p integration_tests --tests`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p connect_norito_bridge --tests`
+- Remaining tail:
+  - translated and versioned Markdown docs still contain stale
+    `DomainId::from_str("wonderland")` / bare-domain examples and need a docs
+    sweep.
+
+## 2026-04-03 Follow-up: `DomainId` no longer implements `FromStr`
+- `DomainId` now has only explicit constructors:
+  - `DomainId::try_new(domain, dataspace)` for structured call sites; and
+  - `DomainId::parse_fully_qualified("domain.dataspace")` for text boundaries.
+- The old raw constructor and generic string parsing path were removed so
+  domain creation can no longer silently bypass domain-label canonicalisation.
+- Runtime code that still depended on generic parsing was migrated across the
+  main stack, including:
+  - `iroha_data_model` JSON/key codecs and domain-bearing parsers (`NFT`, `RWA`,
+    account alias scope resolution);
+  - `iroha_config`, `iroha_genesis`, `iroha_test_network`,
+    `iroha_test_samples`, `iroha_executor`, `iroha_core`, `iroha`,
+    `kotodama_lang`, `ivm`, and `fastpq_prover`;
+  - config validation paths that previously required `DomainId: FromStr`
+    through env/config derive machinery.
+- Verification completed for the runtime slice:
+  - `cargo check -p iroha_data_model`
+  - `cargo check -p kotodama_lang -p iroha_config -p iroha_executor -p fastpq_prover -p iroha_test_samples`
+  - `cargo check -p iroha_config -p iroha_genesis -p iroha_test_network -p iroha_core -p iroha_executor -p fastpq_prover -p iroha -p iroha_test_samples -p kotodama_lang -p ivm`
+- Remaining fallout is now mostly test/example migration. Repo-wide grep still
+  finds many test fixtures, CLI tests, Torii tests, and integration tests that
+  construct `DomainId` via old `.parse()` or `DomainId::from_str(...)` calls.
+
+## 2026-04-03 Follow-up: repo-wide constructor migration in progress
+- After removing `DomainId: FromStr`, a broader second-wave migration was
+  needed for constructor inference sites such as:
+  - `AssetDefinitionId::new("wonderland".parse()?, ...)`
+  - `Domain::new("domain".parse()?)`
+  - `Unregister::domain("dummy".parse()?)`
+  - struct fields like `domain: "wonderland".parse()?`
+- Those constructor patterns were codemodded across the workspace to use
+  explicit `DomainId::try_new(..., "universal")` or
+  `DomainId::parse_fully_qualified(...)` instead of implicit parsing.
+- An isolated verification pass is in progress under
+  `CARGO_TARGET_DIR=target_tmp_domain_cleanup` to avoid the shared target-dir
+  lock pileup from older cargo wrappers.
+- First isolated result from `cargo check -p iroha_data_model --tests` exposed
+  only a small remaining tail in:
+  - `kaigi_events_roundtrip.rs`
+  - `id_json.rs`
+  - `query_response_roundtrip.rs`
+  - `dump_wallet_flow_hex.rs`
+  - plus one unused import in `streaming_events_roundtrip.rs`
+- Those data-model test failures were fixed; the follow-up isolated
+  `iroha_data_model --tests` check is still compiling as of this update.
+
+## 2026-04-03 Follow-up: account scope hierarchy now models dataspaces first, domains second
+- `WorldReadOnly` now exposes an explicit account scope hierarchy:
+  - `account_scope_hierarchy(&AccountId)` returns the account’s `dataspace ->
+    domains` mapping;
+  - `account_dataspaces(...)` and `account_domains(...)` derive the flattened
+    `1..many` dataspace and `0..many` domain views from that mapping; and
+  - the universal dataspace is always present in the hierarchy, while domains
+    remain optional per dataspace.
+- Remaining qualified-domain runtime leaks were removed:
+  - domain-unregister cleanup now resolves each alias to its full qualified
+    `DomainId` before removing bindings, so `domain.universal` and
+    `domain.retail` no longer collide during cleanup;
+  - multisig home-domain inference now reads the full account scope hierarchy
+    instead of reparsing the bare alias-domain segment; and
+  - account-address domain selectors now hash the canonical full
+    `domain.dataspace` literal, eliminating selector collisions between same
+    domain labels in different dataspaces.
+- Follow-on first-release cleanup landed where it was still blocking runtime
+  initialization:
+  - `GENESIS_DOMAIN_ID` is now `genesis.universal`;
+  - config defaults that still referenced bare domains now use explicit
+    `*.universal` literals for canonical asset ids and default governance/oracle
+    domains; and
+  - test-network + integration SNS helpers now register/query domains by the
+    full `domain.dataspace` label.
+- Focused verification completed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_synth_domain cargo check -p iroha_data_model -p iroha_config -p iroha_genesis -p iroha_core -p iroha_test_network -p integration_tests`
+  - `CARGO_TARGET_DIR=target_tmp_synth_domain cargo test -p iroha_core --lib multisig_home_domain_inference_resolves_qualified_alias_domains -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_synth_domain cargo test -p iroha_core --lib unregister_domain_keeps_aliases_in_same_named_foreign_dataspace -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_synth_domain cargo test -p iroha_core account_scope_hierarchy_tracks_dataspaces_and_domains -- --nocapture`
+
+## 2026-04-03 Follow-up: domains are now dataspace-qualified end to end
+- `DomainId` no longer models a bare label. The canonical public form is now
+  always `domain.dataspace`, and parsing rejects standalone `domain` literals.
+- Account-alias domain scopes now resolve through the dataspace catalog instead
+  of silently fabricating standalone domains:
+  - `AccountAlias::domain_id(&DataSpaceCatalog)` is the canonical helper for
+    upgrading `name@domain.dataspace` aliases into a real `DomainId`;
+  - account-alias permissions now carry a full `DomainId`, not a bare
+    `AccountAliasDomain`; and
+  - core/executor/Torii paths that check alias-domain ownership or domain
+    association now compare the full qualified domain id.
+- Genesis-facing builders and fixtures were updated to require explicit domain
+  ids as well:
+  - `GenesisBuilder::domain(...)` / `domain_with_metadata(...)` now take a
+    `DomainId`;
+  - bundled genesis/test-network helpers now seed `*.universal` explicitly
+    instead of relying on bare-domain helpers; and
+  - CLI/Torii/integration test helpers that used to construct bare domains now
+    use explicit dataspace-qualified ids.
+- Removed one remaining synthetic-domain fallback from account creation:
+  domain-scoped account-created events now emit only when the account actually
+  carries a domain-qualified alias, instead of inventing a fake universal
+  domain wrapper for dataspace-root aliases.
+- Focused verification completed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_synth_domain cargo check -p iroha_data_model -p iroha_core -p iroha_executor -p iroha_torii -p iroha_cli -p iroha_test_network`
+- Verification note:
+  - targeted `cargo test` runs now get past the code-level compile failures but
+    still depend on the Norito build script’s Kotlin parity checks under
+    `~/.gradle`; sandboxed runs failed on that external Gradle lock/cache path,
+    so no fresh green test stamp is recorded here yet.
+
 ## 2026-04-03 Follow-up: opaque asset-definition IDs no longer fabricate synthetic `aid` domains
 - Removed the old synthetic-domain compatibility projection from
   `AssetDefinitionId`: raw UUID/Base58 opaque IDs now stay opaque instead of

@@ -110,13 +110,17 @@ pub fn authority_can_resolve_account_alias(
         return false;
     }
 
-    alias.domain.as_ref().is_none_or(|domain| {
-        let domain_permission: Permission = CanResolveAccountAlias {
-            scope: AccountAliasPermissionScope::Domain(domain.clone()),
+    match alias.domain_id(world.dataspace_catalog()) {
+        Ok(Some(domain_id)) => {
+            let domain_permission: Permission = CanResolveAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(domain_id),
+            }
+            .into();
+            authority_has_permission(world, authority, &domain_permission)
         }
-        .into();
-        authority_has_permission(world, authority, &domain_permission)
-    })
+        Ok(None) => true,
+        Err(_) => false,
+    }
 }
 
 /// Return `true` when the authority holds the exact permissions required to mutate `alias`.
@@ -133,13 +137,17 @@ pub fn authority_can_manage_account_alias(
         return false;
     }
 
-    alias.domain.as_ref().is_none_or(|domain| {
-        let domain_permission: Permission = CanManageAccountAlias {
-            scope: AccountAliasPermissionScope::Domain(domain.clone()),
+    match alias.domain_id(world.dataspace_catalog()) {
+        Ok(Some(domain_id)) => {
+            let domain_permission: Permission = CanManageAccountAlias {
+                scope: AccountAliasPermissionScope::Domain(domain_id),
+            }
+            .into();
+            authority_has_permission(world, authority, &domain_permission)
         }
-        .into();
-        authority_has_permission(world, authority, &domain_permission)
-    })
+        Ok(None) => true,
+        Err(_) => false,
+    }
 }
 
 /// Supported alias VOPRF backend (placeholder).

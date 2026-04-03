@@ -565,7 +565,7 @@ mod tests {
             }
         }
 
-        let _domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
         let validator = AccountId::new(key_pair.public_key().clone());
         let instruction = RegisterPublicLaneValidator::new(
@@ -598,7 +598,7 @@ mod tests {
             }
         }
 
-        let _domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let validator_key = KeyPair::from_seed(vec![0x12; 32], Algorithm::Ed25519);
         let peer_key = KeyPair::from_seed(vec![0x13; 32], Algorithm::Ed25519);
         let validator = AccountId::new(validator_key.public_key().clone());

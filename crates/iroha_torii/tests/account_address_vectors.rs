@@ -1,13 +1,12 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 //! Validate Torii's account address handling against the shared compliance vectors.
 
-use std::{path::Path, str::FromStr};
+use std::path::Path;
 
 use hex::FromHex;
 use iroha_data_model::{
     account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
     domain::DomainId,
-    name::Name,
 };
 use norito::json::{self, JsonDeserialize};
 
@@ -108,7 +107,7 @@ struct ExpectedError {
 }
 
 fn domain(label: &str) -> DomainId {
-    DomainId::new(Name::from_str(label).expect("valid domain label"))
+    DomainId::try_new(label, "universal").expect("valid domain label")
 }
 
 fn decode_canonical(hex_value: &str) -> Vec<u8> {

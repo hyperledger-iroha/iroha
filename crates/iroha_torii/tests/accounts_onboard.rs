@@ -67,7 +67,7 @@ async fn accounts_onboard_publishes_global_manifest_and_binding() {
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let authority_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let authority_id = AccountId::new(authority_kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
@@ -245,7 +245,7 @@ async fn accounts_onboard_multisig_registers_multisig_account() {
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let authority_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let authority_id = AccountId::new(authority_kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&authority_id);

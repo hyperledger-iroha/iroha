@@ -431,7 +431,7 @@ mod tests {
     fn mint_and_transfer_have_nonzero_costs() {
         let a = sample_account();
         let def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let mint =
@@ -450,7 +450,7 @@ mod tests {
     fn batch_meter_sums_items() {
         let a = sample_account();
         let def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let r = dm_isi::register::Register::asset_definition({
@@ -472,7 +472,7 @@ mod tests {
         let from = sample_account();
         let to = sample_account();
         let def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let entry_a = dm_isi::transfer::TransferAssetBatchEntry::new(
@@ -509,7 +509,7 @@ mod tests {
         let (authority, _) = gen_account_in("wonderland");
         let role_id: RoleId = "bench_role".parse().unwrap();
         let trigger_id: TriggerId = "bench_trg".parse().unwrap();
-        let bench_domain: DomainId = "bench".parse().unwrap();
+        let bench_domain: DomainId = DomainId::try_new("bench", "universal").unwrap();
 
         let register_domain: InstructionBox =
             dm_isi::register::Register::domain(Domain::new(bench_domain.clone())).into();
@@ -519,7 +519,7 @@ mod tests {
 
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
         let register_asset_definition: InstructionBox =
@@ -591,7 +591,7 @@ mod tests {
         crate::test_alias::ensure();
         super::configure_confidential_gas(super::ConfidentialGasSchedule::default());
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "domain".parse().unwrap(),
+            DomainId::try_new("domain", "universal").unwrap(),
             "shield".parse().unwrap(),
         );
         let account = ALICE_ID.clone();
@@ -653,7 +653,7 @@ mod tests {
         let proof_bytes = attachment.proof.bytes.len() as u64;
         let public_inputs = (fixture.public_inputs.len() / super::FIELD_ELEMENT_BYTES) as u64;
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "domain".parse().unwrap(),
+            DomainId::try_new("domain", "universal").unwrap(),
             "shield".parse().unwrap(),
         );
         let transfer = ZkTransfer::new(
@@ -718,7 +718,7 @@ mod tests {
         assert_eq!(verify_gas, expected_verify);
 
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "domain".parse().unwrap(),
+            DomainId::try_new("domain", "universal").unwrap(),
             "shield".parse().unwrap(),
         );
         let nullifiers = vec![[0xAA; 32], [0xBB; 32]];
@@ -750,7 +750,7 @@ mod tests {
     fn confidential_gas_cost_zero_for_non_confidential_instr() {
         let account = sample_account();
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let mint =

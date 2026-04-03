@@ -1090,7 +1090,7 @@ mod tests {
     fn parliament_bodies_roundtrip() {
         use std::collections::BTreeMap;
 
-        let _domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let members = vec![
             AccountId::new(KeyPair::random().public_key().clone()),
             AccountId::new(KeyPair::random().public_key().clone()),
@@ -1151,7 +1151,7 @@ mod tests {
 
     #[test]
     fn governance_enactment_certificate_roundtrip() {
-        let _domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let signer = AccountId::new(keypair.public_key().clone());
         let payload = GovernanceEnactment {
@@ -1183,7 +1183,7 @@ mod tests {
 
     #[test]
     fn parliament_enactment_certificate_roundtrip() {
-        let _domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let signer = AccountId::new(keypair.public_key().clone());
         let payload = ParliamentEnactment {

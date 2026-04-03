@@ -268,8 +268,6 @@ fn finalize_hash(hasher: &blake3::Hasher) -> Digest32 {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::codec::{Decode, Encode};
 
@@ -277,7 +275,7 @@ mod tests {
     use crate::{account::AccountId, domain::DomainId};
 
     fn sample_body() -> TicketBodyV1 {
-        let _domain = DomainId::from_str("wonderland").expect("static domain is valid");
+        let _domain = DomainId::try_new("wonderland", "universal").expect("static domain is valid");
         let issuer_key = KeyPair::from_seed(vec![0_u8; 32], Algorithm::Ed25519);
         let issuer_id = AccountId::new(issuer_key.public_key().clone());
         TicketBodyV1 {

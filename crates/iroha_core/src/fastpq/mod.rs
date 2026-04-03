@@ -554,6 +554,7 @@ mod tests {
             BlockHeader,
             consensus::{ExecKv, ExecWitness},
         },
+        domain::DomainId,
         fastpq::{TransferTranscript, TransferTranscriptBundle},
         permission::Permission,
         role::{Role, RoleId},
@@ -576,7 +577,7 @@ mod tests {
     #[test]
     fn poseidon_digest_matches_known_vector() {
         let asset = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let delta = TransferDeltaTranscript {
@@ -961,7 +962,7 @@ mod tests {
 
     fn sample_transcript() -> TransferTranscript {
         let asset = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         TransferTranscript {

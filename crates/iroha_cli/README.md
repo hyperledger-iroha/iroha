@@ -217,14 +217,6 @@ curl -sS -X POST -H 'Content-Type: application/json' \
   iroha app contracts manifest get --code-hash 0xAA..AA
   iroha app contracts manifest get --code-hash 0xAA..AA --out manifest.json
 
-- List contract instances in a namespace (filters and pagination):
-
-  iroha app contracts instances --dataspace apps \
-    [--contains calc] [--hash-prefix aabb] [--offset 0] [--limit 50] [--order cid_desc]
-
-  Add --table to render a clean table instead of raw JSON (columns: Namespace, Contract ID, Code Hash):
-
-  iroha app contracts instances --dataspace apps --table [--short-hash]
 ```
 
 - Read governance state:

@@ -564,14 +564,14 @@ mod tests {
     };
 
     fn sample_account() -> AccountId {
-        let _domain: DomainId = "wonderland".parse().expect("domain");
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
         let key_pair = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
         AccountId::new(key_pair.public_key().clone())
     }
 
     fn sample_asset(owner: &AccountId) -> AssetId {
         let definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         AssetId::new(definition, owner.clone())

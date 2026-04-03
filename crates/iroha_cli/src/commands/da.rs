@@ -2636,8 +2636,7 @@ mod tests {
         let pdp = AccountId::new(pdp_key.public_key().clone());
         let potr_key = KeyPair::from_seed(vec![6; 32], Algorithm::Ed25519);
         let potr = AccountId::new(potr_key.public_key().clone());
-        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "sora".parse().unwrap(),
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let accounts = da::DaRentLedgerAccounts {

@@ -36,7 +36,7 @@ const FINALITY_MARGIN: u64 = 2;
 const MIN_SELF_BOND: u64 = 1_000;
 const ELIGIBLE_STAKE: u64 = 2_000;
 const INELIGIBLE_STAKE: u64 = 100;
-const STAKE_DOMAIN_ID: &str = "ivm";
+const STAKE_DOMAIN_ID: &str = "ivm.universal";
 const WAIT_HEIGHT: u64 = 16;
 const COLLECTOR_RETRY: Duration = Duration::from_secs(60);
 const COLLECTOR_POLL: Duration = Duration::from_millis(100);
@@ -49,7 +49,7 @@ enum StakeActivationProfile {
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
-        "nexus".parse().expect("nexus domain"),
+        DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
@@ -81,8 +81,8 @@ fn stake_genesis_post_topology_transactions(
     topology: &[PeerId],
     profile: StakeActivationProfile,
 ) -> Vec<Vec<InstructionBox>> {
-    let stake_domain: DomainId = STAKE_DOMAIN_ID.parse().expect("stake domain id");
-    let nexus_domain: DomainId = "nexus".parse().expect("nexus domain id");
+    let stake_domain = DomainId::parse_fully_qualified(STAKE_DOMAIN_ID).expect("stake domain id");
+    let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain id");
     let stake_asset_id = stake_asset_definition_id();
     let genesis_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
 

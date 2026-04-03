@@ -1224,9 +1224,7 @@ mod tests {
     #[test]
     fn find_asset_queries_roundtrip_with_public_selectors() {
         let definition_id = crate::asset::AssetDefinitionId::new(
-            "wonderland"
-                .parse::<crate::domain::DomainId>()
-                .expect("valid domain id"),
+            crate::domain::DomainId::try_new("wonderland", "universal").expect("valid domain id"),
             "rose".parse::<crate::Name>().expect("valid asset name"),
         );
         let keypair = KeyPair::from_seed(vec![0xCD; 32], Algorithm::Ed25519);

@@ -118,9 +118,9 @@ fn zk_roots_get_respects_cap_and_max() {
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "zcoin".parse().unwrap(),
     );
     let owner = AccountId::new(KeyPair::random().public_key().clone());

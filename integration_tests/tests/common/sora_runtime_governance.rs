@@ -41,7 +41,7 @@ const BALLOT_DURATION_BLOCKS: u64 = 20;
 const THIRD_REFERENDUM_VOTERS: usize = 8;
 const THIRD_REFERENDUM_APPROVE_VOTERS: usize = 5;
 const GOV_MAX_CONVICTION: u64 = 6;
-const GOV_DOMAIN_ID: &str = "govsmoke";
+const GOV_DOMAIN_ID: &str = "govsmoke.universal";
 const FIRST_CONTRACT_ID: &str = "parliament.lifecycle.smoke.contract";
 const SECOND_CONTRACT_ID: &str = "parliament.lifecycle.smoke.reject.contract";
 const RUNTIME_UPGRADE_NAME: &str = "parliament.runtime.upgrade.smoke";
@@ -64,9 +64,7 @@ fn governance_escrow_account_literal() -> String {
 
 fn governance_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
-        GOV_DOMAIN_ID
-            .parse()
-            .expect("governance domain id must parse"),
+        DomainId::parse_fully_qualified(GOV_DOMAIN_ID).expect("governance domain id must parse"),
         "xor".parse().expect("governance asset name must parse"),
     )
 }
@@ -911,7 +909,7 @@ pub async fn setup_runtime_governance_fixture(
         "generated citizen identities must be unique"
     );
 
-    let gov_domain_id: DomainId = GOV_DOMAIN_ID.parse()?;
+    let gov_domain_id = DomainId::parse_fully_qualified(GOV_DOMAIN_ID)?;
     let asset_def_id = governance_asset_definition_id();
     alice
         .submit(Register::domain(Domain::new(gov_domain_id.clone())))

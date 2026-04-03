@@ -26,7 +26,7 @@ fn ivm_instruction_executes() {
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
 
-    let domain_id: DomainId = "test".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("test", "universal").expect("domain id");
     let instruction: InstructionBox = Register::domain(Domain::new(domain_id.clone())).into();
     executor
         .execute_instruction(&mut state_tx, &ALICE_ID.clone(), instruction)
@@ -46,7 +46,7 @@ fn ivm_instruction_reports_error() {
     let mut block = state.block(block_header);
     let mut state_tx = block.transaction();
 
-    let domain_id: DomainId = "fail".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("fail", "universal").expect("domain id");
     let instruction: InstructionBox = Register::domain(Domain::new(domain_id.clone())).into();
     executor
         .execute_instruction(&mut state_tx, &ALICE_ID.clone(), instruction.clone())

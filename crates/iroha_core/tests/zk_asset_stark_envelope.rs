@@ -76,10 +76,10 @@ fn prepare_state() -> (State, AccountId, AssetDefinitionId) {
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
 
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let (owner, _owner_key) = gen_account_in("zkd");
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "zcoin".parse().unwrap(),
     );
 
@@ -135,10 +135,10 @@ fn prepare_state_with_bound_stark_vk(
     let mut stx = block.transaction();
     let executor = stx.world.executor().clone();
 
-    let domain_id: DomainId = "zkd".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").expect("domain id");
     let (owner, _owner_key) = gen_account_in("zkd");
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "zcoin".parse().unwrap(),
     );
     let vk_id = VerifyingKeyId::new(BACKEND, "vk_transfer");

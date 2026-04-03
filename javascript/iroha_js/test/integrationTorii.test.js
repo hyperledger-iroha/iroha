@@ -2732,11 +2732,6 @@ test(
         contractAddress,
         "contract call response must echo contract address",
       );
-      assert.equal(
-        response.contract_id,
-        contractAddress,
-        "contract call response contract_id must normalize to the canonical address string",
-      );
     }
     assertHexString(response.tx_hash_hex, "contract call response.tx_hash_hex");
     assertHexString(response.code_hash_hex, "contract call response.code_hash_hex");

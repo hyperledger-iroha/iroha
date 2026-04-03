@@ -205,7 +205,7 @@ async fn mint_asset_after_3_sec_scenario(
     let sync_timeout = network.sync_timeout();
     run_or_skip(stringify!(mint_asset_after_3_sec), || async {
         let asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().expect("Valid"),
+            DomainId::try_new("wonderland", "universal").expect("Valid"),
             "rose".parse().expect("Valid"),
         );
         let account_id = ALICE_ID.clone();
@@ -334,7 +334,7 @@ async fn pre_commit_trigger_should_be_executed_scenario(
         stringify!(pre_commit_trigger_should_be_executed),
         || async {
             let asset_definition_id = AssetDefinitionId::new(
-                "wonderland".parse().expect("Valid"),
+                DomainId::try_new("wonderland", "universal").expect("Valid"),
                 "rose".parse().expect("Valid"),
             );
             let account_id = ALICE_ID.clone();

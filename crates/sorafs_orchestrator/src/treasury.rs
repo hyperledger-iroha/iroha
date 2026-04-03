@@ -1518,7 +1518,7 @@ mod tests {
     }
 
     fn asset_id() -> AssetDefinitionId {
-        let domain = DomainId::from_str("sora").expect("domain id");
+        let domain = DomainId::try_new("sora", "universal").expect("domain id");
         let name = Name::from_str("xor").expect("asset name");
         AssetDefinitionId::new(domain, name)
     }

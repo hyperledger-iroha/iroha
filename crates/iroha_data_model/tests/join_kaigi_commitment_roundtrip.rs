@@ -23,7 +23,7 @@ fn parse_hash_literal(literal: &str) -> Hash {
 #[test]
 fn join_kaigi_accepts_canonical_commitment_literal() {
     let call = KaigiId::new(
-        DomainId::from_str("wonderland").expect("domain"),
+        DomainId::try_new("wonderland", "universal").expect("domain"),
         Name::from_str("weekly-sync").expect("call name"),
     );
     let participant = AccountId::parse_encoded(

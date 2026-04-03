@@ -64,7 +64,7 @@ fn build_faucet_test_context_with_selector(
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
-    let domain_id: DomainId = "sora".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("sora", "universal").expect("domain id");
     let asset_definition_id =
         AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("asset name"));
     let canonical_selector = asset_definition_id.to_string();

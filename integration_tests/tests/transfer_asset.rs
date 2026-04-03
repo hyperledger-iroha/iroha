@@ -109,7 +109,7 @@ fn create_mouse(mouse_id: AccountId) -> Register<Account> {
 fn asset_definition_id_for(context: &str) -> AssetDefinitionId {
     let name = format!("camomile_{context}");
     AssetDefinitionId::new(
-        "wonderland".parse().expect("domain id should be valid"),
+        DomainId::try_new("wonderland", "universal").expect("domain id should be valid"),
         name.parse().expect("asset name should be valid"),
     )
 }

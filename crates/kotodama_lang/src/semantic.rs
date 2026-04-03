@@ -545,7 +545,7 @@ fn parse_domain_matcher(
     family: TriggerDataFamily,
     raw: &str,
 ) -> Result<DomainId, SemanticError> {
-    raw.parse()
+    DomainId::parse_fully_qualified(raw)
         .map_err(|err| invalid_data_matcher_literal(trigger_name, family, "domain", raw, err))
 }
 
@@ -7683,7 +7683,7 @@ mod tests {
     #[test]
     fn trigger_decl_supports_structured_asset_data_filter() {
         let asset_definition = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
         let asset_definition_literal = asset_definition.to_string();
@@ -7744,9 +7744,9 @@ mod tests {
             .expect("account");
         let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";
         let peer: PeerId = peer_literal.parse().expect("peer");
-        let domain: DomainId = "wonderland".parse().expect("domain");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
         let asset_definition = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
         let asset = AssetId::new(asset_definition.clone(), account.clone());
@@ -8032,7 +8032,7 @@ mod tests {
     #[test]
     fn trigger_decl_rejects_duplicate_data_matchers() {
         let asset_definition_literal = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         )
         .to_string();

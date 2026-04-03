@@ -31,7 +31,8 @@ mod model {
     /// ```rust
     /// use iroha_data_model::nft::NftId;
     ///
-    /// let nft_id = "nft_name$soramitsu".parse::<NftId>().expect("Valid");
+    /// let nft_id =
+    ///     "nft_name$soramitsu.universal".parse::<NftId>().expect("Valid");
     /// ```
     #[derive(
         derive_more::Debug,
@@ -134,7 +135,7 @@ impl NftId {
     }
 }
 
-/// NFT Identification is represented by `name$domain_name` string.
+/// NFT Identification is represented by `name$domain.dataspace` string.
 impl FromStr for NftId {
     type Err = ParseError;
 
@@ -149,9 +150,10 @@ impl FromStr for NftId {
         let name = name_candidate.parse().map_err(|_| ParseError {
             reason: "Failed to parse `name` part in `name$domain`",
         })?;
-        let domain_id = domain_id_candidate.parse().map_err(|_| ParseError {
-            reason: "Failed to parse `domain` part in `name$domain`",
-        })?;
+        let domain_id = crate::domain::DomainId::parse_fully_qualified(domain_id_candidate)
+            .map_err(|_| ParseError {
+                reason: "Failed to parse `domain` part in `name$domain`",
+            })?;
         Ok(Self::new(domain_id, name))
     }
 }
@@ -177,7 +179,7 @@ mod json_tests {
 
     #[test]
     fn new_nft_json_roundtrip() {
-        let domain: DomainId = "art".parse().expect("domain id");
+        let domain = DomainId::try_new("art", "universal").expect("domain id");
         let id = NftId::new(domain, Name::from_str("mona_lisa").expect("nft name"));
         let mut content = Metadata::default();
         content.insert("artist".parse().expect("metadata key"), "da_vinci");

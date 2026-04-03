@@ -2836,7 +2836,7 @@ mod tests {
 
     fn mk_governance_harness(with_permissions: bool) -> GovHarness {
         let authority_keypair = KeyPair::random();
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::of(authority_keypair.public_key().clone());
         let escrow: AccountId =
             iroha_config::parameters::defaults::governance::bond_escrow_account_id();

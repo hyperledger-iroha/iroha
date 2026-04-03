@@ -522,11 +522,11 @@ mod tests {
     fn plan_create_args_build_request() {
         let provider = sample_account_id(1);
         let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "commerce".parse().unwrap(),
+            iroha_data_model::domain::DomainId::try_new("commerce", "universal").unwrap(),
             "plan".parse().unwrap(),
         );
         let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "pay".parse().unwrap(),
+            iroha_data_model::domain::DomainId::try_new("pay", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let plan = sample_plan(provider.clone(), asset_definition);
@@ -565,7 +565,7 @@ mod tests {
     fn subscription_create_args_build_request() {
         let subscriber = sample_account_id(2);
         let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "commerce".parse().unwrap(),
+            iroha_data_model::domain::DomainId::try_new("commerce", "universal").unwrap(),
             "plan".parse().unwrap(),
         );
         let subscription_id: NftId = "sub-1$subscriptions".parse().expect("subscription id");
@@ -660,7 +660,7 @@ mod tests {
     fn load_plan_reads_json_file() {
         let provider = sample_account_id(1);
         let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "pay".parse().unwrap(),
+            iroha_data_model::domain::DomainId::try_new("pay", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let plan = sample_plan(provider, asset_definition);

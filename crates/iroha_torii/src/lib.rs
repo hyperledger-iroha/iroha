@@ -5635,7 +5635,7 @@ fn identifier_claim_lookup_response(
 
 #[cfg(feature = "app_api")]
 fn parse_domain_id(raw: &str) -> Result<DomainId, Error> {
-    raw.parse::<DomainId>()
+    DomainId::parse_fully_qualified(raw)
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))
 }
 
@@ -5645,8 +5645,7 @@ fn parse_kaigi_call_id(raw: &str) -> Result<iroha_data_model::kaigi::KaigiId, Er
     let (domain_raw, call_name_raw) = trimmed
         .split_once(':')
         .ok_or_else(|| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
-    let domain_id = domain_raw
-        .parse::<DomainId>()
+    let domain_id = DomainId::parse_fully_qualified(domain_raw)
         .map_err(|_| Error::Query(iroha_data_model::ValidationFail::TooComplex))?;
     let call_name = call_name_raw
         .parse::<Name>()
@@ -26916,7 +26915,8 @@ mod gateway_denylist_loader_tests {
     }
 
     pub(super) fn sample_account_literals() -> (String, String, String) {
-        let _domain: DomainId = "wonderland".parse().expect("domain parses");
+        let _domain: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain parses");
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -27768,7 +27768,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     pub(crate) fn world_with_account(account_id: &AccountId) -> World {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(account_id);
         let account = Account::new(account_id.clone()).build(account_id);
         World::with([domain], [account], [])
@@ -31925,7 +31925,7 @@ pub(crate) mod tests_runtime_handlers {
                     source_id,
                     storage_class: StorageClass::Warm,
                     lease_asset_definition_id: AssetDefinitionId::new(
-                        "wonderland".parse().expect("domain"),
+                        DomainId::try_new("wonderland", "universal").expect("domain"),
                         "xor".parse().expect("asset"),
                     ),
                     base_fee_nanos: 10_000,
@@ -37011,7 +37011,10 @@ mod tests {
                 scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
             }),
         );
-        if let Some(domain) = alias.domain.clone() {
+        if let Some(domain) = alias
+            .domain_id(&app.state.nexus_snapshot().dataspace_catalog)
+            .expect("test alias dataspace must resolve")
+        {
             stx.world_mut_for_testing().add_account_permission(
                 account_id,
                 Permission::from(CanResolveAccountAlias {
@@ -37041,8 +37044,8 @@ mod tests {
             DataSpaceId::GLOBAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let domain =
-            Domain::new("centralbank".parse::<DomainId>().expect("domain id")).build(&authority);
+        let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
+            .build(&authority);
         let account = Account::new(authority.clone())
             .with_label(Some(alias_label))
             .build(&authority);
@@ -37271,7 +37274,7 @@ mod tests {
     async fn alias_resolve_allows_unsigned_request_without_permission() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let domain_id: DomainId = "centralbank".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("centralbank", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone())
             .with_label(Some(AccountAlias::new(
@@ -37310,8 +37313,8 @@ mod tests {
             DataSpaceId::GLOBAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let domain =
-            Domain::new("centralbank".parse::<DomainId>().expect("domain id")).build(&authority);
+        let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
+            .build(&authority);
         let account = Account::new(authority.clone())
             .with_label(Some(primary_label))
             .build(&authority);
@@ -37393,8 +37396,8 @@ mod tests {
             DataSpaceId::GLOBAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let domain =
-            Domain::new("centralbank".parse::<DomainId>().expect("domain id")).build(&authority);
+        let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
+            .build(&authority);
         let account = Account::new(authority.clone())
             .with_label(Some(primary_label))
             .build(&authority);
@@ -37456,7 +37459,7 @@ mod tests {
             )),
             iroha_data_model::nexus::DataSpaceId::GLOBAL,
         );
-        let domain_id: DomainId = "centralbank".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("centralbank", "universal").expect("domain id");
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
@@ -37815,7 +37818,7 @@ mod tests {
     #[tokio::test]
     async fn identifier_policies_lists_registered_policy() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone())
             .with_uaid(Some(UniversalAccountId::from_hash(Hash::new(
@@ -37887,7 +37890,7 @@ mod tests {
     #[tokio::test]
     async fn identifier_policies_expose_programmed_ram_fhe_profile() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone())
             .with_uaid(Some(UniversalAccountId::from_hash(Hash::new(
@@ -37993,7 +37996,7 @@ mod tests {
     #[tokio::test]
     async fn identifier_resolve_returns_bound_account() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory"));
         let account = Account::new(authority.clone())
@@ -38099,7 +38102,7 @@ mod tests {
     #[tokio::test]
     async fn identifier_resolve_returns_bound_account_with_programmed_backend() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-programmed"));
         let account = Account::new(authority.clone())
@@ -38189,7 +38192,7 @@ mod tests {
     #[tokio::test]
     async fn identifier_resolve_accepts_bfv_encrypted_input() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-encrypted"));
         let account = Account::new(authority.clone())
             .with_uaid(Some(uaid))
@@ -38328,7 +38331,7 @@ mod tests {
     #[tokio::test]
     async fn identifier_claim_receipt_normalizes_phone_input() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-claim"));
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone())
@@ -38401,7 +38404,7 @@ mod tests {
     #[tokio::test]
     async fn identifier_receipt_lookup_returns_persisted_claim() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-directory-receipt-lookup"));
         let account = Account::new(authority.clone())
             .with_uaid(Some(uaid))
@@ -38513,7 +38516,7 @@ mod tests {
     #[tokio::test]
     async fn asset_alias_resolve_returns_definition_fields() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let definition_id = AssetDefinitionId::new(
             domain_id.clone(),
             Name::from_str("usd").expect("asset name token"),
@@ -38565,7 +38568,7 @@ mod tests {
     #[tokio::test]
     async fn asset_alias_resolve_accepts_short_form_alias() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let definition_id = AssetDefinitionId::new(
             domain_id.clone(),
             Name::from_str("usd").expect("asset name token"),
@@ -38615,7 +38618,7 @@ mod tests {
     #[tokio::test]
     async fn asset_definition_get_returns_full_definition_by_base58_id() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let definition_id = AssetDefinitionId::new(
             domain_id.clone(),
             Name::from_str("usd").expect("asset name token"),
@@ -38671,7 +38674,7 @@ mod tests {
     #[tokio::test]
     async fn asset_alias_resolve_returns_not_found_after_grace() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let definition_id = AssetDefinitionId::new(
             domain_id.clone(),
             Name::from_str("usd").expect("asset name token"),
@@ -38713,7 +38716,7 @@ mod tests {
     #[tokio::test]
     async fn asset_definition_get_reports_expired_pending_cleanup_status_after_grace() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let definition_id = AssetDefinitionId::new(
             domain_id.clone(),
             Name::from_str("usd").expect("asset name token"),
@@ -38765,7 +38768,7 @@ mod tests {
     #[tokio::test]
     async fn parse_asset_definition_id_rejects_alias_after_grace() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let definition_id = AssetDefinitionId::new(
             domain_id.clone(),
             Name::from_str("usd").expect("asset name token"),
@@ -38804,7 +38807,7 @@ mod tests {
     #[tokio::test]
     async fn parse_asset_definition_id_accepts_base58_and_alias_literals() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let long_id = AssetDefinitionId::new(
             domain_id.clone(),
             Name::from_str("cbdc").expect("asset name token"),
@@ -38882,7 +38885,7 @@ mod tests {
     async fn resolve_tx_history_allowed_asset_definition_id_accepts_base58_literal_without_local_definition()
      {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let expected = AssetDefinitionId::new(
             domain_id.clone(),
             Name::from_str("cbdc").expect("asset name token"),
@@ -38906,7 +38909,7 @@ mod tests {
     #[tokio::test]
     async fn resolve_tx_history_allowed_asset_definition_id_keeps_alias_selectors_strict() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "issuer".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let mut app = mk_app_state_for_tests_with_world(World::with([domain], [account], []));
@@ -39881,7 +39884,7 @@ mod tests {
     #[tokio::test]
     async fn zk_ivm_derive_returns_proved_payload_without_gas_used() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "wonderland".parse().expect("domain");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let world = World::with_assets([domain], [account], [], [], []);
@@ -40410,8 +40413,8 @@ mod tests {
             DataSpaceId::GLOBAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let domain =
-            Domain::new("centralbank".parse::<DomainId>().expect("domain id")).build(&authority);
+        let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
+            .build(&authority);
         let account = Account::new(authority.clone())
             .with_label(Some(alias_label))
             .build(&authority);
@@ -40512,8 +40515,8 @@ mod tests {
             DataSpaceId::GLOBAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let domain =
-            Domain::new("centralbank".parse::<DomainId>().expect("domain id")).build(&authority);
+        let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
+            .build(&authority);
         let account = Account::new(authority.clone())
             .with_label(Some(alias_label.clone()))
             .build(&authority);

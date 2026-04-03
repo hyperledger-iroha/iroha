@@ -1036,7 +1036,8 @@ mod tests {
         };
         let config_layers = Arc::new(Vec::new());
         let genesis = dummy_genesis();
-        let domain: DomainId = "wonderland".parse().expect("domain");
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         run_fault_loop(
             peer.clone(),
             config,
@@ -1073,7 +1074,8 @@ mod tests {
         };
         let config_layers = Arc::new(Vec::new());
         let genesis = dummy_genesis();
-        let domain: DomainId = "wonderland".parse().expect("domain");
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         let deadline = Instant::now() + Duration::from_secs(30);
 
         let handle = tokio::spawn(run_fault_loop(
@@ -1104,7 +1106,8 @@ mod tests {
         let config_layers = Arc::new(Vec::new());
         let genesis = dummy_genesis();
         let mut rng = StdRng::seed_from_u64(9);
-        let domain: DomainId = "wonderland".parse().expect("domain");
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         let config = FaultConfig {
             interval: Duration::from_secs(1)..=Duration::from_secs(1),
             crash_restart: false,
@@ -1169,7 +1172,8 @@ mod tests {
         let config_layers = Arc::new(Vec::new());
         let genesis = dummy_genesis();
         let mut rng = StdRng::seed_from_u64(17);
-        let domain: DomainId = "wonderland".parse().expect("domain");
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         let config = FaultConfig {
             interval: Duration::from_secs(1)..=Duration::from_secs(1),
             crash_restart: false,
@@ -1218,7 +1222,8 @@ mod tests {
         let config_layers = Arc::new(Vec::new());
         let genesis = dummy_genesis();
         let mut rng = StdRng::seed_from_u64(11);
-        let domain: DomainId = "wonderland".parse().expect("domain");
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         let storage = peer.kura_store_dir();
         if storage.exists() {
             std::fs::remove_dir_all(&storage).unwrap();
@@ -1277,7 +1282,8 @@ mod tests {
         let config_layers = Arc::new(Vec::new());
         let genesis = dummy_genesis();
         let mut rng = StdRng::seed_from_u64(25);
-        let domain: DomainId = "wonderland".parse().expect("domain");
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         let config = FaultConfig {
             interval: Duration::from_secs(1)..=Duration::from_secs(1),
             crash_restart: false,
@@ -1376,7 +1382,8 @@ mod tests {
         let config_layers = Arc::new(Vec::new());
         let genesis = dummy_genesis();
         let mut rng = StdRng::seed_from_u64(51);
-        let domain: DomainId = "wonderland".parse().expect("domain");
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         let config = FaultConfig {
             interval: Duration::from_secs(1)..=Duration::from_secs(1),
             crash_restart: false,

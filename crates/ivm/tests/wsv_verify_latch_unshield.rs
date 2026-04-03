@@ -78,14 +78,14 @@ fn wsv_verify_latch_allows_unshield_then_resets() {
     let caller = sample_account();
     let caller_id = caller.clone();
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
 
     // Seed WSV with caller account and permissions; register asset and enable ZK policy
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
-    let domain: DomainId = "wonderland".parse().unwrap();
+    let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(&caller, domain));
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
@@ -230,12 +230,12 @@ fn unshield_rejects_mismatched_verifying_key() {
     let caller = sample_account();
     let caller_id = caller.clone();
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "iris".parse().unwrap(),
     );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
-    let domain: DomainId = "wonderland".parse().unwrap();
+    let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(&caller, domain));
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
@@ -309,12 +309,12 @@ fn unshield_accepts_and_checks_inline_verifying_key() {
     let caller = sample_account();
     let caller_id = caller.clone();
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "daisy".parse().unwrap(),
     );
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(caller.clone());
-    let domain: DomainId = "wonderland".parse().unwrap();
+    let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     wsv.grant_permission(&caller, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(&caller, domain));
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);

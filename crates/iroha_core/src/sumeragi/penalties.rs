@@ -1697,12 +1697,12 @@ mod tests {
             block.commit();
         }
 
-        let domain: DomainId = "test".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("test", "universal").expect("domain id");
         let validator: AccountId = AccountId::new(key_pair.public_key().clone());
         let escrow_key_pair = KeyPair::random();
         let escrow_account: AccountId = AccountId::new(escrow_key_pair.public_key().clone());
         let stake_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "test".parse().unwrap(),
+            DomainId::try_new("test", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let slash_amount = Numeric::new(100, 0);

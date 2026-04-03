@@ -85,7 +85,7 @@ fn build_transaction(
 fn queue_teu_backlog_matches_metering() -> Result<()> {
     let chain_id = ChainId::from(TEST_CHAIN_ID);
     let (account_id, keypair) = gen_account_in("wonderland");
-    let wonderland_domain: DomainId = "wonderland".parse().unwrap();
+    let wonderland_domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let world = build_world(&account_id, &wonderland_domain);
     let kura = iroha_core::kura::Kura::blank_kura_for_testing();
     let query_store = iroha_core::query::store::LiveQueryStore::start_test();
@@ -201,8 +201,8 @@ fn queue_routes_transactions_across_configured_lanes() -> Result<()> {
     let chain_id = ChainId::from(TEST_CHAIN_ID);
     let (lane0_account, lane0_keypair) = gen_account_in("nexus");
     let (lane1_account, lane1_keypair) = gen_account_in("nexus_alt");
-    let lane0_domain_id: DomainId = "nexus".parse().unwrap();
-    let lane1_domain_id: DomainId = "nexus_alt".parse().unwrap();
+    let lane0_domain_id: DomainId = DomainId::try_new("nexus", "universal").unwrap();
+    let lane1_domain_id: DomainId = DomainId::try_new("nexus_alt", "universal").unwrap();
 
     // Assemble world with both authorities registered.
     let domain0: Domain = Domain::new(lane0_domain_id.clone()).build(&lane0_account);
@@ -438,8 +438,8 @@ fn queue_uses_default_lane_when_no_rule_matches() -> Result<()> {
     let chain_id = ChainId::from(TEST_CHAIN_ID);
     let (fallback_account, fallback_keypair) = gen_account_in("fallback");
     let (routed_account, routed_keypair) = gen_account_in("routed");
-    let fallback_domain_id: DomainId = "fallback".parse().unwrap();
-    let routed_domain_id: DomainId = "routed".parse().unwrap();
+    let fallback_domain_id: DomainId = DomainId::try_new("fallback", "universal").unwrap();
+    let routed_domain_id: DomainId = DomainId::try_new("routed", "universal").unwrap();
 
     let domain_fallback: Domain = Domain::new(fallback_domain_id.clone()).build(&fallback_account);
     let domain_routed: Domain = Domain::new(routed_domain_id.clone()).build(&routed_account);

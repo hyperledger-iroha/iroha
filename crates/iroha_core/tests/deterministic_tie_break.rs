@@ -21,11 +21,11 @@ fn build_world() -> (
     let (a2, k2) = iroha_test_samples::gen_account_in("wonderland");
     let (a3, k3) = iroha_test_samples::gen_account_in("wonderland");
     let (a4, k4) = iroha_test_samples::gen_account_in("wonderland");
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&a1);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
         NumericSpec::default(),

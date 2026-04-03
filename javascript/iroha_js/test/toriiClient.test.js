@@ -12837,59 +12837,6 @@ test("iterateAssetHoldersQuery paginates query responses", async () => {
   assert.equal(callCount, 2);
 });
 
-test("iterateContractInstances paginates registry results", async () => {
-  const responses = [
-    {
-      namespace: "apps",
-      total: 3,
-      offset: 0,
-      limit: 2,
-      instances: [
-        { contract_id: "calc.v1", code_hash_hex: fakeHashHex(0xaa) },
-        { contract_id: "mint.v1", code_hash_hex: fakeHashHex(0xbb) },
-      ],
-    },
-    {
-      namespace: "apps",
-      total: 3,
-      offset: 2,
-      limit: 2,
-      instances: [{ contract_id: "vault.v1", code_hash_hex: fakeHashHex(0xcc) }],
-    },
-  ];
-  let callCount = 0;
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/contracts/instances/apps");
-    assert.equal(parsed.searchParams.get("contains"), "calc");
-    assert.equal(parsed.searchParams.get("limit"), "2");
-    assert.equal(parsed.searchParams.get("offset"), String(callCount * 2));
-    const payload = responses[callCount] ?? {
-      namespace: "apps",
-      total: 3,
-      offset: parsed.searchParams.get("offset") ?? "0",
-      limit: 2,
-      instances: [],
-    };
-    callCount += 1;
-    return createResponse({
-      status: 200,
-      jsonData: payload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const ids = [];
-  for await (const instance of client.iterateContractInstances("apps", {
-    contains: "calc",
-    pageSize: 2,
-  })) {
-    ids.push(instance.contract_id);
-  }
-  assert.deepEqual(ids, ["calc.v1", "mint.v1", "vault.v1"]);
-  assert.equal(callCount, 2);
-});
-
 test("getGovernanceContract reads one governed binding", async () => {
   let calledUrl;
   const fetchImpl = async (url) => {
@@ -15013,6 +14960,10 @@ test("deployContract submits base64 payload and returns response", async () => {
   let captured;
   const responsePayload = {
     ok: true,
+    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    dataspace: "universal",
+    deploy_nonce: 7,
+    tx_hash_hex: "a".repeat(64),
     code_hash_hex: "b".repeat(64),
     abi_hash_hex: "c".repeat(64),
   };
@@ -15090,7 +15041,6 @@ test("callContract posts payload metadata and normalizes response", async () => 
     ok: true,
     submitted: true,
     dataspace: "universal",
-    contract_id: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     code_hash_hex: "1".repeat(64),
     abi_hash_hex: "2".repeat(64),
@@ -15132,7 +15082,6 @@ test("callContract posts payload metadata and normalizes response", async () => 
     ok: true,
     submitted: true,
     dataspace: "universal",
-    contract_id: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     code_hash_hex: "1".repeat(64),
     abi_hash_hex: "2".repeat(64),

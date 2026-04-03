@@ -38,7 +38,7 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 }
 
 fn account(domain: &str, public_key: &str) -> AccountId {
-    let _domain: DomainId = domain.parse().unwrap();
+    let _domain = DomainId::try_new(domain, "universal").unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
     AccountId::new(public_key)
 }
@@ -155,7 +155,7 @@ fn envelope_roles_permissions_triggers() {
     assert!(host.wsv.has_permission(
         &alice,
         &PermissionToken::MintAsset(iroha_data_model::asset::AssetDefinitionId::new(
-            "domain".parse().unwrap(),
+            DomainId::try_new("domain", "universal").unwrap(),
             "rose".parse().unwrap()
         ))
     ));
@@ -182,7 +182,7 @@ fn envelope_roles_permissions_triggers() {
     assert!(!host.wsv.has_permission(
         &alice,
         &PermissionToken::MintAsset(iroha_data_model::asset::AssetDefinitionId::new(
-            "domain".parse().unwrap(),
+            DomainId::try_new("domain", "universal").unwrap(),
             "rose".parse().unwrap()
         ))
     ));

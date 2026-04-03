@@ -106,7 +106,7 @@ fn sample_transfer_transcript() -> TransferTranscript {
         from_account: (*ALICE_ID).clone(),
         to_account: (*BOB_ID).clone(),
         asset_definition: AssetDefinitionId::new(
-            "fixture".parse().unwrap(),
+            DomainId::try_new("fixture", "universal").unwrap(),
             "xor".parse().unwrap(),
         ),
         amount: Numeric::from(75u32),

@@ -7919,10 +7919,10 @@ fn parse_kaigi_id_literal(value: &str, context: &str) -> napi::Result<KaigiId> {
     let Some((domain, call_name)) = trimmed.split_once(':') else {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
-            format!("{context} must be in `domain:callName` format"),
+            format!("{context} must be in `domain.dataspace:callName` format"),
         ));
     };
-    let domain_id = DomainId::from_str(domain).map_err(|err| {
+    let domain_id = DomainId::parse_fully_qualified(domain).map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
             format!("invalid {context} domain id: {err}"),
@@ -8147,7 +8147,7 @@ pub fn build_register_domain_transaction(
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
     })?;
     let authority = parse_account_id(&authority, "authority account id")?;
-    let domain_id: DomainId = domain_id.parse().map_err(|err| {
+    let domain_id = DomainId::parse_fully_qualified(&domain_id).map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
             format!("invalid domain id: {err}"),
@@ -8655,13 +8655,13 @@ mod tests {
 
     fn sample_rwa_id(domain: &str, byte: u8) -> RwaId {
         RwaId::generated(
-            domain.parse().expect("valid domain id"),
+            DomainId::try_new(domain, "universal").expect("valid domain id"),
             Hash::prehashed(sample_hash(byte)),
         )
     }
 
     fn sample_kaigi_id(domain: &str, call_name: &str) -> KaigiId {
-        let domain_id: DomainId = domain.parse().expect("valid domain id");
+        let domain_id = DomainId::try_new(domain, "universal").expect("valid domain id");
         let call = Name::from_str(call_name).expect("valid kaigi name");
         KaigiId::new(domain_id, call)
     }
@@ -9009,8 +9009,10 @@ mod tests {
     #[test]
     fn mint_asset_instruction_json_roundtrip() {
         let account_id = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_definition, account_id.clone());
 
         let mint_box: MintBox =
@@ -9049,8 +9051,10 @@ mod tests {
     #[test]
     fn burn_asset_instruction_json_roundtrip() {
         let account_id = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_definition, account_id.clone());
 
         let burn_box: BurnBox =
@@ -9854,8 +9858,10 @@ mod tests {
     fn transfer_asset_instruction_json_roundtrip() {
         let source_account = sample_account("wonderland");
         let destination = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_definition, source_account.clone());
 
         let transfer_box: TransferBox = Transfer::asset_numeric(
@@ -9898,7 +9904,7 @@ mod tests {
             redeem_enabled: false,
         };
         let new_rwa = NewRwa::new(
-            "commodities".parse().expect("valid domain id"),
+            DomainId::try_new("commodities", "universal").expect("valid domain id"),
             Numeric::from_str("10.5").expect("valid numeric"),
             iroha_primitives::numeric::NumericSpec::fractional(1),
             "vault-cert-001".to_owned(),
@@ -10058,7 +10064,8 @@ mod tests {
     fn transfer_domain_instruction_json_roundtrip() {
         let source_account = sample_account("wonderland");
         let destination = sample_account("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("valid domain id");
 
         let transfer_box: TransferBox = Transfer::domain(
             source_account.clone(),
@@ -11125,8 +11132,10 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_definition, authority.clone());
 
         let instruction_box: InstructionBox = Mint::asset_numeric(

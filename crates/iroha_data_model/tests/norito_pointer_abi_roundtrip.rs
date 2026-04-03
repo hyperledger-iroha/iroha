@@ -62,7 +62,7 @@ fn manifest_pointer_roundtrip() {
 fn nft_syscall_pointers_roundtrip() {
     let keypair = KeyPair::random();
     let (public_key, _) = keypair.into_parts();
-    let domain: DomainId = "wonderland".parse().expect("domain id");
+    let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let account_id = AccountId::new(public_key);
 
     let nft_name: Name = "collectible".parse().expect("valid name");

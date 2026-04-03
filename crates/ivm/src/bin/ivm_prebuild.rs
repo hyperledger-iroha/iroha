@@ -158,7 +158,7 @@ fn build_program_mint_rose_for_authority() -> Vec<u8> {
     };
 
     let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        iroha_data_model::domain::DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
     let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");

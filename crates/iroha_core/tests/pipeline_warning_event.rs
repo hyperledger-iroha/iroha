@@ -41,11 +41,11 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     // Minimal world: one domain, two accounts, one asset def
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
         NumericSpec::default(),
@@ -67,7 +67,7 @@ fn pipeline_warning_emitted_on_dag_mismatch() {
     // Build a block with two txs (independent)
     let chain_id = ChainId::from("chain");
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
@@ -168,11 +168,11 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     // Minimal world: one domain, two accounts, one asset def
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
         NumericSpec::default(),
@@ -194,7 +194,7 @@ fn pipeline_warning_ignored_for_stale_sidecar() {
     // Build a block with two txs (independent)
     let chain_id = ChainId::from("chain");
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());

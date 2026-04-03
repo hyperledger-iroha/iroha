@@ -53,7 +53,7 @@ fn setup_state() -> (State, AccountId, KeyPair) {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
     let kp = KeyPair::random();
-    let domain_id: DomainId = "wonderland".parse().expect("domain");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let account_id = AccountId::new(kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);

@@ -68,7 +68,7 @@ pub mod isi {
             error::{InstructionExecutionError, InvalidParameterError, MathError, RepetitionError},
             governance as gov, nexus, smart_contract_code as scode, verifying_keys,
         },
-        name::{self, Name},
+        name::Name,
         nexus::{
             AxtProofEnvelope, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
             DomainEndorsementRecord, LaneRelayEmergencyValidatorSet, LaneRelayEnvelopeRef,
@@ -9525,18 +9525,12 @@ pub mod isi {
             let Register { object: new_domain } = self;
             let raw_domain_id = new_domain.id.clone();
 
-            let canonical_label = name::canonicalize_domain_label(raw_domain_id.name().as_ref())
+            let canonical_id = DomainId::try_new(raw_domain_id.name(), raw_domain_id.dataspace())
                 .map_err(|err| {
-                    InstructionExecutionError::InvalidParameter(
-                        InvalidParameterError::SmartContract(err.reason().into()),
-                    )
-                })?;
-            let canonical_name = Name::from_str(&canonical_label).map_err(|err| {
                 InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
                     err.reason().into(),
                 ))
             })?;
-            let canonical_id = DomainId::new(canonical_name);
 
             if canonical_id == *iroha_genesis::GENESIS_DOMAIN_ID {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -11013,27 +11007,42 @@ pub mod isi {
             }
 
             for account_id in relabeled_accounts {
-                let labels: Vec<_> = state_transaction
+                let alias_matches_domain =
+                    |label: &AccountAlias| -> Result<bool, InstructionExecutionError> {
+                        label
+                            .domain_id(&state_transaction.nexus.dataspace_catalog)
+                            .map(|resolved| resolved.as_ref() == Some(&domain_id))
+                            .map_err(|err| {
+                                InstructionExecutionError::InvariantViolation(
+                                    format!(
+                                        "account alias `{:?}` could not resolve its qualified domain: {err}",
+                                        label
+                                    )
+                                    .into(),
+                                )
+                            })
+                    };
+                let labels = state_transaction
                     .world
                     .account_aliases_by_account
                     .get(&account_id)
                     .cloned()
                     .unwrap_or_default()
                     .into_iter()
-                    .filter(|label| {
-                        label
-                            .domain
-                            .as_ref()
-                            .is_some_and(|label_domain| label_domain.name() == domain_id.name())
+                    .filter_map(|label| match alias_matches_domain(&label) {
+                        Ok(true) => Some(Ok(label)),
+                        Ok(false) => None,
+                        Err(err) => Some(Err(err)),
                     })
-                    .collect();
-                if let Some(account) = state_transaction.world.accounts.get_mut(&account_id)
-                    && account.label().is_some_and(|label| {
-                        label
-                            .domain
-                            .as_ref()
-                            .is_some_and(|label_domain| label_domain.name() == domain_id.name())
-                    })
+                    .collect::<Result<Vec<_>, _>>()?;
+                let clear_primary_label = state_transaction
+                    .world
+                    .accounts
+                    .get(&account_id)
+                    .and_then(|account| account.label().cloned())
+                    .map_or(Ok(false), |label| alias_matches_domain(&label))?;
+                if clear_primary_label
+                    && let Some(account) = state_transaction.world.accounts.get_mut(&account_id)
                 {
                     account.set_label(None);
                 }
@@ -11609,6 +11618,7 @@ pub mod isi {
                 verifying_keys,
             },
             metadata::Metadata,
+            name,
             nexus::{
                 DataSpaceCatalog, DataSpaceId, DataSpaceMetadata, DomainEndorsement,
                 DomainEndorsementPolicy, DomainEndorsementScope, DomainEndorsementSignature,
@@ -11847,7 +11857,7 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
             let (authority, _) = gen_account_in("tenants");
-            let domain_id: DomainId = "leased.world".parse().expect("domain");
+            let domain_id: DomainId = DomainId::try_new("leased", "world").expect("domain");
 
             let err = Register::domain(Domain::new(domain_id))
                 .execute(&authority, &mut stx)
@@ -11868,7 +11878,7 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
             let (authority, _) = gen_account_in("tenants");
-            let domain_id: DomainId = "leased-genesis.world".parse().expect("domain");
+            let domain_id: DomainId = DomainId::try_new("leased-genesis", "world").expect("domain");
 
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&authority, &mut stx)
@@ -11885,7 +11895,7 @@ pub mod isi {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let (authority, _) = gen_account_in("tenants");
-            let domain_id: DomainId = "leased-ok.world".parse().expect("domain");
+            let domain_id: DomainId = DomainId::try_new("leased-ok", "world").expect("domain");
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &authority, &domain_id);
             let state = State::new(world, kura, query_handle);
@@ -12350,7 +12360,8 @@ pub mod isi {
         }
 
         fn bootstrap_alice_account(stx: &mut StateTransaction<'_, '_>) {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id parses");
             seed_domain_name_lease_tx(&mut stx.world, &ALICE_ID, &domain_id);
             Register::domain(Domain::new(domain_id))
                 .execute(&ALICE_ID, stx)
@@ -12361,13 +12372,15 @@ pub mod isi {
         }
 
         fn configure_global_dataspace(stx: &mut StateTransaction<'_, '_>) {
-            stx.nexus.dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
+            let dataspace_catalog = DataSpaceCatalog::new(vec![DataSpaceMetadata {
                 id: DataSpaceId::GLOBAL,
                 alias: "universal".to_string(),
                 description: None,
                 fault_tolerance: 1,
             }])
             .expect("dataspace catalog");
+            stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+            stx.world.dataspace_catalog = dataspace_catalog;
         }
 
         fn seed_manifest_record(
@@ -12450,8 +12463,10 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let other_domain_id: DomainId = "other.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let other_domain_id: DomainId =
+                DomainId::try_new("other", "world").expect("domain id parses");
             let account_label = AccountAlias::new(
                 "primary".parse().unwrap(),
                 Some(AccountAliasDomain::new(domain_id.name().clone())),
@@ -12561,13 +12576,131 @@ pub mod isi {
         }
 
         #[test]
+        fn unregister_domain_keeps_aliases_in_same_named_foreign_dataspace() {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let state = State::new(World::default(), kura, query_handle);
+
+            let global_domain_id: DomainId =
+                DomainId::try_new("billing", "universal").expect("domain id parses");
+            let retail_domain_id: DomainId =
+                DomainId::try_new("billing", "retail").expect("domain id parses");
+            let retail_dataspace = DataSpaceId::new(17);
+            let primary_label = AccountAlias::new(
+                "globaldesk".parse().unwrap(),
+                Some(AccountAliasDomain::new(global_domain_id.name().clone())),
+                DataSpaceId::GLOBAL,
+            );
+            let retail_label = AccountAlias::new(
+                "retaildesk".parse().unwrap(),
+                Some(AccountAliasDomain::new(retail_domain_id.name().clone())),
+                retail_dataspace,
+            );
+
+            let block = new_dummy_block();
+            let mut state_block = state.block(block.as_ref().header());
+            let mut stx = state_block.transaction();
+            let dataspace_catalog = DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: DataSpaceId::GLOBAL,
+                    alias: "universal".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: retail_dataspace,
+                    alias: "retail".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog");
+            stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+            stx.world.dataspace_catalog = dataspace_catalog;
+
+            let authority_id = AccountId::new(KeyPair::random().public_key().clone());
+            Register::account(NewAccount::new(authority_id.clone()))
+                .execute(&authority_id, &mut stx)
+                .expect("register authority");
+            seed_domain_name_lease_tx(&mut stx.world, &authority_id, &global_domain_id);
+            seed_domain_name_lease_tx(&mut stx.world, &authority_id, &retail_domain_id);
+            Register::domain(Domain::new(global_domain_id.clone()))
+                .execute(&authority_id, &mut stx)
+                .expect("register global domain");
+            Register::domain(Domain::new(retail_domain_id.clone()))
+                .execute(&authority_id, &mut stx)
+                .expect("register retail domain");
+
+            let account_id = AccountId::new(KeyPair::random().public_key().clone());
+            Register::account(NewAccount::new(account_id.clone()))
+                .execute(&authority_id, &mut stx)
+                .expect("register account");
+            stx.world
+                .account_mut(&account_id)
+                .expect("account exists")
+                .set_label(Some(primary_label.clone()));
+            stx.world
+                .insert_account_alias_binding(primary_label.clone(), account_id.clone());
+            stx.world.account_rekey_records.insert(
+                primary_label.clone(),
+                iroha_data_model::account::rekey::AccountRekeyRecord::new(
+                    primary_label.clone(),
+                    account_id.clone(),
+                ),
+            );
+            stx.world
+                .insert_account_alias_binding(retail_label.clone(), account_id.clone());
+            stx.world.account_rekey_records.insert(
+                retail_label.clone(),
+                iroha_data_model::account::rekey::AccountRekeyRecord::new(
+                    retail_label.clone(),
+                    account_id.clone(),
+                ),
+            );
+
+            Unregister::domain(retail_domain_id.clone())
+                .execute(&authority_id, &mut stx)
+                .expect("unregister retail domain");
+
+            assert_eq!(
+                stx.world
+                    .accounts
+                    .get(&account_id)
+                    .and_then(|account| account.label().cloned()),
+                Some(primary_label.clone()),
+                "primary alias in universal dataspace must survive"
+            );
+            assert_eq!(
+                stx.world.account_aliases.get(&primary_label),
+                Some(&account_id),
+                "universal alias binding must remain"
+            );
+            assert!(
+                stx.world.account_aliases.get(&retail_label).is_none(),
+                "retail alias binding should be removed"
+            );
+            assert!(
+                stx.world
+                    .account_rekey_records
+                    .get(&primary_label)
+                    .is_some(),
+                "primary rekey record must remain"
+            );
+            assert!(
+                stx.world.account_rekey_records.get(&retail_label).is_none(),
+                "retail rekey record should be removed"
+            );
+        }
+
+        #[test]
         fn unregister_domain_removes_assets_with_definitions_in_other_domains() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "defs.world".parse().expect("domain id parses");
-            let holder_domain: DomainId = "holder.world".parse().expect("domain id parses");
+            let domain_id: DomainId = DomainId::try_new("defs", "world").expect("domain id parses");
+            let holder_domain: DomainId =
+                DomainId::try_new("holder", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12632,8 +12765,10 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let foreign_domain: DomainId = "foreign.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let foreign_domain: DomainId =
+                DomainId::try_new("foreign", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12706,7 +12841,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12756,9 +12892,12 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let remove_domain: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let retained_domain: DomainId = "retained.world".parse().expect("domain id parses");
-            let holder_domain: DomainId = "holder.world".parse().expect("domain id parses");
+            let remove_domain: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let retained_domain: DomainId =
+                DomainId::try_new("retained", "world").expect("domain id parses");
+            let holder_domain: DomainId =
+                DomainId::try_new("holder", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12827,8 +12966,10 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let foreign_domain: DomainId = "external.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let foreign_domain: DomainId =
+                DomainId::try_new("external", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12910,7 +13051,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -12957,7 +13099,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13003,7 +13146,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13047,7 +13191,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13091,7 +13236,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13136,7 +13282,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13184,8 +13331,10 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let foreign_domain: DomainId = "foreign.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let foreign_domain: DomainId =
+                DomainId::try_new("foreign", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13243,7 +13392,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13309,8 +13459,10 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let external_domain: DomainId = "external.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let external_domain: DomainId =
+                DomainId::try_new("external", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13566,7 +13718,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13583,8 +13736,9 @@ pub mod isi {
 
             let proposal_id = [0xB7; 32];
             let kind = ProposalKind::DeployContract(DeployContractProposal {
-                namespace: "gov".to_string(),
-                contract_id: "proposal-guard".to_string(),
+                contract_address: "tairac1qyqqqqqqqqqqqq9grgu03pwn7635qu0hz5y7dmywpcderfcn32tc3"
+                    .parse()
+                    .expect("contract address"),
                 code_hash_hex: ContractCodeHash::new([0x31; 32]),
                 abi_hash_hex: ContractAbiHash::new([0x41; 32]),
                 abi_version: AbiVersion::new(1),
@@ -13774,7 +13928,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "kingdom".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("kingdom", "universal").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13786,7 +13941,8 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register kingdom domain");
 
-            let owner_domain: DomainId = "wonderland".parse().expect("domain id parses");
+            let owner_domain: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id parses");
             let (bob_id, _) = gen_account_in(&owner_domain);
             Register::account(new_account_in_domain(&bob_id))
                 .execute(&ALICE_ID, &mut stx)
@@ -13853,7 +14009,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13870,7 +14027,8 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
-            let owner_domain: DomainId = "wonderland".parse().expect("domain id parses");
+            let owner_domain: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id parses");
             let (holder_id, _) = gen_account_in(&owner_domain);
             Register::account(new_account_in_domain(&holder_id))
                 .execute(&ALICE_ID, &mut stx)
@@ -13938,7 +14096,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -13955,7 +14114,8 @@ pub mod isi {
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register account in cleanup domain");
 
-            let owner_domain: DomainId = "wonderland".parse().expect("domain id parses");
+            let owner_domain: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id parses");
             let (holder_id, _) = gen_account_in(&owner_domain);
             Register::account(new_account_in_domain(&holder_id))
                 .execute(&ALICE_ID, &mut stx)
@@ -14022,9 +14182,12 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let retained_domain_id: DomainId = "retained.world".parse().expect("domain id parses");
-            let holder_domain_id: DomainId = "holder.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let retained_domain_id: DomainId =
+                DomainId::try_new("retained", "world").expect("domain id parses");
+            let holder_domain_id: DomainId =
+                DomainId::try_new("holder", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -14113,9 +14276,12 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "cleanup.world".parse().expect("domain id parses");
-            let foreign_domain_id: DomainId = "foreign.world".parse().expect("domain id parses");
-            let holder_domain_id: DomainId = "holder.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("cleanup", "world").expect("domain id parses");
+            let foreign_domain_id: DomainId =
+                DomainId::try_new("foreign", "world").expect("domain id parses");
+            let holder_domain_id: DomainId =
+                DomainId::try_new("holder", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -14217,7 +14383,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let domain_id: DomainId = "endorsed.world".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("endorsed", "world").expect("domain id parses");
 
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
@@ -14830,7 +14997,8 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "wÍḷd-card".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("wÍḷd-card", "universal").expect("domain id parses");
             let err = Register::domain(Domain::new(domain_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("label violating STD3 must be rejected");
@@ -14851,14 +15019,15 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "例え.テスト".parse().expect("IDN label parses");
+            let domain_id: DomainId =
+                DomainId::try_new("例え", "テスト").expect("IDN label parses");
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("IDN domain must be accepted");
             let canonical_label =
                 name::canonicalize_domain_label("例え.テスト").expect("canonical label");
-            let canonical_id: DomainId =
-                canonical_label.parse().expect("canonical domain id parses");
+            let canonical_id: DomainId = DomainId::parse_fully_qualified(&canonical_label)
+                .expect("canonical domain id parses");
             assert!(stx.world.domain(&canonical_id).is_ok());
         }
 
@@ -14898,12 +15067,14 @@ pub mod isi {
                 .consensus_keys_by_pk
                 .insert(kp.public_key().to_string(), vec![endorsement_key_id]);
 
-            let domain_id: DomainId = "endorsed".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("endorsed", "universal").expect("domain id parses");
             let mut new_domain = Domain::new(domain_id.clone());
 
             let canonical_label =
                 name::canonicalize_domain_label(domain_id.name.as_ref()).expect("canonical");
-            let canonical_id: DomainId = canonical_label.parse().expect("canonical domain");
+            let canonical_id = DomainId::try_new(&canonical_label, domain_id.dataspace().as_ref())
+                .expect("canonical domain");
             let statement_hash = Hash::new(canonical_id.to_string().as_bytes());
             let mut endorsement = DomainEndorsement {
                 version: iroha_data_model::nexus::DOMAIN_ENDORSEMENT_VERSION_V1,
@@ -14973,7 +15144,8 @@ pub mod isi {
                 .consensus_keys_by_pk
                 .insert(kp.public_key().to_string(), vec![endorsement_key_id]);
 
-            let domain_id: DomainId = "endorse-missing".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("endorse-missing", "universal").expect("domain id parses");
             let res = Register::domain(Domain::new(domain_id)).execute(&ALICE_ID, &mut stx);
             assert!(res.is_err(), "missing endorsement must be rejected");
         }
@@ -15013,10 +15185,12 @@ pub mod isi {
                 .consensus_keys_by_pk
                 .insert(kp.public_key().to_string(), vec![endorsement_key_id]);
 
-            let domain_id: DomainId = "endorsed".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("endorsed", "universal").expect("domain id parses");
             let canonical_label =
                 name::canonicalize_domain_label(domain_id.name.as_ref()).expect("canonical");
-            let canonical_id: DomainId = canonical_label.parse().expect("canonical domain");
+            let canonical_id = DomainId::try_new(&canonical_label, domain_id.dataspace().as_ref())
+                .expect("canonical domain");
             let statement_hash = Hash::new(canonical_id.to_string().as_bytes());
 
             let mut endorsement = DomainEndorsement {
@@ -15125,11 +15299,13 @@ pub mod isi {
                 .consensus_keys_by_pk
                 .insert(kp.public_key().to_string(), vec![endorsement_key_id]);
 
-            let domain_id: DomainId = "endorse-expired".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("endorse-expired", "universal").expect("domain id parses");
             let mut new_domain = Domain::new(domain_id.clone());
             let canonical_label =
                 name::canonicalize_domain_label(domain_id.name.as_ref()).expect("canonical");
-            let canonical_id: DomainId = canonical_label.parse().expect("canonical domain");
+            let canonical_id = DomainId::try_new(&canonical_label, domain_id.dataspace().as_ref())
+                .expect("canonical domain");
             let statement_hash = Hash::new(canonical_id.to_string().as_bytes());
             let mut endorsement = DomainEndorsement {
                 version: iroha_data_model::nexus::DOMAIN_ENDORSEMENT_VERSION_V1,
@@ -17505,7 +17681,8 @@ pub mod isi {
             );
             let mut block = state.block(header);
             let mut stx = block.transaction();
-            let domain_id: DomainId = "wonderland".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id parses");
             let err = Register::domain(Domain::new(domain_id))
                 .execute(&ALICE_ID, &mut stx)
                 .expect_err("endorsement must be required");
@@ -17542,7 +17719,8 @@ pub mod isi {
             let mut stx = block.transaction();
             install_endorsement_keys(&mut stx, &[kp_a.clone(), kp_b.clone()]);
 
-            let domain_id: DomainId = "endorse-me".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("endorse-me", "universal").expect("domain id parses");
             let scope = DomainEndorsementScope {
                 dataspace: None,
                 block_start: Some(stx.block_height()),
@@ -17604,7 +17782,8 @@ pub mod isi {
             let mut stx = block.transaction();
             install_endorsement_keys(&mut stx, std::slice::from_ref(&kp));
 
-            let domain_id: DomainId = "scope-check".parse().expect("domain id parses");
+            let domain_id: DomainId =
+                DomainId::try_new("scope-check", "universal").expect("domain id parses");
             let late_scope = DomainEndorsementScope {
                 dataspace: None,
                 block_start: Some(stx.block_height().saturating_add(2)),

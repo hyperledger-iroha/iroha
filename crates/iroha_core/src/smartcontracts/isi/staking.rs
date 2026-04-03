@@ -1959,7 +1959,7 @@ mod tests {
         lane_id: LaneId,
         mint_amount: u32,
     ) -> (AccountId, AccountId, AssetId, AssetDefinitionId) {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, stx)
             .unwrap();
@@ -1973,7 +1973,7 @@ mod tests {
             .unwrap();
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         Register::asset_definition({
@@ -2033,14 +2033,15 @@ mod tests {
     fn prepare_accounts(
         stx: &mut StateTransaction<'_, '_>,
     ) -> (AccountId, AccountId, AccountId, AssetDefinitionId) {
-        let domain_id: DomainId = "nexus".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("nexus", "universal").expect("domain id");
         stx.world.domains.insert(
             domain_id.clone(),
             Domain::new(domain_id.clone()).build(&ALICE_ID),
         );
         // Ensure the authority account exists in the test ledger so subsequent instructions
         // can execute under Alice's identity.
-        let alice_domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let alice_domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain id");
         stx.world.domains.insert(
             alice_domain_id.clone(),
             Domain::new(alice_domain_id.clone()).build(&ALICE_ID),
@@ -2065,7 +2066,7 @@ mod tests {
         register_peer_for_account(stx, &escrow);
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "nexus".parse().unwrap(),
+            DomainId::try_new("nexus", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         Register::asset_definition({
@@ -2522,7 +2523,7 @@ mod tests {
         stx.nexus.staking.restricted_validator_mode =
             iroha_config::parameters::actual::LaneValidatorMode::AdminManaged;
 
-        let domain_id: DomainId = "council".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("council", "universal").expect("domain id");
         let selector = crate::sns::selector_for_domain(&domain_id).expect("selector");
         let address =
             iroha_data_model::account::AccountAddress::from_account_id(&ALICE_ID).expect("address");

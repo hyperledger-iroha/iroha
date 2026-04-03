@@ -13,7 +13,6 @@ import {
   curveIdFromAlgorithm,
 } from "../src/address.js";
 import {
-  buildActivateContractInstanceInstruction,
   buildBurnAssetInstruction,
   buildBurnTriggerRepetitionsInstruction,
   buildCastPlainBallotInstruction,
@@ -23,7 +22,6 @@ import {
   buildClaimTwitterFollowRewardInstruction,
   buildCreateKaigiInstruction,
   buildCreateElectionInstruction,
-  buildDeactivateContractInstanceInstruction,
   buildEnactReferendumInstruction,
   buildEndKaigiInstruction,
   buildExecuteTriggerInstruction,
@@ -429,8 +427,7 @@ function instructionMatrix() {
     [
       "Governance.ProposeDeployContract",
       buildProposeDeployContractInstruction({
-        namespace: "apps",
-        contractId: "ledger",
+        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
         codeHash: Buffer.alloc(32, 0xaa),
         abiHash: Buffer.alloc(32, 0xbb),
         abiVersion: "1",
@@ -543,22 +540,6 @@ function instructionMatrix() {
       buildRegisterSmartContractBytesInstruction({
         codeHash: Buffer.alloc(32, 0xcd),
         code: Buffer.from([0xde, 0xad, 0xbe, 0xef]),
-      }),
-    ],
-    [
-      "Smart.DeactivateContractInstance",
-      buildDeactivateContractInstanceInstruction({
-        namespace: "apps",
-        contractId: "ledger",
-        reason: "upgrade",
-      }),
-    ],
-    [
-      "Smart.ActivateContractInstance",
-      buildActivateContractInstanceInstruction({
-        namespace: "apps",
-        contractId: "governance",
-        codeHash: Buffer.alloc(32, 0x44),
       }),
     ],
     [

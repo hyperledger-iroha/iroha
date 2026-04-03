@@ -26,7 +26,7 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 }
 
 fn account(domain: &str, public_key: &str) -> AccountId {
-    let _domain: DomainId = domain.parse().unwrap();
+    let _domain = DomainId::try_new(domain, "universal").unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
     AccountId::new(public_key)
 }

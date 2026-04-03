@@ -22,10 +22,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         fixture_account("ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03");
     let pool =
         fixture_account("ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4");
-    let asset_a: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse()?, "usdc".parse()?);
-    let asset_b: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse()?, "eth".parse()?);
+    let asset_a: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "usdc".parse()?,
+    );
+    let asset_b: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "eth".parse()?,
+    );
 
     // Initial balances: Alice has 1_000 USDC, pool has 10_000 USDC and 100 ETH
     let wsv = MockWorldStateView::with_balances(&[

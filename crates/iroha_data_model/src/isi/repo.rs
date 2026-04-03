@@ -202,14 +202,14 @@ mod tests {
         let counterparty = parse_account(COUNTERPARTY);
         let cash_leg = RepoCashLeg {
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: 1_000u32.into(),
         };
         let collateral_leg = RepoCollateralLeg::new(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
             1_100u32.into(),
@@ -241,14 +241,14 @@ mod tests {
         let counterparty = parse_account(COUNTERPARTY);
         let cash_leg = RepoCashLeg {
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: 1_000u32.into(),
         };
         let collateral_leg = RepoCollateralLeg::new(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
             1_100u32.into(),
@@ -280,14 +280,14 @@ mod tests {
         let custodian = parse_account(CUSTODIAN);
         let cash_leg = RepoCashLeg {
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: 1_000u32.into(),
         };
         let collateral_leg = RepoCollateralLeg::new(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
             1_100u32.into(),
@@ -328,14 +328,14 @@ mod tests {
         let counterparty = parse_account(COUNTERPARTY);
         let cash_leg = RepoCashLeg {
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: 1_000u32.into(),
         };
         let collateral_leg = RepoCollateralLeg::new(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
             1_100u32.into(),

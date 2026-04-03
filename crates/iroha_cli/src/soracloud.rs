@@ -12135,7 +12135,8 @@ mod tests {
 
     fn hf_shared_lease_asset_definition() -> AssetDefinitionId {
         AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            iroha_data_model::domain::DomainId::try_new("wonderland", "universal")
+                .expect("domain"),
             "lease".parse().expect("name"),
         )
     }
@@ -12353,7 +12354,8 @@ mod tests {
         };
 
         let instruction = InstructionBox::from(Register::domain(Domain::new(
-            "wonderland".parse().expect("domain id"),
+            iroha_data_model::domain::DomainId::try_new("wonderland", "universal")
+                .expect("domain id"),
         )));
         let wire_id = Instruction::id(&*instruction);
         let payload = Instruction::dyn_encode(&*instruction);

@@ -33,7 +33,8 @@ fn struct_fields_lower_to_syscall_args() {
     let prog = compiler.compile_source(src).expect("compile kotodama");
     let mut wsv = MockWorldStateView::new();
     // Ensure the target account exists in mock WSV to pass validation in host
-    let _domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("domain id");
+    let _domain: ivm::mock_wsv::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain id");
     let bob: AccountId = AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()

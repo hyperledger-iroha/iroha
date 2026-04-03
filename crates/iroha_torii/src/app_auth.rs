@@ -700,7 +700,7 @@ mod tests {
         "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
 
     fn minimal_state_with_account(account: &AccountId) -> Arc<State> {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(account);
         let account_value = Account::new(account.clone()).build(account);
         Arc::new(State::new_for_testing(

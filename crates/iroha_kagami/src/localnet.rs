@@ -420,9 +420,9 @@ const LOCALNET_SORA_MIN_PEERS: u16 = 4;
 const LOCALNET_BLOCK_MAX_TRANSACTIONS: u64 = 10_000;
 /// Default stake bonded per localnet validator (raised to meet min_self_bond).
 const LOCALNET_STAKE_AMOUNT: u64 = 10_000;
-const LOCALNET_NEXUS_DOMAIN: &str = "nexus";
-const LOCALNET_IVM_DOMAIN: &str = "ivm";
-const LOCALNET_UNIVERSAL_DOMAIN: &str = "universal";
+const LOCALNET_NEXUS_DOMAIN: &str = "nexus.universal";
+const LOCALNET_IVM_DOMAIN: &str = "ivm.universal";
+const LOCALNET_UNIVERSAL_DOMAIN: &str = "universal.universal";
 const LOCALNET_STAKE_ASSET_NAME: &str = "xor";
 const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland";
 pub(crate) const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
@@ -2136,9 +2136,9 @@ fn append_localnet_npos_bootstrap(
     gas_account_id: &AccountId,
     stake_amount: u64,
 ) -> Result<RawGenesisTransaction> {
-    let nexus_domain: DomainId = LOCALNET_NEXUS_DOMAIN.parse()?;
-    let ivm_domain: DomainId = LOCALNET_IVM_DOMAIN.parse()?;
-    let universal_domain: DomainId = LOCALNET_UNIVERSAL_DOMAIN.parse()?;
+    let nexus_domain = DomainId::parse_fully_qualified(LOCALNET_NEXUS_DOMAIN)?;
+    let ivm_domain = DomainId::parse_fully_qualified(LOCALNET_IVM_DOMAIN)?;
+    let universal_domain = DomainId::parse_fully_qualified(LOCALNET_UNIVERSAL_DOMAIN)?;
     let stake_asset_id = localnet_stake_asset_definition_id();
     let fee_asset_id = localnet_fee_asset_definition_id();
     let mut registrations = BootstrapRegistrations::from_manifest(&genesis);

@@ -4649,7 +4649,7 @@ mod evidence_http_tests {
         };
 
         let chain: ChainId = "hash-chain".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -4865,7 +4865,7 @@ mod evidence_http_tests {
         };
 
         let chain: ChainId = "hash-chain".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -5049,7 +5049,7 @@ mod evidence_http_tests {
         };
 
         let chain: ChainId = "hash-chain".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -10709,13 +10709,13 @@ mod subscription_http_tests {
         let (provider, provider_key) = gen_account_in("commerce");
         let (subscriber, subscriber_key) = gen_account_in("users");
         let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "commerce".parse().unwrap(),
+            DomainId::try_new("commerce", "universal").unwrap(),
             "fixed_plan".parse().unwrap(),
         );
         let subscription_id: NftId = "sub-1$subscriptions".parse().unwrap();
         let billing_trigger_id: TriggerId = "sub-1-bill".parse().unwrap();
         let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "pay".parse().unwrap(),
+            DomainId::try_new("pay", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let unit_key: Name = "compute_ms".parse().unwrap();
@@ -11362,7 +11362,7 @@ mod tx_hash_tests {
         };
 
         let chain: ChainId = "hash-chain".parse().unwrap();
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let public_key: crate::crypto::PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -12782,7 +12782,7 @@ mod tests {
         let chain: ChainId = "00000000-0000-0000-0000-000000000000"
             .parse()
             .expect("chain id");
-        let _domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
@@ -17558,7 +17558,7 @@ mod tests {
         };
 
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let reason = TransactionRejectionReason::Validation(ValidationFail::InstructionFailed(

@@ -27,8 +27,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "genesis",
         "ed01204164BF554923ECE1FD412D241036D863A6AE430476C898248B8237D77534CFC4",
     );
-    let debt_asset: AssetDefinitionId =
-        iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse()?, "stable".parse()?);
+    let debt_asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "stable".parse()?,
+    );
 
     // Initialize WSV: no balances yet; grant permissions so user can mint via host
     let mut wsv = MockWorldStateView::new();

@@ -37,7 +37,7 @@ fn build_app() -> (axum::Router, AccountId, AccountId) {
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
     // Prepare domain, accounts, and metadata.
-    let domain_id: DomainId = "kaigi".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("kaigi", "universal").expect("domain id");
     let owner_kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let owner_id = AccountId::new(owner_kp.public_key().clone());
     let owner = Account::new(owner_id.clone()).build(&owner_id);

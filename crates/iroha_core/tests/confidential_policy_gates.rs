@@ -47,9 +47,9 @@ fn init_state() -> (
     let state = State::new(World::new(), kura, query);
 
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-    let domain_id: DomainId = "zkdomain".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("zkdomain", "universal").expect("domain id");
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkdomain".parse().unwrap(),
+        DomainId::try_new("zkdomain", "universal").unwrap(),
         "shielded".parse().unwrap(),
     );
     let owner = AccountId::new(KeyPair::random().public_key().clone());

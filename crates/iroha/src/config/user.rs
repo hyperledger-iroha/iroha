@@ -113,6 +113,12 @@ pub enum ParseError {
     /// Connect queue root path was empty after parsing.
     #[error("`connect.queue_root` must not be empty")]
     EmptyConnectQueueRoot,
+    /// Invalid account domain literal.
+    #[error("Account domain must use `domain.dataspace` format: `{value}`")]
+    InvalidAccountDomain {
+        /// Raw configured value.
+        value: String,
+    },
 }
 
 type ReportResult<T, E> = core::result::Result<T, Report<[E]>>;
@@ -134,7 +140,7 @@ impl Root {
             torii_request_timeout_ms,
             account:
                 Account {
-                    domain: domain_id,
+                    domain: domain_literal,
                     public_key,
                     private_key,
                     chain_discriminant,
@@ -277,7 +283,11 @@ impl Root {
 
         let (public_key, public_key_origin) = public_key.into_tuple();
         let (private_key, private_key_origin) = private_key.into_tuple();
-        let _ = &domain_id;
+        let _domain_id = DomainId::parse_fully_qualified(&domain_literal).map_err(|_| {
+            Report::new(ParseError::InvalidAccountDomain {
+                value: domain_literal.clone(),
+            })
+        })?;
         let key_pair = KeyPair::new(public_key.clone(), private_key)
             .attach(ConfigValueAndOrigin::new("[REDACTED]", public_key_origin))
             .attach(ConfigValueAndOrigin::new("[REDACTED]", private_key_origin))
@@ -364,7 +374,7 @@ impl Root {
 pub struct Account {
     /// Domain of the account.
     #[config(env = "ACCOUNT_DOMAIN")]
-    pub domain: DomainId,
+    pub domain: String,
     /// Public key of the account.
     #[config(env = "ACCOUNT_PUBLIC_KEY")]
     pub public_key: WithOrigin<PublicKey>,
@@ -522,7 +532,7 @@ mod tests {
                 crate::config::DEFAULT_TORII_REQUEST_TIMEOUT,
             )),
             account: Account {
-                domain: DomainId::from_str("wonderland").expect("domain id"),
+                domain: "wonderland.universal".to_owned(),
                 public_key: WithOrigin::inline(key_pair.public_key().clone()),
                 private_key: WithOrigin::inline(key_pair.private_key().clone()),
                 chain_discriminant: WithOrigin::new(

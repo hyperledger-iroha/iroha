@@ -221,16 +221,6 @@ fn nexus_fee_seed_amount() -> Numeric {
     1_000_000_u64.into()
 }
 
-fn nexus_fee_asset_is_preseeded(fee_asset: &AssetDefinitionId) -> bool {
-    static SEEDED_FEE_ASSET: std::sync::OnceLock<AssetDefinitionId> = std::sync::OnceLock::new();
-    let seeded_fee_asset = SEEDED_FEE_ASSET.get_or_init(|| {
-        NexusProfile::sora_defaults()
-            .expect("embedded nexus profile should load")
-            .fee_asset_id
-    });
-    fee_asset == seeded_fee_asset
-}
-
 fn account_from_record(record: &AccountRecord, _domain: &DomainId) -> NewAccount {
     let builder = Account::new(record.id.clone());
     if let Some(uaid) = record.uaid {
@@ -303,8 +293,7 @@ pub fn prepare_state(
     allow_contract_deploy_in_stable: bool,
 ) -> Result<PreparedChaos> {
     let effective_accounts = account_count.max(3);
-    let base_domain: DomainId = "chaosnet"
-        .parse()
+    let base_domain = DomainId::parse_fully_qualified("chaosnet.universal")
         .map_err(|_| eyre!("invalid base domain"))?;
     let treasury_key = KeyPair::random();
     let treasury_id = AccountId::new(treasury_key.public_key().clone());
@@ -397,14 +386,11 @@ pub fn prepare_state(
     let mut nexus_staking = None;
     let mut npos_bootstrap_stake = None;
     if nexus.is_some() {
-        let nexus_domain: DomainId = "nexus"
-            .parse()
+        let nexus_domain = DomainId::parse_fully_qualified("nexus.universal")
             .map_err(|_| eyre!("failed to parse nexus domain id"))?;
-        let ivm_domain: DomainId = "ivm"
-            .parse()
+        let ivm_domain = DomainId::parse_fully_qualified("ivm.universal")
             .map_err(|_| eyre!("failed to parse ivm domain id"))?;
-        let universal_domain: DomainId = "universal"
-            .parse()
+        let universal_domain = DomainId::parse_fully_qualified("universal.universal")
             .map_err(|_| eyre!("failed to parse universal domain id"))?;
         let gas_account_id = nexus_gas_account_id();
         let gas_label: Name = "gas"
@@ -430,7 +416,6 @@ pub fn prepare_state(
                     .parse()
                     .expect("default nexus fee asset id should parse")
             });
-        let fee_asset_preseeded = nexus_fee_asset_is_preseeded(&fee_asset);
         let stake_amount_value = SumeragiNposParameters::default().min_self_bond();
         let bootstrap_lane_count = u64::try_from(bootstrap_public_lanes.len()).unwrap_or(u64::MAX);
         let total_bootstrap_stake_value = stake_amount_value.saturating_mul(bootstrap_lane_count);
@@ -443,7 +428,13 @@ pub fn prepare_state(
         nexus_genesis.push(InstructionBox::from(Register::domain(Domain::new(
             ivm_domain.clone(),
         ))));
-        if fee_asset.domain() != stake_asset.domain() {
+        let needs_universal_domain = fee_asset
+            .try_domain()
+            .zip(stake_asset.try_domain())
+            .map_or(true, |(fee_domain, stake_domain)| {
+                fee_domain != stake_domain
+            });
+        if needs_universal_domain {
             nexus_genesis.push(InstructionBox::from(Register::domain(Domain::new(
                 universal_domain,
             ))));
@@ -452,7 +443,7 @@ pub fn prepare_state(
         nexus_genesis.push(InstructionBox::from(Register::asset_definition(
             AssetDefinition::numeric(stake_asset.clone()).with_name("Nexus Stake".to_owned()),
         )));
-        if fee_asset != stake_asset && !fee_asset_preseeded {
+        if fee_asset != stake_asset {
             nexus_genesis.push(InstructionBox::from(Register::asset_definition(
                 AssetDefinition::numeric(fee_asset.clone()).with_name("Nexus Fee".to_owned()),
             )));
@@ -1603,8 +1594,8 @@ impl ChaosState {
 
     fn plan_register_nft(&mut self, _rng: &mut StdRng) -> Result<TransactionPlan> {
         let suffix = self.bump_nft();
-        let domain_name = self.base_domain.name().to_string();
-        let nft_id: NftId = format!("chaos_nft_{suffix}${domain_name}")
+        let domain_id = self.base_domain.to_string();
+        let nft_id: NftId = format!("chaos_nft_{suffix}${domain_id}")
             .parse()
             .map_err(|_| eyre!("failed to parse nft id"))?;
         let nft = Nft::new(nft_id.clone(), Metadata::default());
@@ -1621,8 +1612,8 @@ impl ChaosState {
 
     fn plan_transfer_nft(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
         let suffix = self.bump_nft();
-        let domain_name = self.base_domain.name().to_string();
-        let nft_id: NftId = format!("chaos_nft_{suffix}${domain_name}")
+        let domain_id = self.base_domain.to_string();
+        let nft_id: NftId = format!("chaos_nft_{suffix}${domain_id}")
             .parse()
             .map_err(|_| eyre!("failed to parse nft id"))?;
         let receiver = self.random_user_except(rng, &self.treasury.id)?;
@@ -3054,7 +3045,7 @@ mod tests {
         assert!(!prepared.genesis.is_empty());
         assert!(!prepared.genesis[0].is_empty());
         assert!(prepared.state.users.len() >= 3);
-        let expected: DomainId = "chaosnet".parse().unwrap();
+        let expected: DomainId = DomainId::parse_fully_qualified("chaosnet.universal").unwrap();
         assert_eq!(prepared.state.base_domain(), &expected);
     }
 
@@ -4686,16 +4677,7 @@ mod tests {
     }
 
     #[test]
-    fn default_nexus_fee_asset_is_marked_preseeded() {
-        let profile = NexusProfile::sora_defaults().expect("profile");
-        assert!(
-            nexus_fee_asset_is_preseeded(&profile.fee_asset_id),
-            "embedded Nexus fee asset should reuse the test-network preseeded fee asset"
-        );
-    }
-
-    #[test]
-    fn nexus_prepare_state_reuses_preseeded_fee_asset_definition() {
+    fn nexus_prepare_state_registers_fee_asset_definition() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { genesis, .. } =
             prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
@@ -4716,8 +4698,8 @@ mod tests {
             })
             .count();
         assert_eq!(
-            fee_registration_count, 0,
-            "prepare_state should not re-register the canonical test-network fee asset"
+            fee_registration_count, 1,
+            "prepare_state should register the fee asset definition before minting it"
         );
     }
 

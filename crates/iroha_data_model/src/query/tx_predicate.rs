@@ -838,7 +838,8 @@ mod tests {
     type EntryHash = HashOf<crate::transaction::signed::TransactionEntrypoint>;
 
     fn sample_account(seed: u8) -> crate::account::AccountId {
-        let _domain: crate::domain::DomainId = "wonderland".parse().unwrap();
+        let _domain: crate::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
         let (public_key, _) =
             iroha_crypto::KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
         crate::account::AccountId::new(public_key)
@@ -866,7 +867,7 @@ mod tests {
             action: PrivateKaigiAction::Create(PrivateCreateKaigi {
                 call: PrivateKaigiTemplate {
                     id: KaigiId::new(
-                        DomainId::from_str("kaigi").expect("domain"),
+                        DomainId::try_new("kaigi", "universal").expect("domain"),
                         Name::from_str("room").expect("call"),
                     ),
                     title: None,
@@ -894,7 +895,7 @@ mod tests {
             },
             fee_spend: PrivateKaigiFeeSpend {
                 asset_definition_id: AssetDefinitionId::new(
-                    DomainId::from_str("wonderland").expect("domain"),
+                    DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("xor").expect("name"),
                 ),
                 anchor_root: Hash::new(b"anchor"),

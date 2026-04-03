@@ -2700,7 +2700,7 @@ mod tests {
     }
 
     fn asset_definition(name: &str) -> AssetDefinitionId {
-        let domain = DomainId::from_str("sora").expect("domain id");
+        let domain = DomainId::try_new("sora", "universal").expect("domain id");
         let asset_name = Name::from_str(name).expect("asset name");
         AssetDefinitionId::new(domain, asset_name)
     }

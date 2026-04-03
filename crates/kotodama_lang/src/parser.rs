@@ -2817,7 +2817,7 @@ mod tests {
 
     fn sample_asset_definition_literal() -> String {
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         )
         .to_string()
