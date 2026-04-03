@@ -1790,11 +1790,10 @@ pub async fn handle_gov_contract_get(
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
             ))
         })?;
-    let contract_id = contract_address.to_string();
     let code_hash_hex = state
         .world_view()
         .contract_instances()
-        .get(&(dataspace.clone(), contract_id))
+        .get(&contract_address)
         .map(|hash| {
             let bytes: [u8; 32] = (*hash).into();
             hex::encode(bytes)

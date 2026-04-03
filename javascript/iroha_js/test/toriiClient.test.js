@@ -7823,8 +7823,7 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
         manifest_quorum: { total_checks: 2, satisfied: 1, rejected: 1 },
         recent_manifest_activations: [
           {
-            namespace: "finance",
-            contract_id: "alpha",
+            contract_address: "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
             code_hash_hex: "deadbeef",
             abi_hash_hex: null,
             height: 10,
@@ -7910,8 +7909,7 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
         manifest_quorum: { total_checks: 3, satisfied: 2, rejected: 1 },
         recent_manifest_activations: [
           {
-            namespace: "finance",
-            contract_id: "alpha",
+            contract_address: "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
             code_hash_hex: "deadbeef",
             abi_hash_hex: "b16b00b5",
             height: 11,
@@ -8061,7 +8059,10 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
   assert.equal(first.status.lane_governance_sealed_total, 2);
   assert.deepEqual(first.status.lane_governance_sealed_aliases, ["archive", "payments"]);
   const activation = first.status.governance?.recent_manifest_activations[0];
-  assert.equal(activation?.namespace, "finance");
+  assert.equal(
+    activation?.contract_address,
+    "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
+  );
   assert.equal(activation?.abi_hash_hex, null);
 
   const second = await client.getStatusSnapshot();

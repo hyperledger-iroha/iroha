@@ -972,8 +972,8 @@ fn resolve_contract_view_input_for_instruction(
         let code_hash_hex = hash_hex(&activate.code_hash);
         let mut input = resolve_contract_view_input_for_code_hash(state, &code_hash_hex)?;
         input.warnings.push(format!(
-            "Showing the contract currently bound to {}.{}.",
-            activate.namespace, activate.contract_id
+            "Showing the contract currently bound to {}.",
+            activate.contract_address
         ));
         return Ok(input);
     }

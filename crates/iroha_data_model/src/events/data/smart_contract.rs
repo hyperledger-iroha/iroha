@@ -65,10 +65,8 @@ mod model {
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
     pub struct ContractInstanceActivated {
-        /// Governance namespace.
-        pub namespace: String,
-        /// Contract identifier within the namespace.
-        pub contract_id: String,
+        /// Canonical contract address.
+        pub contract_address: crate::smart_contract::ContractAddress,
         /// Code hash bound to the instance.
         pub code_hash: iroha_crypto::Hash,
         /// Operator that performed the activation.
@@ -80,10 +78,8 @@ mod model {
         Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, iroha_schema::IntoSchema,
     )]
     pub struct ContractInstanceDeactivated {
-        /// Governance namespace.
-        pub namespace: String,
-        /// Contract identifier within the namespace.
-        pub contract_id: String,
+        /// Canonical contract address.
+        pub contract_address: crate::smart_contract::ContractAddress,
         /// Previously bound code hash.
         pub previous_code_hash: iroha_crypto::Hash,
         /// Operator that performed the deactivation.

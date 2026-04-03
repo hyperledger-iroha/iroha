@@ -6378,21 +6378,30 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
             }
 
             if let Some(json::Value::Object(mut fields)) = map.remove("ActivateContractInstance") {
-                let namespace = parse_string_value(
-                    required_value(&mut fields, "namespace", "ActivateContractInstance")?,
-                    "ActivateContractInstance.namespace",
-                )?;
-                let contract_id = parse_string_value(
-                    required_value(&mut fields, "contract_id", "ActivateContractInstance")?,
-                    "ActivateContractInstance.contract_id",
-                )?;
+                let contract_address: iroha_data_model::smart_contract::ContractAddress =
+                    parse_string_value(
+                        required_value(
+                            &mut fields,
+                            "contract_address",
+                            "ActivateContractInstance",
+                        )?,
+                        "ActivateContractInstance.contract_address",
+                    )?
+                    .parse()
+                    .map_err(|err| {
+                        napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "invalid ActivateContractInstance.contract_address literal: {err}"
+                            ),
+                        )
+                    })?;
                 let code_hash_value =
                     required_value(&mut fields, "code_hash", "ActivateContractInstance")?;
                 let code_hash =
                     parse_hash_value(code_hash_value, "ActivateContractInstance.code_hash")?;
                 let instruction = ActivateContractInstance {
-                    namespace,
-                    contract_id,
+                    contract_address,
                     code_hash,
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
@@ -6400,21 +6409,30 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
 
             if let Some(json::Value::Object(mut fields)) = map.remove("DeactivateContractInstance")
             {
-                let namespace = parse_string_value(
-                    required_value(&mut fields, "namespace", "DeactivateContractInstance")?,
-                    "DeactivateContractInstance.namespace",
-                )?;
-                let contract_id = parse_string_value(
-                    required_value(&mut fields, "contract_id", "DeactivateContractInstance")?,
-                    "DeactivateContractInstance.contract_id",
-                )?;
+                let contract_address: iroha_data_model::smart_contract::ContractAddress =
+                    parse_string_value(
+                        required_value(
+                            &mut fields,
+                            "contract_address",
+                            "DeactivateContractInstance",
+                        )?,
+                        "DeactivateContractInstance.contract_address",
+                    )?
+                    .parse()
+                    .map_err(|err| {
+                        napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "invalid DeactivateContractInstance.contract_address literal: {err}"
+                            ),
+                        )
+                    })?;
                 let reason = parse_optional_string_value(
                     fields.remove("reason"),
                     "DeactivateContractInstance.reason",
                 )?;
                 let instruction = DeactivateContractInstance {
-                    namespace,
-                    contract_id,
+                    contract_address,
                     reason,
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
@@ -7399,12 +7417,8 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
     {
         let mut inner = json::Map::new();
         inner.insert(
-            "namespace".to_owned(),
-            json::Value::String(activate.namespace.clone()),
-        );
-        inner.insert(
-            "contract_id".to_owned(),
-            json::Value::String(activate.contract_id.clone()),
+            "contract_address".to_owned(),
+            json::Value::String(activate.contract_address.to_string()),
         );
         inner.insert(
             "code_hash".to_owned(),
@@ -7424,12 +7438,8 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
     {
         let mut inner = json::Map::new();
         inner.insert(
-            "namespace".to_owned(),
-            json::Value::String(deactivate.namespace.clone()),
-        );
-        inner.insert(
-            "contract_id".to_owned(),
-            json::Value::String(deactivate.contract_id.clone()),
+            "contract_address".to_owned(),
+            json::Value::String(deactivate.contract_address.to_string()),
         );
         if let Some(reason) = &deactivate.reason {
             inner.insert("reason".to_owned(), json::Value::String(reason.clone()));
@@ -11020,9 +11030,16 @@ mod tests {
 
     #[test]
     fn activate_contract_instance_instruction_json_roundtrip() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &authority,
+            1,
+            iroha_data_model::nexus::DataSpaceId::new(0),
+        )
+        .expect("contract address");
         let instruction: InstructionBox = Box::new(ActivateContractInstance {
-            namespace: "apps".to_owned(),
-            contract_id: "ledger".to_owned(),
+            contract_address,
             code_hash: Hash::prehashed(sample_hash(0x44)),
         })
         .into_instruction_box();

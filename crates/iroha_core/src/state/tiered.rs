@@ -1865,7 +1865,7 @@ impl TieredStateBackend {
             let view = world.contract_instances.view();
             for (key, value) in view.iter() {
                 let key_handle = TieredKeyHandle::ContractInstance((*key).clone());
-                let key_payload = json::to_vec(&vec![key.0.clone(), key.1.clone()])
+                let key_payload = json::to_vec(key.as_ref())
                     .wrap_err("failed to encode contract instance key for tiered snapshot")?;
                 self.collect_entry_with_encoded_key(
                     TieredSegment::ContractInstances,
@@ -2899,8 +2899,12 @@ mod measured_bytes_impls {
     impl MeasuredBytes for AssetDefinitionId {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AssetDefinitionId>();
-            total = total.saturating_add(self.domain().measured_bytes_extra());
-            total = total.saturating_add(self.name().measured_bytes_extra());
+            if let Some(domain) = self.try_domain() {
+                total = total.saturating_add(domain.measured_bytes_extra());
+            }
+            if let Some(name) = self.try_name() {
+                total = total.saturating_add(name.measured_bytes_extra());
+            }
             total
         }
     }
@@ -4391,7 +4395,7 @@ pub(crate) enum TieredKeyHandle {
     CommitQc(iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>),
     ContractManifest(iroha_crypto::Hash),
     ContractCode(iroha_crypto::Hash),
-    ContractInstance((String, String)),
+    ContractInstance(iroha_data_model::smart_contract::ContractAddress),
     SmartContractState(Name),
     ZkAsset(iroha_data_model::asset::AssetDefinitionId),
     Election(String),
@@ -4461,10 +4465,8 @@ impl TieredKeyHandle {
 
     fn encode_key(&self) -> Result<Vec<u8>> {
         match self {
-            TieredKeyHandle::ContractInstance(key) => {
-                json::to_vec(&vec![key.0.clone(), key.1.clone()])
-                    .wrap_err("failed to encode contract instance key for tiered snapshot")
-            }
+            TieredKeyHandle::ContractInstance(key) => json::to_vec(key.as_ref())
+                .wrap_err("failed to encode contract instance key for tiered snapshot"),
             TieredKeyHandle::Domain(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Account(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRekey(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4766,6 +4768,7 @@ mod tests {
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         account::OpaqueAccountId,
+        asset::AssetDefinitionId,
         block::BlockHeader,
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
         nexus::{LaneCatalog, LaneConfig, LaneId},
@@ -4808,6 +4811,18 @@ mod tests {
             std::mem::size_of::<Vec<u8>>() + value.capacity() * std::mem::size_of::<u8>();
         let measured = compute_hot_bytes(&value).expect("hot byte measurement");
         assert_eq!(measured, expected);
+    }
+
+    #[test]
+    fn measured_bytes_for_opaque_asset_definition_id_does_not_require_projection() {
+        let opaque = AssetDefinitionId::from_uuid_bytes([
+            0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0x4d, 0xef, 0x8a, 0xbc, 0xde, 0xf0, 0x12, 0x34,
+            0x56, 0x78,
+        ])
+        .expect("valid opaque asset definition id");
+        let measured = MeasuredBytes::measured_bytes(&opaque);
+
+        assert_eq!(measured, std::mem::size_of::<AssetDefinitionId>());
     }
 
     #[test]

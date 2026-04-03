@@ -3283,8 +3283,7 @@ export interface ToriiGovernanceManifestQuorumSnapshot {
 }
 
 export interface ToriiGovernanceManifestActivationSnapshot {
-  namespace: string;
-  contract_id: string;
+  contract_address: string;
   code_hash_hex: string;
   abi_hash_hex?: string | null;
   height: number;
@@ -6743,8 +6742,6 @@ export interface RegisterSmartContractBytesTransactionInput {
   ttlMs?: number | null;
   nonce?: number | null;
   privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-}
-
 }
 
 export interface RemoveSmartContractBytesTransactionInput {

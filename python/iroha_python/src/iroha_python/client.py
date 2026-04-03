@@ -6040,8 +6040,7 @@ class GovernanceManifestQuorumSnapshot:
 
 @dataclass(frozen=True)
 class GovernanceManifestActivationSnapshot:
-    namespace: str
-    contract_id: str
+    contract_address: str
     code_hash_hex: str
     abi_hash_hex: Optional[str]
     height: int
@@ -6353,8 +6352,7 @@ class ToriiStatusPayload:
                     raise TypeError(
                         f"governance manifest activation at index {idx} must be an object"
                     )
-                namespace = item.get("namespace", "")
-                contract_id = item.get("contract_id", "")
+                contract_address = item.get("contract_address", "")
                 code_hash = item.get("code_hash_hex", "")
                 abi_hash = item.get("abi_hash_hex")
                 try:
@@ -6366,8 +6364,7 @@ class ToriiStatusPayload:
                     ) from exc
                 recent_activations.append(
                     GovernanceManifestActivationSnapshot(
-                        namespace=str(namespace),
-                        contract_id=str(contract_id),
+                        contract_address=str(contract_address),
                         code_hash_hex=str(code_hash),
                         abi_hash_hex=str(abi_hash) if abi_hash is not None else None,
                         height=height,

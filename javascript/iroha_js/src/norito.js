@@ -1155,16 +1155,14 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
     }
     case "iroha_data_model::isi::smart_contract_code::DeactivateContractInstance": {
       const fields = decodeStructFields(payload, "DeactivateContractInstance", [
-        "namespace",
-        "contract_id",
+        "contract_address",
         "reason",
       ]);
       return {
         DeactivateContractInstance: {
-          namespace: decodeStringValue(fields.namespace, "DeactivateContractInstance.namespace"),
-          contract_id: decodeStringValue(
-            fields.contract_id,
-            "DeactivateContractInstance.contract_id",
+          contract_address: decodeStringValue(
+            fields.contract_address,
+            "DeactivateContractInstance.contract_address",
           ),
           reason: decodeOptionValue(
             fields.reason,
@@ -1176,16 +1174,14 @@ function decodeSmartContractInstructionPayload(wireId, payload) {
     }
     case "iroha_data_model::isi::smart_contract_code::ActivateContractInstance": {
       const fields = decodeStructFields(payload, "ActivateContractInstance", [
-        "namespace",
-        "contract_id",
+        "contract_address",
         "code_hash",
       ]);
       return {
         ActivateContractInstance: {
-          namespace: decodeStringValue(fields.namespace, "ActivateContractInstance.namespace"),
-          contract_id: decodeStringValue(
-            fields.contract_id,
-            "ActivateContractInstance.contract_id",
+          contract_address: decodeStringValue(
+            fields.contract_address,
+            "ActivateContractInstance.contract_address",
           ),
           code_hash: decodeHashValue(fields.code_hash, "ActivateContractInstance.code_hash"),
         },
@@ -2352,14 +2348,8 @@ function encodeSmartContractInstruction(instruction) {
       encodeStructValue([
         [encodeNoritoStringValue(
           assertNonEmptyString(
-            instruction.DeactivateContractInstance.namespace,
-            "DeactivateContractInstance.namespace",
-          ),
-        )],
-        [encodeNoritoStringValue(
-          assertNonEmptyString(
-            instruction.DeactivateContractInstance.contract_id,
-            "DeactivateContractInstance.contract_id",
+            instruction.DeactivateContractInstance.contract_address,
+            "DeactivateContractInstance.contract_address",
           ),
         )],
         [encodeOptionValue(
@@ -2376,14 +2366,8 @@ function encodeSmartContractInstruction(instruction) {
       encodeStructValue([
         [encodeNoritoStringValue(
           assertNonEmptyString(
-            instruction.ActivateContractInstance.namespace,
-            "ActivateContractInstance.namespace",
-          ),
-        )],
-        [encodeNoritoStringValue(
-          assertNonEmptyString(
-            instruction.ActivateContractInstance.contract_id,
-            "ActivateContractInstance.contract_id",
+            instruction.ActivateContractInstance.contract_address,
+            "ActivateContractInstance.contract_address",
           ),
         )],
         [encodeHashValue(

@@ -168,8 +168,7 @@ pub fn insert_evidence_record_for_test(state: &mut crate::state::State, record: 
 /// Insert a contract instance record directly into WSV for tests.
 pub fn insert_contract_instance_for_test(
     state: &mut crate::state::State,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
     code_hash: iroha_crypto::Hash,
 ) {
     let height = next_test_block_height();
@@ -186,7 +185,7 @@ pub fn insert_contract_instance_for_test(
     let mut stx = block.transaction();
     stx.world
         .contract_instances
-        .insert((namespace.to_string(), contract_id.to_string()), code_hash);
+        .insert(contract_address.clone(), code_hash);
     stx.apply();
     block
         .transactions

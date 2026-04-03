@@ -2,6 +2,32 @@
 
 Last updated: 2026-04-03
 
+## 2026-04-03 Follow-up: opaque asset-definition events no longer require domain origin
+- Patched the data-event routing for asset-definition events so opaque
+  canonical `AssetDefinitionId` values no longer get forced through
+  `DomainEvent::AssetDefinition(...)`.
+- `crates/iroha_data_model/src/events/data/events.rs` now:
+  - distinguishes domainful asset-definition events from opaque ones via
+    `AssetDefinitionEvent::try_origin_domain()`;
+  - routes only domainful asset-definition events through `DomainEvent`; and
+  - carries opaque asset-definition events in a standalone `DataEvent`
+    wrapper instead of panicking on `AssetDefinitionId::domain()`.
+- `crates/iroha_core/src/state.rs` and
+  `crates/iroha_core/src/smartcontracts/isi/domain.rs` now emit plain
+  `AssetDefinitionEvent` values and rely on the new routing logic instead of
+  hard-wrapping them as domain events.
+- Added `iroha_data_model` regression coverage for:
+  - opaque asset-definition event routing; and
+  - `AssetDefinitionEventFilter` matching the standalone opaque-event path.
+- Local formatting completed:
+  - `cargo fmt --all`
+- Focused validation status:
+  - the isolated `iroha_data_model` cargo test rerun now compiles past the
+    earlier event-routing/type-conflict errors and is still in progress on the
+    current host under `CARGO_TARGET_DIR=/tmp/iroha_target_eventfix`;
+  - no remaining hard-wrapped `DomainEvent::AssetDefinition(...)` emitters are
+    left in `iroha_core`.
+
 ## 2026-04-03 Follow-up: controlled stepped sweep is green through 100 TPS after domain-model fixes
 - Repaired the remaining stale domain-model assumptions across Izanami and the
   test-network harness:

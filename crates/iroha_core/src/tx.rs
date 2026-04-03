@@ -110,14 +110,6 @@ static GOV_APPROVERS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = Lazy
     iroha_data_model::name::Name::from_str("gov_manifest_approvers")
         .expect("static governance metadata key")
 });
-static CONTRACT_NAMESPACE_METADATA_KEY: LazyLock<iroha_data_model::name::Name> =
-    LazyLock::new(|| {
-        iroha_data_model::name::Name::from_str("contract_namespace")
-            .expect("static contract namespace metadata key")
-    });
-static CONTRACT_ID_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("contract_id").expect("static contract id metadata key")
-});
 static CONTRACT_ADDRESS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> =
     LazyLock::new(|| {
         iroha_data_model::name::Name::from_str("contract_address")
@@ -2997,48 +2989,6 @@ fn enforce_manifest_protected_namespaces(
         })
         .transpose()?;
 
-    let metadata_contract_namespace = metadata
-        .get(&*CONTRACT_NAMESPACE_METADATA_KEY)
-        .map(|value| {
-            let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                reject_lane_policy(
-                    alias,
-                    "`contract_namespace` metadata must be a string value",
-                )
-            })?;
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                return Err(reject_lane_policy(
-                    alias,
-                    "`contract_namespace` metadata must not be blank",
-                ));
-            }
-            Name::from_str(trimmed).map_err(|err| {
-                reject_lane_policy(
-                    alias,
-                    format!("`contract_namespace` metadata `{trimmed}` is not a valid Name: {err}"),
-                )
-            })
-        })
-        .transpose()?;
-
-    let metadata_contract_id_hint = metadata
-        .get(&*CONTRACT_ID_METADATA_KEY)
-        .map(|value| {
-            let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                reject_lane_policy(alias, "`contract_id` metadata must be a string value")
-            })?;
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                return Err(reject_lane_policy(
-                    alias,
-                    "`contract_id` metadata must not be blank",
-                ));
-            }
-            Ok(trimmed.to_string())
-        })
-        .transpose()?;
-
     let mut namespaces_from_instructions = BTreeSet::new();
     let mut contract_bindings = BTreeSet::new();
     let mut register_code_seen = false;
@@ -3048,46 +2998,72 @@ fn enforce_manifest_protected_namespaces(
                 .as_any()
                 .downcast_ref::<ActivateContractInstance>()
             {
-                let ns = Name::from_str(activate.namespace.trim()).map_err(|err| {
+                let dataspace_id = activate.contract_address.dataspace_id().map_err(|err| {
                     reject_lane_policy(
                         alias,
                         format!(
-                            "instruction namespace `{}` is not valid: {err}",
-                            activate.namespace
+                            "instruction contract_address `{}` carries an invalid dataspace: {err}",
+                            activate.contract_address
+                        ),
+                    )
+                })?;
+                let ns = dataspace_catalog
+                    .by_id(dataspace_id)
+                    .ok_or_else(|| {
+                        reject_lane_policy(
+                            alias,
+                            format!(
+                                "instruction contract_address dataspace `{dataspace_id}` is not present in the catalog"
+                            ),
+                        )
+                    })?
+                    .alias
+                    .clone();
+                let ns = Name::from_str(&ns).map_err(|err| {
+                    reject_lane_policy(
+                        alias,
+                        format!(
+                            "instruction contract_address dataspace alias `{ns}` is not a valid Name: {err}"
                         ),
                     )
                 })?;
                 namespaces_from_instructions.insert(ns.clone());
-                let contract_id = activate.contract_id.trim();
-                if contract_id.is_empty() {
-                    return Err(reject_lane_policy(
-                        alias,
-                        "contract_id in ActivateContractInstance must not be blank",
-                    ));
-                }
-                contract_bindings.insert((ns, contract_id.to_string()));
+                contract_bindings.insert(activate.contract_address.clone());
             } else if let Some(deactivate) = instruction
                 .as_any()
                 .downcast_ref::<DeactivateContractInstance>()
             {
-                let ns = Name::from_str(deactivate.namespace.trim()).map_err(|err| {
+                let dataspace_id = deactivate.contract_address.dataspace_id().map_err(|err| {
                     reject_lane_policy(
                         alias,
                         format!(
-                            "instruction namespace `{}` is not valid: {err}",
-                            deactivate.namespace
+                            "instruction contract_address `{}` carries an invalid dataspace: {err}",
+                            deactivate.contract_address
+                        ),
+                    )
+                })?;
+                let ns = dataspace_catalog
+                    .by_id(dataspace_id)
+                    .ok_or_else(|| {
+                        reject_lane_policy(
+                            alias,
+                            format!(
+                                "instruction contract_address dataspace `{dataspace_id}` is not present in the catalog"
+                            ),
+                        )
+                    })?
+                    .alias
+                    .clone();
+                let ns = Name::from_str(&ns).map_err(|err| {
+                    reject_lane_policy(
+                        alias,
+                        format!(
+                            "instruction contract_address dataspace alias `{ns}` is not a valid Name: {err}"
                         ),
                     )
                 })?;
                 namespaces_from_instructions.insert(ns.clone());
-                let contract_id = deactivate.contract_id.trim();
-                if contract_id.is_empty() {
-                    return Err(reject_lane_policy(
-                        alias,
-                        "contract_id in DeactivateContractInstance must not be blank",
-                    ));
-                }
-                contract_bindings.insert((ns, contract_id.to_string()));
+                contract_bindings.insert(deactivate.contract_address.clone());
             } else {
                 let modifies_contract_code = {
                     let any = instruction.as_any();
@@ -3102,18 +3078,39 @@ fn enforce_manifest_protected_namespaces(
         }
     }
 
-    if let Some(ns) = metadata_contract_namespace.clone() {
-        if let Some(cid) = metadata_contract_id_hint.clone() {
-            namespaces_from_instructions.insert(ns.clone());
-            contract_bindings.insert((ns, cid));
-        }
+    if let Some(contract_address) = metadata_contract_address_hint.as_ref() {
+        let dataspace_id = contract_address.dataspace_id().map_err(|err| {
+            reject_lane_policy(
+                alias,
+                format!("`contract_address` metadata carries an invalid dataspace: {err}"),
+            )
+        })?;
+        let namespace = dataspace_catalog
+            .by_id(dataspace_id)
+            .ok_or_else(|| {
+                reject_lane_policy(
+                    alias,
+                    format!(
+                        "`contract_address` dataspace `{dataspace_id}` is not present in the catalog"
+                    ),
+                )
+            })?
+            .alias
+            .clone();
+        let namespace = Name::from_str(&namespace).map_err(|err| {
+            reject_lane_policy(
+                alias,
+                format!(
+                    "dataspace alias derived from `contract_address` is not a valid Name: {err}"
+                ),
+            )
+        })?;
+        namespaces_from_instructions.insert(namespace);
+        contract_bindings.insert(contract_address.clone());
     }
 
     let ivm_with_contract_metadata = matches!(tx.instructions(), Executable::Ivm(_))
-        && (metadata_gov_contract_address.is_some()
-            || metadata_contract_address_hint.is_some()
-            || metadata_contract_namespace.is_some()
-            || metadata_contract_id_hint.is_some());
+        && (metadata_gov_contract_address.is_some() || metadata_contract_address_hint.is_some());
 
     let contract_instr_seen =
         register_code_seen || !contract_bindings.is_empty() || ivm_with_contract_metadata;
@@ -3156,8 +3153,6 @@ fn enforce_manifest_protected_namespaces(
             ),
         )
     })?;
-    let target_contract_id = metadata_gov_contract_address.to_string();
-
     if let Some(contract_address_hint) = metadata_contract_address_hint.as_ref()
         && contract_address_hint != &metadata_gov_contract_address
     {
@@ -3167,40 +3162,19 @@ fn enforce_manifest_protected_namespaces(
         ));
     }
 
-    if let Some(ns_hint) = metadata_contract_namespace.as_ref()
-        && ns_hint != &target_namespace
-    {
-        return Err(reject_lane_policy(
-            alias,
-            "`contract_namespace` metadata must match the dataspace derived from `gov_contract_address` for protected operations",
-        ));
-    }
-
-    if let Some(cid_hint) = metadata_contract_id_hint.as_ref()
-        && cid_hint != &target_contract_id
-    {
-        return Err(reject_lane_policy(
-            alias,
-            "`contract_id` metadata must match `gov_contract_address` for protected operations",
-        ));
-    }
-
     if !contract_bindings.is_empty()
-        && contract_bindings.iter().any(|(namespace, contract_id)| {
-            namespace != &target_namespace || contract_id != &target_contract_id
-        })
+        && contract_bindings
+            .iter()
+            .any(|contract_address| contract_address != &metadata_gov_contract_address)
     {
         return Err(reject_lane_policy(
             alias,
-            "contract instructions must target the dataspace alias and address encoded by `gov_contract_address`",
+            "contract instructions must target the contract_address encoded by `gov_contract_address`",
         ));
     }
 
     let mut namespaces_to_check = namespaces_from_instructions.clone();
     namespaces_to_check.insert(target_namespace.clone());
-    if let Some(ns) = metadata_contract_namespace.clone() {
-        namespaces_to_check.insert(ns);
-    }
 
     for namespace in &namespaces_to_check {
         if !rules.protected_namespaces.contains(namespace) {
@@ -8024,8 +7998,7 @@ pub mod tests {
         .expect("contract address");
 
         let instruction = iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
-            namespace: "universal".to_string(),
-            contract_id: contract_address.to_string(),
+            contract_address,
             code_hash: Hash::prehashed([0_u8; 32]),
         };
         let tx = TransactionBuilder::new(chain, authority)

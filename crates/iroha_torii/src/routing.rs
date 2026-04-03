@@ -8336,9 +8336,9 @@ pub async fn handle_post_contract_call(
         code_hash,
         abi_hash,
         manifest,
-        namespace,
-        contract_id,
+        dataspace,
         contract_address,
+        contract_alias,
     } = prepared;
     let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
     let entrypoint_descriptor = ensure_public_contract_entrypoint(&manifest, resolved_entrypoint)?;
@@ -8346,9 +8346,8 @@ pub async fn handle_post_contract_call(
 
     let metadata = build_contract_call_metadata(
         &manifest,
-        &namespace,
-        &contract_id,
-        contract_address.as_ref(),
+        &contract_address,
+        contract_alias.as_ref(),
         Some(resolved_entrypoint),
         normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
@@ -8383,8 +8382,8 @@ pub async fn handle_post_contract_call(
             ContractCallResponseDto {
                 ok: true,
                 submitted: true,
-                dataspace: namespace,
-                contract_address,
+                dataspace: dataspace.clone(),
+                contract_address: Some(contract_address.clone()),
                 code_hash_hex,
                 abi_hash_hex,
                 creation_time_ms,
@@ -8451,8 +8450,8 @@ pub async fn handle_post_contract_call(
             ContractCallResponseDto {
                 ok: true,
                 submitted: true,
-                dataspace: namespace,
-                contract_address,
+                dataspace: dataspace.clone(),
+                contract_address: Some(contract_address.clone()),
                 code_hash_hex,
                 abi_hash_hex,
                 creation_time_ms,
@@ -8475,8 +8474,8 @@ pub async fn handle_post_contract_call(
             ContractCallResponseDto {
                 ok: true,
                 submitted: false,
-                dataspace: namespace,
-                contract_address,
+                dataspace,
+                contract_address: Some(contract_address),
                 code_hash_hex,
                 abi_hash_hex,
                 creation_time_ms,
@@ -8526,18 +8525,17 @@ pub async fn handle_post_contract_call_simulate(
         code_hash,
         abi_hash,
         manifest,
-        namespace,
-        contract_id,
+        dataspace,
         contract_address,
+        contract_alias,
     } = prepared;
     let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
     let entrypoint_descriptor = ensure_public_contract_entrypoint(&manifest, resolved_entrypoint)?;
     let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
     let _metadata = build_contract_call_metadata(
         &manifest,
-        &namespace,
-        &contract_id,
-        contract_address.as_ref(),
+        &contract_address,
+        contract_alias.as_ref(),
         Some(resolved_entrypoint),
         normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
@@ -8556,8 +8554,8 @@ pub async fn handle_post_contract_call_simulate(
     ) {
         Ok(result) => ContractCallSimulateResponseDto {
             ok: true,
-            dataspace: namespace,
-            contract_address,
+            dataspace: dataspace.clone(),
+            contract_address: Some(contract_address.clone()),
             code_hash_hex: hex::encode(code_hash.as_ref()),
             abi_hash_hex: hex::encode(abi_hash.as_ref()),
             entrypoint: resolved_entrypoint.to_owned(),
@@ -8571,8 +8569,8 @@ pub async fn handle_post_contract_call_simulate(
         },
         Err(err) => ContractCallSimulateResponseDto {
             ok: false,
-            dataspace: namespace,
-            contract_address,
+            dataspace,
+            contract_address: Some(contract_address),
             code_hash_hex: hex::encode(code_hash.as_ref()),
             abi_hash_hex: hex::encode(abi_hash.as_ref()),
             entrypoint: resolved_entrypoint.to_owned(),
@@ -8841,9 +8839,9 @@ pub async fn handle_post_contract_view(
         code_hash,
         abi_hash,
         manifest,
-        namespace,
-        contract_id: _contract_id,
+        dataspace,
         contract_address,
+        contract_alias: _contract_alias,
     } = prepared;
     let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
     let entrypoint_descriptor = ensure_view_contract_entrypoint(&manifest, resolved_entrypoint)?;
@@ -8861,8 +8859,8 @@ pub async fn handle_post_contract_view(
         Err(err) => {
             let body = norito::json::to_json_pretty(&ContractViewErrorResponseDto {
                 ok: false,
-                dataspace: namespace,
-                contract_address,
+                dataspace,
+                contract_address: Some(contract_address),
                 code_hash_hex: hex::encode(code_hash.as_ref()),
                 abi_hash_hex: hex::encode(abi_hash.as_ref()),
                 entrypoint: resolved_entrypoint.to_owned(),
@@ -8882,8 +8880,8 @@ pub async fn handle_post_contract_view(
 
     let body = norito::json::to_json_pretty(&ContractViewResponseDto {
         ok: true,
-        dataspace: namespace,
-        contract_address,
+        dataspace,
+        contract_address: Some(contract_address),
         code_hash_hex: hex::encode(code_hash.as_ref()),
         abi_hash_hex: hex::encode(abi_hash.as_ref()),
         entrypoint: resolved_entrypoint.to_owned(),
@@ -9758,9 +9756,8 @@ fn execute_contract_call_simulation(
 #[cfg(feature = "app_api")]
 fn build_contract_call_metadata(
     manifest: &manifest::ContractManifest,
-    _namespace: &str,
-    _contract_id: &str,
-    contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
     entrypoint: Option<&str>,
     payload: Option<&IrohaJson>,
     gas_asset_id: Option<&str>,
@@ -9772,16 +9769,19 @@ fn build_contract_call_metadata(
         Name::from_str(manifest::MANIFEST_METADATA_KEY).expect("static manifest metadata key");
     metadata.insert(manifest_key, IrohaJson::new(manifest.clone()));
 
-    if let Some(contract_address) = contract_address {
-        let address_key =
-            Name::from_str("contract_address").expect("static metadata key `contract_address`");
-        metadata.insert(address_key, IrohaJson::new(contract_address.to_string()));
-        let gov_address_key = Name::from_str("gov_contract_address")
-            .expect("static metadata key `gov_contract_address`");
-        metadata.insert(
-            gov_address_key,
-            IrohaJson::new(contract_address.to_string()),
-        );
+    let address_key =
+        Name::from_str("contract_address").expect("static metadata key `contract_address`");
+    metadata.insert(address_key, IrohaJson::new(contract_address.to_string()));
+    let gov_address_key =
+        Name::from_str("gov_contract_address").expect("static metadata key `gov_contract_address`");
+    metadata.insert(
+        gov_address_key,
+        IrohaJson::new(contract_address.to_string()),
+    );
+    if let Some(contract_alias) = contract_alias {
+        let alias_key =
+            Name::from_str("contract_alias").expect("static metadata key `contract_alias`");
+        metadata.insert(alias_key, IrohaJson::new(contract_alias.to_string()));
     }
 
     if let Some(selector) = entrypoint {
@@ -9811,8 +9811,7 @@ fn build_contract_call_metadata(
 #[cfg(feature = "app_api")]
 fn derive_multisig_contract_call_trigger_id(
     multisig_account_id: &iroha_data_model::account::AccountId,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
     payload: Option<&IrohaJson>,
     gas_asset_id: Option<&str>,
@@ -9828,7 +9827,7 @@ fn derive_multisig_contract_call_trigger_id(
         .unwrap_or_default();
     let gas_asset_repr = gas_asset_id.unwrap_or_default();
     let seed = format!(
-        "{multisig_account_id}|{namespace}|{contract_id}|{entrypoint}|{payload_repr}|{gas_asset_repr}|{fee_sponsor_repr}|{gas_limit}|{}",
+        "{multisig_account_id}|{contract_address}|{entrypoint}|{payload_repr}|{gas_asset_repr}|{fee_sponsor_repr}|{gas_limit}|{}",
         hex::encode(code_hash.as_ref())
     );
     let digest = blake3_hash(seed.as_bytes());
@@ -9841,8 +9840,8 @@ fn derive_multisig_contract_call_trigger_id(
 #[cfg(feature = "app_api")]
 fn build_multisig_contract_call_instructions(
     multisig_account_id: &iroha_data_model::account::AccountId,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
     entrypoint: &str,
     payload: Option<&IrohaJson>,
     gas_asset_id: Option<&str>,
@@ -9857,8 +9856,7 @@ fn build_multisig_contract_call_instructions(
 )> {
     let trigger_id = derive_multisig_contract_call_trigger_id(
         multisig_account_id,
-        namespace,
-        contract_id,
+        contract_address,
         entrypoint,
         payload,
         gas_asset_id,
@@ -9868,9 +9866,8 @@ fn build_multisig_contract_call_instructions(
     )?;
     let trigger_metadata = build_contract_call_metadata(
         manifest,
-        namespace,
-        contract_id,
-        None,
+        contract_address,
+        contract_alias,
         Some(entrypoint),
         payload,
         gas_asset_id,
@@ -10499,8 +10496,13 @@ fn multisig_contract_call_operation_type(
         return None;
     };
     let metadata = register_trigger.object().action().metadata();
-    let contract_id = multisig_metadata_string(metadata, "contract_id")?;
-    if !contract_id.eq_ignore_ascii_case("mint_request") {
+    let contract_alias = multisig_metadata_string(metadata, "contract_alias")?;
+    let contract_alias: iroha_data_model::smart_contract::ContractAlias =
+        contract_alias.parse().ok()?;
+    if !contract_alias
+        .name_segment()
+        .eq_ignore_ascii_case("mint_request")
+    {
         return None;
     }
     let entrypoint = multisig_metadata_string(metadata, "contract_entrypoint")?;
@@ -13603,17 +13605,16 @@ pub async fn handle_post_contract_call_multisig_propose(
         code_hash,
         abi_hash: _,
         manifest,
-        namespace,
-        contract_id,
+        dataspace: _dataspace,
         contract_address,
+        contract_alias,
     } = prepared;
     let entrypoint_descriptor = ensure_public_contract_entrypoint(&manifest, &entrypoint)?;
     let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
     let tx_metadata = build_contract_call_metadata(
         &manifest,
-        &namespace,
-        &contract_id,
-        contract_address.as_ref(),
+        &contract_address,
+        contract_alias.as_ref(),
         Some(&entrypoint),
         normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
@@ -13622,8 +13623,8 @@ pub async fn handle_post_contract_call_multisig_propose(
     );
     let (proposal_instructions, proposal_hash) = build_multisig_contract_call_instructions(
         &multisig_account_id,
-        &namespace,
-        &contract_id,
+        &contract_address,
+        contract_alias.as_ref(),
         &entrypoint,
         normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
@@ -15727,15 +15728,15 @@ fn prepare_contract_deployment(
 #[cfg(feature = "app_api")]
 fn prepare_contract_call(
     state: &CoreState,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
 ) -> core::result::Result<PreparedContractCall, Error> {
     use iroha_data_model::query::error::QueryExecutionFail;
 
     let world = state.world_view();
     let binding = world
         .contract_instances()
-        .get(&(namespace.to_owned(), contract_id.to_owned()))
+        .get(contract_address)
         .copied()
         .ok_or_else(|| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -15758,6 +15759,19 @@ fn prepare_contract_call(
             QueryExecutionFail::Conversion(err.to_string()),
         ))
     })?;
+    let dataspace_id = contract_address
+        .dataspace_id()
+        .map_err(|err| conversion_error(err.to_string()))?;
+    let dataspace = state
+        .nexus_snapshot()
+        .dataspace_catalog
+        .by_id(dataspace_id)
+        .map(|entry| entry.alias.clone())
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                QueryExecutionFail::NotFound,
+            ))
+        })?;
     let manifest = world
         .contract_manifests()
         .get(&binding)
@@ -15780,9 +15794,9 @@ fn prepare_contract_call(
         code_hash: binding,
         abi_hash: verified.abi_hash,
         manifest,
-        namespace: namespace.to_owned(),
-        contract_id: contract_id.to_owned(),
-        contract_address: contract_id.parse().ok(),
+        dataspace,
+        contract_address: contract_address.clone(),
+        contract_alias,
     })
 }
 
@@ -15791,22 +15805,7 @@ fn prepare_contract_call_by_address(
     state: &CoreState,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
 ) -> core::result::Result<PreparedContractCall, Error> {
-    let dataspace_id = contract_address
-        .dataspace_id()
-        .map_err(|err| conversion_error(err.to_string()))?;
-    let dataspace_alias = state
-        .nexus_snapshot()
-        .dataspace_catalog
-        .by_id(dataspace_id)
-        .map(|entry| entry.alias.clone())
-        .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            ))
-        })?;
-    let mut prepared = prepare_contract_call(state, &dataspace_alias, contract_address.as_ref())?;
-    prepared.contract_address = Some(contract_address.clone());
-    Ok(prepared)
+    prepare_contract_call(state, contract_address, None)
 }
 
 #[cfg(feature = "app_api")]
@@ -15823,7 +15822,7 @@ fn prepare_contract_call_by_alias(
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
             ))
         })?;
-    prepare_contract_call_by_address(state, &contract_address)
+    prepare_contract_call(state, &contract_address, Some(contract_alias.clone()))
 }
 
 #[cfg(feature = "app_api")]
@@ -16752,9 +16751,9 @@ struct PreparedContractCall {
     code_hash: iroha_crypto::Hash,
     abi_hash: iroha_crypto::Hash,
     manifest: manifest::ContractManifest,
-    namespace: String,
-    contract_id: String,
-    contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    dataspace: String,
+    contract_address: iroha_data_model::smart_contract::ContractAddress,
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
 }
 
 // ---------------------- Subscription API DTOs ----------------------
@@ -17892,8 +17891,7 @@ pub async fn handle_post_contract_deploy(
     instructions.push(dm::InstructionBox::from(isi_code));
     instructions.push(dm::InstructionBox::from(isi_bytes));
     instructions.push(dm::InstructionBox::from(ActivateContractInstance {
-        namespace: dataspace_alias.clone(),
-        contract_id: contract_address.to_string(),
+        contract_address: contract_address.clone(),
         code_hash: prepared.code_hash,
     }));
     instructions.push(dm::InstructionBox::from(dm::SetKeyValue::account(

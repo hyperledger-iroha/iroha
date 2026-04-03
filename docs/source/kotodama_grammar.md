@@ -156,8 +156,9 @@ Notes
 - `authority` optionally overrides the trigger authority (AccountId string literal). If omitted,
   the runtime uses the contract-activation authority.
 - Metadata values must be JSON literals (`string`, `number`, `bool`, `null`) or `json!(...)`.
-- Runtime-injected trigger metadata keys: `contract_namespace`, `contract_id`,
-  `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`.
+- Runtime-injected trigger metadata keys: `contract_address`, optional
+  `contract_alias`, `contract_entrypoint`, `contract_code_hash`,
+  `contract_trigger_id`.
 
 ## Functions and Parameters
 

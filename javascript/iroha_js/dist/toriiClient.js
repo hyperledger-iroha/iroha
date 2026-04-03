@@ -11273,14 +11273,10 @@ function parseGovernanceActivations(payload) {
         `governance.recent_manifest_activations[${index}] must be an object`,
       );
     }
-    const namespace =
-      entry.namespace === undefined || entry.namespace === null
+    const contractAddress =
+      entry.contract_address === undefined || entry.contract_address === null
         ? ""
-        : String(entry.namespace);
-    const contractId =
-      entry.contract_id === undefined || entry.contract_id === null
-        ? ""
-        : String(entry.contract_id);
+        : String(entry.contract_address);
     const codeHash =
       entry.code_hash_hex === undefined || entry.code_hash_hex === null
         ? ""
@@ -11290,8 +11286,7 @@ function parseGovernanceActivations(payload) {
         ? null
         : String(entry.abi_hash_hex);
     return {
-      namespace,
-      contract_id: contractId,
+      contract_address: contractAddress,
       code_hash_hex: codeHash,
       abi_hash_hex: abiHash,
       height: coerceNestedInt(

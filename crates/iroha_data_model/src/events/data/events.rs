@@ -2467,7 +2467,11 @@ impl DataEvent {
 
 #[cfg(test)]
 mod event_routing_tests {
-    use super::{DataEvent, asset::AssetDefinitionEvent, domain::DomainEvent};
+    use super::{
+        DataEvent,
+        asset::{AssetDefinitionEvent, StandaloneAssetDefinitionEvent},
+        domain::DomainEvent,
+    };
     use crate::{asset::AssetDefinitionId, domain::DomainId};
 
     #[test]
@@ -2484,7 +2488,7 @@ mod event_routing_tests {
         assert!(opaque_event.try_origin_domain().is_none());
         assert!(matches!(
             DataEvent::from(opaque_event.clone()),
-            DataEvent::AssetDefinitionStandalone(asset::StandaloneAssetDefinitionEvent {
+            DataEvent::AssetDefinitionStandalone(StandaloneAssetDefinitionEvent {
                 event: AssetDefinitionEvent::Deleted(id),
             }) if id == opaque_definition
         ));

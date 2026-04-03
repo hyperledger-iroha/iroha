@@ -2304,23 +2304,10 @@ pub mod isi {
                     err.to_string().into(),
                 ))
             })?;
-            let Some(contract_dataspace) = state_transaction
-                .nexus
-                .dataspace_catalog
-                .by_id(contract_dataspace_id)
-            else {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "contract address dataspace is unknown".to_owned().into(),
-                )
-                .into());
-            };
             if state_transaction
                 .world
                 .contract_instances()
-                .get(&(
-                    contract_dataspace.alias.clone(),
-                    contract_address.to_string(),
-                ))
+                .get(&contract_address)
                 .is_none()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -6878,10 +6865,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        tx.world.contract_instances.insert(
-            ("universal".to_owned(), contract_address.to_string()),
-            Hash::new("contract-alias"),
-        );
+        tx.world
+            .contract_instances
+            .insert(contract_address.clone(), Hash::new("contract-alias"));
 
         let alias: ContractAlias = "router::universal".parse().expect("alias");
         SetContractAlias::bind(contract_address.clone(), alias.clone(), Some(11_000))
@@ -6917,10 +6903,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        tx.world.contract_instances.insert(
-            ("universal".to_owned(), contract_address.to_string()),
-            Hash::new("contract-alias"),
-        );
+        tx.world
+            .contract_instances
+            .insert(contract_address.clone(), Hash::new("contract-alias"));
         seed_account_alias_lease(&mut tx, &authority, &label);
 
         let err = SetContractAlias::bind(
@@ -6964,10 +6949,9 @@ mod tests {
             }),
         );
         seed_account_alias_lease(&mut tx, &authority, &label);
-        tx.world.contract_instances.insert(
-            ("universal".to_owned(), contract_address.clone().to_string()),
-            Hash::new("contract-alias"),
-        );
+        tx.world
+            .contract_instances
+            .insert(contract_address.clone(), Hash::new("contract-alias"));
         tx.world
             .bind_contract_alias(
                 &contract_address,

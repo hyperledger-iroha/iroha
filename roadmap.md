@@ -2,6 +2,32 @@
 
 Last updated: 2026-04-03
 
+Latest sync (2026-04-03 opaque asset-definition event routing fix):
+the remaining NPoS `sumeragi-commit` panic is now patched at the event-model
+layer: opaque canonical asset-definition ids are no longer forced through
+`DomainEvent::AssetDefinition(...)`.
+
+- shipped in:
+  - `/Users/mtakemiya/dev/iroha/crates/iroha_data_model/src/events/data/events.rs`
+  - `/Users/mtakemiya/dev/iroha/crates/iroha_data_model/src/events/data/filters.rs`
+  - `/Users/mtakemiya/dev/iroha/crates/iroha_core/src/state.rs`
+  - `/Users/mtakemiya/dev/iroha/crates/iroha_core/src/smartcontracts/isi/domain.rs`
+- the fix:
+  - adds `AssetDefinitionEvent::try_origin_domain()` and only wraps
+    domainful asset-definition events as `DomainEvent`;
+  - routes opaque asset-definition events through a standalone `DataEvent`
+    wrapper instead; and
+  - removes the last `iroha_core` emit sites that manually wrapped
+    asset-definition events as `DomainEvent::AssetDefinition(...)`.
+
+Open work for this slice now remains:
+- finish the in-flight isolated validation on
+  `CARGO_TARGET_DIR=/tmp/iroha_target_eventfix cargo test -p iroha_data_model ...`;
+- once that is green, rerun the controlled NPoS sweep and verify the retained
+  peer stderr no longer shows `sumeragi-commit` panics from
+  `AssetDefinitionId::domain()`; and
+- only after that rerun, revisit the higher-load NPoS knee.
+
 Latest sync (2026-04-03 controlled stepped sweep after domain-model fixes):
 the current rebuilt control harness is no longer blocked by the old domain
 workload or pre-spawn startup issues, and the short sequential sweep now passes

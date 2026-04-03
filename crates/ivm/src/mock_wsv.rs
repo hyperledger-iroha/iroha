@@ -14,6 +14,7 @@ use iroha_data_model::{
     isi::{smart_contract_code as scode, transfer::TransferAssetBatch},
     nexus::{AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId},
     proof::{ProofAttachment, VerifyingKeyId},
+    smart_contract::ContractAddress,
 };
 use iroha_primitives::json::Json;
 use iroha_primitives::numeric::{Numeric, NumericSpec};
@@ -337,8 +338,8 @@ pub struct MockWorldStateView {
     contract_manifests: HashSet<CryptoHash>,
     /// Stored contract bytecode keyed by code hash.
     contract_code: HashMap<CryptoHash, Vec<u8>>,
-    /// Active contract instances keyed by (namespace, contract_id).
-    contract_instances: HashMap<(String, String), CryptoHash>,
+    /// Active contract instances keyed by canonical contract address.
+    contract_instances: HashMap<ContractAddress, CryptoHash>,
     /// Logical wall-clock timestamp used for time-gated operations (ms since epoch).
     current_time_ms: u64,
     /// Slot length (ms) used to derive current slot for expiry checks.
@@ -545,12 +546,10 @@ impl MockWorldStateView {
     /// Bind a contract instance in the mock registry.
     pub fn bind_contract_instance(
         &mut self,
-        namespace: impl Into<String>,
-        contract_id: impl Into<String>,
+        contract_address: ContractAddress,
         code_hash: CryptoHash,
     ) {
-        self.contract_instances
-            .insert((namespace.into(), contract_id.into()), code_hash);
+        self.contract_instances.insert(contract_address, code_hash);
     }
 
     // -----------------------------
@@ -5307,13 +5306,12 @@ impl IVMHost for WsvHost {
                 }
                 let req: scode::DeactivateContractInstance =
                     norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-                let namespace = req.namespace().trim();
-                let contract_id = req.contract_id().trim();
-                if namespace.is_empty() || contract_id.is_empty() {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let key = (namespace.to_owned(), contract_id.to_owned());
-                if self.wsv.contract_instances.remove(&key).is_some() {
+                if self
+                    .wsv
+                    .contract_instances
+                    .remove(req.contract_address())
+                    .is_some()
+                {
                     Ok(0)
                 } else {
                     Err(VMError::PermissionDenied)

@@ -7566,10 +7566,16 @@ mod pointer_abi_tests {
         let (public_key, _) = kp.into_parts();
         let authority = AccountId::of(public_key);
         let mut host = CoreHost::new(authority);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &host.authority,
+            1,
+            iroha_data_model::nexus::DataSpaceId::new(0),
+        )
+        .expect("contract address");
 
         let request = scode::ActivateContractInstance {
-            namespace: "apps".into(),
-            contract_id: "payments".into(),
+            contract_address,
             code_hash: IrohaHash::new(b"payments-code"),
         };
         let payload = norito::to_bytes(&request).expect("encode request");
@@ -7591,10 +7597,16 @@ mod pointer_abi_tests {
         let (public_key, _) = kp.into_parts();
         let authority = AccountId::of(public_key);
         let mut host = CoreHost::new(authority);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &host.authority,
+            2,
+            iroha_data_model::nexus::DataSpaceId::new(0),
+        )
+        .expect("contract address");
 
         let request = scode::DeactivateContractInstance {
-            namespace: "apps".to_owned(),
-            contract_id: "settlement".to_owned(),
+            contract_address,
             reason: Some("compromised deployment".to_owned()),
         };
         let payload = norito::to_bytes(&request).expect("encode request");
