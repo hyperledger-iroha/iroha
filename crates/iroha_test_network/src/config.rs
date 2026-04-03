@@ -389,21 +389,26 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .expect("garden_of_live_flowers domain");
     let cabbage_name: Name = "cabbage".parse().expect("cabbage asset name");
     let alice_metadata = Metadata::default();
+    let universal_dataspace: Name = "universal".parse().expect("universal dataspace");
+    let wonderland_domain = DomainId::new(wonderland_name.clone(), universal_dataspace.clone());
+    let garden_domain = DomainId::new(garden_name.clone(), universal_dataspace.clone());
 
     builder = builder
-        .domain(wonderland_name.clone())
+        .domain(wonderland_domain.clone())
         .account_with_metadata(ALICE_KEYPAIR.public_key().clone(), alice_metadata)
         .account(BOB_KEYPAIR.public_key().clone())
         .asset(rose_name, NumericSpec::default())
         .asset(camomile_name, NumericSpec::default())
         .finish_domain()
-        .domain(garden_name)
+        .domain(garden_domain.clone())
         .account(CARPENTER_KEYPAIR.public_key().clone())
         .asset(cabbage_name, NumericSpec::default())
         .finish_domain();
 
-    let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain id");
-    let garden_domain: DomainId = "garden_of_live_flowers"
+    let wonderland_domain: DomainId = "wonderland.universal"
+        .parse()
+        .expect("wonderland domain id");
+    let garden_domain: DomainId = "garden_of_live_flowers.universal"
         .parse()
         .expect("garden_of_live_flowers domain id");
     let rose_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(

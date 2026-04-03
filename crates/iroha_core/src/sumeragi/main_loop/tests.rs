@@ -109010,6 +109010,7 @@ fn partial_rbc_session_for_block(
     session
 }
 
+#[cfg(feature = "telemetry")]
 fn partial_rbc_session_for_block_with_config_chunking(
     actor: &Actor,
     block: &SignedBlock,

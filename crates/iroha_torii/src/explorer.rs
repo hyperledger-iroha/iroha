@@ -88,11 +88,7 @@ impl ExplorerAggregates {
             let linked_domains = world
                 .bound_account_aliases(account.id())
                 .into_iter()
-                .filter_map(|alias| {
-                    alias
-                        .domain
-                        .map(|domain| DomainId::new(domain.name().clone()))
-                })
+                .filter_map(|alias| alias.domain_id(world.dataspace_catalog()).ok().flatten())
                 .collect::<BTreeSet<_>>();
             for domain_id in linked_domains {
                 account_domains.insert(domain_id.clone());

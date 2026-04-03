@@ -552,7 +552,10 @@ mod tests {
     use std::str::FromStr;
 
     fn account_id_for_domain(label: &str, seed: u8) -> AccountId {
-        let _ = DomainId::new(Name::from_str(label).expect("domain label canonicalises"));
+        let _ = DomainId::new(
+            Name::from_str(label).expect("domain label canonicalises"),
+            Name::from_str("universal").expect("dataspace alias canonicalises"),
+        );
         let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         AccountId::new(key_pair.public_key().clone())
     }

@@ -37171,7 +37171,10 @@ mod tests {
                 scope: AccountAliasPermissionScope::Dataspace(alias.dataspace),
             }),
         );
-        if let Some(domain) = alias.domain.clone() {
+        if let Some(domain) = alias
+            .domain_id(&app.state.nexus_snapshot().dataspace_catalog)
+            .expect("test alias dataspace must resolve")
+        {
             stx.world_mut_for_testing().add_account_permission(
                 account_id,
                 Permission::from(CanResolveAccountAlias {

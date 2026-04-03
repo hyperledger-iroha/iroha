@@ -3808,10 +3808,14 @@ fn authority_owns_any_alias_domain(
     subject: &AccountId,
 ) -> Result<bool, ValidationFail> {
     for alias in world.bound_account_aliases(subject) {
-        let Some(alias_domain) = alias.domain.as_ref() else {
+        let Some(domain_id) = alias.domain_id(world.dataspace_catalog()).map_err(|err| {
+            ValidationFail::InstructionFailed(InstructionExecutionError::InvariantViolation(
+                err.to_string().into(),
+            ))
+        })?
+        else {
             continue;
         };
-        let domain_id = DomainId::new(alias_domain.name().clone());
         if authority_owns_domain(world, authority, &domain_id)? {
             return Ok(true);
         }

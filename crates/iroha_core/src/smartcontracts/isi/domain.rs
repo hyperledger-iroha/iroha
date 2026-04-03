@@ -273,21 +273,15 @@ pub mod isi {
     fn account_created_event_domain(
         state_transaction: &StateTransaction<'_, '_>,
         account_id: &AccountId,
-    ) -> DomainId {
+    ) -> Option<DomainId> {
         state_transaction
             .world
             .bound_account_aliases(account_id)
             .into_iter()
             .find_map(|alias| {
                 alias
-                    .domain
-                    .as_ref()
-                    .map(|domain| DomainId::new(domain.name().clone()))
-            })
-            .unwrap_or_else(|| {
-                crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS
-                    .parse()
-                    .expect("reserved universal dataspace alias must parse as DomainId")
+                    .domain_id(&state_transaction.nexus.dataspace_catalog)
+                    .expect("bound account alias dataspace must exist in catalog")
             })
     }
 
@@ -915,15 +909,15 @@ pub mod isi {
                 ));
             }
 
-            // Account lifecycle events still require a domain wrapper in the current event model.
-            // Prefer a concrete alias domain when one exists and otherwise use the stable
-            // universal dataspace alias as synthetic context for domainless accounts.
-            let created_domain = account_created_event_domain(state_transaction, &account_id);
-            state_transaction
-                .world
-                .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
-                    AccountCreated::new(account, created_domain),
-                ))));
+            if let Some(created_domain) =
+                account_created_event_domain(state_transaction, &account_id)
+            {
+                state_transaction
+                    .world
+                    .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
+                        AccountCreated::new(account, created_domain),
+                    ))));
+            }
 
             Ok(())
         }
@@ -3080,7 +3074,7 @@ mod tests {
         tx.world.add_account_permission(
             authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(alias_domain(domain)),
+                scope: AccountAliasPermissionScope::Domain(domain.clone()),
             }),
         );
         tx.world.add_account_permission(

@@ -11693,8 +11693,14 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids.len(), 2);
-        assert_eq!(ids[0], DomainId::new("w1".parse().unwrap(),));
-        assert_eq!(ids[1], DomainId::new("w2".parse().unwrap(),));
+        assert_eq!(
+            ids[0],
+            DomainId::new("w1".parse().unwrap(), "universal".parse().unwrap(),)
+        );
+        assert_eq!(
+            ids[1],
+            DomainId::new("w2".parse().unwrap(), "universal".parse().unwrap(),)
+        );
     }
 
     #[cfg(feature = "ids_projection")]

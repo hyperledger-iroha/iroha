@@ -68,7 +68,7 @@ pub mod isi {
             error::{InstructionExecutionError, InvalidParameterError, MathError, RepetitionError},
             governance as gov, nexus, smart_contract_code as scode, verifying_keys,
         },
-        name::{self, Name},
+        name::Name,
         nexus::{
             AxtProofEnvelope, DomainCommittee, DomainEndorsement, DomainEndorsementPolicy,
             DomainEndorsementRecord, LaneRelayEmergencyValidatorSet, LaneRelayEnvelopeRef,
@@ -9519,18 +9519,14 @@ pub mod isi {
             let Register { object: new_domain } = self;
             let raw_domain_id = new_domain.id.clone();
 
-            let canonical_label = name::canonicalize_domain_label(raw_domain_id.name().as_ref())
+            let canonical_id = raw_domain_id
+                .to_string()
+                .parse::<DomainId>()
                 .map_err(|err| {
                     InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(err.reason().into()),
                     )
                 })?;
-            let canonical_name = Name::from_str(&canonical_label).map_err(|err| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    err.reason().into(),
-                ))
-            })?;
-            let canonical_id = DomainId::new(canonical_name);
 
             if canonical_id == *iroha_genesis::GENESIS_DOMAIN_ID {
                 return Err(InstructionExecutionError::InvariantViolation(

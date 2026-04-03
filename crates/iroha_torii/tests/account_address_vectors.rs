@@ -108,7 +108,10 @@ struct ExpectedError {
 }
 
 fn domain(label: &str) -> DomainId {
-    DomainId::new(Name::from_str(label).expect("valid domain label"))
+    DomainId::new(
+        Name::from_str(label).expect("valid domain label"),
+        Name::from_str("universal").expect("valid dataspace label"),
+    )
 }
 
 fn decode_canonical(hex_value: &str) -> Vec<u8> {

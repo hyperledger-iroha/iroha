@@ -344,6 +344,7 @@ impl<T: MvValue> CellVecExt<T> for CellTransaction<'_, '_, Vec<T>> {
 macro_rules! build_world_block {
     ($state:expr, $method:ident) => {
         WorldBlock {
+            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
             parameters: $state.parameters.$method(),
             peers: $state.peers.$method(),
             consensus_keys: $state.consensus_keys.$method(),
@@ -528,6 +529,7 @@ macro_rules! build_world_block {
 macro_rules! build_world_transaction {
     ($state:expr, $telemetry:expr, $axt_lane_config:expr, $axt_current_slot:expr) => {
         WorldTransaction {
+            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
             parameters: $state.parameters.transaction(),
             peers: $state.peers.transaction(),
             consensus_keys: $state.consensus_keys.transaction(),
@@ -1806,6 +1808,8 @@ pub struct World {
 
 /// Struct for block's aggregated changes
 pub struct WorldBlock<'world> {
+    /// Dataspace alias catalog used to qualify domain-backed aliases.
+    pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
     pub parameters: CellBlock<'world, Parameters>,
     /// Identifications of discovered peers.
@@ -2355,6 +2359,8 @@ impl<'world> WorldBlock<'world> {
 
 /// Struct for single transaction's aggregated changes
 pub struct WorldTransaction<'block, 'world> {
+    /// Dataspace alias catalog used to qualify domain-backed aliases.
+    pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
     pub(crate) parameters: CellTransaction<'block, 'world, Parameters>,
     /// Identifications of discovered peers.
@@ -3144,6 +3150,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
 /// Consistent point in time view of the [`World`]
 pub struct WorldView<'world> {
+    /// Dataspace alias catalog used to qualify domain-backed aliases.
+    pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
     pub(crate) parameters: CellView<'world, Parameters>,
     /// Identifications of discovered peers.
@@ -9551,10 +9559,12 @@ impl DetachedStateTransactionDelta {
         }
 
         for alias in world.bound_account_aliases(account_id) {
-            let Some(alias_domain) = alias.domain.as_ref() else {
+            let Some(domain_id) = alias.domain_id(world.dataspace_catalog()).map_err(|err| {
+                ValidationFail::InstructionFailed(Error::InvariantViolation(err.to_string().into()))
+            })?
+            else {
                 continue;
             };
-            let domain_id = DomainId::new(alias_domain.name().clone());
             let domain_owner = match self.domain_owner_transfer.get(&domain_id) {
                 Some((_, to)) => to.clone(),
                 None => world
@@ -9642,10 +9652,12 @@ impl DetachedStateTransactionDelta {
         }
 
         for alias in world.bound_account_aliases(transfer.source()) {
-            let Some(alias_domain) = alias.domain.as_ref() else {
+            let Some(domain_id) = alias.domain_id(world.dataspace_catalog()).map_err(|err| {
+                ValidationFail::InstructionFailed(Error::InvariantViolation(err.to_string().into()))
+            })?
+            else {
                 continue;
             };
-            let domain_id = DomainId::new(alias_domain.name().clone());
             let source_domain_owner = match self.domain_owner_transfer.get(&domain_id) {
                 Some((_, to)) => to.clone(),
                 None => world
@@ -11410,6 +11422,7 @@ impl World {
     #[allow(clippy::too_many_lines)]
     pub fn view(&self) -> WorldView<'_> {
         WorldView {
+            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
             parameters: self.parameters.view(),
             peers: self.peers.view(),
             consensus_keys: self.consensus_keys.view(),
@@ -11587,6 +11600,8 @@ impl World {
 pub trait WorldReadOnly {
     /// Global parameters registry.
     fn parameters(&self) -> &Parameters;
+    /// Dataspace alias catalog used to qualify domain-scoped aliases.
+    fn dataspace_catalog(&self) -> &iroha_data_model::nexus::DataSpaceCatalog;
     /// Decode the `sumeragi_npos_parameters` custom payload when present.
     fn sumeragi_npos_parameters(&self) -> Option<SumeragiNposParameters> {
         sumeragi_npos_parameters_from_parameters(self.parameters())
@@ -12145,9 +12160,10 @@ pub trait WorldReadOnly {
     fn account_has_alias_domain(&self, account_id: &AccountId, id: &DomainId) -> bool {
         let matches_alias = |alias: &AccountAlias| {
             alias
-                .domain
-                .as_ref()
-                .is_some_and(|alias_domain| alias_domain.name() == id.name())
+                .domain_id(self.dataspace_catalog())
+                .ok()
+                .flatten()
+                .is_some_and(|alias_domain| &alias_domain == id)
         };
 
         self.account_aliases_by_account()
@@ -12585,6 +12601,9 @@ macro_rules! impl_world_ro {
         impl WorldReadOnly for $ident {
             fn parameters(&self) -> &Parameters {
                 &self.parameters
+            }
+            fn dataspace_catalog(&self) -> &iroha_data_model::nexus::DataSpaceCatalog {
+                &self.dataspace_catalog
             }
             fn peers(&self) -> &Peers {
                 &self.peers
@@ -17202,9 +17221,11 @@ impl State {
     pub fn block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
+        let nexus_snapshot = self.nexus_snapshot();
         // Determine pre-block consensus seed and per-block gas limit before taking block locks.
         let (gas_limit_per_block, pre_block_npos_seed) = {
-            let world_view = self.world.view();
+            let mut world_view = self.world.view();
+            world_view.dataspace_catalog = nexus_snapshot.dataspace_catalog.clone();
             let gas_limit_per_block = gas_limit_from_parameters(world_view.parameters());
             let pre_block_npos_seed = crate::sumeragi::npos_seed_for_height_from_world(
                 &world_view,
@@ -17219,10 +17240,12 @@ impl State {
             self.telemetry.reset_block_fee_units();
         }
         // Acquire block hashes before the world lock to match `State::view` and avoid deadlocks.
+        let mut world = self.world.block();
+        world.dataspace_catalog = nexus_snapshot.dataspace_catalog.clone();
         let mut sb = StateBlock {
             state_ref: self,
             block_hashes: self.block_hashes.block(),
-            world: self.world.block(),
+            world,
             merge_ledger: &self.merge_ledger,
             transactions: self.transactions.block(),
             commit_topology: self.commit_topology.block(),
@@ -17766,7 +17789,9 @@ impl State {
     /// consensus paths that only need access to parameters/consensus keys.
     #[track_caller]
     pub fn world_view(&self) -> WorldView<'_> {
-        self.world.view()
+        let mut world = self.world.view();
+        world.dataspace_catalog = self.nexus_snapshot().dataspace_catalog;
+        world
     }
 
     /// Create a point-in-time snapshot tuned for query/IVM execution.
@@ -18099,8 +18124,12 @@ impl State {
         let block_hashes: Vec<HashOf<BlockHeader>> =
             self.block_hashes.view().iter().copied().collect();
         let block_hashes_wait = block_hashes_start.elapsed();
+        let nexus_start = Instant::now();
+        let nexus = self.nexus_snapshot();
+        let nexus_wait = nexus_start.elapsed();
         let world_start = Instant::now();
-        let world = self.world.view();
+        let mut world = self.world.view();
+        world.dataspace_catalog = nexus.dataspace_catalog.clone();
         let world_wait = world_start.elapsed();
         let transactions_start = Instant::now();
         let transactions = self.transactions.view();
@@ -18111,9 +18140,6 @@ impl State {
         let prev_commit_topology_start = Instant::now();
         let prev_commit_topology = self.prev_commit_topology.view();
         let prev_commit_topology_wait = prev_commit_topology_start.elapsed();
-        let nexus_start = Instant::now();
-        let nexus = self.nexus_snapshot();
-        let nexus_wait = nexus_start.elapsed();
         let _view_lock = self.view_lock.try_read().map_or_else(
             || {
                 self.note_view_lock_contention(caller);
@@ -21297,6 +21323,13 @@ impl<'state> StateBlock<'state> {
             axt_current_slot,
             self.nexus.axt.replay_retention_slots.get(),
         );
+        let mut world = self.world.trasaction(
+            #[cfg(feature = "telemetry")]
+            Some(self.telemetry),
+            self.nexus.lane_config.clone(),
+            axt_current_slot,
+        );
+        world.dataspace_catalog = self.nexus.dataspace_catalog.clone();
         StateTransaction {
             committed_fragments: &mut self.committed_fragments,
             touched_lanes: &mut self.touched_lanes,
@@ -21305,12 +21338,7 @@ impl<'state> StateBlock<'state> {
             mode_cutover_next_set_in_tx: false,
             mode_cutover_activation_set_in_tx: false,
             confidential_registry_dirty: &mut self.confidential_registry_dirty,
-            world: self.world.trasaction(
-                #[cfg(feature = "telemetry")]
-                Some(self.telemetry),
-                self.nexus.lane_config.clone(),
-                axt_current_slot,
-            ),
+            world,
             block_hashes: self.block_hashes.transaction(),
             merge_ledger: self.merge_ledger,
             commit_topology: self.commit_topology.transaction(),
@@ -39619,7 +39647,7 @@ mod tests {
                 Permission::from(
                     iroha_executor_data_model::permission::account::CanManageAccountAlias {
                         scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                            AccountAliasDomain::new(domain_id.name().clone()),
+                            domain_id.clone(),
                         ),
                     },
                 ),
@@ -39643,7 +39671,7 @@ mod tests {
                 Permission::from(
                     iroha_executor_data_model::permission::account::CanResolveAccountAlias {
                         scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                            AccountAliasDomain::new(domain_id.name().clone()),
+                            domain_id.clone(),
                         ),
                     },
                 ),

@@ -219,10 +219,12 @@ pub mod isi {
             let is_genesis = state_transaction._curr_block.is_genesis();
             let mut is_domain_owner = false;
             for alias in state_transaction.world.bound_account_aliases(&owner) {
-                let Some(alias_domain) = alias.domain.as_ref() else {
+                let Some(domain_id) = alias
+                    .domain_id(&state_transaction.nexus.dataspace_catalog)
+                    .expect("bound account alias dataspace must exist in catalog")
+                else {
                     continue;
                 };
-                let domain_id = DomainId::new(alias_domain.name().clone());
                 let domain_owner = state_transaction
                     .world
                     .domain(&domain_id)

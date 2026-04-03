@@ -1580,7 +1580,10 @@ mod tests {
     ];
 
     fn domain(name: &str) -> DomainId {
-        DomainId::new(Name::from_str(name).expect("valid domain name"))
+        DomainId::new(
+            Name::from_str(name).expect("valid domain name"),
+            Name::from_str("universal").expect("valid dataspace alias"),
+        )
     }
 
     fn guard_default_label() -> DefaultDomainGuard {

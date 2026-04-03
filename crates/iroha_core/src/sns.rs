@@ -111,7 +111,8 @@ impl SnsNamespace {
     fn label_regex(self) -> &'static str {
         match self {
             Self::AccountAlias => r"^[a-z0-9@.-]{3,255}$",
-            Self::Domain | Self::Dataspace => r"^[a-z0-9-]{1,63}$",
+            Self::Domain => r"^[a-z0-9-]{1,63}\.[a-z0-9-]{1,63}$",
+            Self::Dataspace => r"^[a-z0-9-]{1,63}$",
         }
     }
 
@@ -181,7 +182,7 @@ pub fn selector_for_account_alias(
 
 /// Build the selector used for a canonical domain-name lease record.
 pub fn selector_for_domain(domain: &DomainId) -> Result<NameSelectorV1, NameSelectorError> {
-    NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain.name().as_ref())
+    NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain.to_string())
 }
 
 /// Build the selector used for a canonical dataspace-alias lease record.
@@ -211,10 +212,9 @@ pub fn selector_for_namespace_literal(
     match namespace {
         SnsNamespace::AccountAlias => selector_for_account_alias_literal(literal, catalog),
         SnsNamespace::Domain => {
-            let name = Name::from_str(literal.trim())
+            let domain = DomainId::from_str(literal.trim())
                 .map_err(|err| SnsError::BadRequest(err.reason().to_owned()))?;
-            selector_for_domain(&DomainId::new(name))
-                .map_err(|err| SnsError::BadRequest(err.to_string()))
+            selector_for_domain(&domain).map_err(|err| SnsError::BadRequest(err.to_string()))
         }
         SnsNamespace::Dataspace => selector_for_dataspace_alias(literal)
             .map_err(|err| SnsError::BadRequest(err.to_string())),
@@ -284,6 +284,7 @@ fn seed_alias_manage_permissions_if_missing(
     world: &mut World,
     authority: &AccountId,
     label: &AccountAlias,
+    dataspace_catalog: &DataSpaceCatalog,
 ) {
     let mut permissions = world
         .account_permissions
@@ -295,9 +296,12 @@ fn seed_alias_manage_permissions_if_missing(
         scope: AccountAliasPermissionScope::Dataspace(label.dataspace),
     });
     permissions.insert(dataspace_permission);
-    if let Some(domain) = &label.domain {
+    if let Some(domain_id) = label
+        .domain_id(dataspace_catalog)
+        .expect("genesis alias dataspace must resolve")
+    {
         let domain_permission = Permission::from(CanManageAccountAlias {
-            scope: AccountAliasPermissionScope::Domain(domain.clone()),
+            scope: AccountAliasPermissionScope::Domain(domain_id),
         });
         permissions.insert(domain_permission);
     }
@@ -334,7 +338,12 @@ pub fn seed_genesis_alias_bootstrap(
                     }
                     RegisterBox::Account(register) => {
                         if let Some(label) = register.object().label() {
-                            seed_alias_manage_permissions_if_missing(world, authority, label);
+                            seed_alias_manage_permissions_if_missing(
+                                world,
+                                authority,
+                                label,
+                                dataspace_catalog,
+                            );
                             if let Ok(selector) =
                                 selector_for_account_alias(label, dataspace_catalog)
                             {
@@ -351,7 +360,12 @@ pub fn seed_genesis_alias_bootstrap(
                 .downcast_ref::<SetPrimaryAccountAlias>()
             {
                 if let Some(alias) = set_alias.alias.as_ref() {
-                    seed_alias_manage_permissions_if_missing(world, authority, alias);
+                    seed_alias_manage_permissions_if_missing(
+                        world,
+                        authority,
+                        alias,
+                        dataspace_catalog,
+                    );
                     if let Ok(selector) = selector_for_account_alias(alias, dataspace_catalog) {
                         seed_name_record_if_missing(world, authority, selector);
                     }
@@ -363,7 +377,12 @@ pub fn seed_genesis_alias_bootstrap(
                 .downcast_ref::<SetAccountAliasBinding>()
             {
                 if let Some(alias) = bind_alias.alias.as_ref() {
-                    seed_alias_manage_permissions_if_missing(world, authority, alias);
+                    seed_alias_manage_permissions_if_missing(
+                        world,
+                        authority,
+                        alias,
+                        dataspace_catalog,
+                    );
                     if let Ok(selector) = selector_for_account_alias(alias, dataspace_catalog) {
                         seed_name_record_if_missing(world, authority, selector);
                     }
@@ -1386,9 +1405,7 @@ mod tests {
         );
         assert!(
             permissions.contains(&Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(AccountAliasDomain::new(
-                    domain_id.name().clone(),
-                )),
+                scope: AccountAliasPermissionScope::Domain(domain_id.clone()),
             })),
             "genesis authority must be able to manage the alias domain used at genesis"
         );
@@ -1610,8 +1627,11 @@ mod tests {
     #[test]
     fn get_name_record_refreshes_expired_lifecycle() {
         let mut world = World::default();
-        let selector = selector_for_domain(&DomainId::new("trade".parse().expect("domain")))
-            .expect("selector");
+        let selector = selector_for_domain(&DomainId::new(
+            "trade".parse().expect("domain"),
+            "universal".parse().expect("dataspace"),
+        ))
+        .expect("selector");
         let owner = owner();
         let record = NameRecordV1::new(
             selector.clone(),

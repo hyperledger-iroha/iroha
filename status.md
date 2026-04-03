@@ -2,6 +2,38 @@
 
 Last updated: 2026-04-03
 
+## 2026-04-03 Follow-up: domains are now dataspace-qualified end to end
+- `DomainId` no longer models a bare label. The canonical public form is now
+  always `domain.dataspace`, and parsing rejects standalone `domain` literals.
+- Account-alias domain scopes now resolve through the dataspace catalog instead
+  of silently fabricating standalone domains:
+  - `AccountAlias::domain_id(&DataSpaceCatalog)` is the canonical helper for
+    upgrading `name@domain.dataspace` aliases into a real `DomainId`;
+  - account-alias permissions now carry a full `DomainId`, not a bare
+    `AccountAliasDomain`; and
+  - core/executor/Torii paths that check alias-domain ownership or domain
+    association now compare the full qualified domain id.
+- Genesis-facing builders and fixtures were updated to require explicit domain
+  ids as well:
+  - `GenesisBuilder::domain(...)` / `domain_with_metadata(...)` now take a
+    `DomainId`;
+  - bundled genesis/test-network helpers now seed `*.universal` explicitly
+    instead of relying on bare-domain helpers; and
+  - CLI/Torii/integration test helpers that used to construct bare domains now
+    use explicit dataspace-qualified ids.
+- Removed one remaining synthetic-domain fallback from account creation:
+  domain-scoped account-created events now emit only when the account actually
+  carries a domain-qualified alias, instead of inventing a fake universal
+  domain wrapper for dataspace-root aliases.
+- Focused verification completed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_synth_domain cargo check -p iroha_data_model -p iroha_core -p iroha_executor -p iroha_torii -p iroha_cli -p iroha_test_network`
+- Verification note:
+  - targeted `cargo test` runs now get past the code-level compile failures but
+    still depend on the Norito build script’s Kotlin parity checks under
+    `~/.gradle`; sandboxed runs failed on that external Gradle lock/cache path,
+    so no fresh green test stamp is recorded here yet.
+
 ## 2026-04-03 Follow-up: opaque asset-definition IDs no longer fabricate synthetic `aid` domains
 - Removed the old synthetic-domain compatibility projection from
   `AssetDefinitionId`: raw UUID/Base58 opaque IDs now stay opaque instead of

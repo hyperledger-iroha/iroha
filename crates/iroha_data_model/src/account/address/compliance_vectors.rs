@@ -83,7 +83,10 @@ fn ed25519_pk_with(seed_byte: u8) -> PublicKey {
 }
 
 fn domain(label: &str) -> DomainId {
-    DomainId::new(Name::from_str(label).expect("valid domain name"))
+    DomainId::new(
+        Name::from_str(label).expect("valid domain name"),
+        Name::from_str("universal").expect("valid dataspace alias"),
+    )
 }
 
 fn canonical_hex(address: &AccountAddress) -> String {

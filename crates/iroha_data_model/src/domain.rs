@@ -1,16 +1,16 @@
 //! This module contains [`Domain`](`crate::domain::Domain`) structure
 //! and related implementations and trait implementations.
-use std::{format, string::String, vec::Vec};
+use std::{format, str::FromStr, string::String, vec::Vec};
 
-use derive_more::{Constructor, Display, FromStr};
+use derive_more::{Constructor, Display};
 use iroha_data_model_derive::{IdEqOrdHash, model};
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 pub use self::model::*;
 use crate::{
-    HasMetadata, Identifiable, Name, Registered, Registrable, metadata::Metadata, prelude::*,
-    sorafs_uri::SorafsUri,
+    HasMetadata, Identifiable, Name, Registered, Registrable, error::ParseError,
+    metadata::Metadata, name, prelude::*, sorafs_uri::SorafsUri,
 };
 
 #[model]
@@ -23,7 +23,6 @@ mod model {
     #[derive(
         Debug,
         Display,
-        FromStr,
         Clone,
         PartialEq,
         Eq,
@@ -36,13 +35,14 @@ mod model {
         Encode,
         IntoSchema,
     )]
-    #[display("{name}")]
+    #[display("{name}.{dataspace}")]
     #[getset(get = "pub")]
-    #[repr(transparent)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(opaque))]
     pub struct DomainId {
-        /// [`Name`] unique to a [`Domain`] e.g. company name
+        /// Domain label unique only within its parent dataspace.
         pub name: Name,
+        /// Dataspace alias that owns the domain namespace.
+        pub dataspace: Name,
     }
 
     /// Named group of [`Account`] and [`Asset`](`crate::asset::value::Asset`) entities.
@@ -97,6 +97,42 @@ mod model {
 }
 
 string_id!(DomainId);
+
+impl FromStr for DomainId {
+    type Err = ParseError;
+
+    fn from_str(candidate: &str) -> Result<Self, Self::Err> {
+        if candidate.trim().is_empty() {
+            return Err(ParseError::new("domain id must not be empty"));
+        }
+        if candidate.trim() != candidate {
+            return Err(ParseError::new(
+                "domain id must not contain leading or trailing whitespace",
+            ));
+        }
+
+        let dot_count = candidate.bytes().filter(|byte| *byte == b'.').count();
+        if dot_count != 1 {
+            return Err(ParseError::new(
+                "domain id must use `domain.dataspace` format",
+            ));
+        }
+
+        let (name, dataspace) = candidate
+            .split_once('.')
+            .expect("validated domain literal must contain exactly one dot");
+        if name.is_empty() || dataspace.is_empty() {
+            return Err(ParseError::new("domain id segments must not be empty"));
+        }
+
+        let canonical_name = name::canonicalize_domain_label(name)?;
+        let canonical_dataspace = name::canonicalize_domain_label(dataspace)?;
+        Ok(Self::new(
+            Name::from_str(&canonical_name)?,
+            Name::from_str(&canonical_dataspace)?,
+        ))
+    }
+}
 
 impl HasMetadata for NewDomain {
     #[inline]

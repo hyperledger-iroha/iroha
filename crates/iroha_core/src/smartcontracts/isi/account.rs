@@ -1056,7 +1056,7 @@ pub mod query {
                 iroha_executor_data_model::permission::account::CanManageAccountAlias {
                     scope:
                         iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                            alias_domain(domain),
+                            domain.clone(),
                         ),
                 },
             ),

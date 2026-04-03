@@ -998,9 +998,8 @@ fn relay_domain(
         .into_iter()
         .filter_map(|alias| {
             alias
-                .domain
-                .as_ref()
-                .map(|domain| DomainId::new(domain.name().clone()))
+                .domain_id(&state_transaction.nexus.dataspace_catalog)
+                .expect("bound account alias dataspace must exist in catalog")
         })
         .collect::<BTreeSet<_>>()
         .into_iter();

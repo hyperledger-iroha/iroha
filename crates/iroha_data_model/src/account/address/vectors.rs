@@ -836,6 +836,7 @@ fn decode_multisig_payload(payload: &[u8]) -> MultisigControllerPayload<'_> {
 fn domain_id(label: &str) -> DomainId {
     DomainId::new(
         Name::from_str(label).unwrap_or_else(|_| panic!("invalid domain label `{label}`")),
+        Name::from_str("universal").expect("valid dataspace alias"),
     )
 }
 

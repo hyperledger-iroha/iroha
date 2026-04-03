@@ -42190,9 +42190,13 @@ fn ensure_onboarding_signer_can_manage_alias(
 
 #[cfg(feature = "app_api")]
 fn alias_domain_to_domain_id(
-    domain: account::rekey::AccountAliasDomain,
-) -> iroha_data_model::domain::DomainId {
-    iroha_data_model::domain::DomainId::new(Name::from(domain))
+    alias: &account::rekey::AccountAlias,
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+) -> Result<Option<iroha_data_model::domain::DomainId>> {
+    alias.domain_id(catalog).map_err(|err| {
+        let message = format!("invalid account alias domain scope: {err}");
+        onboarding_invalid_request(&message)
+    })
 }
 
 #[iroha_futures::telemetry_future]
@@ -42657,11 +42661,8 @@ pub async fn handle_v1_accounts_onboard_multisig(
     let transaction_ttl_ms = NonZeroU64::new(transaction_ttl_ms.unwrap_or(86_400_000).max(1))
         .ok_or_else(|| onboarding_invalid_request("transaction_ttl_ms must be positive"))?;
     let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
-    let register = MultisigRegister::with_account(
-        multisig_account.clone(),
-        alias_label.domain.clone().map(alias_domain_to_domain_id),
-        spec,
-    );
+    let alias_domain = alias_domain_to_domain_id(&alias_label, &nexus.dataspace_catalog)?;
+    let register = MultisigRegister::with_account(multisig_account.clone(), alias_domain, spec);
     let bind_alias = SetPrimaryAccountAlias {
         account: multisig_account.clone(),
         alias: Some(alias_label),

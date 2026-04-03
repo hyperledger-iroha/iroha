@@ -2,6 +2,42 @@
 
 Last updated: 2026-04-03
 
+Latest sync (2026-04-03 dataspace-qualified domain refactor):
+domains no longer exist as standalone labels in the first-release model; the
+canonical public shape is now always `domain.dataspace`.
+
+- shipped in `iroha_data_model` / `iroha_executor_data_model` /
+  `iroha_core` / `iroha_torii` / `iroha_genesis` / `iroha_test_network` /
+  `iroha_cli`:
+  - `DomainId` now stores both the domain label and dataspace alias and rejects
+    bare-domain parsing;
+  - account-alias resolution gained an explicit
+    `AccountAlias::domain_id(&DataSpaceCatalog)` helper, and alias-domain
+    permissions now carry a full `DomainId` instead of a bare
+    `AccountAliasDomain`;
+  - core/executor/Torii permission matching, alias ownership checks, domain
+    counters, and alias-derived domain lookups now compare fully qualified
+    domain ids;
+  - genesis builders now require explicit `DomainId` inputs, and bundled sample
+    genesis/test-network fixtures were rewritten to pass `*.universal`
+    explicitly; and
+  - the synthetic “universal domain wrapper” fallback was removed from the
+    account-created event path, so domain events are emitted only when a real
+    domain-qualified alias exists.
+- focused verification is green for compile/format, including:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_synth_domain cargo check -p iroha_data_model -p iroha_core -p iroha_executor -p iroha_torii -p iroha_cli -p iroha_test_network`
+
+Open work for this slice now remains:
+- rerun focused `cargo test` coverage outside the current sandbox restriction so
+  Norito’s Gradle/Kotlin parity checks under `~/.gradle` can complete and stamp
+  the touched crates green;
+- audit remaining event/query surfaces that still assume a single domain per
+  account and either qualify them with explicit dataspace/domain mappings or
+  split them into dataspace-root versus domain-scoped paths; and
+- update any remaining docs and fixture files outside the touched crates that
+  still show bare-domain literals instead of `domain.dataspace`.
+
 Latest sync (2026-04-03 opaque asset-definition ID cleanup):
 opaque canonical `AssetDefinitionId` values no longer fabricate the legacy
 synthetic `aid` domain/name projection.
