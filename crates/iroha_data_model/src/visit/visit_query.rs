@@ -41,6 +41,8 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_parameters(FindParameters),
         visit_find_account_by_id(FindAccountById),
         visit_find_aliases_by_account_id(FindAliasesByAccountId),
+        visit_find_account_recovery_policy_by_alias(FindAccountRecoveryPolicyByAlias),
+        visit_find_account_recovery_request_by_alias(FindAccountRecoveryRequestByAlias),
         visit_find_proof_record_by_id(FindProofRecordById),
         visit_find_contract_manifest_by_code_hash(FindContractManifestByCodeHash),
         visit_find_abi_version(FindAbiVersion),
@@ -117,6 +119,12 @@ macro_rules! query_visitors {
             visit_find_parameters(&FindParameters),
             visit_find_account_by_id(&$crate::query::account::FindAccountById),
             visit_find_aliases_by_account_id(&$crate::query::account::FindAliasesByAccountId),
+            visit_find_account_recovery_policy_by_alias(
+                &$crate::query::account::FindAccountRecoveryPolicyByAlias
+            ),
+            visit_find_account_recovery_request_by_alias(
+                &$crate::query::account::FindAccountRecoveryRequestByAlias
+            ),
             visit_find_proof_record_by_id(&$crate::query::proof::FindProofRecordById),
             visit_find_contract_manifest_by_code_hash(
                 &$crate::query::smart_contract::FindContractManifestByCodeHash
@@ -213,6 +221,8 @@ mod tests {
             SingularQueryBox::FindParameters(_) => {}
             SingularQueryBox::FindAccountById(_) => {}
             SingularQueryBox::FindAliasesByAccountId(_) => {}
+            SingularQueryBox::FindAccountRecoveryPolicyByAlias(_) => {}
+            SingularQueryBox::FindAccountRecoveryRequestByAlias(_) => {}
             SingularQueryBox::FindProofRecordById(_) => {}
             SingularQueryBox::FindContractManifestByCodeHash(_) => {}
             SingularQueryBox::FindAbiVersion(_) => {}

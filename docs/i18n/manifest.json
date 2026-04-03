@@ -145,6 +145,7 @@
     "docs/source/confidential_key_vectors.json",
     "docs/source/norito_json_inventory.json",
     "docs/source/grafana_*.json",
+    "2026-annual-hyperledger-iroha.md",
     "target/**",
     "vendor/**",
     "artifacts/**",

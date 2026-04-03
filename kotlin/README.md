@@ -9,8 +9,8 @@ Not published to Maven Central yet. Build locally and consume via `mavenLocal()`
 | Artifact | Type | Description |
 |----------|------|-------------|
 | `org.hyperledger.iroha.sdk:core-jvm` | JAR | Pure Kotlin/JVM — models, codec, crypto, client, offline protocol |
-| `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager |
-| `org.hyperledger.iroha.sdk:offline-wallet-android` | AAR | Offline wallet: JNI natives, attestation (Play Integrity, SafetyDetect) |
+| `org.hyperledger.iroha.sdk:client-android` | AAR | Android keystore, device telemetry, IrohaKeyManager, shared JNI bridge for ML-DSA / offline flows |
+| `org.hyperledger.iroha.sdk:offline-wallet-android` | AAR | Offline wallet APIs and attestation (Play Integrity, SafetyDetect) layered on `client-android` |
 
 ### Consumer usage
 
@@ -26,7 +26,7 @@ implementation("org.hyperledger.iroha.sdk:core-jvm:0.1-SNAPSHOT")
 // Android wallet without offline payments
 implementation("org.hyperledger.iroha.sdk:client-android:0.1-SNAPSHOT")
 
-// Android wallet with offline payments (adds ~14MB arm64 native lib)
+// Android wallet with offline payments
 implementation("org.hyperledger.iroha.sdk:offline-wallet-android:0.1-SNAPSHOT")
 ```
 
@@ -56,9 +56,9 @@ These modules have no native dependencies — they build immediately.
 ./gradlew :core-jvm:test --console=plain
 ```
 
-### Step 2: Build native libraries (for offline-wallet-android)
+### Step 2: Build native libraries (for `client-android` and offline-wallet consumers)
 
-The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
+The `libconnect_norito_bridge.so` files are **not tracked in git** — they are built from the Rust crate at `crates/connect_norito_bridge` in the same iroha repository. The Gradle task now lives on `client-android`, which owns the shared native bridge used for ML-DSA signing and by the offline-wallet layer. It defaults to `../..` as the iroha root (override via `iroha.dir` in `local.properties` if needed).
 
 **One-time setup:**
 
@@ -76,13 +76,13 @@ echo $ANDROID_NDK_HOME  # must point to NDK 28+
 **Build the .so files:**
 
 ```bash
-./gradlew :offline-wallet-android:buildNativeLibs
+./gradlew :client-android:buildNativeLibs
 ```
 
 This Gradle task:
 1. Reads `iroha.dir` from `local.properties`
 2. Runs `cargo ndk` for `arm64-v8a` and `x86_64` targets
-3. Copies `libconnect_norito_bridge.so` into `offline-wallet-android/src/main/jniLibs/`
+3. Copies `libconnect_norito_bridge.so` into `client-android/src/main/jniLibs/`
 
 First build takes ~5-10 minutes (compiles all Rust dependencies). Incremental builds are faster.
 
@@ -90,8 +90,8 @@ First build takes ~5-10 minutes (compiles all Rust dependencies). Incremental bu
 
 | ABI | File | Size |
 |-----|------|-----:|
-| arm64-v8a | `jniLibs/arm64-v8a/libconnect_norito_bridge.so` | ~14MB |
-| x86_64 | `jniLibs/x86_64/libconnect_norito_bridge.so` | ~18MB |
+| arm64-v8a | `client-android/src/main/jniLibs/arm64-v8a/libconnect_norito_bridge.so` | ~14MB |
+| x86_64 | `client-android/src/main/jniLibs/x86_64/libconnect_norito_bridge.so` | ~18MB |
 
 > **Note:** `armeabi-v7a` (32-bit ARM) is not supported due to an upstream `rkyv` crate incompatibility with 32-bit targets.
 
@@ -116,16 +116,41 @@ ls ~/.m2/repository/org/hyperledger/iroha/sdk/offline-wallet-android/0.1-SNAPSHO
 
 ```bash
 # Full build from scratch (after local.properties is configured):
-./gradlew :offline-wallet-android:buildNativeLibs  # ~5-10 min first time
+./gradlew :client-android:buildNativeLibs          # ~5-10 min first time
 ./gradlew publishToMavenLocal                       # ~30 sec
 
 # Rebuild only core-jvm (no native deps):
 ./gradlew :core-jvm:publishToMavenLocal
 
 # Rebuild after Rust source changes:
-./gradlew :offline-wallet-android:buildNativeLibs
+./gradlew :client-android:buildNativeLibs
+./gradlew :client-android:publishToMavenLocal
 ./gradlew :offline-wallet-android:publishToMavenLocal
 ```
+
+## Signing Algorithm Selection
+
+Android apps can now choose the transaction and offline-wallet signing
+algorithm explicitly:
+
+```kotlin
+import org.hyperledger.iroha.sdk.IrohaKeyManager
+import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
+import org.hyperledger.iroha.sdk.crypto.keystore.KeyGenParameters
+
+val ed25519Manager = IrohaKeyManager.withSoftwareFallback()
+val mlDsaManager = IrohaKeyManager.withSoftwareFallback(SigningAlgorithm.ML_DSA)
+
+val tunedManager = IrohaKeyManager.withDefaultProviders(
+    KeyGenParameters.Builder()
+        .setSigningAlgorithm(SigningAlgorithm.ML_DSA)
+        .build()
+)
+```
+
+`ED25519` remains the default. `ML_DSA` currently uses the shared native bridge
+and is software-only in this SDK pass, so hardware/StrongBox preferences fail
+fast instead of silently downgrading.
 
 ## Motivation
 
@@ -155,9 +180,9 @@ The original SDK shipped as a single monolith. This rewrite splits it into three
 
 - **`core-jvm`** — pure JVM, no Android framework dependency. Usable in Kotlin Multiplatform modules, JUnit tests without Robolectric, server-side tools, and admin panels. Contains all protocol logic: Norito codec, transaction building, client transport, offline journal, connect protocol.
 
-- **`client-android`** — Android keystore integration, hardware-backed key generation, device telemetry. Depends on `core-jvm` via `api()` — consumers get all core types transitively.
+- **`client-android`** — Android keystore integration, hardware-backed key generation, device telemetry, and the shared JNI bridge used for ML-DSA signing. Depends on `core-jvm` via `api()` — consumers get all core types transitively.
 
-- **`offline-wallet-android`** — extracted specifically to isolate the `libconnect_norito_bridge.so` native library (~14MB arm64). Consumers who don't need offline payments avoid this APK size impact entirely.
+- **`offline-wallet-android`** — offline wallet APIs and attestation helpers layered on `client-android`.
 
 ### Null safety
 

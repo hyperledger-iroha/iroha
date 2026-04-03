@@ -806,6 +806,9 @@ mod account {
             #[has_origin(asset_event => &asset_event.origin().account)]
             /// Nested asset event scoped to this account.
             Asset(AssetEvent),
+            #[has_origin(controller_replaced => &controller_replaced.account)]
+            /// Account controller was replaced while preserving linked state.
+            ControllerReplaced(AccountControllerReplaced),
             #[has_origin(permission_changed => &permission_changed.account)]
             /// Permission was granted to the account.
             PermissionAdded(AccountPermissionChanged),
@@ -824,9 +827,37 @@ mod account {
             #[has_origin(metadata_changed => &metadata_changed.target)]
             /// Metadata entry was removed.
             MetadataRemoved(AccountMetadataChanged),
+            #[has_origin(recovery_event => recovery_event.origin())]
+            /// Social recovery lifecycle event scoped to this account.
+            Recovery(AccountRecoveryEvent),
             #[has_origin(repo_event => repo_event.origin())]
             /// Repo agreement lifecycle event scoped to this account.
             Repo(RepoAccountEvent),
+        }
+    }
+
+    data_event! {
+        #[has_origin(origin = Account)]
+        /// Account social-recovery lifecycle event.
+        pub enum AccountRecoveryEvent {
+            #[has_origin(event => &event.account)]
+            /// Recovery policy was set or replaced.
+            PolicySet(AccountRecoveryPolicySet),
+            #[has_origin(event => &event.account)]
+            /// Recovery policy was cleared.
+            PolicyCleared(AccountRecoveryPolicyCleared),
+            #[has_origin(event => &event.account)]
+            /// Recovery request was proposed.
+            Proposed(AccountRecoveryProposed),
+            #[has_origin(event => &event.account)]
+            /// Recovery request approval was recorded.
+            Approved(AccountRecoveryApproved),
+            #[has_origin(event => &event.account)]
+            /// Recovery request was cancelled.
+            Cancelled(AccountRecoveryCancelled),
+            #[has_origin(event => &event.account)]
+            /// Recovery request was finalized.
+            Finalized(AccountRecoveryFinalized),
         }
     }
 
@@ -853,6 +884,20 @@ mod account {
             pub permission: Permission,
         }
 
+        /// Payload emitted when an account controller is replaced.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct AccountControllerReplaced {
+            /// New canonical account identifier after replacement.
+            pub account: AccountId,
+            /// Previous canonical account identifier before replacement.
+            pub previous_account: AccountId,
+            /// Previous controller attached to the account.
+            pub previous_controller: crate::account::AccountController,
+            /// New controller attached to the account.
+            pub new_controller: crate::account::AccountController,
+        }
+
         /// Depending on the wrapping event, [`AccountRoleChanged`] represents the granted or revoked role
         #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
@@ -861,6 +906,87 @@ mod account {
         pub struct AccountRoleChanged {
             pub account: AccountId,
             pub role: RoleId,
+        }
+
+        /// Recovery-policy update payload.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        pub struct AccountRecoveryPolicySet {
+            /// Account whose stable alias policy was updated.
+            pub account: AccountId,
+            /// Stable alias targeted by the policy.
+            pub alias: crate::account::AccountAlias,
+            /// Recovery policy that was persisted.
+            pub policy: crate::account::AccountRecoveryPolicy,
+        }
+
+        /// Recovery-policy removal payload.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct AccountRecoveryPolicyCleared {
+            /// Account whose stable alias policy was cleared.
+            pub account: AccountId,
+            /// Stable alias whose policy was removed.
+            pub alias: crate::account::AccountAlias,
+        }
+
+        /// Recovery-request proposal payload.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        pub struct AccountRecoveryProposed {
+            /// Account currently active behind the alias.
+            pub account: AccountId,
+            /// Stable alias targeted by the request.
+            pub alias: crate::account::AccountAlias,
+            /// Request persisted in world state.
+            pub request: crate::account::AccountRecoveryRequest,
+        }
+
+        /// Recovery-request approval payload.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        pub struct AccountRecoveryApproved {
+            /// Account currently active behind the alias.
+            pub account: AccountId,
+            /// Stable alias targeted by the request.
+            pub alias: crate::account::AccountAlias,
+            /// Guardian that recorded the approval.
+            pub approver: AccountId,
+            /// Updated request after approval was recorded.
+            pub request: crate::account::AccountRecoveryRequest,
+        }
+
+        /// Recovery-request cancellation payload.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        pub struct AccountRecoveryCancelled {
+            /// Account currently active behind the alias.
+            pub account: AccountId,
+            /// Stable alias targeted by the request.
+            pub alias: crate::account::AccountAlias,
+            /// Authority that cancelled the request.
+            pub cancelled_by: AccountId,
+            /// Updated request after cancellation.
+            pub request: crate::account::AccountRecoveryRequest,
+        }
+
+        /// Recovery-request finalization payload.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+        pub struct AccountRecoveryFinalized {
+            /// New account active behind the alias after finalization.
+            pub account: AccountId,
+            /// Previous account active behind the alias before finalization.
+            pub previous_account: AccountId,
+            /// Stable alias targeted by the request.
+            pub alias: crate::account::AccountAlias,
+            /// Finalized request snapshot.
+            pub request: crate::account::AccountRecoveryRequest,
         }
     }
 
@@ -905,7 +1031,17 @@ mod account {
 }
 
 #[cfg(feature = "json")]
-impl_json_via_norito_bytes!(AccountPermissionChanged, AccountRoleChanged);
+impl_json_via_norito_bytes!(
+    AccountPermissionChanged,
+    AccountRoleChanged,
+    AccountControllerReplaced,
+    AccountRecoveryPolicySet,
+    AccountRecoveryPolicyCleared,
+    AccountRecoveryProposed,
+    AccountRecoveryApproved,
+    AccountRecoveryCancelled,
+    AccountRecoveryFinalized
+);
 
 mod repo_account {
     //! Repo lifecycle events scoped to individual accounts.
@@ -2304,7 +2440,10 @@ pub mod prelude {
     pub use super::{
         DataEvent, HasOrigin, MetadataChanged,
         account::{
-            AccountCreated, AccountEvent, AccountEventSet, AccountPermissionChanged,
+            AccountControllerReplaced, AccountCreated, AccountEvent, AccountEventSet,
+            AccountPermissionChanged, AccountRecoveryApproved, AccountRecoveryCancelled,
+            AccountRecoveryEvent, AccountRecoveryEventSet, AccountRecoveryFinalized,
+            AccountRecoveryPolicyCleared, AccountRecoveryPolicySet, AccountRecoveryProposed,
             AccountRoleChanged,
         },
         asset::{

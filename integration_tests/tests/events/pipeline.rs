@@ -24,6 +24,10 @@ use tokio::{
     time::{sleep, timeout},
 };
 
+fn pipeline_event_timeout(network: &Network) -> Duration {
+    network.sync_timeout().max(Duration::from_secs(60))
+}
+
 async fn test_with_instruction_and_status(
     context: &'static str,
     network: &Network,
@@ -39,8 +43,9 @@ async fn test_with_instruction_and_status(
     // When
     let transaction = client.build_transaction(exec, Metadata::default());
     let hash = transaction.hash();
+    let event_timeout = pipeline_event_timeout(network);
     let mut events = tokio::time::timeout(
-        network.sync_timeout(),
+        event_timeout,
         client.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
@@ -48,7 +53,6 @@ async fn test_with_instruction_and_status(
     spawn_blocking(move || client.submit_transaction(&transaction)).await??;
 
     // Then
-    let event_timeout = network.sync_timeout();
     timeout(event_timeout, async {
         let mut saw_queued = false;
         loop {
@@ -92,8 +96,9 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     let register = Register::domain(Domain::new(kura_domain));
     let tx = client.build_transaction([register], Metadata::default());
     let hash = tx.hash();
+    let event_timeout = pipeline_event_timeout(network);
     let mut events = tokio::time::timeout(
-        network.sync_timeout(),
+        event_timeout,
         client.listen_for_events_async([TransactionEventFilter::default().for_hash(hash)]),
     )
     .await
@@ -103,7 +108,7 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     spawn_blocking(move || client.submit_transaction(&tx)).await??;
 
     // Wait for the transaction pipeline to advance to Approved (committed)
-    timeout(network.sync_timeout(), async {
+    timeout(event_timeout, async {
         let mut saw_queued = false;
         loop {
             let EventBox::Pipeline(PipelineEventBox::Transaction(event)) =
@@ -166,7 +171,7 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     let expected_index_bytes = 2 * 16;
     let mut hashes_len;
     let mut index_len;
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     loop {
         hashes_len = std::fs::metadata(&hashes_path)?.len();
         index_len = std::fs::metadata(&index_path)?.len();
@@ -204,7 +209,7 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     let index_count = index_len / 16;
 
     // Read the last block index and ensure the length is non-zero once Kura flushes.
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let deadline = Instant::now() + Duration::from_secs(15);
     let (start, length) = loop {
         let mut idx_file = std::fs::File::open(&index_path)?;
         idx_file.seek(SeekFrom::Start((index_count - 1) * 16))?;

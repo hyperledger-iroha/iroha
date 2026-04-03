@@ -21,6 +21,12 @@ All logic must remain deterministic across peers and hardware.
 - Usage accumulator: subscription metadata updated by a by-call contract.
 - Optional invoice: `subscription_invoice` metadata stored on the subscription NFT for the latest attempt (apps can mint separate invoice NFTs if they need a full history).
 
+Scheduled billing triggers may also opt into the core time-trigger retry policy.
+In v1 this is a fixed-delay retry keyed off committed block timestamps, limited
+to one outstanding retry stream per trigger, with no backoff. While a retry is
+pending, missed periodic billing ticks are dropped rather than replayed, and an
+exhausted retry budget unregisters the trigger.
+
 ## Canonical Metadata Schemas (Norito JSON)
 The schema types are defined in `crates/iroha_data_model/src/subscription.rs` and
 match the JSON layouts below (Norito JSON).

@@ -32,6 +32,8 @@ pub struct SpecializedAction<F> {
     pub authority: AccountId,
     /// Defines events which trigger the `Action`
     pub filter: F,
+    /// Optional retry policy for scheduled time triggers.
+    pub retry_policy: Option<TimeTriggerRetryPolicy>,
     /// Metadata used as persistent storage for trigger data.
     pub metadata: Metadata,
 }
@@ -55,6 +57,7 @@ impl<F> SpecializedAction<F> {
             repeats,
             authority,
             filter,
+            retry_policy: None,
             metadata: Metadata::default(),
         }
     }
@@ -151,6 +154,9 @@ where
         write("filter", &|out| {
             JsonSerializeTrait::json_serialize(&self.filter, out);
         });
+        write("retry_policy", &|out| {
+            JsonSerializeTrait::json_serialize(&self.retry_policy, out);
+        });
         write("metadata", &|out| {
             JsonSerializeTrait::json_serialize(&self.metadata, out);
         });
@@ -169,6 +175,7 @@ where
         let mut repeats: Option<Repeats> = None;
         let mut authority: Option<AccountId> = None;
         let mut filter: Option<F> = None;
+        let mut retry_policy: Option<Option<TimeTriggerRetryPolicy>> = None;
         let mut metadata: Option<Metadata> = None;
 
         while let Some(key) = visitor.next_key()? {
@@ -198,6 +205,12 @@ where
                     }
                     filter = Some(visitor.parse_value()?);
                 }
+                "retry_policy" => {
+                    if retry_policy.is_some() {
+                        return Err(json::MapVisitor::duplicate_field("retry_policy"));
+                    }
+                    retry_policy = Some(visitor.parse_value()?);
+                }
                 "metadata" => {
                     if metadata.is_some() {
                         return Err(json::MapVisitor::duplicate_field("metadata"));
@@ -217,9 +230,11 @@ where
         let repeats = repeats.ok_or_else(|| json::MapVisitor::missing_field("repeats"))?;
         let authority = authority.ok_or_else(|| json::MapVisitor::missing_field("authority"))?;
         let filter = filter.ok_or_else(|| json::MapVisitor::missing_field("filter"))?;
+        let retry_policy = retry_policy.unwrap_or(None);
         let metadata = metadata.ok_or_else(|| json::MapVisitor::missing_field("metadata"))?;
 
         let mut action = Self::new(executable, repeats, authority, filter);
+        action.retry_policy = retry_policy;
         action.metadata = metadata;
         Ok(action)
     }
@@ -240,6 +255,7 @@ where
             repeats: value.repeats,
             authority: value.authority,
             filter,
+            retry_policy: value.retry_policy,
             metadata: value.metadata,
         }
     }
@@ -266,6 +282,7 @@ macro_rules! impl_try_from_box {
                             executable,
                             repeats,
                             authority,
+                            retry_policy,
                             metadata,
                             ..
                         } = boxed.action().clone();
@@ -274,6 +291,7 @@ macro_rules! impl_try_from_box {
                             repeats,
                             authority,
                             filter: concrete_filter,
+                            retry_policy,
                             metadata,
                         };
                         Ok(Self {
@@ -308,6 +326,10 @@ pub struct LoadedAction<F> {
     pub authority: AccountId,
     /// Condition defining which events invoke the executable.
     pub filter: F,
+    /// Optional retry policy for scheduled time triggers.
+    pub retry_policy: Option<TimeTriggerRetryPolicy>,
+    /// Internal retry runtime state for time triggers.
+    pub retry_state: Option<TimeTriggerRetryState>,
     /// Arbitrary metadata stored for this trigger.
     pub metadata: Metadata,
 }
@@ -318,6 +340,43 @@ impl<F> LoadedAction<F> {
             ExecutableRef::Ivm(blob_hash) => Some(blob_hash),
             ExecutableRef::Instructions(_) => None,
         }
+    }
+}
+
+/// Internal retry runtime state for scheduled time triggers.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Decode, Encode)]
+pub struct TimeTriggerRetryState {
+    /// Number of automatic retries already consumed.
+    pub retries_used: u32,
+    /// Millisecond timestamp when the next retry becomes eligible.
+    pub next_retry_at_ms: u64,
+}
+
+#[cfg(feature = "json")]
+impl json::JsonSerialize for TimeTriggerRetryState {
+    fn json_serialize(&self, out: &mut String) {
+        use base64::Engine as _;
+
+        let bytes = norito::to_bytes(self)
+            .expect("TimeTriggerRetryState Norito serialization must succeed");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        json::JsonSerialize::json_serialize(&encoded, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl json::JsonDeserialize for TimeTriggerRetryState {
+    fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+        use base64::Engine as _;
+
+        let encoded = parser.parse_string()?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded.as_str())
+            .map_err(|err| json::Error::Message(err.to_string()))?;
+        let archived = norito::from_bytes::<TimeTriggerRetryState>(&bytes)
+            .map_err(|err| json::Error::Message(err.to_string()))?;
+        norito::core::NoritoDeserialize::try_deserialize(archived)
+            .map_err(|err| json::Error::Message(err.to_string()))
     }
 }
 
@@ -351,6 +410,12 @@ where
         write("filter", &|out| {
             JsonSerializeTrait::json_serialize(&self.filter, out);
         });
+        write("retry_policy", &|out| {
+            JsonSerializeTrait::json_serialize(&self.retry_policy, out);
+        });
+        write("retry_state", &|out| {
+            JsonSerializeTrait::json_serialize(&self.retry_state, out);
+        });
         write("metadata", &|out| {
             JsonSerializeTrait::json_serialize(&self.metadata, out);
         });
@@ -377,6 +442,16 @@ where
             }
         };
 
+        let retry_policy = map
+            .remove("retry_policy")
+            .map(json::from_value)
+            .transpose()?
+            .unwrap_or(None);
+        let retry_state = map
+            .remove("retry_state")
+            .map(json::from_value)
+            .transpose()?
+            .unwrap_or(None);
         let mut take_field = |name: &str| -> Result<JsonValue, json::Error> {
             map.remove(name)
                 .ok_or_else(|| json::Error::missing_field(name))
@@ -397,6 +472,8 @@ where
             repeats,
             authority,
             filter,
+            retry_policy,
+            retry_state,
             metadata,
         })
     }
@@ -467,6 +544,8 @@ impl<F: EventFilter + Into<EventFilterBox> + Clone> LoadedActionTrait for Loaded
             repeats,
             authority,
             filter,
+            retry_policy,
+            retry_state,
             metadata,
         } = self;
 
@@ -475,6 +554,8 @@ impl<F: EventFilter + Into<EventFilterBox> + Clone> LoadedActionTrait for Loaded
             repeats,
             authority,
             filter: filter.into(),
+            retry_policy,
+            retry_state,
             metadata,
         }
     }
@@ -537,6 +618,8 @@ mod tests {
             repeats: Repeats::Exactly(3),
             authority: AccountId::new(KeyPair::random().public_key().clone()),
             filter: DataEventFilter::Any,
+            retry_policy: None,
+            retry_state: None,
             metadata: Metadata::default(),
         };
 
@@ -550,6 +633,8 @@ mod tests {
             action.authority.subject_id()
         );
         assert_eq!(reparsed.filter, action.filter);
+        assert_eq!(reparsed.retry_policy, action.retry_policy);
+        assert_eq!(reparsed.retry_state, action.retry_state);
         assert_eq!(reparsed.metadata, action.metadata);
 
         match reparsed.executable {

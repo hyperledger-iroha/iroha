@@ -32,6 +32,9 @@ use norito::json::Value as JsonValue;
 use reqwest::header::CONTENT_TYPE;
 use tokio::runtime::Runtime;
 
+const DOMAIN_REGISTRATION_RECOVERY_TIMEOUT: Duration = Duration::from_secs(60);
+const DOMAIN_REGISTRATION_RECOVERY_POLL: Duration = Duration::from_millis(250);
+
 fn start_network(
     builder: NetworkBuilder,
     context: &'static str,
@@ -58,9 +61,85 @@ fn upgrade_executor(client: &Client, executor: impl AsRef<str>) -> Result<()> {
     Ok(())
 }
 
+fn is_inconclusive_domain_registration_error(err: &eyre::Report) -> bool {
+    const NEEDLES: [&str; 4] = [
+        "haven't got tx confirmation within",
+        "transaction queued for too long",
+        "fallback status check failed",
+        "operation timed out",
+    ];
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        NEEDLES.iter().any(|needle| text.contains(needle))
+    })
+}
+
+fn domain_visible(client: &Client, domain: &DomainId) -> Result<bool> {
+    Ok(client
+        .query(FindDomains::new())
+        .execute_all()?
+        .into_iter()
+        .any(|registered| registered.id() == domain))
+}
+
+fn wait_for_domain_visibility(
+    client: &Client,
+    domain: &DomainId,
+    timeout: Duration,
+) -> Result<bool> {
+    let deadline = Instant::now() + timeout;
+    let mut last_err = None;
+
+    loop {
+        match domain_visible(client, domain) {
+            Ok(true) => return Ok(true),
+            Ok(false) => {}
+            Err(err) => last_err = Some(err),
+        }
+
+        if Instant::now() >= deadline {
+            break;
+        }
+        std::thread::sleep(DOMAIN_REGISTRATION_RECOVERY_POLL);
+    }
+
+    if let Some(err) = last_err {
+        Err(err).wrap_err_with(|| {
+            format!("timed out waiting for multisig test domain `{domain}` visibility")
+        })
+    } else {
+        Ok(false)
+    }
+}
+
 fn register_runtime_domain(network: &Network, client: &Client, domain: &DomainId) -> Result<()> {
-    submit_register_domain_with_network_lease(network, client, Domain::new(domain.clone()))
-        .wrap_err_with(|| format!("register multisig test domain `{domain}`"))
+    let register_domain =
+        || submit_register_domain_with_network_lease(network, client, Domain::new(domain.clone()));
+    match register_domain() {
+        Ok(()) => Ok(()),
+        Err(err) if is_inconclusive_domain_registration_error(&err) => {
+            if wait_for_domain_visibility(client, domain, DOMAIN_REGISTRATION_RECOVERY_TIMEOUT)? {
+                return Ok(());
+            }
+
+            let retry = client.submit_blocking(Register::domain(Domain::new(domain.clone())));
+            match retry {
+                Ok(_) => Ok(()),
+                Err(retry_err)
+                    if wait_for_domain_visibility(
+                        client,
+                        domain,
+                        DOMAIN_REGISTRATION_RECOVERY_TIMEOUT,
+                    )? =>
+                {
+                    Ok(())
+                }
+                Err(retry_err) => Err(retry_err),
+            }
+        }
+        Err(err) => Err(err),
+    }
+    .wrap_err_with(|| format!("register multisig test domain `{domain}`"))
 }
 
 fn register_runtime_domain_and_transfer_to_bob(
@@ -562,10 +641,12 @@ fn multisig_register_materializes_missing_signatory_account_after_executor_upgra
         return Ok(());
     }
 
-    upgrade_executor(&test_client, "executor_with_admin")?;
-
     let domain: DomainId = "multisig-register-materialize-upgraded".parse().unwrap();
     register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
+    // This regression targets multisig account materialization after the executor
+    // upgrade. Keep the domain bootstrap on the pre-upgrade executor so the test
+    // stays scoped to the multisig path rather than unrelated domain admission.
+    upgrade_executor(&test_client, "executor_with_admin")?;
 
     let existing_signer = gen_account_in(&domain);
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
@@ -618,10 +699,11 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account_aft
         return Ok(());
     }
 
-    upgrade_executor(&test_client, "executor_with_admin")?;
-
     let domain: DomainId = "multisig-register-rejected-upgraded".parse().unwrap();
     register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
+    // Keep domain bootstrap outside the upgraded executor so this test continues
+    // to isolate the post-upgrade multisig register behavior it actually covers.
+    upgrade_executor(&test_client, "executor_with_admin")?;
 
     let existing_signer = gen_account_in(&domain);
     let non_signatory = gen_account_in(&domain);
@@ -1216,4 +1298,16 @@ fn debug_account(account_id: &AccountId, client: &Client) {
         .unwrap();
 
     eprintln!("{account:#?}");
+}
+
+#[test]
+fn inconclusive_domain_registration_error_matches_queue_timeout() {
+    let err = eyre!("transaction queued for too long");
+    assert!(is_inconclusive_domain_registration_error(&err));
+}
+
+#[test]
+fn inconclusive_domain_registration_error_ignores_rejections() {
+    let err = eyre!("domain registration rejected");
+    assert!(!is_inconclusive_domain_registration_error(&err));
 }

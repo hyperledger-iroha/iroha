@@ -79,11 +79,35 @@ fn log_vote_validation_drop(
 const VOTE_VERIFY_DEFERRED_DISPATCH_MAX: usize = 32;
 const VOTE_VERIFY_POP_CACHE_MAX: usize = 64;
 const VOTE_VERIFY_TOPOLOGY_CACHE_MAX: usize = 64;
+// Same-height commit votes are on the liveness hot path. For small rosters, verify them inline so
+// they cannot be stranded behind a vote-worker backlog during repeated view changes.
+const VOTE_VERIFY_INLINE_ROSTER_MAX: usize = 8;
 
 impl Actor {
     fn should_fast_path_new_view_vote(&self, vote: &crate::sumeragi::consensus::Vote) -> bool {
         vote.phase == Phase::NewView
             && vote.height == self.committed_height_snapshot().saturating_add(1)
+    }
+
+    fn should_fast_path_commit_vote(&self, vote: &crate::sumeragi::consensus::Vote) -> bool {
+        vote.phase == Phase::Commit
+            && vote.height == self.committed_height_snapshot().saturating_add(1)
+    }
+
+    fn should_fast_path_vote_verification(
+        &self,
+        vote: &crate::sumeragi::consensus::Vote,
+        signature_topology: &super::network_topology::Topology,
+    ) -> bool {
+        self.should_fast_path_new_view_vote(vote)
+            || (self.should_fast_path_commit_vote(vote)
+                && signature_topology.as_ref().len() <= VOTE_VERIFY_INLINE_ROSTER_MAX
+                && (self.block_known_locally(vote.block_hash)
+                    || self.runtime_da_enabled()
+                    || self
+                        .pending
+                        .missing_block_requests
+                        .contains_key(&vote.block_hash)))
     }
 
     fn vote_signer_peer_from_base_topology(
@@ -150,11 +174,10 @@ impl Actor {
         })
     }
 
-    pub(super) fn local_conflicting_slot_vote(
+    pub(super) fn local_same_height_vote(
         &self,
         height: u64,
         epoch: u64,
-        block_hash: HashOf<BlockHeader>,
     ) -> Option<crate::sumeragi::consensus::Vote> {
         let local_peer = self.common_config.peer.id();
         self.vote_log.values().find_map(|existing| {
@@ -164,7 +187,6 @@ impl Actor {
                     | crate::sumeragi::consensus::Phase::Commit
             ) || existing.height != height
                 || existing.epoch != epoch
-                || existing.block_hash == block_hash
             {
                 return None;
             }
@@ -172,6 +194,16 @@ impl Actor {
                 .filter(|peer| peer == local_peer)
                 .map(|_| existing.clone())
         })
+    }
+
+    pub(super) fn local_conflicting_slot_vote(
+        &self,
+        height: u64,
+        epoch: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) -> Option<crate::sumeragi::consensus::Vote> {
+        self.local_same_height_vote(height, epoch)
+            .filter(|existing| existing.block_hash != block_hash)
     }
 
     pub(super) fn local_conflicting_frontier_vote(
@@ -484,7 +516,7 @@ impl Actor {
             );
             return;
         }
-        if self.should_fast_path_new_view_vote(&vote) {
+        if self.should_fast_path_new_view_vote(&vote) || self.should_fast_path_commit_vote(&vote) {
             self.handle_vote(vote);
             return;
         }
@@ -688,7 +720,7 @@ impl Actor {
             }
             return;
         }
-        if self.should_fast_path_new_view_vote(&vote) {
+        if self.should_fast_path_vote_verification(&vote, context.signature_topology.as_ref()) {
             let chain_id = self.common_config.chain.clone();
             let evidence_context = super::evidence::EvidenceValidationContext {
                 topology: &context.topology,

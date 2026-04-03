@@ -5,7 +5,7 @@ use std::sync::Arc;
 use axum::{extract::Path, response::IntoResponse};
 use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_crypto::Algorithm;
-use iroha_data_model::account::curve::CurveId;
+use iroha_data_model::{account::curve::CurveId, transaction::SignedTransaction};
 use iroha_logger::warn;
 use mv::storage::StorageReadOnly;
 use norito::derive::{NoritoDeserialize, NoritoSerialize};
@@ -24,6 +24,8 @@ pub struct NodeCapabilitiesResponse {
     pub abi_version: u16,
     /// Data model compatibility version for SDK handshakes.
     pub data_model_version: u32,
+    /// Norito schema hash for `SignedTransaction` submit payloads.
+    pub signed_transaction_schema_hash_hex: String,
     /// Cryptography capabilities (SM, default hashes, allow-lists)
     pub crypto: NodeCryptoCapabilities,
 }
@@ -160,6 +162,7 @@ pub async fn handle_node_capabilities(
     Ok(NodeCapabilitiesResponse {
         abi_version: world.abi_version(),
         data_model_version: iroha_data_model::DATA_MODEL_VERSION,
+        signed_transaction_schema_hash_hex: signed_transaction_schema_hash_hex(),
         crypto: NodeCryptoCapabilities {
             sm: NodeSmCapabilities {
                 enabled: crypto_cfg.sm_helpers_enabled(),
@@ -177,6 +180,10 @@ pub async fn handle_node_capabilities(
             curves: curve_caps,
         },
     })
+}
+
+fn signed_transaction_schema_hash_hex() -> String {
+    hex::encode(<SignedTransaction as norito::core::NoritoSerialize>::schema_hash())
 }
 
 fn summarize_curve_capabilities(
@@ -486,6 +493,15 @@ mod tests {
             .await
             .expect("ok");
         assert_eq!(resp.abi_version, 1);
+        assert_eq!(
+            resp.data_model_version,
+            iroha_data_model::DATA_MODEL_VERSION
+        );
+        assert_eq!(resp.signed_transaction_schema_hash_hex.len(), 32);
+        assert_eq!(
+            resp.signed_transaction_schema_hash_hex,
+            signed_transaction_schema_hash_hex()
+        );
         assert_eq!(resp.crypto.curves.registry_version, CURVE_REGISTRY_VERSION);
         assert!(
             resp.crypto

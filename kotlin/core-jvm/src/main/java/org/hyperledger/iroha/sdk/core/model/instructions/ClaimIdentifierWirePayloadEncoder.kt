@@ -23,7 +23,8 @@ object ClaimIdentifierWirePayloadEncoder {
     private const val SCHEMA_PATH = "iroha_data_model::isi::identifier::ClaimIdentifier"
 
     private val RAW_BYTE_VEC_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.rawByteVecAdapter()
-    private val OPTIONAL_SIGNATURE_ADAPTER: TypeAdapter<Optional<ByteArray>> = NoritoAdapters.option(RAW_BYTE_VEC_ADAPTER)
+    private val SIGNATURE_BYTE_VEC_ADAPTER: TypeAdapter<ByteArray> = NoritoAdapters.byteVecAdapter()
+    private val OPTIONAL_SIGNATURE_ADAPTER: TypeAdapter<Optional<ByteArray>> = NoritoAdapters.option(SIGNATURE_BYTE_VEC_ADAPTER)
     private val OPTIONAL_PROOF_ADAPTER: TypeAdapter<Optional<ByteArray>> = NoritoAdapters.option(RAW_BYTE_VEC_ADAPTER)
 
     /** Encodes a signed `ClaimIdentifier` instruction as a wire-framed [InstructionBox]. */
