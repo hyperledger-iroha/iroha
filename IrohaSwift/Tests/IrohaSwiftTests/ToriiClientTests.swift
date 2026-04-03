@@ -9312,12 +9312,24 @@ id: 88
     }
 
     func testPipelineStatusStateMapping() throws {
-        let json = """
+        let nestedJSON = """
         {"kind":"Transaction","content":{"hash":"deadbeef","status":{"kind":"Committed","content":null}}}
         """.data(using: .utf8)!
-        let decoded = try JSONDecoder().decode(ToriiPipelineTransactionStatus.self, from: json)
-        XCTAssertEqual(decoded.content.status.state, .committed)
-        XCTAssertTrue(decoded.content.status.state.isKnownTerminalSuccess)
+        let nested = try JSONDecoder().decode(ToriiPipelineTransactionStatus.self, from: nestedJSON)
+        XCTAssertEqual(nested.kind, "Transaction")
+        XCTAssertEqual(nested.content.hash, "deadbeef")
+        XCTAssertEqual(nested.content.status.state, .committed)
+        XCTAssertTrue(nested.content.status.state.isKnownTerminalSuccess)
+
+        let flatJSON = """
+        {"hash":"facefeed","resolved_from":"cache","scope":"auto","status":{"block_height":64,"kind":"Applied"}}
+        """.data(using: .utf8)!
+        let flat = try JSONDecoder().decode(ToriiPipelineTransactionStatus.self, from: flatJSON)
+        XCTAssertEqual(flat.kind, "Transaction")
+        XCTAssertEqual(flat.content.hash, "facefeed")
+        XCTAssertEqual(flat.content.status.state, .applied)
+        XCTAssertTrue(flat.content.status.state.isTerminalSuccess)
+
         let other = PipelineTransactionState(kind: "CustomStatus")
         if case let .other(value) = other {
             XCTAssertEqual(value, "CustomStatus")

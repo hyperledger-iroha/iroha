@@ -2,6 +2,40 @@
 
 Last updated: 2026-04-03
 
+## 2026-04-03 Follow-up: Kotodama `state Map` helper parameters and method-only map/json helpers landed
+- Landed the first durable-handle ergonomics pass for Kotodama:
+  - internal helper functions can now accept `state Map<K, V>` parameters,
+    preserving durable map roots across calls without falling back to forbidden
+    local state aliasing;
+  - the public helper surface now prefers method syntax for map/path/json
+    operations (`map.contains(...)`, `map.get_or(...)`, `map.ensure(...)`,
+    `base.path(...)`, `json.get_* (...)`); and
+  - direct free-call spellings for those helpers are rejected by the parser
+    with migration hints so new code cannot keep using the removed surface.
+- Updated the canonical Kotodama samples/tests/docs around that surface:
+  - `crates/kotodama_lang` parser/semantic/IR/compiler tests now use the new
+    method syntax and cover the parse-time rejection path;
+  - the durable `Map<Name, int>` runtime regression tests now exercise
+    `state Map` helper parameters and method-form map/path helpers; and
+  - the canonical English grammar/examples plus `crates/ivm/docs` now describe
+    the method-first surface.
+- Focused verification completed:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang`
+  - `cargo test -p ivm --test kotodama_state_name_map_runtime -- --nocapture`
+  - `cargo test -p ivm --test debug_contains -- --nocapture`
+  - `cargo test -p ivm kotodama_invalid_literals -- --nocapture`
+- Verification note:
+  - the current dirty workspace still has unrelated pre-existing red tests in
+    `cargo test -p ivm --test kotodama -- --nocapture`
+    (`branch_lowering_uses_short_bne_and_dual_jal`,
+    `compile_poseidon2_and_assert_eq`,
+    `manifest_includes_entrypoints_and_features`,
+    `manifest_includes_isi_access_hints_for_static_targets`,
+    `prediction_market_demo_compiles`,
+    `seiyaku_meta_controls_header`);
+    the method-helper migration itself is green in the focused slices above.
+
 ## 2026-04-03 Follow-up: multisig domain bootstrap now recovers from inconclusive submit timeouts
 - Hardened `integration_tests/tests/multisig.rs` after the remaining
   broad-workspace executor-upgrade failure reproduced only as an inconclusive
@@ -18628,3 +18662,12 @@ Last updated: 2026-04-03
 - The direct cause of that peer death is `irohad`'s supervisor unexpected-exit path: `iroha_futures::supervisor::SupervisorLoop::handle_child_exit` (`crates/iroha_futures/src/supervisor.rs:302-312`) treats any non-shutdown `ChildExitResult::Ok|Cancel` as fatal, and `crates/irohad/src/main.rs:8631-8635` propagates that as `MainError::IrohaRun`, exiting the validator with status `1`.
 - Supporting trace from a preserved NPoS repro on the last available soak binary pair (`/private/tmp/iroha-npos-rootcause-repro-fix16/irohad_test_network_oxW85Q`): the same validator public key `ea013088...` that later fell to height `0` in the fresh full soak maps to peer dir `cerebral_otter`, and that peer repeatedly stalls in the NPoS consensus path with `deferring RBC DELIVER: READY quorum not yet satisfied`, `missing_qc`, and `no proposal observed for view before changing view` while block sync samples only `online=3` peers. This localizes the upstream failure to the validator-internal NPoS Sumeragi/RBC/proposal path rather than Nexus routing or the Izanami harness.
 - Remaining evidence gap: because the fresh full-soak peer dirs were not retained and the current dirty tree no longer rebuilds cleanly due unrelated `iroha_data_model` errors, this investigation did not uniquely name which supervised child inside `irohad` exited first on the fresh failing binary; it did trace the failure to the validator-internal supervisor path and tie the dead validator to the NPoS RBC/proposal instability.
+
+## 2026-04-03 Mochi Torii Account Event Summary Fix
+- Updated `mochi/mochi-core/src/torii.rs` so `account_event_summary` now handles the newer `AccountEvent::ControllerReplaced` and `AccountEvent::Recovery` variants instead of failing the build with a non-exhaustive match.
+- Added dedicated Torii summary formatting for account-controller replacement and account-recovery lifecycle events, including alias, quorum, timelock, and actor details for recovery-policy updates.
+- Added focused regression coverage in `mochi/mochi-core/src/torii.rs` for the new controller-replaced and recovery-policy summary paths.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `cargo test -p mochi-core account_controller_replaced_summary_mentions_old_and_new_controllers -- --nocapture`
+  - `cargo test -p mochi-core account_recovery_policy_summary_mentions_alias_and_quorum -- --nocapture`

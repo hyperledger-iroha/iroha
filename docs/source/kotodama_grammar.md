@@ -269,7 +269,11 @@ Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
 - `verify_ds_proof(DataSpaceId*, ProofBlob?)`
 - `use_asset_handle(AssetHandle*, Blob[NoritoBytes], ProofBlob?)`
 - `axt_commit()`
-- `contains(Map<K,V>, K) -> bool`
+- `map.contains(key) -> bool`
+- `map.get_or(key, default) -> V`
+- `map.ensure(key, default) -> V`
+- `name.path(segment) -> Name`
+- `json.get_int(key)`, `json.get_numeric(key)`, `json.get_json(key)`, `json.get_name(key)`, `json.get_account_id(key)`, `json.get_asset_definition_id(key)`, `json.get_nft_id(key)`, `json.get_blob_hex(key)`
 
 Utility builtins
 - `info(string|int)`: emits a structured event/message via OUTPUT.
@@ -294,9 +298,12 @@ Type: `Map<K, V>`
 - Durable state maps (`state Map<...>`) use Norito-encoded keys/values. Supported keys: `int` or pointer types. Supported values: `int`, `bool`, `Json`, `Blob`/`bytes`, pointer types, tuples of durable-supported values, or structs whose fields are all durable-supported values.
 - `Map::new()` allocates and zero-initializes the single in-memory entry (key/value = 0); for non-`Map<int,int>` maps, provide an explicit type annotation or return type.
 - State maps are not first-class values: you cannot reassign them (e.g., `M = Map::new()`); update entries via indexing (`M[key] = value`).
+- Internal helper functions may accept durable state-map handles with `state Map<K, V>` parameters. These handles are non-first-class and only valid for map operations and forwarding to other `state Map` helper parameters.
 - Operations:
   - Indexing: `map[key]` get/set value (set performed via host syscall; see runtime API mapping).
-  - Existence: `contains(map, key) -> bool` (lowered helper; may be an intrinsic syscall).
+  - Existence/defaults: `map.contains(key)`, `map.get_or(key, default)`, `map.ensure(key, default)` (lowered helpers; may be intrinsic syscalls).
+  - Path building: `base.path(segment)` lowers to the durable-path helpers for integer or Norito-encoded segments.
+  - JSON field extraction: `json.get_*` lowers to the corresponding typed JSON helper syscall.
   - Iteration: `for (k, v) in map { ... }` with deterministic order and mutation rules.
 - Composite durable map values are written and read as whole values. Partial field updates on stored records still lower to a load-modify-store pattern in user code.
 

@@ -497,7 +497,7 @@ impl ContractRuntimeExecutionContext {
 }
 
 #[derive(Clone, Debug)]
-struct ContractCallExecutionContext {
+pub(crate) struct ContractCallExecutionContext {
     namespace: Option<String>,
     contract_id: Option<String>,
     entrypoint: Option<String>,
@@ -506,16 +506,24 @@ struct ContractCallExecutionContext {
 }
 
 impl ContractCallExecutionContext {
-    fn runtime_context(&self) -> Option<ContractRuntimeExecutionContext> {
+    pub(crate) fn runtime_context(&self) -> Option<ContractRuntimeExecutionContext> {
         Some(ContractRuntimeExecutionContext {
             namespace: self.namespace.clone()?,
             contract_id: self.contract_id.clone()?,
             entrypoint: self.entrypoint.clone()?,
         })
     }
+
+    pub(crate) fn entrypoint_pc(&self) -> Option<u64> {
+        self.entrypoint_pc
+    }
+
+    pub(crate) fn args(&self) -> &Json {
+        &self.args
+    }
 }
 
-fn parse_contract_call_execution_context(
+pub(crate) fn parse_contract_call_execution_context(
     metadata: &Metadata,
     bytecode: &[u8],
 ) -> Result<Option<ContractCallExecutionContext>, ValidationFail> {

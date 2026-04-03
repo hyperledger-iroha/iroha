@@ -2,6 +2,34 @@
 
 Last updated: 2026-04-03
 
+Latest sync (2026-04-03 Kotodama state-map helper ergonomics):
+the first durable-handle ergonomics tranche is landed for Kotodama, with
+method-only map/path/json helper syntax enforced for new code.
+
+- shipped in `crates/kotodama_lang` / `crates/ivm` / docs:
+  - internal helper functions can accept `state Map<K, V>` parameters and keep
+    durable map root provenance across calls;
+  - direct free-call helper spellings for map/path/json access are rejected by
+    the parser in favor of `map.contains/get_or/ensure`, `base.path`, and
+    `json.get_*`;
+  - the canonical samples, parser/semantic/IR/compiler tests, and the durable
+    `Map<Name, int>` runtime regressions now use the new method surface.
+- focused verification is green, including:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang`
+  - `cargo test -p ivm --test kotodama_state_name_map_runtime -- --nocapture`
+  - `cargo test -p ivm --test debug_contains -- --nocapture`
+  - `cargo test -p ivm kotodama_invalid_literals -- --nocapture`
+
+Open work for this slice now remains:
+- decide whether to extend `state` parameters beyond `Map<K, V>`; the current
+  pass intentionally stops short of generic `state T` handles because the
+  flattened durable-struct path model still makes that awkward;
+- migrate the translated Kotodama docs to the method-only helper spelling so
+  non-English references match the canonical English docs; and
+- clear the unrelated current reds in `cargo test -p ivm --test kotodama -- --nocapture`
+  before claiming a fully green `ivm` Kotodama slice on this dirty workspace.
+
 Latest sync (2026-04-03 multisig submit-timeout recovery):
 the remaining broad-run executor-upgrade multisig failure is hardened on the
 patched tree without changing multisig semantics.

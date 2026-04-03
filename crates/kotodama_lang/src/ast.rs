@@ -110,6 +110,8 @@ pub enum TypeExpr {
 pub struct Param {
     pub ty: Option<TypeExpr>,
     pub name: String,
+    /// Whether this parameter is a durable state handle (`state Map<...>`).
+    pub is_state: bool,
 }
 
 #[derive(Debug, PartialEq, Clone)]

@@ -4847,6 +4847,166 @@ mod tests {
 
     #[test]
     fn multisig_signatory_can_approve_without_roles() {
+        use iroha_data_model::{
+            events::execute_trigger::ExecuteTriggerEventFilter,
+            isi::{ExecuteTrigger, Unregister},
+            metadata::Metadata,
+            name::Name,
+            prelude::Json,
+            transaction::{Executable, IvmBytecode},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+        use ivm::KotodamaCompiler;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-trigger-contract-entrypoint"),
+        );
+
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+        let domain_id: iroha_data_model::domain::DomainId = "contract-dispatch".parse().unwrap();
+
+        let signer1 = KeyPair::random();
+        let signer2 = KeyPair::random();
+        let signer1_id = new_account_id(&signer1);
+        let signer2_id = new_account_id(&signer2);
+
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(&signer1_id, &mut state_transaction)
+            .expect("domain registration");
+        register_account_in_domain(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            &signer1_id,
+            "register signer1",
+        );
+        register_account_in_domain(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            &signer2_id,
+            "register signer2",
+        );
+
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
+            quorum: NonZeroU16::new(2).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+        };
+        let multisig_id = register_multisig_account(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            &spec,
+            "register multisig account",
+        );
+
+        let program = KotodamaCompiler::new()
+            .compile_source(
+                r#"
+seiyaku TriggerDispatch {
+  #[access(read="*", write="*")]
+  kotoage fn main() {
+    set_account_detail(authority(), name("entrypoint"), json("1"));
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn alternate() {
+    set_account_detail(authority(), name("entrypoint"), json("2"));
+  }
+}
+"#,
+            )
+            .expect("compile trigger dispatch contract");
+        let bytecode = IvmBytecode::from_compiled(program);
+
+        let trigger_id: iroha_data_model::trigger::TriggerId =
+            "contract_dispatch".parse().unwrap();
+        let mut trigger_metadata = Metadata::default();
+        trigger_metadata.insert(
+            Name::from_str("contract_entrypoint").expect("static metadata key"),
+            Json::new("alternate"),
+        );
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Executable::Ivm(bytecode),
+                Repeats::Exactly(1),
+                multisig_id.clone(),
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+            )
+            .with_metadata(trigger_metadata),
+        );
+
+        let instructions = vec![
+            InstructionBox::from(Register::trigger(trigger)),
+            InstructionBox::from(ExecuteTrigger::new(trigger_id.clone())),
+            InstructionBox::from(Unregister::trigger(trigger_id.clone())),
+        ];
+        let instructions_hash = HashOf::new(&instructions);
+        execute_propose(
+            &mut state_transaction,
+            &signer1_id,
+            &MultisigPropose::new(multisig_id.clone(), instructions, None),
+        )
+        .expect("signatory propose");
+
+        let proposal = proposal_value(&state_transaction, &multisig_id, &instructions_hash)
+            .expect("proposal exists after propose");
+        let register = proposal
+            .instructions
+            .first()
+            .expect("proposal should register trigger")
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+            .expect("first instruction must be register");
+        let iroha_data_model::isi::RegisterBox::Trigger(register_trigger) = register else {
+            panic!("first instruction must be register trigger");
+        };
+        let stored_entrypoint = register_trigger
+            .object()
+            .action()
+            .metadata()
+            .get("contract_entrypoint")
+            .expect("stored trigger metadata should keep contract_entrypoint")
+            .clone()
+            .try_into_any_norito::<String>()
+            .expect("entrypoint metadata should decode as string");
+        assert_eq!(stored_entrypoint, "alternate");
+
+        execute_approve(
+            &mut state_transaction,
+            &signer2_id,
+            &MultisigApprove::new(multisig_id.clone(), instructions_hash),
+        )
+        .expect("signatory approve should execute alternate entrypoint");
+
+        let entrypoint_key: Name = "entrypoint".parse().expect("entrypoint metadata key");
+        let executed_value = state_transaction
+            .world
+            .account(&multisig_id)
+            .expect("multisig account should exist")
+            .metadata()
+            .get(&entrypoint_key)
+            .expect("alternate entrypoint should write account metadata")
+            .clone()
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("entrypoint account metadata should decode");
+        assert_eq!(executed_value, norito::json!(2));
+    }
+
+    #[test]
+    fn multisig_signatory_can_approve_without_roles() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let state = State::new_with_chain(
