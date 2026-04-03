@@ -50,7 +50,7 @@ translator: machine-google-reviewed
 - ተለዋጭ ሞዴል;
   - ቀኖናዊ መለያ ማንነት ጎራ ወይም የውሂብ ቦታ ክፍልን በጭራሽ አያካትትም።
   - `AccountAlias` እሴቶች በ `AccountId` ላይ የተደረደሩ የተለያዩ የኤስኤንኤስ ማሰሪያዎች ናቸው።
-  - እንደ `merchant@hbl.sbp` ያሉ በጎራ ብቃት ያላቸው ተለዋጭ ስሞች ሁለቱንም ጎራ እና የውሂብ ቦታን በቅጥያ ማሰሪያ ውስጥ ይይዛሉ።
+  - እንደ `merchant@banka.sbp` ያሉ በጎራ ብቃት ያላቸው ተለዋጭ ስሞች ሁለቱንም ጎራ እና የውሂብ ቦታን በቅጥያ ማሰሪያ ውስጥ ይይዛሉ።
   - እንደ `merchant@sbp` ያሉ የዳታ ስፔስ-ስር ተለዋጭ ስሞች የውሂብ ቦታን ብቻ ይይዛሉ እና ስለዚህ በተፈጥሮ ከ `Account::new(...)` ጋር ያጣምራሉ ።
   - ሙከራዎች እና ዕቃዎች መጀመሪያ ሁለንተናዊውን `AccountId` መዝራት አለባቸው፣ ከዚያም ተለዋጭ ስም ሊዝ፣ ቅጽል ስም ፈቃዶችን እና ማንኛውንም የጎራ ግምቶችን በራሱ መለያ ማንነት ውስጥ ከማስቀመጥ ይልቅ በተናጠል ማከል አለባቸው።
   - ይፋዊ ነጠላ መለያ ፍለጋ አሁን በቅጽል ስሞች (`FindAliasesByAccountId`) ላይ ያተኩራል። የመለያው ማንነት ራሱ ያለገደብ ይቆያል።### የንብረት መግለጫዎች እና ንብረቶች
@@ -249,7 +249,7 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl.sbp
+  --alias pkr#bankb.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
@@ -259,14 +259,14 @@ iroha ledger asset definition register \
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl.sbp \
+  --definition-alias pkr#bankb.sbp \
   --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl.sbp"}'
+  -d '{"alias":"pkr#bankb.sbp"}'
 ```የስደት ማስታወሻ፡-
 - የድሮ `name#domain` የንብረት-ፍቺ መታወቂያዎች v1 ውስጥ ተቀባይነት የላቸውም።
 - የህዝብ ንብረት መራጮች አንድ የንብረት-ፍቺ ቅርጸት ብቻ ይጠቀማሉ፡ ቀኖናዊ Base58 መታወቂያዎች። ተለዋጭ ስሞች እንደ አማራጭ መራጮች ይቆያሉ፣ ግን በተመሳሳይ ቀኖናዊ መታወቂያ ይፍቱ።

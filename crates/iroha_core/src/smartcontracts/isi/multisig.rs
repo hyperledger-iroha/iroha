@@ -4846,10 +4846,11 @@ mod tests {
     }
 
     #[test]
-    fn multisig_signatory_can_approve_without_roles() {
+    fn multisig_approval_preserves_contract_call_trigger_metadata_for_non_default_entrypoints() {
         use iroha_data_model::{
+            HasMetadata,
             events::execute_trigger::ExecuteTriggerEventFilter,
-            isi::{ExecuteTrigger, Unregister},
+            isi::ExecuteTrigger,
             metadata::Metadata,
             name::Name,
             prelude::Json,
@@ -4873,55 +4874,61 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "contract-dispatch".parse().unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
+        let owner_id = new_account_id(&KeyPair::random());
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
-        register_account_in_domain(
-            &mut state_transaction,
-            &signer1_id,
-            &domain_id,
-            &signer1_id,
-            "register signer1",
-        );
-        register_account_in_domain(
-            &mut state_transaction,
-            &signer1_id,
-            &domain_id,
-            &signer2_id,
-            "register signer2",
-        );
+        Register::account(iroha_data_model::account::NewAccount::new(owner_id.clone()))
+            .execute(&owner_id, &mut state_transaction)
+            .expect("register owner");
+        Register::account(iroha_data_model::account::NewAccount::new(
+            signer1_id.clone(),
+        ))
+        .execute(&owner_id, &mut state_transaction)
+        .expect("register signer1");
+        Register::account(iroha_data_model::account::NewAccount::new(
+            signer2_id.clone(),
+        ))
+        .execute(&owner_id, &mut state_transaction)
+        .expect("register signer2");
 
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
             quorum: NonZeroU16::new(2).unwrap(),
             transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
         };
-        let multisig_id = register_multisig_account(
+        let multisig_id = new_account_id(&KeyPair::random());
+        execute_register(
             &mut state_transaction,
-            &signer1_id,
-            &domain_id,
-            &spec,
-            "register multisig account",
-        );
+            &owner_id,
+            MultisigRegister::with_account(
+                multisig_id.clone(),
+                None::<iroha_data_model::domain::DomainId>,
+                spec.clone(),
+            ),
+        )
+        .expect("register multisig account");
+        let multisig_id = state_transaction
+            .world
+            .accounts_iter()
+            .find(|account| account.id().multisig_policy().is_some())
+            .map(|account| account.id().clone())
+            .expect("registered multisig account");
 
         let program = KotodamaCompiler::new()
             .compile_source(
                 r#"
 seiyaku TriggerDispatch {
   #[access(read="*", write="*")]
-  kotoage fn main() {
+  kotoage fn main() permission(Admin) {
     set_account_detail(authority(), name("entrypoint"), json("1"));
   }
 
   #[access(read="*", write="*")]
-  kotoage fn alternate() {
+  kotoage fn alternate() permission(Admin) {
     set_account_detail(authority(), name("entrypoint"), json("2"));
   }
 }
@@ -4930,8 +4937,7 @@ seiyaku TriggerDispatch {
             .expect("compile trigger dispatch contract");
         let bytecode = IvmBytecode::from_compiled(program);
 
-        let trigger_id: iroha_data_model::trigger::TriggerId =
-            "contract_dispatch".parse().unwrap();
+        let trigger_id: iroha_data_model::trigger::TriggerId = "contract_dispatch".parse().unwrap();
         let mut trigger_metadata = Metadata::default();
         trigger_metadata.insert(
             Name::from_str("contract_entrypoint").expect("static metadata key"),
@@ -4951,7 +4957,6 @@ seiyaku TriggerDispatch {
         let instructions = vec![
             InstructionBox::from(Register::trigger(trigger)),
             InstructionBox::from(ExecuteTrigger::new(trigger_id.clone())),
-            InstructionBox::from(Unregister::trigger(trigger_id.clone())),
         ];
         let instructions_hash = HashOf::new(&instructions);
         execute_propose(

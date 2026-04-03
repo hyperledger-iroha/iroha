@@ -10,6 +10,7 @@ use iroha_primitives::numeric::Numeric;
 
 use super::{
     ast::{BinaryOp, UnaryOp},
+    builtins::Builtin,
     semantic::{
         self, Type, TypedBlock, TypedExpr, TypedFunction, TypedItem, TypedParam, TypedProgram,
         TypedStatement, state_env_snapshot,
@@ -1116,19 +1117,20 @@ fn lower_function_named(
         register_state_value_metadata(&mut ctx, name, ty, name);
     }
     for (param, tmp) in param_temps {
-        if param.is_state
-            && let Type::Map(key, value) = semantic::resolve_struct_type(&param.ty)
-        {
+        if param.is_state {
             ctx.state_runtime_roots.insert(param.name.clone(), tmp);
-            ctx.state_map_configs.insert(
-                param.name.clone(),
-                StateMapSpec {
-                    key: *key,
-                    value: *value,
-                },
-            );
+            if let Type::Map(key, value) = semantic::resolve_struct_type(&param.ty) {
+                ctx.state_map_configs.insert(
+                    param.name.clone(),
+                    StateMapSpec {
+                        key: *key,
+                        value: *value,
+                    },
+                );
+            }
+        } else {
+            vars.insert(param.name, tmp);
         }
-        vars.insert(param.name, tmp);
     }
 
     lower_block(&mut ctx, &func.body, &mut vars);
@@ -1974,6 +1976,608 @@ fn lower_expr_as_numeric(
     }
 }
 
+fn lower_surface_builtin_call(
+    ctx: &mut LowerCtx,
+    builtin: Builtin,
+    args: &[semantic::TypedExpr],
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    match builtin {
+        Builtin::GetInt => {
+            let j = lower_expr(ctx, &args[0], vars);
+            let k = lower_expr(ctx, &args[1], vars);
+            let d = ctx.new_temp();
+            ctx.current_instr(Instr::JsonGetInt {
+                dest: d,
+                json: j,
+                key: k,
+            });
+            d
+        }
+        Builtin::GetNumeric => {
+            let j = lower_expr(ctx, &args[0], vars);
+            let k = lower_expr(ctx, &args[1], vars);
+            let d = ctx.new_temp();
+            ctx.current_instr(Instr::JsonGetNumeric {
+                dest: d,
+                json: j,
+                key: k,
+            });
+            d
+        }
+        Builtin::GetJson => {
+            let j = lower_expr(ctx, &args[0], vars);
+            let k = lower_expr(ctx, &args[1], vars);
+            let d = ctx.new_temp();
+            ctx.current_instr(Instr::JsonGetJson {
+                dest: d,
+                json: j,
+                key: k,
+            });
+            d
+        }
+        Builtin::GetName => {
+            let j = lower_expr(ctx, &args[0], vars);
+            let k = lower_expr(ctx, &args[1], vars);
+            let d = ctx.new_temp();
+            ctx.current_instr(Instr::JsonGetName {
+                dest: d,
+                json: j,
+                key: k,
+            });
+            d
+        }
+        Builtin::GetAccountId => {
+            let j = lower_expr(ctx, &args[0], vars);
+            let k = lower_expr(ctx, &args[1], vars);
+            let d = ctx.new_temp();
+            ctx.current_instr(Instr::JsonGetAccountId {
+                dest: d,
+                json: j,
+                key: k,
+            });
+            d
+        }
+        Builtin::GetAssetDefinitionId => {
+            let j = lower_expr(ctx, &args[0], vars);
+            let k = lower_expr(ctx, &args[1], vars);
+            let d = ctx.new_temp();
+            ctx.current_instr(Instr::JsonGetAssetDefinitionId {
+                dest: d,
+                json: j,
+                key: k,
+            });
+            d
+        }
+        Builtin::GetNftId => {
+            let j = lower_expr(ctx, &args[0], vars);
+            let k = lower_expr(ctx, &args[1], vars);
+            let d = ctx.new_temp();
+            ctx.current_instr(Instr::JsonGetNftId {
+                dest: d,
+                json: j,
+                key: k,
+            });
+            d
+        }
+        Builtin::GetBlobHex => {
+            let j = lower_expr(ctx, &args[0], vars);
+            let k = lower_expr(ctx, &args[1], vars);
+            let d = ctx.new_temp();
+            ctx.current_instr(Instr::JsonGetBlobHex {
+                dest: d,
+                json: j,
+                key: k,
+            });
+            d
+        }
+        Builtin::Path => {
+            let base = lower_expr(ctx, &args[0], vars);
+            let d = ctx.new_temp();
+            if semantic::is_numeric_type(&args[1].ty) {
+                let key = lower_expr_as_int(ctx, &args[1], vars);
+                ctx.current_instr(Instr::PathMapKey { dest: d, base, key });
+            } else if semantic::is_blob_like(&args[1].ty) {
+                let blob = lower_expr(ctx, &args[1], vars);
+                ctx.current_instr(Instr::PathMapKeyNorito {
+                    dest: d,
+                    base,
+                    key_blob: blob,
+                });
+            } else {
+                panic!("path expects int-like or blob-like key")
+            }
+            d
+        }
+        Builtin::StateGet => {
+            let p = lower_expr(ctx, &args[0], vars);
+            let d = ctx.new_temp();
+            ctx.current_instr(Instr::StateGet { dest: d, path: p });
+            d
+        }
+        Builtin::StateSet => {
+            let path = lower_expr(ctx, &args[0], vars);
+            let val = lower_expr(ctx, &args[1], vars);
+            ctx.current_instr(Instr::StateSet { path, value: val });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::StateDel => {
+            let path = lower_expr(ctx, &args[0], vars);
+            ctx.current_instr(Instr::StateDel { path });
+            let t = ctx.new_temp();
+            ctx.current_instr(Instr::Const { dest: t, value: 0 });
+            t
+        }
+        Builtin::Contains => {
+            let mexpr = &args[0];
+            let kexpr = &args[1];
+            let key_tmp = lower_expr(ctx, kexpr, vars);
+            if let Some(bn) = state_map_base_name(mexpr)
+                && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
+                && let Some(key_codec) = key_codec_for_type(&spec.key)
+            {
+                let anchor = state_map_anchor_base_name(&bn, &spec.value);
+                let t_path = build_state_path(ctx, &anchor, key_tmp, &key_codec);
+                let t_blob = ctx.new_temp();
+                ctx.current_instr(Instr::StateGet {
+                    dest: t_blob,
+                    path: t_path,
+                });
+                let zero = ctx.new_temp();
+                ctx.current_instr(Instr::Const {
+                    dest: zero,
+                    value: 0,
+                });
+                let out = ctx.new_temp();
+                ctx.current_instr(Instr::Binary {
+                    dest: out,
+                    op: BinaryOp::Ne,
+                    left: t_blob,
+                    right: zero,
+                });
+                return out;
+            }
+            let m = lower_expr(ctx, mexpr, vars);
+            let sk = ctx.new_temp();
+            let dummy_v = ctx.new_temp();
+            ctx.current_instr(Instr::MapLoadPair {
+                dest_key: sk,
+                dest_val: dummy_v,
+                map: m,
+                offset: 0,
+            });
+            lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp)
+        }
+        Builtin::GetOrDefault => {
+            let mexpr = &args[0];
+            let kexpr = &args[1];
+            let dexpr = &args[2];
+            let key_tmp = lower_expr(ctx, kexpr, vars);
+            if let Some(bn) = state_map_base_name(mexpr)
+                && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
+                && let Some(key_codec) = key_codec_for_type(&spec.key)
+            {
+                let anchor = state_map_anchor_base_name(&bn, &spec.value);
+                let t_path = build_state_path(ctx, &anchor, key_tmp, &key_codec);
+                let t_blob = ctx.new_temp();
+                ctx.current_instr(Instr::StateGet {
+                    dest: t_blob,
+                    path: t_path,
+                });
+                let zero = ctx.new_temp();
+                ctx.current_instr(Instr::Const {
+                    dest: zero,
+                    value: 0,
+                });
+                let result = ctx.new_temp();
+                let cond = ctx.new_temp();
+                ctx.current_instr(Instr::Binary {
+                    dest: cond,
+                    op: BinaryOp::Ne,
+                    left: t_blob,
+                    right: zero,
+                });
+                let then_bb = ctx.new_label();
+                let else_bb = ctx.new_label();
+                let end_bb = ctx.new_label();
+                ctx.finish_current(Terminator::Branch {
+                    cond,
+                    then_bb,
+                    else_bb,
+                });
+                ctx.start_block(then_bb);
+                let decoded = lower_state_map_get_value(ctx, &bn, key_tmp, &spec.key, &spec.value)
+                    .expect("durable map value should decode");
+                ctx.current_instr(Instr::Copy {
+                    dest: result,
+                    src: decoded,
+                });
+                ctx.finish_current(Terminator::Jump(end_bb));
+                ctx.start_block(else_bb);
+                let def = lower_expr(ctx, dexpr, vars);
+                ctx.current_instr(Instr::Copy {
+                    dest: result,
+                    src: def,
+                });
+                ctx.finish_current(Terminator::Jump(end_bb));
+                ctx.start_block(end_bb);
+                return result;
+            }
+            let m = lower_expr(ctx, mexpr, vars);
+            let d = lower_expr(ctx, dexpr, vars);
+            let sk = ctx.new_temp();
+            let sv = ctx.new_temp();
+            ctx.current_instr(Instr::MapLoadPair {
+                dest_key: sk,
+                dest_val: sv,
+                map: m,
+                offset: 0,
+            });
+            let zero = ctx.new_temp();
+            ctx.current_instr(Instr::Const {
+                dest: zero,
+                value: 0,
+            });
+            let result = ctx.new_temp();
+            let cond = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
+            let then_bb = ctx.new_label();
+            let else_bb = ctx.new_label();
+            let end_bb = ctx.new_label();
+            ctx.finish_current(Terminator::Branch {
+                cond,
+                then_bb,
+                else_bb,
+            });
+            ctx.start_block(then_bb);
+            ctx.current_instr(Instr::Binary {
+                dest: result,
+                op: BinaryOp::Add,
+                left: sv,
+                right: zero,
+            });
+            ctx.finish_current(Terminator::Jump(end_bb));
+            ctx.start_block(else_bb);
+            ctx.current_instr(Instr::Binary {
+                dest: result,
+                op: BinaryOp::Add,
+                left: d,
+                right: zero,
+            });
+            ctx.finish_current(Terminator::Jump(end_bb));
+            ctx.start_block(end_bb);
+            result
+        }
+        Builtin::GetOr => {
+            let mexpr = &args[0];
+            let kexpr = &args[1];
+            let dexpr = &args[2];
+            let key_tmp = lower_expr(ctx, kexpr, vars);
+            if let Some(bn) = state_map_base_name(mexpr)
+                && let Some(spec) = ctx.state_map_configs.get(&bn)
+                && let (Some(key_codec), Some(value_codec)) = (
+                    key_codec_for_type(&spec.key),
+                    value_codec_for_type(&spec.value),
+                )
+            {
+                let t_path = build_state_path(ctx, &bn, key_tmp, &key_codec);
+                let t_blob = ctx.new_temp();
+                ctx.current_instr(Instr::StateGet {
+                    dest: t_blob,
+                    path: t_path,
+                });
+                let zero = ctx.new_temp();
+                ctx.current_instr(Instr::Const {
+                    dest: zero,
+                    value: 0,
+                });
+                let result = ctx.new_temp();
+                let cond = ctx.new_temp();
+                ctx.current_instr(Instr::Binary {
+                    dest: cond,
+                    op: BinaryOp::Ne,
+                    left: t_blob,
+                    right: zero,
+                });
+                let then_bb = ctx.new_label();
+                let else_bb = ctx.new_label();
+                let end_bb = ctx.new_label();
+                ctx.finish_current(Terminator::Branch {
+                    cond,
+                    then_bb,
+                    else_bb,
+                });
+                ctx.start_block(then_bb);
+                let existing = decode_value_from_norito(ctx, t_blob, &value_codec);
+                ctx.current_instr(Instr::Binary {
+                    dest: result,
+                    op: BinaryOp::Add,
+                    left: existing,
+                    right: zero,
+                });
+                ctx.finish_current(Terminator::Jump(end_bb));
+                ctx.start_block(else_bb);
+                let def = lower_expr(ctx, dexpr, vars);
+                ctx.current_instr(Instr::Binary {
+                    dest: result,
+                    op: BinaryOp::Add,
+                    left: def,
+                    right: zero,
+                });
+                ctx.finish_current(Terminator::Jump(end_bb));
+                ctx.start_block(end_bb);
+                return result;
+            }
+            let m = lower_expr(ctx, mexpr, vars);
+            let sk = ctx.new_temp();
+            let sv = ctx.new_temp();
+            ctx.current_instr(Instr::MapLoadPair {
+                dest_key: sk,
+                dest_val: sv,
+                map: m,
+                offset: 0,
+            });
+            let zero = ctx.new_temp();
+            ctx.current_instr(Instr::Const {
+                dest: zero,
+                value: 0,
+            });
+            let result = ctx.new_temp();
+            let cond = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
+            let then_bb = ctx.new_label();
+            let else_bb = ctx.new_label();
+            let end_bb = ctx.new_label();
+            ctx.finish_current(Terminator::Branch {
+                cond,
+                then_bb,
+                else_bb,
+            });
+            ctx.start_block(then_bb);
+            ctx.current_instr(Instr::Binary {
+                dest: result,
+                op: BinaryOp::Add,
+                left: sv,
+                right: zero,
+            });
+            ctx.finish_current(Terminator::Jump(end_bb));
+            ctx.start_block(else_bb);
+            let def = lower_expr(ctx, dexpr, vars);
+            ctx.current_instr(Instr::Binary {
+                dest: result,
+                op: BinaryOp::Add,
+                left: def,
+                right: zero,
+            });
+            ctx.finish_current(Terminator::Jump(end_bb));
+            ctx.start_block(end_bb);
+            result
+        }
+        Builtin::Ensure => {
+            let mexpr = &args[0];
+            let kexpr = &args[1];
+            let dexpr = &args[2];
+            let key_tmp = lower_expr(ctx, kexpr, vars);
+            if let Some(bn) = state_map_base_name(mexpr)
+                && let Some(spec) = ctx.state_map_configs.get(&bn).cloned()
+                && let Some(key_codec) = key_codec_for_type(&spec.key)
+            {
+                let anchor = state_map_anchor_base_name(&bn, &spec.value);
+                let t_path = build_state_path(ctx, &anchor, key_tmp, &key_codec);
+                let t_blob = ctx.new_temp();
+                ctx.current_instr(Instr::StateGet {
+                    dest: t_blob,
+                    path: t_path,
+                });
+                let zero = ctx.new_temp();
+                ctx.current_instr(Instr::Const {
+                    dest: zero,
+                    value: 0,
+                });
+                let result = ctx.new_temp();
+                let cond = ctx.new_temp();
+                ctx.current_instr(Instr::Binary {
+                    dest: cond,
+                    op: BinaryOp::Ne,
+                    left: t_blob,
+                    right: zero,
+                });
+                let then_bb = ctx.new_label();
+                let else_bb = ctx.new_label();
+                let end_bb = ctx.new_label();
+                ctx.finish_current(Terminator::Branch {
+                    cond,
+                    then_bb,
+                    else_bb,
+                });
+                ctx.start_block(then_bb);
+                let existing = lower_state_map_get_value(ctx, &bn, key_tmp, &spec.key, &spec.value)
+                    .expect("durable map value should decode");
+                ctx.current_instr(Instr::Copy {
+                    dest: result,
+                    src: existing,
+                });
+                ctx.finish_current(Terminator::Jump(end_bb));
+                ctx.start_block(else_bb);
+                let def = lower_expr(ctx, dexpr, vars);
+                let _ = lower_state_map_set_value(ctx, &bn, key_tmp, &spec.key, &spec.value, def);
+                ctx.current_instr(Instr::Copy {
+                    dest: result,
+                    src: def,
+                });
+                ctx.finish_current(Terminator::Jump(end_bb));
+                ctx.start_block(end_bb);
+                return result;
+            }
+            let m = lower_expr(ctx, mexpr, vars);
+            let sk = ctx.new_temp();
+            let sv = ctx.new_temp();
+            ctx.current_instr(Instr::MapLoadPair {
+                dest_key: sk,
+                dest_val: sv,
+                map: m,
+                offset: 0,
+            });
+            let zero = ctx.new_temp();
+            ctx.current_instr(Instr::Const {
+                dest: zero,
+                value: 0,
+            });
+            let result = ctx.new_temp();
+            let cond = lower_map_key_eq(ctx, &kexpr.ty, sk, key_tmp);
+            let then_bb = ctx.new_label();
+            let else_bb = ctx.new_label();
+            let end_bb = ctx.new_label();
+            ctx.finish_current(Terminator::Branch {
+                cond,
+                then_bb,
+                else_bb,
+            });
+            ctx.start_block(then_bb);
+            ctx.current_instr(Instr::Binary {
+                dest: result,
+                op: BinaryOp::Add,
+                left: sv,
+                right: zero,
+            });
+            ctx.finish_current(Terminator::Jump(end_bb));
+            ctx.start_block(else_bb);
+            let def = lower_expr(ctx, dexpr, vars);
+            ctx.current_instr(Instr::MapSet {
+                map: m,
+                key: key_tmp,
+                value: def,
+            });
+            ctx.current_instr(Instr::Binary {
+                dest: result,
+                op: BinaryOp::Add,
+                left: def,
+                right: zero,
+            });
+            ctx.finish_current(Terminator::Jump(end_bb));
+            ctx.start_block(end_bb);
+            result
+        }
+        Builtin::KeysTake2 | Builtin::ValuesTake2 => {
+            let base = lower_expr(ctx, &args[0], vars);
+            let start_t = lower_expr_as_int(ctx, &args[1], vars);
+            let which_t = lower_expr_as_int(ctx, &args[2], vars);
+            let one = ctx.new_temp();
+            ctx.current_instr(Instr::Const {
+                dest: one,
+                value: 1,
+            });
+            let masked = ctx.new_temp();
+            ctx.current_instr(Instr::Binary {
+                dest: masked,
+                op: BinaryOp::And,
+                left: which_t,
+                right: one,
+            });
+            let idx = ctx.new_temp();
+            ctx.current_instr(Instr::Binary {
+                dest: idx,
+                op: BinaryOp::Add,
+                left: start_t,
+                right: masked,
+            });
+            let sixteen = ctx.new_temp();
+            ctx.current_instr(Instr::Const {
+                dest: sixteen,
+                value: 16,
+            });
+            let bytes = ctx.new_temp();
+            ctx.current_instr(Instr::Binary {
+                dest: bytes,
+                op: BinaryOp::Mul,
+                left: idx,
+                right: sixteen,
+            });
+            let addr = ctx.new_temp();
+            ctx.current_instr(Instr::Binary {
+                dest: addr,
+                op: BinaryOp::Add,
+                left: base,
+                right: bytes,
+            });
+            let k = ctx.new_temp();
+            let v = ctx.new_temp();
+            ctx.current_instr(Instr::Load64Imm {
+                dest: k,
+                base: addr,
+                imm: 0,
+            });
+            ctx.current_instr(Instr::Load64Imm {
+                dest: v,
+                base: addr,
+                imm: 8,
+            });
+            if builtin == Builtin::KeysTake2 { k } else { v }
+        }
+        Builtin::KeysValuesTake2 => {
+            let base = lower_expr(ctx, &args[0], vars);
+            let start_t = lower_expr_as_int(ctx, &args[1], vars);
+            let which_t = lower_expr_as_int(ctx, &args[2], vars);
+            let one = ctx.new_temp();
+            ctx.current_instr(Instr::Const {
+                dest: one,
+                value: 1,
+            });
+            let masked = ctx.new_temp();
+            ctx.current_instr(Instr::Binary {
+                dest: masked,
+                op: BinaryOp::And,
+                left: which_t,
+                right: one,
+            });
+            let idx = ctx.new_temp();
+            ctx.current_instr(Instr::Binary {
+                dest: idx,
+                op: BinaryOp::Add,
+                left: start_t,
+                right: masked,
+            });
+            let sixteen = ctx.new_temp();
+            ctx.current_instr(Instr::Const {
+                dest: sixteen,
+                value: 16,
+            });
+            let bytes = ctx.new_temp();
+            ctx.current_instr(Instr::Binary {
+                dest: bytes,
+                op: BinaryOp::Mul,
+                left: idx,
+                right: sixteen,
+            });
+            let addr = ctx.new_temp();
+            ctx.current_instr(Instr::Binary {
+                dest: addr,
+                op: BinaryOp::Add,
+                left: base,
+                right: bytes,
+            });
+            let k = ctx.new_temp();
+            let v = ctx.new_temp();
+            ctx.current_instr(Instr::Load64Imm {
+                dest: k,
+                base: addr,
+                imm: 0,
+            });
+            ctx.current_instr(Instr::Load64Imm {
+                dest: v,
+                base: addr,
+                imm: 8,
+            });
+            let tup = ctx.new_temp();
+            ctx.current_instr(Instr::TuplePack {
+                dest: tup,
+                items: vec![k, v],
+            });
+            tup
+        }
+    }
+}
+
 fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, Temp>) -> Temp {
     match &expr.expr {
         semantic::ExprKind::Tuple(elems) => {
@@ -2042,11 +2646,11 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             t
         }
         semantic::ExprKind::Ident(name) => {
-            if let Some(literal) = ctx.state_name_literals.get(name).cloned()
-                && !ctx.loaded_state_fields.contains(name)
-                && let Some(value) = lower_state_field(ctx, &literal, &expr.ty)
+            if (ctx.state_name_literals.contains_key(name)
+                || ctx.state_runtime_roots.contains_key(name))
+                && !vars.contains_key(name)
+                && let Some(value) = lower_state_binding_value(ctx, name, &expr.ty)
             {
-                ctx.loaded_state_fields.insert(name.clone());
                 vars.insert(name.clone(), value);
                 return value;
             }
@@ -2229,6 +2833,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
             result
         }
         semantic::ExprKind::Call { name, args } => {
+            if let Some(builtin) = Builtin::from_name(name) {
+                return lower_surface_builtin_call(ctx, builtin, args, vars);
+            }
             match name.as_str() {
                 "encode_int" => {
                     let v = lower_expr(ctx, &args[0], vars);
@@ -2260,7 +2867,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::TlvLen { dest: d, value: v });
                     d
                 }
-                "json_get_int" => {
+                "get_int" => {
                     let j = lower_expr(ctx, &args[0], vars);
                     let k = lower_expr(ctx, &args[1], vars);
                     let d = ctx.new_temp();
@@ -2271,7 +2878,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     });
                     d
                 }
-                "json_get_numeric" => {
+                "get_numeric" => {
                     let j = lower_expr(ctx, &args[0], vars);
                     let k = lower_expr(ctx, &args[1], vars);
                     let d = ctx.new_temp();
@@ -2282,7 +2889,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     });
                     d
                 }
-                "json_get_json" => {
+                "get_json" => {
                     let j = lower_expr(ctx, &args[0], vars);
                     let k = lower_expr(ctx, &args[1], vars);
                     let d = ctx.new_temp();
@@ -2293,7 +2900,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     });
                     d
                 }
-                "json_get_name" => {
+                "get_name" => {
                     let j = lower_expr(ctx, &args[0], vars);
                     let k = lower_expr(ctx, &args[1], vars);
                     let d = ctx.new_temp();
@@ -2304,7 +2911,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     });
                     d
                 }
-                "json_get_account_id" => {
+                "get_account_id" => {
                     let j = lower_expr(ctx, &args[0], vars);
                     let k = lower_expr(ctx, &args[1], vars);
                     let d = ctx.new_temp();
@@ -2315,7 +2922,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     });
                     d
                 }
-                "json_get_asset_definition_id" => {
+                "get_asset_definition_id" => {
                     let j = lower_expr(ctx, &args[0], vars);
                     let k = lower_expr(ctx, &args[1], vars);
                     let d = ctx.new_temp();
@@ -2326,7 +2933,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     });
                     d
                 }
-                "json_get_nft_id" => {
+                "get_nft_id" => {
                     let j = lower_expr(ctx, &args[0], vars);
                     let k = lower_expr(ctx, &args[1], vars);
                     let d = ctx.new_temp();
@@ -2337,7 +2944,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     });
                     d
                 }
-                "json_get_blob_hex" => {
+                "get_blob_hex" => {
                     let j = lower_expr(ctx, &args[0], vars);
                     let k = lower_expr(ctx, &args[1], vars);
                     let d = ctx.new_temp();
@@ -2382,22 +2989,22 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.current_instr(Instr::PointerToNorito { dest: d, value: v });
                     d
                 }
-                "path_map_key" => {
+                "path" => {
                     let base = lower_expr(ctx, &args[0], vars);
-                    let key = lower_expr_as_int(ctx, &args[1], vars);
                     let d = ctx.new_temp();
-                    ctx.current_instr(Instr::PathMapKey { dest: d, base, key });
-                    d
-                }
-                "path_map_key_norito" => {
-                    let base = lower_expr(ctx, &args[0], vars);
-                    let blob = lower_expr(ctx, &args[1], vars);
-                    let d = ctx.new_temp();
-                    ctx.current_instr(Instr::PathMapKeyNorito {
-                        dest: d,
-                        base,
-                        key_blob: blob,
-                    });
+                    if semantic::is_numeric_type(&args[1].ty) {
+                        let key = lower_expr_as_int(ctx, &args[1], vars);
+                        ctx.current_instr(Instr::PathMapKey { dest: d, base, key });
+                    } else if semantic::is_blob_like(&args[1].ty) {
+                        let blob = lower_expr(ctx, &args[1], vars);
+                        ctx.current_instr(Instr::PathMapKeyNorito {
+                            dest: d,
+                            base,
+                            key_blob: blob,
+                        });
+                    } else {
+                        panic!("path expects int-like or blob-like key")
+                    }
                     d
                 }
                 "state_get" => {
@@ -3146,7 +3753,7 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     ctx.start_block(end_bb);
                     result
                 }
-                "get_or_insert_default" => {
+                "ensure" => {
                     // Like get_or_default(map, key, default) but inserts the default deterministically when missing.
                     let mexpr = &args[0];
                     let kexpr = &args[1];
@@ -4041,11 +4648,9 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     name.push_str(&i.to_string());
                 }
                 if ctx.state_name_literals.contains_key(&name) {
-                    if !ctx.loaded_state_fields.contains(&name)
-                        && let Some(literal) = ctx.state_name_literals.get(&name).cloned()
-                        && let Some(value) = lower_state_field(ctx, &literal, &expr.ty)
+                    if !vars.contains_key(&name)
+                        && let Some(value) = lower_state_binding_value(ctx, &name, &expr.ty)
                     {
-                        ctx.loaded_state_fields.insert(name.clone());
                         vars.insert(name.clone(), value);
                         return value;
                     }
@@ -4093,14 +4698,14 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
     }
 }
 
-fn lower_state_field(ctx: &mut LowerCtx, literal: &str, ty: &Type) -> Option<Temp> {
+fn lower_state_binding_value(ctx: &mut LowerCtx, name: &str, ty: &Type) -> Option<Temp> {
     let resolved = semantic::resolve_struct_type(ty);
     match resolved {
         Type::Struct { fields, .. } => {
             let mut items = Vec::with_capacity(fields.len());
-            for (field_name, field_ty) in &fields {
-                let child_literal = format!("{literal}_{field_name}");
-                items.push(lower_state_field(ctx, &child_literal, field_ty)?);
+            for (idx, (_field_name, field_ty)) in fields.iter().enumerate() {
+                let child = format!("{name}#{idx}");
+                items.push(lower_state_binding_value(ctx, &child, field_ty)?);
             }
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::TuplePack { dest, items });
@@ -4109,22 +4714,22 @@ fn lower_state_field(ctx: &mut LowerCtx, literal: &str, ty: &Type) -> Option<Tem
         Type::Tuple(items_ty) => {
             let mut items = Vec::with_capacity(items_ty.len());
             for (idx, item_ty) in items_ty.iter().enumerate() {
-                let child_literal = format!("{literal}_{idx}");
-                items.push(lower_state_field(ctx, &child_literal, item_ty)?);
+                let child = format!("{name}#{idx}");
+                items.push(lower_state_binding_value(ctx, &child, item_ty)?);
             }
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::TuplePack { dest, items });
             Some(dest)
         }
         Type::Int => {
-            let blob = state_get_blob(ctx, literal);
+            let blob = state_get_blob_for_name(ctx, name);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::DecodeInt { dest, blob });
             Some(dest)
         }
-        ty if semantic::is_wide_numeric_type(&ty) => Some(state_get_blob(ctx, literal)),
+        ty if semantic::is_wide_numeric_type(&ty) => Some(state_get_blob_for_name(ctx, name)),
         Type::Bool => {
-            let blob = state_get_blob(ctx, literal);
+            let blob = state_get_blob_for_name(ctx, name);
             let decoded = ctx.new_temp();
             ctx.current_instr(Instr::DecodeInt {
                 dest: decoded,
@@ -4145,44 +4750,39 @@ fn lower_state_field(ctx: &mut LowerCtx, literal: &str, ty: &Type) -> Option<Tem
             Some(out)
         }
         Type::Json => {
-            let blob = state_get_blob(ctx, literal);
+            let blob = state_get_blob_for_name(ctx, name);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::JsonDecode { dest, blob });
             Some(dest)
         }
         Type::Name => {
-            let blob = state_get_blob(ctx, literal);
+            let blob = state_get_blob_for_name(ctx, name);
             let dest = ctx.new_temp();
             ctx.current_instr(Instr::NameDecode { dest, blob });
             Some(dest)
         }
-        Type::Blob | Type::Bytes | Type::String => Some(state_get_blob(ctx, literal)),
+        Type::Blob | Type::Bytes | Type::String => Some(state_get_blob_for_name(ctx, name)),
         Type::AccountId
         | Type::AssetDefinitionId
         | Type::AssetId
         | Type::DomainId
         | Type::NftId => {
             if let Some(kind) = pointer_kind_for_type(&resolved) {
-                let blob = state_get_blob(ctx, literal);
+                let blob = state_get_blob_for_name(ctx, name);
                 let dest = ctx.new_temp();
                 ctx.current_instr(Instr::PointerFromNorito { dest, blob, kind });
                 Some(dest)
             } else {
                 // Fallback: treat as raw blob if pointer kind resolution fails.
-                Some(state_get_blob(ctx, literal))
+                Some(state_get_blob_for_name(ctx, name))
             }
         }
         _ => None,
     }
 }
 
-fn state_get_blob(ctx: &mut LowerCtx, literal: &str) -> Temp {
-    let path = ctx.new_temp();
-    ctx.current_instr(Instr::DataRef {
-        dest: path,
-        kind: DataRefKind::Name,
-        value: literal.to_string(),
-    });
+fn state_get_blob_for_name(ctx: &mut LowerCtx, name: &str) -> Temp {
+    let path = build_state_base(ctx, name);
     let blob = ctx.new_temp();
     ctx.current_instr(Instr::StateGet { dest: blob, path });
     blob
@@ -4206,8 +4806,6 @@ struct LowerCtx {
     state_name_literals: HashMap<String, String>,
     /// Runtime Name roots for `state` helper parameters.
     state_runtime_roots: HashMap<String, Temp>,
-    /// Tracks which flattened state fields have already been loaded from durable storage.
-    loaded_state_fields: std::collections::HashSet<String>,
     /// Dynamic iteration cap for feature-gated dynamic bounds.
     _dyn_iter_cap: usize,
     call_renames: HashMap<String, String>,
@@ -4230,7 +4828,6 @@ impl LowerCtx {
             state_map_configs: Default::default(),
             state_name_literals: Default::default(),
             state_runtime_roots: Default::default(),
-            loaded_state_fields: Default::default(),
             _dyn_iter_cap: dyn_iter_cap,
             call_renames,
             function_param_specs,
@@ -4385,10 +4982,10 @@ fn lower_state_handle_arg(
     expr: &semantic::TypedExpr,
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
-    if let Some(base_name) = state_map_base_name(expr) {
+    if let Some(base_name) = semantic::typed_state_handle_name(expr) {
         build_state_base(ctx, &base_name)
     } else {
-        ctx.record_error("state parameter arguments must reference a durable state map".into());
+        ctx.record_error("state parameter arguments must reference a durable state handle".into());
         let t = ctx.new_temp();
         ctx.current_instr(Instr::Const { dest: t, value: 0 });
         // Use vars to keep parity with the regular lower_expr signature.
@@ -4411,7 +5008,6 @@ fn emit_scalar_state_set(ctx: &mut LowerCtx, name: &str, ty: &Type, value: Temp)
         path,
         value: encoded,
     });
-    ctx.loaded_state_fields.insert(name.to_string());
 }
 
 fn emit_state_set(ctx: &mut LowerCtx, name: &str, ty: &Type, value: Temp) {
@@ -4654,43 +5250,43 @@ mod tests {
     }
 
     #[test]
-    fn lower_json_get_numeric_builtin() {
+    fn lower_get_numeric_builtin() {
         let src = "fn main() { let ev = trigger_event(); let _amount: Amount = ev.get_numeric(name(\"amount\")); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
         let f = &ir.functions[0];
-        let mut saw_json_get_numeric = false;
+        let mut saw_get_numeric = false;
         for bb in &f.blocks {
             for instr in &bb.instrs {
                 if let Instr::JsonGetNumeric { .. } = instr {
-                    saw_json_get_numeric = true;
+                    saw_get_numeric = true;
                 }
             }
         }
         assert!(
-            saw_json_get_numeric,
+            saw_get_numeric,
             "expected JsonGetNumeric instruction in lowered IR"
         );
     }
 
     #[test]
-    fn lower_json_get_asset_definition_id_builtin() {
+    fn lower_get_asset_definition_id_builtin() {
         let src = "fn main() { let ev = trigger_event(); let _asset = ev.get_asset_definition_id(name(\"asset_definition_id\")); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
         let f = &ir.functions[0];
-        let mut saw_json_get_asset_definition_id = false;
+        let mut saw_get_asset_definition_id = false;
         for bb in &f.blocks {
             for instr in &bb.instrs {
                 if let Instr::JsonGetAssetDefinitionId { .. } = instr {
-                    saw_json_get_asset_definition_id = true;
+                    saw_get_asset_definition_id = true;
                 }
             }
         }
         assert!(
-            saw_json_get_asset_definition_id,
+            saw_get_asset_definition_id,
             "expected JsonGetAssetDefinitionId instruction in lowered IR"
         );
     }
@@ -5104,6 +5700,92 @@ mod tests {
         assert!(
             helper_uses_runtime_root,
             "expected helper to build durable paths from its state parameter handle"
+        );
+    }
+
+    #[test]
+    fn lower_state_scalar_helper_param_round_trips_root_handle() {
+        let src = r#"
+            seiyaku Demo {
+                state Counter: int;
+
+                fn read_counter(state int counter) -> int {
+                    return counter;
+                }
+
+                fn main() -> int {
+                    return read_counter(Counter);
+                }
+            }
+        "#;
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let main_fn = ir
+            .functions
+            .iter()
+            .find(|f| f.name == "main")
+            .expect("main function");
+        let helper_fn = ir
+            .functions
+            .iter()
+            .find(|f| f.name == "read_counter")
+            .expect("helper function");
+
+        let mut counter_handle_temps = Vec::new();
+        for bb in &main_fn.blocks {
+            for instr in &bb.instrs {
+                if let Instr::DataRef {
+                    dest,
+                    kind: DataRefKind::Name,
+                    value,
+                } = instr
+                    && value == "Counter"
+                {
+                    counter_handle_temps.push(*dest);
+                }
+            }
+        }
+        let mut main_passes_counter_literal = false;
+        for bb in &main_fn.blocks {
+            for instr in &bb.instrs {
+                if let Instr::Call { callee, args, .. } = instr
+                    && callee == "read_counter"
+                    && args
+                        .first()
+                        .is_some_and(|arg| counter_handle_temps.contains(arg))
+                {
+                    main_passes_counter_literal = true;
+                }
+            }
+        }
+        assert!(
+            main_passes_counter_literal,
+            "expected caller to pass the durable scalar state root as a Name handle"
+        );
+
+        let mut helper_reads_runtime_root = false;
+        for bb in &helper_fn.blocks {
+            for instr in &bb.instrs {
+                if let Instr::StateGet { path, .. } = instr
+                    && helper_fn
+                        .blocks
+                        .iter()
+                        .flat_map(|block| block.instrs.iter())
+                        .any(|candidate| {
+                            matches!(
+                                candidate,
+                                Instr::LoadVar { dest, name } if *dest == *path && name == "counter"
+                            )
+                        })
+                {
+                    helper_reads_runtime_root = true;
+                }
+            }
+        }
+        assert!(
+            helper_reads_runtime_root,
+            "expected scalar helper to read durable state through its runtime state handle"
         );
     }
 

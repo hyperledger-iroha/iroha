@@ -2753,7 +2753,7 @@ mod tests {
     fn parse_candidates_rejects_invalid_account_id_literal() {
         let (state, _, _) = mk_basic_context();
         let candidates = vec![VrfCandidateDto {
-            account_id: "not-an-i105@hbl.dataspace".to_string(),
+            account_id: "not-an-i105@banka.dataspace".to_string(),
             variant: "Normal".to_string(),
             pk_b64: "AQ==".to_string(),
             proof_b64: "AQ==".to_string(),

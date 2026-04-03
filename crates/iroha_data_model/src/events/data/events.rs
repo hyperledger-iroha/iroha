@@ -1021,11 +1021,25 @@ mod account {
         pub fn origin_domain(&self) -> &DomainId {
             match self {
                 Self::Created(created) => &created.domain,
-                Self::Asset(asset_event) => asset_event.origin().definition.domain(),
+                Self::Asset(asset_event) => asset_event
+                    .origin()
+                    .definition
+                    .try_domain()
+                    .expect("domain event requires a domain-scoped asset definition id"),
                 other => {
                     panic!("domain context is not embedded in account event variant {other:?}")
                 }
             }
+        }
+    }
+
+    impl AssetDefinitionEvent {
+        /// Return the domain context required by [`DomainEvent::AssetDefinition`].
+        #[must_use]
+        pub fn origin_domain(&self) -> &DomainId {
+            self.origin()
+                .try_domain()
+                .expect("domain event requires a domain-scoped asset definition id")
         }
     }
 }
@@ -1236,7 +1250,7 @@ mod domain {
             Created(Domain),
             /// Domain was deleted.
             Deleted(DomainId),
-            #[has_origin(asset_definition_event => asset_definition_event.origin().domain())]
+            #[has_origin(asset_definition_event => asset_definition_event.origin_domain())]
             /// Asset-definition event occurred in the domain scope.
             AssetDefinition(AssetDefinitionEvent),
             #[has_origin(nft_event => &nft_event.origin().domain)]

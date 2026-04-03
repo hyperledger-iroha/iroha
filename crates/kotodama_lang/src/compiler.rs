@@ -870,7 +870,7 @@ seiyaku NegTest {
     }
 
     #[test]
-    fn json_get_numeric_emits_numeric_syscall() {
+    fn get_numeric_emits_numeric_syscall() {
         let src = r#"
 seiyaku JsonNumericTest {
   meta { abi_version: 1; }
@@ -881,9 +881,7 @@ seiyaku JsonNumericTest {
 }
 "#;
         let compiler = Compiler::new();
-        let bytes = compiler
-            .compile_source(src)
-            .expect("compile json_get_numeric");
+        let bytes = compiler.compile_source(src).expect("compile get_numeric");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let needle = encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
@@ -899,7 +897,7 @@ seiyaku JsonNumericTest {
     }
 
     #[test]
-    fn json_get_asset_definition_id_emits_asset_definition_syscall() {
+    fn get_asset_definition_id_emits_asset_definition_syscall() {
         let src = r#"
 seiyaku JsonAssetDefinitionTest {
   meta { abi_version: 1; }
@@ -912,7 +910,7 @@ seiyaku JsonAssetDefinitionTest {
         let compiler = Compiler::new();
         let bytes = compiler
             .compile_source(src)
-            .expect("compile json_get_asset_definition_id");
+            .expect("compile get_asset_definition_id");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let needle = encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
@@ -1332,11 +1330,6 @@ seiyaku Test {
         assert!(
             hints
                 .read_keys
-                .contains(&format!("domain:{}", canonical_asset.definition().domain()))
-        );
-        assert!(
-            hints
-                .read_keys
                 .contains(&format!("asset_def:{}", canonical_asset.definition()))
         );
         assert!(
@@ -1353,6 +1346,14 @@ seiyaku Test {
             hints
                 .write_keys
                 .contains(&format!("asset:{canonical_asset}"))
+        );
+        assert!(
+            canonical_asset.definition().try_domain().is_none(),
+            "canonical execute_instruction payload should decode to an opaque asset definition id",
+        );
+        assert!(
+            !hints.read_keys.iter().any(|key| key.starts_with("domain:")),
+            "opaque canonical asset ids should not synthesize a domain access hint",
         );
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
@@ -1500,17 +1501,20 @@ seiyaku Test {
         assert!(
             hints
                 .read_keys
-                .contains(&format!("domain:{}", canonical_asset.definition().domain()))
-        );
-        assert!(
-            hints
-                .read_keys
                 .contains(&format!("asset_def:{}", canonical_asset.definition()))
         );
         assert!(
             hints
                 .read_keys
                 .contains(&format!("asset:{canonical_asset}"))
+        );
+        assert!(
+            canonical_asset.definition().try_domain().is_none(),
+            "canonical execute_query payload should decode to an opaque asset definition id",
+        );
+        assert!(
+            !hints.read_keys.iter().any(|key| key.starts_with("domain:")),
+            "opaque canonical asset ids should not synthesize a domain access hint",
         );
         assert!(hints.write_keys.is_empty());
 
@@ -8036,7 +8040,7 @@ fn record_isi_access(
             let Some(id) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
-            add_domain_r(access_set, id.domain());
+            add_asset_def_domain_r_if_projected(access_set, &id);
             add_asset_def_rw(access_set, &id);
         }
         ir::Instr::SetAccountDetail { account, key, .. } => {
@@ -8311,7 +8315,7 @@ fn record_instruction_box_access(
                 add_account_rw(access_set, r.object.id());
             }
             RegisterBox::AssetDefinition(r) => {
-                add_domain_r(access_set, r.object.id().domain());
+                add_asset_def_domain_r_if_projected(access_set, r.object.id());
                 add_asset_def_rw(access_set, r.object.id());
             }
             RegisterBox::Nft(r) => add_nft_rw(access_set, r.object.id()),
@@ -8587,10 +8591,16 @@ fn add_asset_def_r(set: &mut AccessSets, id: &AssetDefinitionId) {
     set.reads.insert(key_asset_def(id));
 }
 
+fn add_asset_def_domain_r_if_projected(set: &mut AccessSets, id: &AssetDefinitionId) {
+    if let Some(domain) = id.try_domain() {
+        add_domain_r(set, domain);
+    }
+}
+
 fn add_asset_r(set: &mut AccessSets, id: &AssetId) {
     set.reads.insert(key_asset(id));
     add_account_r(set, id.account());
-    add_domain_r(set, id.definition().domain());
+    add_asset_def_domain_r_if_projected(set, id.definition());
     add_asset_def_r(set, id.definition());
 }
 
@@ -8606,7 +8616,7 @@ fn add_asset_rw(set: &mut AccessSets, id: &AssetId) {
     set.reads.insert(key.clone());
     set.writes.insert(key);
     add_account_r(set, id.account());
-    add_domain_r(set, id.definition().domain());
+    add_asset_def_domain_r_if_projected(set, id.definition());
     add_asset_def_r(set, id.definition());
 }
 

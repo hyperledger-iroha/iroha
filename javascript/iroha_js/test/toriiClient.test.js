@@ -15320,7 +15320,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.proposeMultisigContractCall({
-    multisigAccountAlias: "cbdc@hbl",
+    multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
     namespace: "apps",
     contractId: "mint",
@@ -15333,7 +15333,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call/multisig/propose`);
   const body = JSON.parse(captured.init.body);
   assert.deepEqual(body, {
-    multisig_account_alias: "cbdc@hbl",
+    multisig_account_alias: "cbdc@banka",
     signer_account_id: FIXTURE_ALICE_ID,
     namespace: "apps",
     contract_id: "mint",
@@ -15409,11 +15409,11 @@ test("getMultisigSpec posts selector and returns raw spec payload", async () => 
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getMultisigSpec({
-    multisig_account_alias: "cbdc@ubl",
+    multisig_account_alias: "cbdc@bankb",
   });
   assert.equal(captured.url, `${BASE_URL}/v1/multisig/spec`);
   assert.deepEqual(JSON.parse(captured.init.body), {
-    multisig_account_alias: "cbdc@ubl",
+    multisig_account_alias: "cbdc@bankb",
   });
   assert.deepEqual(result, responsePayload);
 });
@@ -15441,7 +15441,7 @@ test("listMultisigProposals decodes proposal entries", async () => {
       }),
   });
   const result = await client.listMultisigProposals({
-    multisigAccountAlias: "cbdc@hbl",
+    multisigAccountAlias: "cbdc@banka",
   });
   assert.deepEqual(result, responsePayload);
 });
@@ -15467,12 +15467,12 @@ test("getMultisigProposal resolves by instructions hash", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getMultisigProposal({
-    multisigAccountAlias: "cbdc@hbl",
+    multisigAccountAlias: "cbdc@banka",
     instructionsHash: "e".repeat(64),
   });
   assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/get`);
   assert.deepEqual(JSON.parse(captured.init.body), {
-    multisig_account_alias: "cbdc@hbl",
+    multisig_account_alias: "cbdc@banka",
     instructions_hash: "e".repeat(64),
   });
   assert.deepEqual(result, responsePayload);
@@ -15488,7 +15488,7 @@ test("getMultisigSpec rejects selectors that set both account id and alias", asy
     () =>
       client.getMultisigSpec({
         multisigAccountId: FIXTURE_ALICE_ID,
-        multisigAccountAlias: "cbdc@hbl",
+        multisigAccountAlias: "cbdc@banka",
       }),
     /requires exactly one of multisig_account_id or multisig_account_alias/,
   );
@@ -15511,16 +15511,16 @@ test("getMultisigSpec accepts domain-scoped aliases and rejects unsupported alia
   });
 
   await client.getMultisigSpec({
-    multisigAccountAlias: "cbdc@hbl.universal",
+    multisigAccountAlias: "cbdc@banka.universal",
   });
   assert.deepEqual(JSON.parse(captured.init.body), {
-    multisig_account_alias: "cbdc@hbl.universal",
+    multisig_account_alias: "cbdc@banka.universal",
   });
 
   await assert.rejects(
     () =>
       client.getMultisigSpec({
-        multisigAccountAlias: "cbdc@hbl.universal.extra",
+        multisigAccountAlias: "cbdc@banka.universal.extra",
       }),
     /must use name@dataspace or name@domain.dataspace form/,
   );
@@ -17098,7 +17098,7 @@ test("getExplorerAccountQr normalizes payloads", async () => {
 });
 
 test("getExplorerAccountQr accepts account aliases on account-id paths", async () => {
-  const alias = "operator@hbl.universal";
+  const alias = "operator@banka.universal";
   const fetchImpl = async (url, init = {}) => {
     const requestUrl = new URL(url);
     assert.equal(init.method, "GET");

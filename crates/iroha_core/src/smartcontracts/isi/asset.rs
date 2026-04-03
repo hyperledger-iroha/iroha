@@ -470,8 +470,14 @@ pub mod isi {
 
         let alias_domains: BTreeSet<_> = state_transaction
             .world
-            .alias_domains_for_account(subject)
+            .bound_account_aliases(subject)
             .into_iter()
+            .filter_map(|alias| {
+                alias
+                    .domain
+                    .as_ref()
+                    .map(|domain| DomainId::new(domain.name().clone()))
+            })
             .collect();
 
         for domain_id in &binding.allowed_domains {
@@ -1335,8 +1341,8 @@ pub mod query {
                     if let Ok(asset_id) = raw.parse::<AssetId>() {
                         self.subjects.insert(asset_id.account().subject_id());
                         self.definitions.insert(asset_id.definition().clone());
-                        if !asset_id.definition().is_opaque_canonical() {
-                            self.domains.insert(asset_id.definition().domain().clone());
+                        if let Some(domain_id) = asset_id.definition().try_domain() {
+                            self.domains.insert(domain_id.clone());
                         }
                     }
                 }
@@ -1401,8 +1407,11 @@ pub mod query {
                 return false;
             }
             if !self.domains.is_empty()
-                && (asset.id().definition().is_opaque_canonical()
-                    || !self.domains.contains(asset.id().definition().domain()))
+                && !asset
+                    .id()
+                    .definition()
+                    .try_domain()
+                    .is_some_and(|domain| self.domains.contains(domain))
             {
                 return false;
             }
@@ -1439,10 +1448,11 @@ pub mod query {
             | "asset_definition_id"
             | "definition_id"
             | "id.definition" => Some(asset.id().definition().to_string()),
-            "domain" | "definition.domain" | "id.definition.domain" => {
-                (!asset.id().definition().is_opaque_canonical())
-                    .then(|| asset.id().definition().domain().to_string())
-            }
+            "domain" | "definition.domain" | "id.definition.domain" => asset
+                .id()
+                .definition()
+                .try_domain()
+                .map(|domain| domain.to_string()),
             _ => None,
         }
     }
@@ -1723,9 +1733,11 @@ pub mod query {
                                 world
                                     .assets_iter()
                                     .filter(move |entry| {
-                                        let definition = entry.id().definition();
-                                        !definition.is_opaque_canonical()
-                                            && domains.contains(definition.domain())
+                                        entry
+                                            .id()
+                                            .definition()
+                                            .try_domain()
+                                            .is_some_and(|domain| domains.contains(domain))
                                     })
                                     .map(entry_to_asset),
                             )
@@ -1785,8 +1797,9 @@ pub mod query {
                                 definitions
                                     .iter()
                                     .filter(|definition| {
-                                        !definition.is_opaque_canonical()
-                                            && domains.contains(definition.domain())
+                                        definition
+                                            .try_domain()
+                                            .is_some_and(|domain| domains.contains(domain))
                                     })
                                     .cloned()
                                     .collect::<BTreeSet<_>>(),
@@ -1811,10 +1824,12 @@ pub mod query {
                             world
                                 .assets_in_account_iter(&subject)
                                 .filter(move |entry| {
-                                    let definition = entry.id().definition();
                                     domains.as_ref().is_none_or(|domains| {
-                                        !definition.is_opaque_canonical()
-                                            && domains.contains(definition.domain())
+                                        entry
+                                            .id()
+                                            .definition()
+                                            .try_domain()
+                                            .is_some_and(|domain| domains.contains(domain))
                                     })
                                 })
                                 .map(entry_to_asset)
@@ -1831,8 +1846,9 @@ pub mod query {
                         Some(definitions) => definitions
                             .into_iter()
                             .filter(|definition| {
-                                !definition.is_opaque_canonical()
-                                    && domains.contains(definition.domain())
+                                definition
+                                    .try_domain()
+                                    .is_some_and(|domain| domains.contains(domain))
                             })
                             .collect(),
                         None => {

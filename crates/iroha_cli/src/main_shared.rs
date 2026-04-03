@@ -6854,17 +6854,17 @@ mod settlement {
         }
 
         fn settlement_currency_code(asset: &AssetDefinitionId) -> String {
-            let candidate = asset.name().as_ref().to_ascii_uppercase();
-            if candidate.len() == 3 && candidate.chars().all(|ch| ch.is_ascii_uppercase()) {
+            if let Some(name) = asset.try_name() {
+                let candidate = name.as_ref().to_ascii_uppercase();
+                if candidate.len() == 3 && candidate.chars().all(|ch| ch.is_ascii_uppercase()) {
+                    return candidate;
+                }
                 return candidate;
             }
-            if asset.is_opaque_canonical() {
-                // Offline previews only see the canonical asset-definition address, so
-                // preserve a schema-valid placeholder when the original currency label
-                // is no longer recoverable from the identifier alone.
-                return "XXX".to_owned();
-            }
-            candidate
+            // Offline previews only see the canonical asset-definition address, so
+            // preserve a schema-valid placeholder when the original currency label
+            // is no longer recoverable from the identifier alone.
+            "XXX".to_owned()
         }
 
         fn counter_info(leg: &SettlementLeg) -> String {

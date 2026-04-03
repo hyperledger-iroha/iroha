@@ -16,6 +16,7 @@ use iroha_data_model::{
 };
 
 use super::ast::{Block, Expr, Item, Pattern, Program, Statement};
+use crate::builtins::Builtin;
 use crate::i18n::{self, Language, Message as I18nMessage, StateShadowContext};
 use crate::pointer_abi::{self, PointerType};
 
@@ -713,22 +714,17 @@ fn is_literal_state_key(expr: &Expr) -> bool {
 fn is_literal_state_path(expr: &Expr) -> bool {
     match expr {
         Expr::String(_) | Expr::Bytes(_) => true,
-        Expr::Call { name, args } => match name.as_str() {
-            "name" => {
+        Expr::Call { name, args } => match Builtin::from_name(name) {
+            None if name == "name" => {
                 args.len() == 1
                     && matches!(args.first(), Some(Expr::String(_)) | Some(Expr::Bytes(_)))
             }
-            "path_map_key" => {
+            Some(Builtin::Path) => {
                 if args.len() != 2 {
                     return false;
                 }
-                is_literal_state_path(&args[0]) && matches!(args[1], Expr::Number(_))
-            }
-            "path_map_key_norito" => {
-                if args.len() != 2 {
-                    return false;
-                }
-                is_literal_state_path(&args[0]) && is_literal_state_key(&args[1])
+                is_literal_state_path(&args[0])
+                    && (matches!(args[1], Expr::Number(_)) || is_literal_state_key(&args[1]))
             }
             _ => false,
         },

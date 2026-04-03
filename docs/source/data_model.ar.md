@@ -50,7 +50,7 @@ translator: machine-google-reviewed
 - نموذج الاسم المستعار:
   - لا تشتمل هوية الحساب Canonical مطلقًا على مجال أو مقطع مساحة بيانات.
   - قيم `AccountAlias` هي روابط SNS منفصلة موضوعة أعلى `AccountId`.
-  - الأسماء المستعارة المؤهلة للمجال مثل `merchant@hbl.sbp` تحمل كلاً من المجال ومساحة البيانات في ربط الاسم المستعار.
+  - الأسماء المستعارة المؤهلة للمجال مثل `merchant@banka.sbp` تحمل كلاً من المجال ومساحة البيانات في ربط الاسم المستعار.
   - الأسماء المستعارة لجذر مساحة البيانات مثل `merchant@sbp` تحمل مساحة البيانات فقط وبالتالي تقترن بشكل طبيعي مع `Account::new(...)`.
   - يجب أن تقوم الاختبارات والتركيبات بتثبيت `AccountId` العالمي أولاً، ثم إضافة عقود إيجار الاسم المستعار وأذونات الاسم المستعار وأي حالة مملوكة للنطاق بشكل منفصل بدلاً من تشفير افتراضات المجال في هوية الحساب نفسها.
   - يركز البحث العام عن الحساب المفرد الآن على الأسماء المستعارة (`FindAliasesByAccountId`)؛ تظل هوية الحساب نفسها بلا مجال.### تعريفات الأصول والأصول
@@ -249,7 +249,7 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl.sbp
+  --alias pkr#bankb.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
@@ -259,14 +259,14 @@ iroha ledger asset definition register \
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl.sbp \
+  --definition-alias pkr#bankb.sbp \
   --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl.sbp"}'
+  -d '{"alias":"pkr#bankb.sbp"}'
 ```مذكرة الهجرة:
 - لا يتم قبول معرفات تعريف الأصول `name#domain` القديمة في الإصدار 1.
 - تستخدم محددات الأصول العامة تنسيقًا واحدًا لتعريف الأصول فقط: معرفات Base58 الأساسية. تظل الأسماء المستعارة محددات اختيارية، ولكنها تتوافق مع نفس المعرف الأساسي.

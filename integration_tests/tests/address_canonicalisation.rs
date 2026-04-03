@@ -373,18 +373,18 @@ fn with_offline_allowance_genesis(
     let garden_domain: DomainId = "garden_of_live_flowers"
         .parse()
         .expect("default garden_of_live_flowers domain should parse");
-    let aid_domain: DomainId = "aid".parse().expect("default aid domain should parse");
     let preseeded_domains = BTreeSet::from([
         iroha_genesis::GENESIS_DOMAIN_ID.clone(),
         wonderland_domain.clone(),
         garden_domain,
-        aid_domain,
     ]);
 
     // Seed every domain touched by the fixture so genesis mint/register steps can resolve
     // asset-definition scopes even when they use non-wonderland domains.
     let mut required_domains = BTreeSet::new();
-    required_domains.insert(certificate.allowance.asset.definition().domain().clone());
+    if let Some(domain) = certificate.allowance.asset.definition().try_domain() {
+        required_domains.insert(domain.clone());
+    }
     for domain in required_domains {
         if !preseeded_domains.contains(&domain) {
             builder = builder.with_genesis_instruction(Register::domain(Domain::new(domain)));
@@ -406,10 +406,14 @@ fn with_offline_allowance_genesis(
 
     let asset_definition_id = certificate.allowance.asset.definition().clone();
     let scale = certificate.allowance.amount.scale();
+    let asset_definition_name = asset_definition_id
+        .try_name()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| asset_definition_id.to_string());
     // Asset definition registrations require an explicit human-facing name.
     let asset_definition =
         AssetDefinition::new(asset_definition_id.clone(), NumericSpec::fractional(scale))
-            .with_name(asset_definition_id.name().to_string());
+            .with_name(asset_definition_name);
     builder = builder.with_genesis_instruction(Register::asset_definition(asset_definition));
     builder = builder.with_genesis_instruction(SetKeyValue::asset_definition(
         certificate.allowance.asset.definition().clone(),
@@ -429,7 +433,11 @@ fn offline_allowance_genesis_helper_seeds_domain_once_and_names_asset_definition
     init_instruction_registry();
     let certificate = load_offline_certificate_fixture()?;
     let asset_definition_id = certificate.allowance.asset.definition().clone();
-    let asset_domain = asset_definition_id.domain().clone();
+    let asset_domain = asset_definition_id.try_domain().cloned();
+    let expected_name = asset_definition_id
+        .try_name()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| asset_definition_id.to_string());
     let network = with_offline_allowance_genesis(NetworkBuilder::new(), &certificate).build();
     let genesis = network.genesis();
 
@@ -447,7 +455,7 @@ fn offline_allowance_genesis_helper_seeds_domain_once_and_names_asset_definition
                 match register {
                     RegisterBox::Domain(register) => {
                         let domain = register.object().clone().build(&authority);
-                        if domain.id == asset_domain {
+                        if asset_domain.as_ref() == Some(&domain.id) {
                             domain_registrations += 1;
                         }
                     }
@@ -468,13 +476,12 @@ fn offline_allowance_genesis_helper_seeds_domain_once_and_names_asset_definition
     }
 
     assert_eq!(
-        domain_registrations, 1,
-        "offline allowance helper should register the fixture domain exactly once across genesis instructions"
+        domain_registrations,
+        usize::from(asset_domain.is_some()),
+        "offline allowance helper should only register a domain when the asset definition carries an explicit domain projection"
     );
     assert!(
-        definition_names
-            .iter()
-            .any(|name| name == asset_definition_id.name().as_ref()),
+        definition_names.iter().any(|name| name == &expected_name),
         "offline allowance helper should seed the fixture asset definition with a human-facing name"
     );
 
@@ -810,7 +817,7 @@ fn local8_literal() -> String {
 
 fn public_key_literal() -> String {
     let public_key = ALICE_KEYPAIR.public_key().to_string();
-    format!("{public_key}@hbl.centralbank")
+    format!("{public_key}@banka.centralbank")
 }
 
 struct KaigiRelaySeed {

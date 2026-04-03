@@ -198,13 +198,13 @@ Execution ကို `iroha_core::smartcontracts::isi` တွင် `Execute for 
 - Parameter အပ်ဒိတ်-
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` ကို အပ်ဒိတ်လုပ်ပြီး `ConfigurationEvent::Changed` ကို ထုတ်လွှတ်သည်။CLI / Torii ပိုင်ဆိုင်မှု-အဓိပ္ပါယ်ဖွင့်ဆိုချက် id + alias ဥပမာများ-
 - Canonical Base58 id + တိကျသောအမည် + ရှည်လျားသောအမည်များဖြင့် မှတ်ပုံတင်ပါ။
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
 - Canonical Base58 id + တိကျသောအမည် + အတိုကောက်အမည်များ ဖြင့် မှတ်ပုံတင်ပါ။
   - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - နာမည်များ + အကောင့်အစိတ်အပိုင်းများမှ Mint
-  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
 - Canonical Base58 id အတွက် alias များကို ဖြေရှင်းပါ-
-  - JSON `{ "alias": "pkr#ubl.sbp" }` ဖြင့် `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#bankb.sbp" }` ဖြင့် `POST /v1/assets/aliases/resolve`
 
 ပြောင်းရွှေ့မှုမှတ်စု-
 - `name#domain` စာသားဆိုင်ရာ ပိုင်ဆိုင်မှု-အဓိပ္ပာယ်ဖွင့်ဆိုချက် ID များသည် ပထမထုတ်ဝေမှုတွင် ရည်ရွယ်ချက်ရှိရှိ ပံ့ပိုးမထားပါ။ Canonical Base58 ID များကို အသုံးပြုပါ သို့မဟုတ် အစက်ချထားသော နာမည်များကို ဖြေရှင်းပါ။

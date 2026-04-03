@@ -85,7 +85,16 @@ impl ExplorerAggregates {
             let account_id = account.id().clone();
             agg.account_counters.entry(account_id.clone()).or_default();
             let account_domains = agg.account_domains.entry(account_id).or_default();
-            for domain_id in world.alias_domains_for_account(account.id()) {
+            let linked_domains = world
+                .bound_account_aliases(account.id())
+                .into_iter()
+                .filter_map(|alias| {
+                    alias
+                        .domain
+                        .map(|domain| DomainId::new(domain.name().clone()))
+                })
+                .collect::<BTreeSet<_>>();
+            for domain_id in linked_domains {
                 account_domains.insert(domain_id.clone());
                 let entry = agg.domain_counters.entry(domain_id).or_default();
                 entry.accounts = entry.accounts.saturating_add(1);
@@ -1441,10 +1450,10 @@ where
 {
     let mut items = Vec::new();
     for definition in definitions {
-        if let Some(domain) = domain_filter {
-            if definition.id().domain() != domain {
-                continue;
-            }
+        if let Some(domain) = domain_filter
+            && definition.id().try_domain() != Some(domain)
+        {
+            continue;
         }
         if let Some(owner) = owner_filter {
             if definition.owned_by() != owner {

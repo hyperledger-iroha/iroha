@@ -2663,7 +2663,7 @@ pub mod query {
         fn find_aliases_by_account_id_returns_primary_alias_bindings() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let linked_domain: DomainId = "hbl".parse().unwrap();
+            let linked_domain: DomainId = "banka".parse().unwrap();
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
             seed_authority_account(&mut world, &ALICE_ID);
@@ -2694,7 +2694,7 @@ pub mod query {
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
 
-            let (account_id, _) = gen_account_in("hbl");
+            let (account_id, _) = gen_account_in("banka");
             let primary_label = AccountAlias::new_in_dataspace(
                 "merchant".parse().expect("label"),
                 Some(alias_domain(&linked_domain)),
@@ -2712,14 +2712,14 @@ pub mod query {
             let aliases = FindAliasesByAccountId::new(
                 account_id.clone(),
                 Some("centralbank".to_owned()),
-                Some("hbl".to_owned()),
+                Some("banka".to_owned()),
             )
             .execute(&view)
             .unwrap();
             assert_eq!(aliases.len(), 1);
-            assert_eq!(aliases[0].alias, "merchant@hbl.centralbank");
+            assert_eq!(aliases[0].alias, "merchant@banka.centralbank");
             assert_eq!(aliases[0].dataspace, "centralbank");
-            assert_eq!(aliases[0].domain.as_deref(), Some("hbl"));
+            assert_eq!(aliases[0].domain.as_deref(), Some("banka"));
             assert!(aliases[0].is_primary);
         }
 
@@ -2727,7 +2727,7 @@ pub mod query {
         fn find_aliases_by_account_id_returns_empty_when_filters_do_not_match() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let linked_domain: DomainId = "hbl".parse().unwrap();
+            let linked_domain: DomainId = "banka".parse().unwrap();
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
             seed_authority_account(&mut world, &ALICE_ID);
@@ -2758,7 +2758,7 @@ pub mod query {
                 iroha_data_model::nexus::DataSpaceId::new(9),
             );
 
-            let (account_id, _) = gen_account_in("hbl");
+            let (account_id, _) = gen_account_in("banka");
             let primary_label = AccountAlias::new_in_dataspace(
                 "merchant".parse().expect("label"),
                 Some(alias_domain(&linked_domain)),
@@ -2776,7 +2776,7 @@ pub mod query {
             let aliases = FindAliasesByAccountId::new(
                 account_id,
                 Some("centralbank".to_owned()),
-                Some("ubl".to_owned()),
+                Some("bankb".to_owned()),
             )
             .execute(&view)
             .unwrap();

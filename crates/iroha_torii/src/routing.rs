@@ -9850,9 +9850,6 @@ fn build_multisig_contract_call_instructions(
         iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::ExecuteTrigger::new(
             trigger_id.clone(),
         )),
-        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Unregister::trigger(
-            trigger_id,
-        )),
     ];
     let instructions_hash = HashOf::new(&instructions);
     Ok((instructions, instructions_hash))
@@ -11033,7 +11030,7 @@ mod multisig_contract_call_tests {
         )
         .expect("instructions");
 
-        assert_eq!(instructions.len(), 3);
+        assert_eq!(instructions.len(), 2);
         assert_eq!(instructions_hash, HashOf::new(&instructions));
     }
 
@@ -11393,7 +11390,7 @@ mod multisig_selector_tests {
         String,
         String,
     ) {
-        let domain_id: DomainId = "hbl".parse().expect("domain");
+        let domain_id: DomainId = "banka".parse().expect("domain");
         let label_name: Name = "cbdc".parse().expect("label");
         let alias_literal = format!("{}@{}.universal", label_name, domain_id);
 
@@ -11564,7 +11561,7 @@ mod multisig_selector_tests {
         String,
         KeyPair,
     ) {
-        let domain_id: DomainId = "hbl".parse().expect("domain");
+        let domain_id: DomainId = "banka".parse().expect("domain");
         let label_name: Name = "cbdc".parse().expect("label");
         let alias_literal = format!("{}@{}.universal", label_name, domain_id);
 
@@ -11756,7 +11753,7 @@ mod multisig_selector_tests {
                 multisig_account_id: Some(dm::AccountId::new(
                     KeyPair::random().public_key().clone(),
                 )),
-                multisig_account_alias: Some("cbdc@hbl.universal".to_owned()),
+                multisig_account_alias: Some("cbdc@banka.universal".to_owned()),
             },
             None,
         )
@@ -11784,18 +11781,18 @@ mod multisig_selector_tests {
         let err = handle_post_multisig_spec(
             state,
             NoritoJson(MultisigSpecRequestDto {
-                selector: alias_selector("missing@hbl.universal"),
+                selector: alias_selector("missing@banka.universal"),
             }),
         )
         .await
         .expect_err("unknown alias must fail");
         let message = expect_app_not_found(err, "multisig_authority_alias_not_found");
-        assert!(message.contains("missing@hbl.universal"));
+        assert!(message.contains("missing@banka.universal"));
     }
 
     #[tokio::test]
     async fn multisig_spec_rejects_alias_bound_non_multisig_account() {
-        let domain_id: DomainId = "hbl".parse().expect("domain");
+        let domain_id: DomainId = "banka".parse().expect("domain");
         let keypair = KeyPair::random();
         let scoped = dm::AccountId::new(keypair.public_key().clone());
         let authority = scoped.account().clone();
@@ -11814,7 +11811,7 @@ mod multisig_selector_tests {
         let err = handle_post_multisig_spec(
             state,
             NoritoJson(MultisigSpecRequestDto {
-                selector: alias_selector("cbdc@hbl.universal"),
+                selector: alias_selector("cbdc@banka.universal"),
             }),
         )
         .await
@@ -11959,7 +11956,7 @@ mod multisig_selector_tests {
 
     #[tokio::test]
     async fn multisig_spec_falls_back_to_contract_state_when_metadata_is_missing() {
-        let domain_id: DomainId = "hbl".parse().expect("domain");
+        let domain_id: DomainId = "banka".parse().expect("domain");
         let label_name: Name = "cbdc".parse().expect("label");
 
         let signer_one = KeyPair::random();
@@ -12394,7 +12391,7 @@ mod multisig_selector_tests {
             vec![execute_trigger_instruction(
                 "staged_mint_request_hbl",
                 norito::json::parse_value(&format!(
-                    r#"{{"action":"create","request_id":"mr_type_filter_1","asset_id":"{}","to_account_id":"{}","fi_id":"hbl","amount_i64":77}}"#,
+                    r#"{{"action":"create","request_id":"mr_type_filter_1","asset_id":"{}","to_account_id":"{}","fi_id":"banka","amount_i64":77}}"#,
                     test_asset_definition_id(),
                     multisig_account_id,
                 ))
@@ -12421,18 +12418,18 @@ mod multisig_selector_tests {
                 r#"{{
                     "proposal_id":"mr_type_filter_contract",
                     "approval_alias":"banking@centralbank",
-                    "requesting_fi_dataspace":"hbl",
+                    "requesting_fi_dataspace":"banka",
                     "asset_definition":"{asset_definition}",
-                    "to_account_alias":"cbdc@hbl.centralbank",
+                    "to_account_alias":"cbdc@banka.centralbank",
                     "amount":"77",
                     "requested_by_actor":{{
                         "proposal_id":"mr_type_filter_contract",
-                        "requesting_fi_id":"hbl",
+                        "requesting_fi_id":"banka",
                         "approval_alias_fqn":"banking@centralbank",
-                        "creation_multisig_alias_fqn":"cbdc@hbl.centralbank",
+                        "creation_multisig_alias_fqn":"cbdc@banka.centralbank",
                         "asset_id":"{asset_definition}",
                         "amount":"77",
-                        "to_account_id":"cbdc@hbl.centralbank"
+                        "to_account_id":"cbdc@banka.centralbank"
                     }}
                 }}"#,
             ))
@@ -13006,7 +13003,7 @@ mod multisig_selector_tests {
     #[tokio::test]
     async fn asset_transfer_control_get_returns_stored_state_and_usage() {
         let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "hbl".parse().expect("domain");
+        let domain_id: DomainId = "banka".parse().expect("domain");
         let scoped_account_id = dm::AccountId::new(KeyPair::random().public_key().clone());
         let controlled_account_id: dm::AccountId = scoped_account_id.clone().into();
         let asset_definition_id = test_asset_definition_id();
@@ -13590,111 +13587,112 @@ pub async fn handle_post_contract_call_multisig_propose(
         .with_metadata(tx_metadata)
         .with_instructions([dm::InstructionBox::from(propose_instruction)]);
 
-    let response =
-        if private_key.is_some() {
-            return Err(reject_server_side_signing(
-                ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
-            ));
-        } else if public_key_hex.is_some() || signature_b64.is_some() {
-            let public_key_hex = public_key_hex
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
-            let signature_b64 = signature_b64
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
-            let public_key_bytes = hex::decode(public_key_hex)
-                .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let public_key = iroha_crypto::PublicKey::from_bytes(
-                iroha_crypto::Algorithm::Ed25519,
-                &public_key_bytes,
-            )
+    let response = if private_key.is_some() {
+        return Err(reject_server_side_signing(
+            ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
+        ));
+    } else if public_key_hex.is_some() || signature_b64.is_some() {
+        let public_key_hex = public_key_hex
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
+        let signature_b64 = signature_b64
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
+        let public_key_bytes = hex::decode(public_key_hex)
             .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let expected_authority = dm::AccountId::new(public_key.clone());
-            if signer_account_id != expected_authority {
-                return Err(conversion_error(
-                    "public_key_hex does not match signer_account_id".to_owned(),
-                ));
-            }
-            let signature_bytes = base64::engine::general_purpose::STANDARD
-                .decode(signature_b64.as_bytes())
-                .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
-            let mut tx = builder
-                .sign(
-                    iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
-                        .private_key(),
-                )
-                .with_authority(signer_account_id.clone().into());
-            let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
-            tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
+        let public_key = iroha_crypto::PublicKey::from_bytes(
+            iroha_crypto::Algorithm::Ed25519,
+            &public_key_bytes,
+        )
+        .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+        let expected_authority = dm::AccountId::new(public_key.clone());
+        if signer_account_id != expected_authority {
+            return Err(conversion_error(
+                "public_key_hex does not match signer_account_id".to_owned(),
+            ));
+        }
+        let signature_bytes = base64::engine::general_purpose::STANDARD
+            .decode(signature_b64.as_bytes())
+            .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+        let mut tx = builder
+            .sign(
+                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+                    .private_key(),
+            )
+            .with_authority(signer_account_id.clone().into());
+        let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
+        tx.set_signature(
+            iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
                     iroha_data_model::transaction::signed::TransactionPayload,
                 >::from_signature(signature),
-            ));
-            tx.verify_signature().map_err(|err| {
-                conversion_error(format!(
-                    "multisig contract-call propose detached signature verification failed: {err}"
-                ))
-            })?;
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id,
-                queue,
-                Arc::clone(&state),
-                tx,
-                telemetry,
-                ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
-            )
-            .await?;
-            if wait_for_multisig_proposal_record_visibility(
-                state.as_ref(),
-                &multisig_account_id,
-                &spec,
-                &proposal_hash,
-            )
-            .await?
-            .is_none()
-            {
-                iroha_logger::warn!(
-                    multisig_account_id = %multisig_account_id,
-                    proposal_id = %proposal_id,
-                    "submitted multisig contract-call proposal did not become visible within the wait window"
-                );
-            }
-            MultisigContractCallResponseDto {
-                ok: true,
-                resolved_multisig_account_id: multisig_account_id.clone(),
-                submitted: Some(true),
-                proposal_id: Some(proposal_id),
-                instructions_hash: Some(instructions_hash),
-                tx_hash_hex: Some(tx_hash_hex.clone()),
-                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
-                creation_time_ms: Some(creation_time_ms),
-                signing_message_b64: None,
-            }
-        } else {
-            let scaffold_key =
-                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-            let tx = builder
-                .sign(scaffold_key.private_key())
-                .with_authority(signer_account_id.clone().into());
-            let signing_message_b64 = base64::engine::general_purpose::STANDARD
-                .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
-            MultisigContractCallResponseDto {
-                ok: true,
-                resolved_multisig_account_id: multisig_account_id,
-                submitted: Some(false),
-                proposal_id: Some(proposal_id),
-                instructions_hash: Some(instructions_hash),
-                tx_hash_hex: None,
-                executed_tx_hash_hex: None,
-                creation_time_ms: Some(creation_time_ms),
-                signing_message_b64: Some(signing_message_b64),
-            }
-        };
+            ),
+        );
+        tx.verify_signature().map_err(|err| {
+            conversion_error(format!(
+                "multisig contract-call propose detached signature verification failed: {err}"
+            ))
+        })?;
+        let tx_hash_hex = hex::encode(tx.hash().as_ref());
+        handle_transaction_with_metrics(
+            chain_id,
+            queue,
+            Arc::clone(&state),
+            tx,
+            telemetry,
+            ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
+        )
+        .await?;
+        if wait_for_multisig_proposal_record_visibility(
+            state.as_ref(),
+            &multisig_account_id,
+            &spec,
+            &proposal_hash,
+        )
+        .await?
+        .is_none()
+        {
+            iroha_logger::warn!(
+                multisig_account_id = %multisig_account_id,
+                proposal_id = %proposal_id,
+                "submitted multisig contract-call proposal did not become visible within the wait window"
+            );
+        }
+        MultisigContractCallResponseDto {
+            ok: true,
+            resolved_multisig_account_id: multisig_account_id.clone(),
+            submitted: Some(true),
+            proposal_id: Some(proposal_id),
+            instructions_hash: Some(instructions_hash),
+            tx_hash_hex: Some(tx_hash_hex.clone()),
+            executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
+            creation_time_ms: Some(creation_time_ms),
+            signing_message_b64: None,
+        }
+    } else {
+        let scaffold_key =
+            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let tx = builder
+            .sign(scaffold_key.private_key())
+            .with_authority(signer_account_id.clone().into());
+        let signing_message_b64 = base64::engine::general_purpose::STANDARD
+            .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
+        MultisigContractCallResponseDto {
+            ok: true,
+            resolved_multisig_account_id: multisig_account_id,
+            submitted: Some(false),
+            proposal_id: Some(proposal_id),
+            instructions_hash: Some(instructions_hash),
+            tx_hash_hex: None,
+            executed_tx_hash_hex: None,
+            creation_time_ms: Some(creation_time_ms),
+            signing_message_b64: Some(signing_message_b64),
+        }
+    };
 
     Ok(JsonBody(response).into_response())
 }
@@ -13935,114 +13933,115 @@ pub async fn handle_post_multisig_cancel(
         )
     };
 
-    let response =
-        if private_key.is_some() {
-            return Err(reject_server_side_signing(ENDPOINT_MULTISIG_CANCEL));
-        } else if public_key_hex.is_some() || signature_b64.is_some() {
-            let public_key_hex = public_key_hex
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
-            let signature_b64 = signature_b64
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
-            let public_key_bytes = hex::decode(public_key_hex)
-                .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let public_key = iroha_crypto::PublicKey::from_bytes(
-                iroha_crypto::Algorithm::Ed25519,
-                &public_key_bytes,
-            )
+    let response = if private_key.is_some() {
+        return Err(reject_server_side_signing(ENDPOINT_MULTISIG_CANCEL));
+    } else if public_key_hex.is_some() || signature_b64.is_some() {
+        let public_key_hex = public_key_hex
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
+        let signature_b64 = signature_b64
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
+        let public_key_bytes = hex::decode(public_key_hex)
             .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let expected_authority = dm::AccountId::new(public_key.clone());
-            if signer_account_id != expected_authority {
-                return Err(conversion_error(
-                    "public_key_hex does not match signer_account_id".to_owned(),
-                ));
-            }
-            let signature_bytes = base64::engine::general_purpose::STANDARD
-                .decode(signature_b64.as_bytes())
-                .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
-            let mut tx = builder
-                .sign(
-                    iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
-                        .private_key(),
-                )
-                .with_authority(signer_account_id.clone().into());
-            let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
-            tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
+        let public_key = iroha_crypto::PublicKey::from_bytes(
+            iroha_crypto::Algorithm::Ed25519,
+            &public_key_bytes,
+        )
+        .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+        let expected_authority = dm::AccountId::new(public_key.clone());
+        if signer_account_id != expected_authority {
+            return Err(conversion_error(
+                "public_key_hex does not match signer_account_id".to_owned(),
+            ));
+        }
+        let signature_bytes = base64::engine::general_purpose::STANDARD
+            .decode(signature_b64.as_bytes())
+            .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+        let mut tx = builder
+            .sign(
+                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+                    .private_key(),
+            )
+            .with_authority(signer_account_id.clone().into());
+        let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
+        tx.set_signature(
+            iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
                     iroha_data_model::transaction::signed::TransactionPayload,
                 >::from_signature(signature),
-            ));
-            tx.verify_signature().map_err(|err| {
-                conversion_error(format!(
-                    "multisig cancel detached signature verification failed: {err}"
-                ))
-            })?;
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id,
-                queue,
-                Arc::clone(&state),
-                tx,
-                telemetry,
-                ENDPOINT_MULTISIG_CANCEL,
+            ),
+        );
+        tx.verify_signature().map_err(|err| {
+            conversion_error(format!(
+                "multisig cancel detached signature verification failed: {err}"
+            ))
+        })?;
+        let tx_hash_hex = hex::encode(tx.hash().as_ref());
+        handle_transaction_with_metrics(
+            chain_id,
+            queue,
+            Arc::clone(&state),
+            tx,
+            telemetry,
+            ENDPOINT_MULTISIG_CANCEL,
+        )
+        .await?;
+        if action == "PROPOSE"
+            && wait_for_multisig_proposal_record_visibility(
+                state.as_ref(),
+                &multisig_account_id,
+                &spec,
+                &cancel_hash,
             )
-            .await?;
-            if action == "PROPOSE"
-                && wait_for_multisig_proposal_record_visibility(
-                    state.as_ref(),
-                    &multisig_account_id,
-                    &spec,
-                    &cancel_hash,
-                )
-                .await?
-                .is_none()
-            {
-                iroha_logger::warn!(
-                    multisig_account_id = %multisig_account_id,
-                    proposal_id = %cancel_hash_literal,
-                    "submitted multisig cancel proposal did not become visible within the wait window"
-                );
-            }
-            MultisigCancelResponseDto {
-                ok: true,
-                resolved_multisig_account_id: multisig_account_id.clone(),
-                submitted: Some(true),
-                action: action.clone(),
-                target_proposal_id: target_hash_literal.clone(),
-                target_instructions_hash: target_hash_literal.clone(),
-                cancel_proposal_id: cancel_hash_literal.clone(),
-                cancel_instructions_hash: cancel_hash_literal.clone(),
-                executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
-                creation_time_ms: Some(creation_time_ms),
-                signing_message_b64: None,
-            }
-        } else {
-            let scaffold_key =
-                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-            let tx = builder
-                .sign(scaffold_key.private_key())
-                .with_authority(signer_account_id.into());
-            let signing_message_b64 = base64::engine::general_purpose::STANDARD
-                .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
-            MultisigCancelResponseDto {
-                ok: true,
-                resolved_multisig_account_id: multisig_account_id,
-                submitted: Some(false),
-                action,
-                target_proposal_id: target_hash_literal.clone(),
-                target_instructions_hash: target_hash_literal,
-                cancel_proposal_id: cancel_hash_literal.clone(),
-                cancel_instructions_hash: cancel_hash_literal,
-                executed_tx_hash_hex: None,
-                creation_time_ms: Some(creation_time_ms),
-                signing_message_b64: Some(signing_message_b64),
-            }
-        };
+            .await?
+            .is_none()
+        {
+            iroha_logger::warn!(
+                multisig_account_id = %multisig_account_id,
+                proposal_id = %cancel_hash_literal,
+                "submitted multisig cancel proposal did not become visible within the wait window"
+            );
+        }
+        MultisigCancelResponseDto {
+            ok: true,
+            resolved_multisig_account_id: multisig_account_id.clone(),
+            submitted: Some(true),
+            action: action.clone(),
+            target_proposal_id: target_hash_literal.clone(),
+            target_instructions_hash: target_hash_literal.clone(),
+            cancel_proposal_id: cancel_hash_literal.clone(),
+            cancel_instructions_hash: cancel_hash_literal.clone(),
+            executed_tx_hash_hex: will_execute.then_some(tx_hash_hex),
+            creation_time_ms: Some(creation_time_ms),
+            signing_message_b64: None,
+        }
+    } else {
+        let scaffold_key =
+            iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+        let tx = builder
+            .sign(scaffold_key.private_key())
+            .with_authority(signer_account_id.into());
+        let signing_message_b64 = base64::engine::general_purpose::STANDARD
+            .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
+        MultisigCancelResponseDto {
+            ok: true,
+            resolved_multisig_account_id: multisig_account_id,
+            submitted: Some(false),
+            action,
+            target_proposal_id: target_hash_literal.clone(),
+            target_instructions_hash: target_hash_literal,
+            cancel_proposal_id: cancel_hash_literal.clone(),
+            cancel_instructions_hash: cancel_hash_literal,
+            executed_tx_hash_hex: None,
+            creation_time_ms: Some(creation_time_ms),
+            signing_message_b64: Some(signing_message_b64),
+        }
+    };
 
     Ok(JsonBody(response).into_response())
 }
@@ -19814,7 +19813,7 @@ mod repair_worker_tests {
             let claim = RepairWorkerClaimDto {
                 ticket_id: report.ticket_id.clone(),
                 manifest_digest_hex: hex::encode(report.evidence.manifest_digest),
-                worker_id: "worker@hbl.dataspace".into(),
+                worker_id: "worker@banka.dataspace".into(),
                 claimed_at_unix: report.submitted_at_unix + 10,
                 idempotency_key: "claim-invalid".into(),
                 signature: sign_worker_action(
@@ -19822,7 +19821,7 @@ mod repair_worker_tests {
                     &report.ticket_id,
                     report.evidence.manifest_digest,
                     report.evidence.provider_id,
-                    "worker@hbl.dataspace",
+                    "worker@banka.dataspace",
                     "claim-invalid",
                     RepairWorkerActionV1::Claim {
                         claimed_at_unix: report.submitted_at_unix + 10,
@@ -22154,12 +22153,19 @@ fn instruction_matches_domain_id(
     };
     use iroha_executor_data_model::isi::multisig::MultisigInstructionBox;
 
+    let matches_asset_definition_domain =
+        |definition: &iroha_data_model::asset::AssetDefinitionId| {
+            definition.try_domain() == Some(expected)
+        };
+
     let any = instr.as_any();
     if let Some(transfer) = any.downcast_ref::<TransferBox>() {
         return match transfer {
             TransferBox::Domain(inner) => inner.object() == expected,
-            TransferBox::AssetDefinition(inner) => inner.object().domain() == expected,
-            TransferBox::Asset(inner) => inner.source().definition().domain() == expected,
+            TransferBox::AssetDefinition(inner) => matches_asset_definition_domain(inner.object()),
+            TransferBox::Asset(inner) => {
+                matches_asset_definition_domain(inner.source().definition())
+            }
             TransferBox::Nft(inner) => inner.object().domain() == expected,
         };
     }
@@ -22167,28 +22173,28 @@ fn instruction_matches_domain_id(
         return batch
             .entries()
             .iter()
-            .any(|entry| entry.asset_definition().domain() == expected);
+            .any(|entry| matches_asset_definition_domain(entry.asset_definition()));
     }
     if let Some(mint) = any.downcast_ref::<MintBox>() {
         if let MintBox::Asset(asset_mint) = mint {
-            return asset_mint.destination().definition().domain() == expected;
+            return matches_asset_definition_domain(asset_mint.destination().definition());
         }
         return false;
     }
     if let Some(burn) = any.downcast_ref::<BurnBox>() {
         if let BurnBox::Asset(asset_burn) = burn {
-            return asset_burn.destination().definition().domain() == expected;
+            return matches_asset_definition_domain(asset_burn.destination().definition());
         }
         return false;
     }
     if let Some(set) = any.downcast_ref::<SetAssetKeyValue>() {
-        return set.asset().definition().domain() == expected;
+        return matches_asset_definition_domain(set.asset().definition());
     }
     if let Some(remove) = any.downcast_ref::<RemoveAssetKeyValue>() {
-        return remove.asset().definition().domain() == expected;
+        return matches_asset_definition_domain(remove.asset().definition());
     }
     if let Some(rewards) = any.downcast_ref::<RecordPublicLaneRewards>() {
-        return rewards.reward_asset().definition().domain() == expected;
+        return matches_asset_definition_domain(rewards.reward_asset().definition());
     }
     if let Some(custom) = any.downcast_ref::<CustomInstruction>() {
         if let Ok(multisig) = MultisigInstructionBox::try_from(custom.payload()) {
@@ -24241,7 +24247,7 @@ mod account_path_metric_tests {
                 .get()
         };
         assert!(
-            parse_account_path_segment("bad@hbl.dataspace", &telemetry, endpoint).is_err(),
+            parse_account_path_segment("bad@banka.dataspace", &telemetry, endpoint).is_err(),
             "literal should be rejected"
         );
         let after = {
@@ -24275,7 +24281,7 @@ mod stateful_account_path_parser_tests {
 
     #[tokio::test]
     async fn stateful_account_path_parser_resolves_bound_alias_literal() {
-        let domain_id: DomainId = "hbl".parse().expect("domain");
+        let domain_id: DomainId = "banka".parse().expect("domain");
         let authority = ALICE_ID.clone();
         let scoped_account_id = authority.clone();
         let alias = AccountAlias::new(
@@ -24301,7 +24307,7 @@ mod stateful_account_path_parser_tests {
 
         let (resolved, canonical) = parse_account_path_segment_with_state(
             &state,
-            "operator@hbl.universal",
+            "operator@banka.universal",
             &telemetry,
             ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
         )
@@ -39776,7 +39782,7 @@ mod tx_projection_display_tests {
     #[test]
     fn projections_omit_invalid_authority_literals() {
         let projection = TxProjection {
-            authority: Some("operator1@hbl".to_string()),
+            authority: Some("operator1@banka".to_string()),
             timestamp_ms: Some(123),
             entrypoint_hash: "deadbeef".into(),
             entrypoint_kind: "unknown".into(),
@@ -41511,12 +41517,23 @@ fn account_read_response_from_world_entry(
     entry: iroha_data_model::account::AccountEntry<'_>,
 ) -> iroha_torii_shared::AccountReadResponse {
     let details = entry.value().clone().into_inner();
+    let linked_domains = world
+        .bound_account_aliases(entry.id())
+        .into_iter()
+        .filter_map(|alias| {
+            alias
+                .domain
+                .map(|domain| DomainId::new(domain.name().clone()))
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect();
     iroha_torii_shared::AccountReadResponse {
         account_id: entry.id().clone(),
         label: details.label,
         uaid: details.uaid,
         opaque_ids: details.opaque_ids,
-        linked_domains: world.alias_domains_for_account(entry.id()),
+        linked_domains,
     }
 }
 

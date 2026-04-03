@@ -294,7 +294,7 @@ fn durable_name_map_branch_value_survives_following_addition() {
 }
 
 #[test]
-fn durable_name_map_branch_value_survives_path_map_key_work() {
+fn durable_name_map_branch_value_survives_path_work() {
     let src = r#"
         seiyaku C {
             state Foo: Map<Name, int>;

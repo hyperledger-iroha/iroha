@@ -27,7 +27,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Universal-account model:
   - `AccountId` is the canonical account identity and is always domainless.
   - Domain context for routing, aliasing, and ownership lives outside the canonical account identity in alias bindings and domain-owned entities.
-  - Account aliases are a separate SNS/account-label layer. Both domain-qualified aliases like `merchant@hbl.sbp` and dataspace-root aliases like `merchant@sbp` bind to the same canonical `AccountId`.
+  - Account aliases are a separate SNS/account-label layer. Both domain-qualified aliases like `merchant@banka.sbp` and dataspace-root aliases like `merchant@sbp` bind to the same canonical `AccountId`.
   - In tests and fixtures, seed the universal `AccountId` first, then add alias leases, alias permissions, and any domain-owned state separately. Use `Account::new(...)` for account registration and bind aliases separately only when the behavior under test depends on them.
 
 ## Repository structure

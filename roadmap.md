@@ -153,6 +153,41 @@ Open work for this slice now remains:
 - add a narrower stress sweep that separates restart/wipe faults from
   network-only perturbation at the Sumeragi layer, so the next pass can locate
   the first disruption level where each mode still converges.
+Latest sync (2026-04-03 opaque asset-definition ID cleanup):
+opaque canonical `AssetDefinitionId` values no longer fabricate the legacy
+synthetic `aid` domain/name projection.
+
+- shipped in `crates/iroha_data_model` / `crates/iroha_core` /
+  `crates/iroha_torii` / `crates/iroha_cli` / `integration_tests`:
+  - `AssetDefinitionId::from_uuid_bytes(...)` and Base58 parsing now keep raw
+    canonical IDs opaque;
+  - `AssetDefinitionId::new(domain, name)` remains the only path that carries a
+    domain/name projection, exposed explicitly through `try_domain()` /
+    `try_name()`;
+  - core/Torii domain-index and domain-filter paths now skip opaque IDs instead
+    of inheriting a fake `aid` domain; and
+  - the offline allowance genesis helper now uses a real fallback display name
+    and only seeds a domain when the fixture asset definition actually carries
+    one; and
+  - the bundled test network plus affected integration/Torii tests no longer
+    preregister a synthetic `aid` domain just to keep old asset-ID assumptions
+    alive.
+- focused verification is green, including:
+  - `cargo check -p iroha_data_model`
+  - `cargo check -p iroha_torii`
+  - `cargo check -p iroha_cli`
+
+Open work for this slice now remains:
+- rerun the edited offline allowance integration target once the current build
+  slot is free if a direct green stamp is needed for
+  `offline_allowance_genesis_helper_seeds_domain_once_and_names_asset_definition`;
+- decide whether opaque asset-definition lifecycle events should gain an
+  explicit non-domain event path instead of relying on domain-scoped callers to
+  reject them loudly; and
+- clear the unrelated current `kotodama_lang` build failures before using a
+  broad `cargo check` / `cargo test --workspace` run as the validation source
+  for this tree.
+
 Latest sync (2026-04-03 Kaigi localnet signer alignment):
 the Taira Kaigi overlay/bootstrap path now uses the same genesis signer contract
 as `kagami localnet` and fails fast on signer mismatches instead of producing an
@@ -185,31 +220,32 @@ Open work for this slice now remains:
 - rerun broader repo-wide verification if a fresh full-workspace green stamp is
   needed beyond the focused Kaigi / config coverage above.
 
-Latest sync (2026-04-03 Kotodama state-map helper ergonomics):
-the first durable-handle ergonomics tranche is landed for Kotodama, with
-method-only map/path/json helper syntax enforced for new code.
+Latest sync (2026-04-03 Kotodama state-map/helper-alias ergonomics):
+the first durable-handle ergonomics tranche is landed for Kotodama, and the
+remaining legacy helper aliases are now closed so the method-only
+map/path/json surface is consistent for new code and docs.
 
 - shipped in `crates/kotodama_lang` / `crates/ivm` / docs:
   - internal helper functions can accept `state Map<K, V>` parameters and keep
     durable map root provenance across calls;
-  - direct free-call helper spellings for map/path/json access are rejected by
-    the parser in favor of `map.contains/get_or/ensure`, `base.path`, and
-    `json.get_*`;
-  - the canonical samples, parser/semantic/IR/compiler tests, and the durable
-    `Map<Name, int>` runtime regressions now use the new method surface.
+  - parser method-call sugar now rejects the remaining legacy helper aliases
+    (`map.has`, `map.get_or_insert_default`, `base.path_map_key`,
+    `base.path_map_key_norito`, `json.json_get_*`) with migration hints;
+  - semantic analysis no longer normalizes the stale `std::map::*` / `json::*`
+    compatibility aliases; and
+  - the canonical plus translated Kotodama examples now use the method-only
+    helper spelling.
 - focused verification is green, including:
   - `cargo fmt --all`
   - `cargo test -p kotodama_lang`
   - `cargo test -p ivm --test kotodama_state_name_map_runtime -- --nocapture`
   - `cargo test -p ivm --test debug_contains -- --nocapture`
-  - `cargo test -p ivm kotodama_invalid_literals -- --nocapture`
+  - `cargo test -p ivm --test kotodama runtime_durable_ensure_state_map -- --nocapture`
 
 Open work for this slice now remains:
 - decide whether to extend `state` parameters beyond `Map<K, V>`; the current
   pass intentionally stops short of generic `state T` handles because the
-  flattened durable-struct path model still makes that awkward;
-- migrate the translated Kotodama docs to the method-only helper spelling so
-  non-English references match the canonical English docs; and
+  flattened durable-struct path model still makes that awkward; and
 - clear the unrelated current reds in `cargo test -p ivm --test kotodama -- --nocapture`
   before claiming a fully green `ivm` Kotodama slice on this dirty workspace.
 
@@ -3451,7 +3487,7 @@ now pin the canonical account/alias split more explicitly.
   explicit domain context for operations that truly require a domain-linked
   view or registration;
 - the docs now also spell out that aliases are a separate SNS/account-label
-  layer, so both domain-qualified aliases like `merchant@hbl.sbp` and
+  layer, so both domain-qualified aliases like `merchant@banka.sbp` and
   dataspace-root aliases like `merchant@sbp` resolve to the same canonical
   `AccountId`; and
 - focused `FindAliasesByAccountId` coverage now includes the dataspace-root
@@ -5469,7 +5505,7 @@ client slice past the pure-JS-only fallback path:
   native instruction and transaction tests now execute against the real Norito
   addon path instead of skipping or failing as unsupported;
 - `AccountAddress.fromAccount({ domain })` now accepts dotted domain ids such
-  as `hbl.sbp` by validating each label separately, which restores the JS
+  as `banka.sbp` by validating each label separately, which restores the JS
   transaction-builder helper path that derives sample i105 authorities for the
   native RWA transaction tests; and
 - the account-address vector helper in `iroha_data_model` now matches the
@@ -14706,7 +14742,7 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
   - supports optional account fixtures, durable-state fixtures, decoded return values, syscall trace output, and source snippets from `--source-file`
 - [x] Follow-up tranche: add pure `get_or(map, key, default)` plus `view fn` rejection of mutating state reads.
   - `std::map::get_or` / `get_or` now lower to deterministic read-only selection without `MapSet` / `StateSet`
-  - `view fn` now rejects `get_or_insert_default(...)` with an explicit guidance error pointing callers to `get_or(...)`
+  - `view fn` now rejects `ensure(...)` with an explicit guidance error pointing callers to `get_or(...)`
 - [x] Follow-up tranche: add singleton struct-backed durable state lowering for `state StructName foo;`.
   - whole-struct reads now reconstruct tuple/struct values from flattened durable child paths
   - whole-struct writes now fan back out into child `StateSet` operations for flattened durable storage
@@ -14720,7 +14756,7 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 1. Add an end-to-end integration test that proves an unregistered signatory can successfully complete `MultisigPropose`/`MultisigApprove` against a live multi-peer network (not just unit-level admission/execution slices).
 
 ## Trigger ABI Follow-up
-1. Deploy and validate the new `json_get_numeric` trigger path in downstream SBP issuance-swap contracts, then add a multi-peer integration test that executes a by-call trigger carrying decimal `Numeric` args through to `transfer_asset(...)`.
+1. Deploy and validate the new `get_numeric` trigger path in downstream SBP issuance-swap contracts, then add a multi-peer integration test that executes a by-call trigger carrying decimal `Numeric` args through to `transfer_asset(...)`.
 
 ## Query Performance Follow-up
 1. Re-run `snapshot_(stored|ephemeral)_sorted_asset_defs_first_batch` on an isolated host/profile and lock acceptance on stable repeated samples (current host shows large Criterion noise spikes).

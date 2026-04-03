@@ -10652,7 +10652,7 @@ List aliases bound to a canonical account id
 
 * `--account-id <ACCOUNT_ID>` — Canonical I105 account id
 * `--dataspace <DATASPACE>` — Optional dataspace alias filter such as `sbp`
-* `--domain <DOMAIN>` — Optional exact domain filter such as `hbl`
+* `--domain <DOMAIN>` — Optional exact domain filter such as `banka`
 
 
 

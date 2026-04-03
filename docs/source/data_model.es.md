@@ -50,7 +50,7 @@ Este documento explica las estructuras, identificadores, rasgos y protocolos que
 - Modelo de alias:
   - La identidad de la cuenta canónica nunca incluye un dominio o segmento de espacio de datos.
   - Los valores `AccountAlias` son enlaces SNS separados superpuestos a `AccountId`.
-  - Los alias calificados por dominio, como `merchant@hbl.sbp`, llevan tanto un dominio como un espacio de datos en el enlace de alias.
+  - Los alias calificados por dominio, como `merchant@banka.sbp`, llevan tanto un dominio como un espacio de datos en el enlace de alias.
   - Los alias de raíz del espacio de datos, como `merchant@sbp`, transportan solo el espacio de datos y, por lo tanto, se emparejan naturalmente con `Account::new(...)`.
   - Las pruebas y accesorios deben generar primero el `AccountId` universal, luego agregar concesiones de alias, permisos de alias y cualquier estado de propiedad del dominio por separado en lugar de codificar suposiciones de dominio en la identidad de la cuenta misma.
   - La búsqueda de cuentas públicas singulares ahora se centra en alias (`FindAliasesByAccountId`); La identidad de la cuenta en sí misma permanece sin dominio.### Definiciones de activos y activos
@@ -249,7 +249,7 @@ Referencia rápida de ID/alias de definición de activo (CLI + Torii):
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl.sbp
+  --alias pkr#bankb.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
@@ -259,14 +259,14 @@ iroha ledger asset definition register \
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl.sbp \
+  --definition-alias pkr#bankb.sbp \
   --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl.sbp"}'
+  -d '{"alias":"pkr#bankb.sbp"}'
 ```Nota de migración:
 - Los ID de definición de activos antiguos `name#domain` no se aceptan en v1.
 - Los selectores de activos públicos utilizan solo un formato de definición de activos: identificadores canónicos Base58. Los alias siguen siendo selectores opcionales, pero se resuelven en la misma identificación canónica.

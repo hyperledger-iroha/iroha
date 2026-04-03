@@ -50,7 +50,7 @@ translator: machine-google-reviewed
 - عرفی ماڈل:
   - کیننیکل اکاؤنٹ کی شناخت میں کبھی بھی ڈومین یا ڈیٹا اسپیس سیگمنٹ شامل نہیں ہوتا ہے۔
   - `AccountAlias` قدریں `AccountId` کے اوپر لیئر والی علیحدہ SNS بائنڈنگز ہیں۔
-  - ڈومین کوالیفائیڈ عرفی نام جیسے `merchant@hbl.sbp` عرف بائنڈنگ میں ڈومین اور ڈیٹا اسپیس دونوں رکھتے ہیں۔
+  - ڈومین کوالیفائیڈ عرفی نام جیسے `merchant@banka.sbp` عرف بائنڈنگ میں ڈومین اور ڈیٹا اسپیس دونوں رکھتے ہیں۔
   - ڈیٹا اسپیس روٹ عرفی نام جیسے کہ `merchant@sbp` صرف ڈیٹا اسپیس رکھتے ہیں اور اس لیے قدرتی طور پر `Account::new(...)` کے ساتھ جوڑتے ہیں۔
   - ٹیسٹ اور فکسچر کو پہلے عالمگیر `AccountId` کو سیڈ کرنا چاہیے، پھر اکاؤنٹ کی شناخت میں ڈومین کے مفروضوں کو انکوڈنگ کرنے کے بجائے عرفی لیز، عرفی اجازتیں، اور کسی بھی ڈومین کی ملکیت والی ریاست کو الگ سے شامل کرنا چاہیے۔
   - عوامی واحد اکاؤنٹ کی تلاش اب عرفی ناموں پر مرکوز ہے (`FindAliasesByAccountId`)؛ اکاؤنٹ کی شناخت خود ڈومین لیس رہتی ہے۔### اثاثہ کی تعریفیں اور اثاثے۔
@@ -249,7 +249,7 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl.sbp
+  --alias pkr#bankb.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
@@ -259,14 +259,14 @@ iroha ledger asset definition register \
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl.sbp \
+  --definition-alias pkr#bankb.sbp \
   --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl.sbp"}'
+  -d '{"alias":"pkr#bankb.sbp"}'
 ```نقل مکانی نوٹ:
 - پرانی `name#domain` اثاثہ کی تعریف کی IDs v1 میں قبول نہیں کی جاتی ہیں۔
 - عوامی اثاثہ کے انتخاب کنندگان صرف ایک اثاثہ کی تعریف کا فارمیٹ استعمال کرتے ہیں: کینونیکل Base58 ids۔ عرفی نام اختیاری سلیکٹر رہتے ہیں، لیکن ایک ہی کینونیکل id پر حل کرتے ہیں۔

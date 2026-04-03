@@ -50,7 +50,7 @@ translator: machine-google-reviewed
 - མིང་གཞན་དཔེ་ཚད་:
   - ཀེ་ནོ་ནིཀ་རྩིས་ཐོའི་ངོ་རྟགས་འདི་གིས་ མངའ་ཁོངས་ཡང་ན་ གནད་སྡུད་ས་སྟོང་ཆ་ཤས་ཅིག་ ནམ་ཡང་མི་ཚུདཔ་ཨིན།
   - `AccountAlias` གནས་གོང་ཚུ་ `AccountId` གི་གུ་བང་རིམ་བཟོ་ཡོད་པའི་ ཨེསི་ཨེན་ཨེསི་བཱའིན་ཌིང་སོ་སོ་ཚུ་ཨིན།
-  - མངའ་ཁོངས་-ཤེས་ཚད་ཅན་གྱི་མིང་གཞན་ དཔེར་ན་ `merchant@hbl.sbp` ཚུ་གིས་ མིང་གཞན་བཱའིན་ཌིང་ནང་ མངའ་ཁོངས་དང་ གནད་སྡུད་ས་སྟོང་གཉིས་ཆ་ར་ འབག་འོང་།
+  - མངའ་ཁོངས་-ཤེས་ཚད་ཅན་གྱི་མིང་གཞན་ དཔེར་ན་ `merchant@banka.sbp` ཚུ་གིས་ མིང་གཞན་བཱའིན་ཌིང་ནང་ མངའ་ཁོངས་དང་ གནད་སྡུད་ས་སྟོང་གཉིས་ཆ་ར་ འབག་འོང་།
   - གནད་སྡུད་ས་སྒོ་-རྩ་བའི་མིང་གཞན་ `merchant@sbp` བཟུམ་ཚུ་གིས་ གནད་སྡུད་ས་སྒོ་རྐྱངམ་ཅིག་འབག་འོང་ དེ་འབདཝ་ལས་ `Account::new(...)` དང་ཅིག་ཁར་ རང་བཞིན་གྱི་ཆ་སྒྲིག་འབདཝ་ཨིན།
   - བརྟག་དཔྱད་དང་སྒྲིག་ཆས་ཚུ་གིས་ དང་པ་ར་ ཡོངས་ཁྱབ་`AccountId` འདི་བཙུགས་དགོཔ་དང་ དེ་ལས་ རྩིས་ཐོ་ངོ་རྟགས་ནང་ལུ་ མངའ་ཁོངས་བསམ་ཚུལ་ཚུ་ ཨིན་ཀོ་ཌིང་འབད་ནིའི་ཚབ་ལུ་ མིང་གཞན་གླ་ཁར་ལེན་ནི་དང་ མིང་གཞན་ཆོག་ཐམ་ དེ་ལས་ མངའ་ཁོངས་བདག་དབང་ཡོད་པའི་གནས་སྟངས་གང་རུང་ཅིག་ སོ་སོ་སྦེ་ཁ་སྐོང་བརྐྱབ་དགོ།
   - མི་མང་རྐྱང་པའི་རྩིས་ཐོ་འཚོལ་ཞིབ་འདི་ད་ལྟོ་མིང་གཞན་ཚུ་ལུ་གཙོ་བོར་བསྟེནམ་ཨིན། (`FindAliasesByAccountId`); རྩིས་ཐོའི་ངོ་རྟགས་འདི་རང་ མངའ་ཁོངས་མེད་པར་སྡོདཔ་ཨིན།### རྒྱུ་དངོས་ངེས་ཚིག་དང་རྒྱུ་ནོར།
@@ -249,7 +249,7 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl.sbp
+  --alias pkr#bankb.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
@@ -259,14 +259,14 @@ iroha ledger asset definition register \
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl.sbp \
+  --definition-alias pkr#bankb.sbp \
   --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl.sbp"}'
+  -d '{"alias":"pkr#bankb.sbp"}'
 ```གནས་སྤོ་དྲན་ཐོ།
 - རྙིངམ་ `name#domain` རྒྱུ་དངོས་-ངེས་ཚིག་ཨའི་ཌི་ཚུ་ v1 ནང་ངོས་ལེན་མི་འབད།
 - མི་མང་རྒྱུ་དངོས་སེལ་འཐུ་འབད་མི་ཚུ་གིས་ རྒྱུ་དངོས་ངེས་ཚིག་རྩ་སྒྲིག་གཅིག་རྐྱངམ་ཅིག་ལག་ལེན་འཐབ་ཨིན་: canonical Base58 ids. མིང་གཞན་ཚུ་ གདམ་ཁའི་སེལ་འཐུ་འབད་མི་སྦེ་ལུསཔ་ཨིན་རུང་ ཀེ་ནོ་ནིཀ་ཨའི་ཌི་གཅིག་མཚུངས་ལུ་ ཐག་བཅད་འོང་།

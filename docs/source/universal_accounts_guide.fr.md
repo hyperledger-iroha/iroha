@@ -92,7 +92,7 @@ Concrètement :
 
 Le déploiement du compte universel ne modifie pas le modèle canonique d'identité du compte :- `AccountId` reste le sujet canonique du compte sans domaine.
 - Les valeurs `AccountAlias` sont des liaisons SNS distinctes en plus de ce sujet. Un
-  alias qualifié de domaine tel que `merchant@hbl.sbp` et un alias racine d'espace de données
+  alias qualifié de domaine tel que `merchant@banka.sbp` et un alias racine d'espace de données
   tels que `merchant@sbp` peuvent tous deux se résoudre au même `AccountId` canonique.
 - L'enregistrement canonique du compte est toujours `Account::new(AccountId)` /
   `NewAccount::new(AccountId)` ; il n'y a pas de domaine qualifié ou matérialisé par domaine

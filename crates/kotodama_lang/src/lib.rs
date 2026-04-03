@@ -14,7 +14,9 @@
 
 pub mod analysis;
 pub mod ast;
+pub mod builtins;
 pub mod compiler;
+mod doc_consistency;
 pub mod i18n;
 pub mod ir;
 pub mod lexer;

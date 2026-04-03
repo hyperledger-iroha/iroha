@@ -3635,7 +3635,7 @@ mod evidence_http_tests {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let response = json_response(StatusCode::OK, "{}");
-        let literal = "alice@hbl.dataspace";
+        let literal = "alice@banka.dataspace";
 
         with_mock_http(respond_with(&snapshots, response), || {
             let resp = client
@@ -16897,7 +16897,7 @@ mod tests {
         let ticket_id = RepairTicketId("REP-405".to_string());
         let manifest_digest = [0x11; 32];
         let provider_id = [0x22; 32];
-        let worker_id = "worker@hbl.dataspace".to_string();
+        let worker_id = "worker@banka.dataspace".to_string();
         let idempotency_key = "claim-405".to_string();
         let claimed_at_unix = 1_700_000_005;
         let payload = RepairWorkerSignaturePayloadV1 {
@@ -16933,7 +16933,7 @@ mod tests {
             ticket_id: RepairTicketId("REP-406".to_string()),
             provider_id: [0x77; 32],
             manifest_digest: [0x88; 32],
-            auditor_account: "auditor@hbl.dataspace".to_string(),
+            auditor_account: "auditor@banka.dataspace".to_string(),
             proposed_penalty_nano: 500,
             submitted_at_unix: 1_700_000_006,
             rationale: "sla_missed".to_string(),

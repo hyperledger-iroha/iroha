@@ -10523,7 +10523,7 @@ pub mod isi {
 
     fn is_permission_domain_associated(permission: &Permission, domain_id: &DomainId) -> bool {
         let asset_definition_matches_domain = |asset_definition: &AssetDefinitionId| -> bool {
-            !asset_definition.is_opaque_canonical() && asset_definition.domain() == domain_id
+            asset_definition.try_domain() == Some(domain_id)
         };
         if let Ok(permission) = CanUnregisterDomain::try_from(permission) {
             return &permission.domain == domain_id;
@@ -10981,10 +10981,7 @@ pub mod isi {
                 .world
                 .assets
                 .iter()
-                .filter(|(asset_id, _)| {
-                    let definition = asset_id.definition();
-                    !definition.is_opaque_canonical() && definition.domain() == &domain_id
-                })
+                .filter(|(asset_id, _)| asset_id.definition().try_domain() == Some(&domain_id))
                 .map(|(asset_id, _)| asset_id.clone())
                 .collect();
             for asset_id in remove_assets {

@@ -92,7 +92,7 @@ En términos concretos:
 
 La implementación de la cuenta universal no cambia el modelo de identidad de la cuenta canónica:- `AccountId` sigue siendo el sujeto de cuenta canónico sin dominio.
 - Los valores `AccountAlias` son enlaces SNS separados además de ese tema. un
-  alias calificado de dominio como `merchant@hbl.sbp` y un alias de raíz de espacio de datos
+  alias calificado de dominio como `merchant@banka.sbp` y un alias de raíz de espacio de datos
   como `merchant@sbp` pueden resolverse en el mismo `AccountId` canónico.
 - El registro de cuenta canónica es siempre `Account::new(AccountId)` /
   `NewAccount::new(AccountId)`; no hay dominio calificado ni dominio materializado

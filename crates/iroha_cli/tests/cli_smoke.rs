@@ -5011,7 +5011,7 @@ fn address_audit_rejects_domain_suffix() {
 
     let account = account_id_for_domain("wonderland", 0xE5);
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");
-    let literal = format!("{i105}@hbl");
+    let literal = format!("{i105}@banka");
 
     let temp_dir = TempDir::new("address_audit_domain").expect("temp dir");
     let path = temp_dir.path().join("addresses.txt");

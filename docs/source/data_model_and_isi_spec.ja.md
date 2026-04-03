@@ -198,13 +198,13 @@ ID は、`Display`/`FromStr` 往復の安定した文字列形式を持ちます
 - パラメータの更新:
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` は `ConfigurationEvent::Changed` を更新および発行します。CLI / Torii アセット定義 ID + エイリアスの例:
 - 正規の Base58 ID + 明示的な名前 + 長いエイリアスを使用して登録します。
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
 - 正規の Base58 ID + 明示的な名前 + 短いエイリアスを使用して登録します。
   - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - エイリアス + アカウント コンポーネントによるミント:
-  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
 - エイリアスを正規の Base58 ID に解決します。
-  - JSON を使用した `POST /v1/assets/aliases/resolve` `{ "alias": "pkr#ubl.sbp" }`
+  - JSON を使用した `POST /v1/assets/aliases/resolve` `{ "alias": "pkr#bankb.sbp" }`
 
 移行メモ:
 - `name#domain` テキストのアセット定義 ID は、最初のリリースでは意図的にサポートされていないままです。正規の Base58 ID を使用するか、ドット区切りのエイリアスを解決します。

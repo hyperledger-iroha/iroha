@@ -992,15 +992,24 @@ fn relay_domain(
     state_transaction: &StateTransaction<'_, '_>,
     relay_id: &AccountId,
 ) -> Result<DomainId, Error> {
-    let alias_domains = state_transaction
+    let mut alias_domains = state_transaction
         .world
-        .alias_domains_for_account(&relay_id.subject_id());
-    match alias_domains.as_slice() {
-        [domain_id] => Ok(domain_id.clone()),
-        [] => Err(relay_error(
+        .bound_account_aliases(&relay_id.subject_id())
+        .into_iter()
+        .filter_map(|alias| {
+            alias
+                .domain
+                .as_ref()
+                .map(|domain| DomainId::new(domain.name().clone()))
+        })
+        .collect::<BTreeSet<_>>()
+        .into_iter();
+    match (alias_domains.next(), alias_domains.next()) {
+        (Some(domain_id), None) => Ok(domain_id),
+        (None, _) => Err(relay_error(
             "relay account has no domain-qualified alias; explicit relay domain is required",
         )),
-        _ => Err(relay_error(
+        (Some(_), Some(_)) => Err(relay_error(
             "relay account has aliases in multiple domains; explicit relay domain is required",
         )),
     }
