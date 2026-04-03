@@ -8398,6 +8398,8 @@ pub async fn handle_post_contract_call(
         signature_b64,
         contract_address,
         contract_alias,
+        namespace,
+        contract_id,
         entrypoint,
         payload,
         creation_time_ms,
@@ -8410,25 +8412,13 @@ pub async fn handle_post_contract_call(
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
 
-    let prepared = match (contract_address.as_ref(), contract_alias.as_ref()) {
-        (Some(_), Some(_)) => {
-            return Err(conversion_error(
-                "exactly one of contract_address or contract_alias must be provided".to_owned(),
-            ));
-        }
-        (Some(contract_address), None) => {
-            prepare_contract_call_by_address(&state, contract_address)?
-        }
-        (None, Some(contract_alias)) => {
-            prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
-        }
-        _ => {
-            return Err(conversion_error(
-                "provide exactly one contract target via contract_address or contract_alias"
-                    .to_owned(),
-            ));
-        }
-    };
+    let prepared = resolve_contract_call_target(
+        &state,
+        contract_address.as_ref(),
+        contract_alias.as_ref(),
+        namespace.as_deref(),
+        contract_id.as_deref(),
+    )?;
     let PreparedContractCall {
         code_bytes,
         code_hash,
@@ -10965,6 +10955,7 @@ mod contract_payload_normalization_tests {
 mod multisig_selector_tests {
     use std::num::{NonZeroU16, NonZeroU64};
 
+    use axum::response::IntoResponse as _;
     use http_body_util::BodyExt as _;
     use iroha_core::{
         kura::Kura,
@@ -11499,6 +11490,85 @@ mod multisig_selector_tests {
         .expect_err("non-multisig alias must fail");
         let message = expect_app_conflict(err, "multisig_account_not_authority");
         assert!(message.contains("resolved account is not a multisig authority"));
+    }
+
+    #[tokio::test]
+    async fn contract_call_accepts_legacy_namespace_and_contract_id_target() {
+        let authority_keypair = KeyPair::random();
+        let authority = dm::AccountId::new(authority_keypair.public_key().clone());
+        let authority_account = Account::new(authority.clone()).build(&authority);
+        let state = build_state(World::with([], [authority_account], []));
+        install_contract_instance(
+            state.as_ref(),
+            &authority,
+            &authority_keypair,
+            "apps",
+            "demo",
+        );
+
+        let response = handle_post_contract_call(
+            Arc::new("contract-call-legacy-target".parse().expect("chain id")),
+            build_queue(),
+            state,
+            MaybeTelemetry::disabled(),
+            NoritoJson(ContractCallDto {
+                authority: authority.clone(),
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                contract_address: None,
+                contract_alias: None,
+                namespace: Some("apps".to_owned()),
+                contract_id: Some("demo".to_owned()),
+                entrypoint: Some("main".to_owned()),
+                payload: None,
+                creation_time_ms: Some(1_700_000_000_234),
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: 10_000,
+            }),
+        )
+        .await
+        .expect("legacy contract target should prepare");
+
+        let payload = decode_json_response(response.into_response()).await;
+        assert_eq!(payload["ok"].as_bool(), Some(true));
+        assert_eq!(payload["submitted"].as_bool(), Some(false));
+        assert_eq!(payload["dataspace"].as_str(), Some("apps"));
+        assert_eq!(payload["contract_id"].as_str(), Some("demo"));
+        assert!(payload["signing_message_b64"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn contract_call_rejects_partial_legacy_target() {
+        let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let err = handle_post_contract_call(
+            Arc::new("contract-call-legacy-target".parse().expect("chain id")),
+            build_queue(),
+            build_state(World::default()),
+            MaybeTelemetry::disabled(),
+            NoritoJson(ContractCallDto {
+                authority,
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                contract_address: None,
+                contract_alias: None,
+                namespace: Some("apps".to_owned()),
+                contract_id: None,
+                entrypoint: Some("main".to_owned()),
+                payload: None,
+                creation_time_ms: Some(1_700_000_000_234),
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: 10_000,
+            }),
+        )
+        .await
+        .expect_err("partial legacy target must fail");
+
+        let message = expect_conversion(err);
+        assert!(message.contains("provide both namespace and contract_id"));
     }
 
     #[tokio::test]
@@ -15311,6 +15381,50 @@ fn prepare_contract_call_by_alias(
 }
 
 #[cfg(feature = "app_api")]
+fn resolve_contract_call_target(
+    state: &CoreState,
+    contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
+    contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
+    namespace: Option<&str>,
+    contract_id: Option<&str>,
+) -> core::result::Result<PreparedContractCall, Error> {
+    let namespace = namespace.map(str::trim).filter(|value| !value.is_empty());
+    let contract_id = contract_id.map(str::trim).filter(|value| !value.is_empty());
+    let legacy_target_supplied = namespace.is_some() || contract_id.is_some();
+    let explicit_target_supplied = contract_address.is_some() || contract_alias.is_some();
+
+    if explicit_target_supplied && legacy_target_supplied {
+        return Err(conversion_error(
+            "provide exactly one contract target via contract_address, contract_alias, or namespace + contract_id"
+                .to_owned(),
+        ));
+    }
+
+    match (contract_address, contract_alias, namespace, contract_id) {
+        (Some(_), Some(_), _, _) => Err(conversion_error(
+            "exactly one of contract_address or contract_alias must be provided".to_owned(),
+        )),
+        (Some(contract_address), None, None, None) => {
+            prepare_contract_call_by_address(state, contract_address)
+        }
+        (None, Some(contract_alias), None, None) => {
+            prepare_contract_call_by_alias(state, contract_alias, current_time_millis())
+        }
+        (None, None, Some(namespace), Some(contract_id)) => {
+            prepare_contract_call(state, namespace, contract_id)
+        }
+        (None, None, Some(_), None) | (None, None, None, Some(_)) => Err(conversion_error(
+            "provide both namespace and contract_id when using legacy contract-call targeting"
+                .to_owned(),
+        )),
+        _ => Err(conversion_error(
+            "provide exactly one contract target via contract_address, contract_alias, or namespace + contract_id"
+                .to_owned(),
+        )),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn resolve_public_contract_deploy_dataspace(
     state: &CoreState,
     dataspace_alias: Option<&str>,
@@ -15428,6 +15542,12 @@ pub struct ContractCallDto {
     /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
     #[norito(default)]
     pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Optional legacy governance namespace used by maintained `apps/<contract_id>` callers.
+    #[norito(default)]
+    pub namespace: Option<String>,
+    /// Optional legacy contract id paired with `namespace`.
+    #[norito(default)]
+    pub contract_id: Option<String>,
     /// Optional entrypoint selector; defaults to `main`.
     #[norito(default)]
     pub entrypoint: Option<String>,
