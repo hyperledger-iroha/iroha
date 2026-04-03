@@ -35,7 +35,7 @@ security and operability risk first, UX throughput second.
   existing accounts can keep stable alias bindings during a rolling upgrade without hash breaks.
 
 ### DeactivateContractInstance
-- Remove or tombstone the `(namespace, contract_id)` binding while persisting provenance data
+- Remove or tombstone the `contract_address` binding while persisting provenance data
   (who, when, reason code) for troubleshooting.
 - Require the same governance permission set as activation, with policy hooks to disallow
   deactivation of core system namespaces without elevated approval.

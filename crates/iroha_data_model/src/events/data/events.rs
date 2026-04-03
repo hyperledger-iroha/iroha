@@ -64,6 +64,8 @@ mod model {
         Peer(peer::PeerEvent),
         /// Domain event
         Domain(domain::DomainEvent),
+        /// Asset-definition event whose origin does not map to a domain event.
+        AssetDefinitionStandalone(asset::StandaloneAssetDefinitionEvent),
         /// Trigger event
         Trigger(trigger::TriggerEvent),
         /// Role event
@@ -475,6 +477,17 @@ mod asset {
             pub minted_amount: Numeric,
             /// Account that performed the mint.
             pub authority: AccountId,
+        }
+
+        /// Wrapper for asset-definition events that cannot be grouped under a domain event.
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        #[cfg_attr(feature = "json", norito(transparent, reuse_archived))]
+        #[cfg_attr(not(feature = "json"), norito(reuse_archived))]
+        #[repr(transparent)]
+        pub struct StandaloneAssetDefinitionEvent {
+            /// Asset-definition event payload.
+            pub event: AssetDefinitionEvent,
         }
     }
 }
@@ -1034,11 +1047,29 @@ mod account {
     }
 
     impl AssetDefinitionEvent {
+        /// Return the domain context when the asset-definition origin is still domain-scoped.
+        #[must_use]
+        pub fn try_origin_domain(&self) -> Option<&DomainId> {
+            match self {
+                Self::Created(asset_definition) => asset_definition.id().try_domain(),
+                Self::Deleted(asset_definition_id)
+                | Self::MintabilityChanged(asset_definition_id) => asset_definition_id.try_domain(),
+                Self::MetadataInserted(metadata_changed)
+                | Self::MetadataRemoved(metadata_changed) => metadata_changed.target.try_domain(),
+                Self::MintabilityChangedDetailed(mintability_changed) => {
+                    mintability_changed.asset_definition.try_domain()
+                }
+                Self::TotalQuantityChanged(total_quantity_changed) => {
+                    total_quantity_changed.asset_definition.try_domain()
+                }
+                Self::OwnerChanged(owner_changed) => owner_changed.asset_definition.try_domain(),
+            }
+        }
+
         /// Return the domain context required by [`DomainEvent::AssetDefinition`].
         #[must_use]
         pub fn origin_domain(&self) -> &DomainId {
-            self.origin()
-                .try_domain()
+            self.try_origin_domain()
                 .expect("domain event requires a domain-scoped asset definition id")
         }
     }
@@ -2395,7 +2426,11 @@ impl From<AccountEvent> for DataEvent {
 
 impl From<AssetDefinitionEvent> for DataEvent {
     fn from(value: AssetDefinitionEvent) -> Self {
-        DomainEvent::AssetDefinition(value).into()
+        if value.try_origin_domain().is_some() {
+            DomainEvent::AssetDefinition(value).into()
+        } else {
+            Self::AssetDefinitionStandalone(asset::StandaloneAssetDefinitionEvent { event: value })
+        }
     }
 }
 
@@ -2422,10 +2457,48 @@ impl DataEvent {
     pub fn domain(&self) -> Option<&DomainId> {
         match self {
             Self::Domain(event) => Some(event.origin()),
+            Self::AssetDefinitionStandalone(event) => event.event.try_origin_domain(),
             #[cfg(feature = "governance")]
             Self::Governance(_) => None,
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod event_routing_tests {
+    use super::{
+        DataEvent,
+        asset::{AssetDefinitionEvent, StandaloneAssetDefinitionEvent},
+        domain::DomainEvent,
+    };
+    use crate::{asset::AssetDefinitionId, domain::DomainId};
+
+    #[test]
+    fn opaque_asset_definition_events_route_without_domain_wrapper() {
+        let domain_id: DomainId = DomainId::try_new("reward", "universal").expect("domain");
+        let scoped_definition =
+            AssetDefinitionId::new(domain_id.clone(), "fee".parse().expect("asset name"));
+        let opaque_definition: AssetDefinitionId = scoped_definition
+            .to_string()
+            .parse()
+            .expect("opaque canonical asset definition id");
+
+        let opaque_event = AssetDefinitionEvent::Deleted(opaque_definition.clone());
+        assert!(opaque_event.try_origin_domain().is_none());
+        assert!(matches!(
+            DataEvent::from(opaque_event.clone()),
+            DataEvent::AssetDefinitionStandalone(StandaloneAssetDefinitionEvent {
+                event: AssetDefinitionEvent::Deleted(id),
+            }) if id == opaque_definition
+        ));
+        assert!(DataEvent::from(opaque_event).domain().is_none());
+
+        let scoped_event = AssetDefinitionEvent::Deleted(scoped_definition);
+        assert!(matches!(
+            DataEvent::from(scoped_event),
+            DataEvent::Domain(DomainEvent::AssetDefinition(_))
+        ));
     }
 }
 

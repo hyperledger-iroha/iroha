@@ -2,8 +2,8 @@
 /**
  * Contract deployment helper (roadmap JS-06).
  *
- * Uploads smart-contract manifests/bytecode via Torii's REST API and optionally
- * activates the instance in a single run. Environment variables:
+ * Uploads smart-contract manifests/bytecode via Torii's address-first deploy
+ * flow. Environment variables:
  *
  *   TORII_URL (required)                — Base Torii URL (http://127.0.0.1:8080)
  *   TORII_AUTH_TOKEN / TORII_API_TOKEN  — Optional headers for locked-down nodes
@@ -12,19 +12,11 @@
  *   CONTRACT_CODE_PATH (required)       — Path to .to bytecode
  *   CONTRACT_MANIFEST_PATH              — Optional path to manifest JSON
  *   CONTRACT_MANIFEST_JSON              — Inline manifest JSON string (overrides path)
- *   CONTRACT_NAMESPACE / CONTRACT_ID    — Required when CONTRACT_STAGE includes "instance"
- *   CONTRACT_STAGE                      — "both" (default), "register", or "instance"
+ *   CONTRACT_DATASPACE                  — Optional dataspace alias (defaults to `universal`)
  *
  * Examples:
- *   CONTRACT_STAGE=register \
  *   AUTHORITY=sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4 \
  *   PRIVATE_KEY_HEX=fedcba... \
- *   CONTRACT_CODE_PATH=./artifacts/contract.to \
- *   node javascript/iroha_js/recipes/contracts.mjs
- *
- *   CONTRACT_STAGE=instance \
- *   CONTRACT_NAMESPACE=apps \
- *   CONTRACT_ID=ledger \
  *   CONTRACT_CODE_PATH=./artifacts/contract.to \
  *   CONTRACT_MANIFEST_PATH=./manifest.json \
  *   node javascript/iroha_js/recipes/contracts.mjs
@@ -40,26 +32,6 @@ function fail(message) {
   console.error(`[contracts] ${message}`);
   process.exitCode = 1;
   throw new Error(message);
-}
-
-function selectStage(value = "both") {
-  const normalized = value.trim().toLowerCase();
-  switch (normalized) {
-    case "":
-    case "both":
-      return { register: true, activate: true };
-    case "register":
-    case "code":
-    case "upload":
-      return { register: true, activate: false };
-    case "instance":
-    case "activate":
-      return { register: false, activate: true };
-    default:
-      fail(
-        `unsupported CONTRACT_STAGE="${value}". Use "register", "instance", or "both".`,
-      );
-  }
 }
 
 function trimToNull(value) {
@@ -142,10 +114,10 @@ async function main() {
     fail("AUTHORITY is required");
   }
 
-  const stage = selectStage(process.env.CONTRACT_STAGE ?? "both");
   const privateKey = resolvePrivateKey();
   const manifest = await loadManifest();
   const codeBytes = await readCodeBytes();
+  const dataspace = trimToNull(process.env.CONTRACT_DATASPACE);
 
   const clientOptions = {};
   const authToken = trimToNull(process.env.TORII_AUTH_TOKEN);
@@ -158,55 +130,31 @@ async function main() {
   }
   const client = new ToriiClient(toriiUrl, clientOptions);
 
-  if (stage.register) {
-    console.log("[contracts] uploading manifest + bytecode via /v1/contracts/deploy");
-    const response = await client.deployContract({
-      authority,
-      privateKey,
-      codeB64: Buffer.from(codeBytes),
-      manifest: manifest ?? undefined,
-    });
-    if (response) {
-      console.log(
-        "  code_hash_hex:",
-        response.code_hash_hex ?? "<unspecified>",
-        "abi_hash_hex:",
-        response.abi_hash_hex ?? "<unspecified>",
-      );
-    } else {
-      console.log("  Torii returned 202 Accepted (no body)");
-    }
-  }
-
-  if (stage.activate) {
-    const namespace =
-      trimToNull(process.env.CONTRACT_NAMESPACE) ?? fail("CONTRACT_NAMESPACE is required");
-    const contractId =
-      trimToNull(process.env.CONTRACT_ID) ?? fail("CONTRACT_ID is required");
+  console.log("[contracts] deploying bytecode via /v1/contracts/deploy");
+  const response = await client.deployContract({
+    authority,
+    privateKey,
+    dataspace: dataspace ?? undefined,
+    codeB64: Buffer.from(codeBytes),
+    manifest: manifest ?? undefined,
+  });
+  if (response) {
     console.log(
-      "[contracts] activating instance via /v1/contracts/instance",
-      `${namespace}::${contractId}`,
+      "  contract_address:",
+      response.contract_address ?? "<unspecified>",
+      "dataspace:",
+      response.dataspace ?? "<unspecified>",
+      "tx_hash_hex:",
+      response.tx_hash_hex ?? "<unspecified>",
     );
-    const response = await client.deployContractInstance({
-      authority,
-      privateKey,
-      namespace,
-      contractId,
-      codeB64: Buffer.from(codeBytes),
-      manifest: manifest ?? undefined,
-    });
-    if (response) {
-      console.log(
-        "  namespace:",
-        response.namespace,
-        "contract_id:",
-        response.contract_id,
-        "code_hash_hex:",
-        response.code_hash_hex ?? "<unspecified>",
-      );
-    } else {
-      console.log("  Torii returned 202 Accepted (no body)");
-    }
+    console.log(
+      "  code_hash_hex:",
+      response.code_hash_hex ?? "<unspecified>",
+      "abi_hash_hex:",
+      response.abi_hash_hex ?? "<unspecified>",
+    );
+  } else {
+    console.log("  Torii returned 202 Accepted (no body)");
   }
 }
 

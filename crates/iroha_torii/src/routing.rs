@@ -8297,183 +8297,6 @@ pub async fn handle_get_contract_code_bytes(
 }
 
 #[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request for activating a contract instance
-pub struct ActivateInstanceDto {
-    /// Authority account id
-    pub authority: iroha_data_model::account::AccountId,
-    /// Private key for signing
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
-    /// Target namespace
-    pub namespace: String,
-    /// Contract id
-    pub contract_id: String,
-    /// Hex-encoded 32-byte code hash
-    pub code_hash: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    Copy,
-    Clone,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Response for activating a contract instance
-pub struct ActivateInstanceResponseDto {
-    /// Whether the operation succeeded
-    pub ok: bool,
-}
-
-/// POST /v1/contracts/instance/activate — submit ActivateContractInstance.
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_contract_instance_activate(
-    chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    NoritoJson(req): NoritoJson<ActivateInstanceDto>,
-) -> Result<impl IntoResponse> {
-    use iroha_data_model::{isi::smart_contract_code::ActivateContractInstance, prelude as dm};
-    // Parse code_hash
-    let bytes = hex::decode(req.code_hash.trim_start_matches("0x")).map_err(|e| {
-        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
-                "invalid code_hash: {e}"
-            )),
-        ))
-    })?;
-    if bytes.len() != 32 {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "code_hash must be 32 bytes".into(),
-            ),
-        )));
-    }
-    let mut arr = [0u8; 32];
-    arr.copy_from_slice(&bytes);
-    let code_hash = iroha_crypto::Hash::prehashed(arr);
-    let authority: dm::AccountId = req.authority.into();
-    let isi = ActivateContractInstance {
-        namespace: req.namespace,
-        contract_id: req.contract_id,
-        code_hash,
-    };
-    let metadata = metadata_with_default_gas_asset(&state);
-    let mut instructions = Vec::with_capacity(2);
-    instructions.extend(register_authority_if_missing(&state, &authority));
-    instructions.push(Box::new(isi).into_instruction_box());
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
-        .with_metadata(metadata)
-        .with_instructions(instructions.into_iter())
-        .sign(&req.private_key.0);
-    handle_transaction_with_metrics(
-        chain_id,
-        queue,
-        state,
-        tx,
-        telemetry,
-        "/v1/contracts/instance/activate",
-    )
-    .await?;
-    let body = norito::json::to_json_pretty(&ActivateInstanceResponseDto { ok: true })
-        .unwrap_or_else(|_| "{}".into());
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
-/// POST /v1/contracts/instance — accept bytecode, register manifest/bytes, and activate instance.
-#[iroha_futures::telemetry_future]
-#[cfg(feature = "app_api")]
-pub async fn handle_post_contract_instance(
-    chain_id: Arc<ChainId>,
-    queue: Arc<Queue>,
-    state: Arc<CoreState>,
-    telemetry: MaybeTelemetry,
-    NoritoJson(req): NoritoJson<DeployAndActivateInstanceDto>,
-) -> Result<impl IntoResponse> {
-    use iroha_data_model::{
-        isi::{smart_contract_code, smart_contract_code::ActivateContractInstance},
-        prelude as dm,
-    };
-
-    let DeployAndActivateInstanceDto {
-        authority,
-        private_key,
-        namespace,
-        contract_id,
-        code_b64,
-    } = req;
-    let authority: dm::AccountId = authority.into();
-
-    let signer = KeyPair::from(private_key.0.clone());
-    let prepared = prepare_contract_deployment(&code_b64, &signer)?;
-
-    let mut instructions = Vec::with_capacity(4);
-    instructions.extend(register_authority_if_missing(&state, &authority));
-    instructions.push(dm::InstructionBox::from(
-        smart_contract_code::RegisterSmartContractCode {
-            manifest: prepared.manifest.clone(),
-        },
-    ));
-    instructions.push(dm::InstructionBox::from(
-        smart_contract_code::RegisterSmartContractBytes {
-            code_hash: prepared.code_hash,
-            code: prepared.code_bytes.clone(),
-        },
-    ));
-    instructions.push(dm::InstructionBox::from(ActivateContractInstance {
-        namespace: namespace.clone(),
-        contract_id: contract_id.clone(),
-        code_hash: prepared.code_hash,
-    }));
-    let metadata = metadata_with_default_gas_asset(&state);
-
-    let tx = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone())
-        .with_metadata(metadata)
-        .with_instructions(instructions.into_iter())
-        .sign(&private_key.0);
-
-    handle_transaction_with_metrics(
-        chain_id,
-        queue.clone(),
-        state.clone(),
-        tx,
-        telemetry,
-        "/v1/contracts/instance",
-    )
-    .await?;
-
-    let body = norito::json::to_json_pretty(&DeployAndActivateInstanceResponseDto {
-        ok: true,
-        namespace,
-        contract_id,
-        code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
-        abi_hash_hex: hex::encode(<[u8; 32]>::from(prepared.abi_hash)),
-    })
-    .unwrap_or_else(|_| "{}".into());
-
-    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-    resp.headers_mut().insert(
-        axum::http::header::CONTENT_TYPE,
-        axum::http::HeaderValue::from_static("application/json"),
-    );
-    Ok(resp)
-}
-
 /// POST /v1/contracts/call — invoke a deployed contract entrypoint with optional payload.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
@@ -8494,8 +8317,6 @@ pub async fn handle_post_contract_call(
         signature_b64,
         contract_address,
         contract_alias,
-        namespace,
-        contract_id,
         entrypoint,
         payload,
         creation_time_ms,
@@ -8508,21 +8329,16 @@ pub async fn handle_post_contract_call(
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
 
-    let prepared = resolve_contract_call_target(
-        &state,
-        contract_address.as_ref(),
-        contract_alias.as_ref(),
-        namespace.as_deref(),
-        contract_id.as_deref(),
-    )?;
+    let prepared =
+        resolve_contract_call_target(&state, contract_address.as_ref(), contract_alias.as_ref())?;
     let PreparedContractCall {
         code_bytes,
         code_hash,
         abi_hash,
         manifest,
-        namespace,
-        contract_id,
+        dataspace,
         contract_address,
+        contract_alias,
     } = prepared;
     let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
     let entrypoint_descriptor = ensure_public_contract_entrypoint(&manifest, resolved_entrypoint)?;
@@ -8530,9 +8346,8 @@ pub async fn handle_post_contract_call(
 
     let metadata = build_contract_call_metadata(
         &manifest,
-        &namespace,
-        &contract_id,
-        contract_address.as_ref(),
+        &contract_address,
+        contract_alias.as_ref(),
         Some(resolved_entrypoint),
         normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
@@ -8567,9 +8382,8 @@ pub async fn handle_post_contract_call(
             ContractCallResponseDto {
                 ok: true,
                 submitted: true,
-                dataspace: namespace,
-                contract_id,
-                contract_address,
+                dataspace: dataspace.clone(),
+                contract_address: Some(contract_address.clone()),
                 code_hash_hex,
                 abi_hash_hex,
                 creation_time_ms,
@@ -8636,9 +8450,8 @@ pub async fn handle_post_contract_call(
             ContractCallResponseDto {
                 ok: true,
                 submitted: true,
-                dataspace: namespace,
-                contract_id,
-                contract_address,
+                dataspace: dataspace.clone(),
+                contract_address: Some(contract_address.clone()),
                 code_hash_hex,
                 abi_hash_hex,
                 creation_time_ms,
@@ -8661,9 +8474,8 @@ pub async fn handle_post_contract_call(
             ContractCallResponseDto {
                 ok: true,
                 submitted: false,
-                dataspace: namespace,
-                contract_id,
-                contract_address,
+                dataspace,
+                contract_address: Some(contract_address),
                 code_hash_hex,
                 abi_hash_hex,
                 creation_time_ms,
@@ -8674,6 +8486,103 @@ pub async fn handle_post_contract_call(
                 entrypoint: response_entrypoint,
             }
         };
+
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+/// POST /v1/contracts/call/simulate — execute a public contract entrypoint locally without submission.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_contract_call_simulate(
+    state: Arc<CoreState>,
+    NoritoJson(req): NoritoJson<ContractCallSimulateDto>,
+) -> Result<impl IntoResponse> {
+    let ContractCallSimulateDto {
+        authority,
+        contract_address,
+        contract_alias,
+        entrypoint,
+        payload,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
+    } = req;
+
+    if gas_limit == 0 {
+        return Err(conversion_error("gas_limit must be positive".to_owned()));
+    }
+
+    let prepared =
+        resolve_contract_call_target(&state, contract_address.as_ref(), contract_alias.as_ref())?;
+    let PreparedContractCall {
+        code_bytes,
+        code_hash,
+        abi_hash,
+        manifest,
+        dataspace,
+        contract_address,
+        contract_alias,
+    } = prepared;
+    let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
+    let entrypoint_descriptor = ensure_public_contract_entrypoint(&manifest, resolved_entrypoint)?;
+    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
+    let _metadata = build_contract_call_metadata(
+        &manifest,
+        &contract_address,
+        contract_alias.as_ref(),
+        Some(resolved_entrypoint),
+        normalized_payload.as_ref(),
+        gas_asset_id.as_deref(),
+        fee_sponsor.as_ref(),
+        gas_limit,
+    );
+
+    let response = match execute_contract_call_simulation(
+        &state,
+        &authority,
+        &code_bytes,
+        resolved_entrypoint,
+        entrypoint_descriptor,
+        normalized_payload.clone(),
+        gas_limit,
+    ) {
+        Ok(result) => ContractCallSimulateResponseDto {
+            ok: true,
+            dataspace: dataspace.clone(),
+            contract_address: Some(contract_address.clone()),
+            code_hash_hex: hex::encode(code_hash.as_ref()),
+            abi_hash_hex: hex::encode(abi_hash.as_ref()),
+            entrypoint: resolved_entrypoint.to_owned(),
+            normalized_payload,
+            gas_limit,
+            gas_used: result.gas_used,
+            queued_instructions: result.queued_instructions,
+            result: result.result,
+            error: None,
+            vm_diagnostic: None,
+        },
+        Err(err) => ContractCallSimulateResponseDto {
+            ok: false,
+            dataspace,
+            contract_address: Some(contract_address),
+            code_hash_hex: hex::encode(code_hash.as_ref()),
+            abi_hash_hex: hex::encode(abi_hash.as_ref()),
+            entrypoint: resolved_entrypoint.to_owned(),
+            normalized_payload,
+            gas_limit,
+            gas_used: err.gas_used,
+            queued_instructions: err.queued_instructions,
+            result: None,
+            error: Some(err.message),
+            vm_diagnostic: err.vm_diagnostic,
+        },
+    };
 
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
@@ -8930,9 +8839,9 @@ pub async fn handle_post_contract_view(
         code_hash,
         abi_hash,
         manifest,
-        namespace,
-        contract_id,
+        dataspace,
         contract_address,
+        contract_alias: _contract_alias,
     } = prepared;
     let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
     let entrypoint_descriptor = ensure_view_contract_entrypoint(&manifest, resolved_entrypoint)?;
@@ -8950,9 +8859,8 @@ pub async fn handle_post_contract_view(
         Err(err) => {
             let body = norito::json::to_json_pretty(&ContractViewErrorResponseDto {
                 ok: false,
-                dataspace: namespace,
-                contract_id,
-                contract_address,
+                dataspace,
+                contract_address: Some(contract_address),
                 code_hash_hex: hex::encode(code_hash.as_ref()),
                 abi_hash_hex: hex::encode(abi_hash.as_ref()),
                 entrypoint: resolved_entrypoint.to_owned(),
@@ -8972,9 +8880,8 @@ pub async fn handle_post_contract_view(
 
     let body = norito::json::to_json_pretty(&ContractViewResponseDto {
         ok: true,
-        dataspace: namespace,
-        contract_id,
-        contract_address,
+        dataspace,
+        contract_address: Some(contract_address),
         code_hash_hex: hex::encode(code_hash.as_ref()),
         abi_hash_hex: hex::encode(abi_hash.as_ref()),
         entrypoint: resolved_entrypoint.to_owned(),
@@ -9589,6 +9496,21 @@ struct ContractViewExecutionError {
 }
 
 #[cfg(feature = "app_api")]
+struct ContractCallSimulationExecution {
+    gas_used: u64,
+    queued_instructions: Vec<norito::json::Value>,
+    result: Option<IrohaJson>,
+}
+
+#[cfg(feature = "app_api")]
+struct ContractCallSimulationError {
+    message: String,
+    vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
+    gas_used: u64,
+    queued_instructions: Vec<norito::json::Value>,
+}
+
+#[cfg(feature = "app_api")]
 fn map_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> ContractViewVmDiagnosticDto {
     ContractViewVmDiagnosticDto {
         trap_kind: format!("{:?}", diag.trap_kind),
@@ -9615,6 +9537,22 @@ fn map_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> ContractViewVmDiagnos
         predecoded_loaded: diag.context.predecoded_loaded,
         predecoded_hit: diag.context.predecoded_hit,
     }
+}
+
+#[cfg(feature = "app_api")]
+fn render_contract_queued_instructions(
+    queued: &[iroha_data_model::isi::InstructionBox],
+) -> std::result::Result<Vec<norito::json::Value>, ContractCallSimulationError> {
+    queued
+        .iter()
+        .map(norito::json::to_value)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|err| ContractCallSimulationError {
+            message: format!("failed to serialize queued instructions: {err}"),
+            vm_diagnostic: None,
+            gas_used: 0,
+            queued_instructions: Vec::new(),
+        })
 }
 
 #[cfg(feature = "app_api")]
@@ -9708,11 +9646,118 @@ fn execute_contract_view(
 }
 
 #[cfg(feature = "app_api")]
+fn execute_contract_call_simulation(
+    state: &CoreState,
+    authority: &iroha_data_model::account::AccountId,
+    code_bytes: &[u8],
+    selector: &str,
+    descriptor: &manifest::EntrypointDescriptor,
+    payload: Option<IrohaJson>,
+    gas_limit: u64,
+) -> std::result::Result<ContractCallSimulationExecution, ContractCallSimulationError> {
+    let entry_pc =
+        resolve_contract_entrypoint_pc(code_bytes, selector, manifest::EntryPointKind::Public)
+            .map_err(|err| ContractCallSimulationError {
+                message: err.to_string(),
+                vm_diagnostic: None,
+                gas_used: 0,
+                queued_instructions: Vec::new(),
+            })?;
+    let query_view = state.query_view();
+    let mut vm = query_view.ivm.clone();
+    let mut host = if let Some(args) = payload {
+        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts_and_args(
+            authority.clone(),
+            query_view.accounts_snapshot(),
+            args,
+        )
+    } else {
+        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts(
+            authority.clone(),
+            query_view.accounts_snapshot(),
+        )
+    };
+    host.set_crypto_config(Arc::clone(&query_view.crypto));
+    host.set_halo2_config(&query_view.zk.halo2);
+    host.set_chain_id(&query_view.chain_id);
+    host.set_axt_timing(query_view.nexus.axt);
+    host.set_durable_state_snapshot_from_world(&query_view.world);
+    host.set_public_inputs_from_parameters(query_view.world.parameters());
+    host.set_vrf_epoch_seeds_from_world(&query_view.world);
+
+    vm.load_program(code_bytes)
+        .map_err(|err| ContractCallSimulationError {
+            message: format!("failed to load contract call bytecode: {err}"),
+            vm_diagnostic: None,
+            gas_used: 0,
+            queued_instructions: Vec::new(),
+        })?;
+    vm.set_gas_limit(gas_limit);
+    vm.set_register(1, vm.memory.code_len());
+    vm.set_program_counter(entry_pc)
+        .map_err(|err| ContractCallSimulationError {
+            message: format!("failed to seek to contract call entrypoint: {err}"),
+            vm_diagnostic: None,
+            gas_used: 0,
+            queued_instructions: Vec::new(),
+        })?;
+
+    let run_result = vm.run_with_host(&mut host);
+    let queued = host.drain_instructions();
+    let _durable_state_overlay = host.drain_durable_state_overlay();
+    let gas_used = gas_limit.saturating_sub(vm.gas_remaining);
+    let queued_instructions = render_contract_queued_instructions(&queued).map_err(|mut err| {
+        err.gas_used = gas_used;
+        err
+    })?;
+
+    if let Err(err) = run_result {
+        return Err(ContractCallSimulationError {
+            message: format!("contract call simulation failed: {err}"),
+            vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+            gas_used,
+            queued_instructions,
+        });
+    }
+
+    let schema = descriptor
+        .return_type
+        .as_deref()
+        .map(parse_contract_schema_type)
+        .transpose()
+        .map_err(|err| ContractCallSimulationError {
+            message: err.to_string(),
+            vm_diagnostic: None,
+            gas_used,
+            queued_instructions: queued_instructions.clone(),
+        })?
+        .unwrap_or(ContractSchemaType::Unit);
+    let result = if schema == ContractSchemaType::Unit {
+        None
+    } else {
+        let (value, _) = decode_contract_view_result_value(&vm, 10, &schema).map_err(|err| {
+            ContractCallSimulationError {
+                message: err.to_string(),
+                vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+                gas_used,
+                queued_instructions: queued_instructions.clone(),
+            }
+        })?;
+        Some(IrohaJson::from(value))
+    };
+
+    Ok(ContractCallSimulationExecution {
+        gas_used,
+        queued_instructions,
+        result,
+    })
+}
+
+#[cfg(feature = "app_api")]
 fn build_contract_call_metadata(
     manifest: &manifest::ContractManifest,
-    namespace: &str,
-    contract_id: &str,
-    contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
     entrypoint: Option<&str>,
     payload: Option<&IrohaJson>,
     gas_asset_id: Option<&str>,
@@ -9724,20 +9769,19 @@ fn build_contract_call_metadata(
         Name::from_str(manifest::MANIFEST_METADATA_KEY).expect("static manifest metadata key");
     metadata.insert(manifest_key, IrohaJson::new(manifest.clone()));
 
-    let ns_key =
-        Name::from_str("contract_namespace").expect("static metadata key `contract_namespace`");
-    metadata.insert(ns_key, IrohaJson::new(namespace.to_owned()));
-    let gov_ns_key = Name::from_str("gov_namespace").expect("static metadata key `gov_namespace`");
-    metadata.insert(gov_ns_key, IrohaJson::new(namespace.to_owned()));
-    let cid_key = Name::from_str("contract_id").expect("static metadata key `contract_id`");
-    metadata.insert(cid_key, IrohaJson::new(contract_id.to_owned()));
-    let gov_cid_key =
-        Name::from_str("gov_contract_id").expect("static metadata key `gov_contract_id`");
-    metadata.insert(gov_cid_key, IrohaJson::new(contract_id.to_owned()));
-    if let Some(contract_address) = contract_address {
-        let address_key =
-            Name::from_str("contract_address").expect("static metadata key `contract_address`");
-        metadata.insert(address_key, IrohaJson::new(contract_address.to_string()));
+    let address_key =
+        Name::from_str("contract_address").expect("static metadata key `contract_address`");
+    metadata.insert(address_key, IrohaJson::new(contract_address.to_string()));
+    let gov_address_key =
+        Name::from_str("gov_contract_address").expect("static metadata key `gov_contract_address`");
+    metadata.insert(
+        gov_address_key,
+        IrohaJson::new(contract_address.to_string()),
+    );
+    if let Some(contract_alias) = contract_alias {
+        let alias_key =
+            Name::from_str("contract_alias").expect("static metadata key `contract_alias`");
+        metadata.insert(alias_key, IrohaJson::new(contract_alias.to_string()));
     }
 
     if let Some(selector) = entrypoint {
@@ -9767,8 +9811,7 @@ fn build_contract_call_metadata(
 #[cfg(feature = "app_api")]
 fn derive_multisig_contract_call_trigger_id(
     multisig_account_id: &iroha_data_model::account::AccountId,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
     payload: Option<&IrohaJson>,
     gas_asset_id: Option<&str>,
@@ -9784,7 +9827,7 @@ fn derive_multisig_contract_call_trigger_id(
         .unwrap_or_default();
     let gas_asset_repr = gas_asset_id.unwrap_or_default();
     let seed = format!(
-        "{multisig_account_id}|{namespace}|{contract_id}|{entrypoint}|{payload_repr}|{gas_asset_repr}|{fee_sponsor_repr}|{gas_limit}|{}",
+        "{multisig_account_id}|{contract_address}|{entrypoint}|{payload_repr}|{gas_asset_repr}|{fee_sponsor_repr}|{gas_limit}|{}",
         hex::encode(code_hash.as_ref())
     );
     let digest = blake3_hash(seed.as_bytes());
@@ -9797,8 +9840,8 @@ fn derive_multisig_contract_call_trigger_id(
 #[cfg(feature = "app_api")]
 fn build_multisig_contract_call_instructions(
     multisig_account_id: &iroha_data_model::account::AccountId,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
     entrypoint: &str,
     payload: Option<&IrohaJson>,
     gas_asset_id: Option<&str>,
@@ -9813,8 +9856,7 @@ fn build_multisig_contract_call_instructions(
 )> {
     let trigger_id = derive_multisig_contract_call_trigger_id(
         multisig_account_id,
-        namespace,
-        contract_id,
+        contract_address,
         entrypoint,
         payload,
         gas_asset_id,
@@ -9824,9 +9866,8 @@ fn build_multisig_contract_call_instructions(
     )?;
     let trigger_metadata = build_contract_call_metadata(
         manifest,
-        namespace,
-        contract_id,
-        None,
+        contract_address,
+        contract_alias,
         Some(entrypoint),
         payload,
         gas_asset_id,
@@ -10455,8 +10496,13 @@ fn multisig_contract_call_operation_type(
         return None;
     };
     let metadata = register_trigger.object().action().metadata();
-    let contract_id = multisig_metadata_string(metadata, "contract_id")?;
-    if !contract_id.eq_ignore_ascii_case("mint_request") {
+    let contract_alias = multisig_metadata_string(metadata, "contract_alias")?;
+    let contract_alias: iroha_data_model::smart_contract::ContractAlias =
+        contract_alias.parse().ok()?;
+    if !contract_alias
+        .name_segment()
+        .eq_ignore_ascii_case("mint_request")
+    {
         return None;
     }
     let entrypoint = multisig_metadata_string(metadata, "contract_entrypoint")?;
@@ -10955,13 +11001,19 @@ mod multisig_contract_call_tests {
         let multisig = sample_account_id();
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "n": 1 }));
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &multisig,
+            0,
+            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
         let asset_definition =
             test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400aa");
 
         let first = derive_multisig_contract_call_trigger_id(
             &multisig,
-            "apps",
-            "calc.v1",
+            &contract_address,
             "main",
             Some(&payload),
             Some(asset_definition.as_str()),
@@ -10972,8 +11024,7 @@ mod multisig_contract_call_tests {
         .expect("trigger id");
         let second = derive_multisig_contract_call_trigger_id(
             &multisig,
-            "apps",
-            "calc.v1",
+            &contract_address,
             "main",
             Some(&payload),
             Some(asset_definition.as_str()),
@@ -10986,8 +11037,7 @@ mod multisig_contract_call_tests {
 
         let changed = derive_multisig_contract_call_trigger_id(
             &multisig,
-            "apps",
-            "calc.v1",
+            &contract_address,
             "alternate",
             Some(&payload),
             Some(asset_definition.as_str()),
@@ -11002,6 +11052,13 @@ mod multisig_contract_call_tests {
     #[test]
     fn multisig_contract_call_instruction_envelope_hashes_deterministically() {
         let multisig = sample_account_id();
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &multisig,
+            0,
+            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
         let manifest = manifest::ContractManifest {
             code_hash: None,
             abi_hash: None,
@@ -11019,8 +11076,8 @@ mod multisig_contract_call_tests {
 
         let (instructions, instructions_hash) = build_multisig_contract_call_instructions(
             &multisig,
-            "apps",
-            "calc.v1",
+            &contract_address,
+            None,
             "main",
             Some(&payload),
             Some(asset_definition.as_str()),
@@ -11037,7 +11094,7 @@ mod multisig_contract_call_tests {
     }
 
     #[test]
-    fn contract_call_metadata_includes_lane_governance_keys() {
+    fn contract_call_metadata_includes_lane_governance_address_key() {
         let manifest = manifest::ContractManifest {
             code_hash: None,
             abi_hash: None,
@@ -11048,11 +11105,14 @@ mod multisig_contract_call_tests {
             kotoba: None,
             provenance: None,
         };
+        let contract_address: iroha_data_model::smart_contract::ContractAddress =
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address");
 
         let metadata = build_contract_call_metadata(
             &manifest,
-            "apps",
-            "mint_request",
+            &contract_address,
             None,
             Some("create_mint_request"),
             None,
@@ -11061,23 +11121,14 @@ mod multisig_contract_call_tests {
             300_000,
         );
 
-        let gov_namespace = metadata
-            .get(&Name::from_str("gov_namespace").expect("static name"))
-            .expect("gov_namespace metadata");
-        let gov_contract_id = metadata
-            .get(&Name::from_str("gov_contract_id").expect("static name"))
-            .expect("gov_contract_id metadata");
+        let gov_contract_address = metadata
+            .get(&Name::from_str("gov_contract_address").expect("static name"))
+            .expect("gov_contract_address metadata");
         assert_eq!(
-            gov_namespace
+            gov_contract_address
                 .try_into_any_norito::<String>()
-                .expect("gov namespace string"),
-            "apps"
-        );
-        assert_eq!(
-            gov_contract_id
-                .try_into_any_norito::<String>()
-                .expect("gov contract id string"),
-            "mint_request"
+                .expect("gov contract address string"),
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
         );
     }
 }
@@ -11633,25 +11684,35 @@ mod multisig_selector_tests {
         state: &State,
         authority: &dm::AccountId,
         authority_keypair: &KeyPair,
-        namespace: &str,
-        contract_id: &str,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
     ) {
         install_contract_instance_with_code(
             state,
             authority,
             authority_keypair,
-            namespace,
-            contract_id,
+            contract_address,
             minimal_ivm_program(1),
         );
+    }
+
+    fn derived_universal_contract_address(
+        authority: &dm::AccountId,
+        deploy_nonce: u64,
+    ) -> iroha_data_model::smart_contract::ContractAddress {
+        iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            authority,
+            deploy_nonce,
+            iroha_data_model::nexus::DataSpaceId::new(0),
+        )
+        .expect("contract address")
     }
 
     fn install_contract_instance_with_code(
         state: &State,
         authority: &dm::AccountId,
         authority_keypair: &KeyPair,
-        namespace: &str,
-        contract_id: &str,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
         code: Vec<u8>,
     ) {
         let mut block = state.block(dm::BlockHeader::new(
@@ -11683,7 +11744,7 @@ mod multisig_selector_tests {
         );
         let manifest = verified.manifest.signed(authority_keypair);
         register_manifest(authority, manifest, &mut stx).expect("register manifest");
-        activate_instance(authority, namespace, contract_id, code_hash, &mut stx)
+        activate_instance(authority, contract_address.clone(), code_hash, &mut stx)
             .expect("activate instance");
 
         stx.apply();
@@ -11823,21 +11884,21 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
-    async fn contract_call_accepts_legacy_namespace_and_contract_id_target() {
+    async fn contract_call_accepts_contract_address_target() {
         let authority_keypair = KeyPair::random();
         let authority = dm::AccountId::new(authority_keypair.public_key().clone());
         let authority_account = Account::new(authority.clone()).build(&authority);
         let state = build_state(World::with([], [authority_account], []));
+        let contract_address = derived_universal_contract_address(&authority, 1);
         install_contract_instance(
             state.as_ref(),
             &authority,
             &authority_keypair,
-            "apps",
-            "demo",
+            &contract_address,
         );
 
         let response = handle_post_contract_call(
-            Arc::new("contract-call-legacy-target".parse().expect("chain id")),
+            Arc::new("contract-call-address-target".parse().expect("chain id")),
             build_queue(),
             state,
             MaybeTelemetry::disabled(),
@@ -11846,10 +11907,8 @@ mod multisig_selector_tests {
                 private_key: None,
                 public_key_hex: None,
                 signature_b64: None,
-                contract_address: None,
+                contract_address: Some(contract_address.clone()),
                 contract_alias: None,
-                namespace: Some("apps".to_owned()),
-                contract_id: Some("demo".to_owned()),
                 entrypoint: Some("main".to_owned()),
                 payload: None,
                 creation_time_ms: Some(1_700_000_000_234),
@@ -11859,21 +11918,28 @@ mod multisig_selector_tests {
             }),
         )
         .await
-        .expect("legacy contract target should prepare");
+        .expect("contract address target should prepare");
 
         let payload = decode_json_response(response.into_response()).await;
         assert_eq!(payload["ok"].as_bool(), Some(true));
         assert_eq!(payload["submitted"].as_bool(), Some(false));
-        assert_eq!(payload["dataspace"].as_str(), Some("apps"));
-        assert_eq!(payload["contract_id"].as_str(), Some("demo"));
+        assert_eq!(payload["dataspace"].as_str(), Some("universal"));
+        assert_eq!(
+            payload["contract_id"].as_str(),
+            Some(contract_address.as_ref())
+        );
+        assert_eq!(
+            payload["contract_address"].as_str(),
+            Some(contract_address.as_ref())
+        );
         assert!(payload["signing_message_b64"].as_str().is_some());
     }
 
     #[tokio::test]
-    async fn contract_call_rejects_partial_legacy_target() {
+    async fn contract_call_rejects_missing_target() {
         let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
         let result = handle_post_contract_call(
-            Arc::new("contract-call-legacy-target".parse().expect("chain id")),
+            Arc::new("contract-call-missing-target".parse().expect("chain id")),
             build_queue(),
             build_state(World::default()),
             MaybeTelemetry::disabled(),
@@ -11884,8 +11950,6 @@ mod multisig_selector_tests {
                 signature_b64: None,
                 contract_address: None,
                 contract_alias: None,
-                namespace: Some("apps".to_owned()),
-                contract_id: None,
                 entrypoint: Some("main".to_owned()),
                 payload: None,
                 creation_time_ms: Some(1_700_000_000_234),
@@ -11902,7 +11966,7 @@ mod multisig_selector_tests {
         };
 
         let message = expect_conversion(err);
-        assert!(message.contains("provide both namespace and contract_id"));
+        assert!(message.contains("provide exactly one contract target"));
     }
 
     #[tokio::test]
@@ -11919,9 +11983,9 @@ mod multisig_selector_tests {
             state.as_ref(),
             &authority_account_id,
             &authority_keypair,
-            "apps",
-            "demo",
+            &derived_universal_contract_address(&authority_account_id, 1),
         );
+        let contract_address = derived_universal_contract_address(&authority_account_id, 1);
         let outsider = dm::AccountId::new(KeyPair::random().public_key().clone());
 
         let err = handle_post_contract_call_multisig_propose(
@@ -11939,8 +12003,8 @@ mod multisig_selector_tests {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_234),
-                namespace: "apps".to_owned(),
-                contract_id: "demo".to_owned(),
+                contract_address: Some(contract_address),
+                contract_alias: None,
                 entrypoint: "main".to_owned(),
                 payload: None,
                 gas_asset_id: None,
@@ -12415,6 +12479,11 @@ mod multisig_selector_tests {
             provenance: None,
         };
         let asset_definition = test_asset_definition_id().to_string();
+        let contract_address = derived_universal_contract_address(&multisig_account_id, 2);
+        let contract_alias: iroha_data_model::smart_contract::ContractAlias =
+            "mint_request::universal"
+                .parse()
+                .expect("mint request alias");
         let contract_payload = IrohaJson::new(
             norito::json::parse_value(&format!(
                 r#"{{
@@ -12439,8 +12508,8 @@ mod multisig_selector_tests {
         );
         let (contract_mint_request_instructions, _) = build_multisig_contract_call_instructions(
             &multisig_account_id,
-            "apps",
-            "mint_request",
+            &contract_address,
+            Some(&contract_alias),
             "create_mint_request",
             Some(&contract_payload),
             None,
@@ -13250,9 +13319,9 @@ mod multisig_selector_tests {
             state.as_ref(),
             &authority_account_id,
             &authority_keypair,
-            "apps",
-            "demo",
+            &derived_universal_contract_address(&authority_account_id, 1),
         );
+        let contract_address = derived_universal_contract_address(&authority_account_id, 1);
 
         let response = handle_post_contract_call_multisig_propose(
             Arc::new("multisig-selector-test".parse().expect("chain id")),
@@ -13266,8 +13335,8 @@ mod multisig_selector_tests {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_234),
-                namespace: "apps".to_owned(),
-                contract_id: "demo".to_owned(),
+                contract_address: Some(contract_address),
+                contract_alias: None,
                 entrypoint: "main".to_owned(),
                 payload: None,
                 gas_asset_id: None,
@@ -13323,10 +13392,10 @@ seiyaku BlobPayloadNormalizeTest {
             state.as_ref(),
             &authority_account_id,
             &authority_keypair,
-            "apps",
-            "demo_blob",
+            &derived_universal_contract_address(&authority_account_id, 1),
             code,
         );
+        let contract_address = derived_universal_contract_address(&authority_account_id, 1);
 
         let request_payload = IrohaJson::new(norito::json!({
             "alias_literal": "banking@centralbank"
@@ -13343,8 +13412,8 @@ seiyaku BlobPayloadNormalizeTest {
                 public_key_hex: None,
                 signature_b64: None,
                 creation_time_ms: Some(1_700_000_000_345),
-                namespace: "apps".to_owned(),
-                contract_id: "demo_blob".to_owned(),
+                contract_address: Some(contract_address.clone()),
+                contract_alias: None,
                 entrypoint: "create".to_owned(),
                 payload: Some(request_payload.clone()),
                 gas_asset_id: None,
@@ -13365,7 +13434,7 @@ seiyaku BlobPayloadNormalizeTest {
             code_hash,
             manifest,
             ..
-        } = prepare_contract_call(state.as_ref(), "apps", "demo_blob")
+        } = prepare_contract_call(state.as_ref(), &contract_address, None)
             .expect("prepared contract call");
         let entrypoint = ensure_public_contract_entrypoint(&manifest, "create")
             .expect("blob entrypoint descriptor");
@@ -13374,8 +13443,8 @@ seiyaku BlobPayloadNormalizeTest {
             .expect("normalized payload");
         let (_, expected_hash) = build_multisig_contract_call_instructions(
             &multisig_account_id,
-            "apps",
-            "demo_blob",
+            &contract_address,
+            None,
             "create",
             Some(&normalized_payload),
             None,
@@ -13507,8 +13576,8 @@ pub async fn handle_post_contract_call_multisig_propose(
         public_key_hex,
         signature_b64,
         creation_time_ms,
-        namespace,
-        contract_id,
+        contract_address,
+        contract_alias,
         entrypoint,
         payload,
         gas_asset_id,
@@ -13537,21 +13606,23 @@ pub async fn handle_post_contract_call_multisig_propose(
         ));
     }
 
-    let prepared = prepare_contract_call(&state, &namespace, &contract_id)?;
+    let prepared =
+        resolve_contract_call_target(&state, contract_address.as_ref(), contract_alias.as_ref())?;
     let PreparedContractCall {
         code_bytes,
         code_hash,
         abi_hash: _,
         manifest,
-        ..
+        dataspace: _dataspace,
+        contract_address,
+        contract_alias,
     } = prepared;
     let entrypoint_descriptor = ensure_public_contract_entrypoint(&manifest, &entrypoint)?;
     let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
     let tx_metadata = build_contract_call_metadata(
         &manifest,
-        &namespace,
-        &contract_id,
-        None,
+        &contract_address,
+        contract_alias.as_ref(),
         Some(&entrypoint),
         normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
@@ -13560,8 +13631,8 @@ pub async fn handle_post_contract_call_multisig_propose(
     );
     let (proposal_instructions, proposal_hash) = build_multisig_contract_call_instructions(
         &multisig_account_id,
-        &namespace,
-        &contract_id,
+        &contract_address,
+        contract_alias.as_ref(),
         &entrypoint,
         normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
@@ -15584,6 +15655,8 @@ pub struct DeployContractResponseDto {
     pub dataspace: String,
     /// Successful deploy nonce consumed for address derivation.
     pub deploy_nonce: u64,
+    /// Hex-encoded transaction hash submitted to the queue.
+    pub tx_hash_hex: String,
     /// Hex-encoded code hash
     pub code_hash_hex: String,
     /// Hex-encoded ABI hash (if present)
@@ -15663,15 +15736,15 @@ fn prepare_contract_deployment(
 #[cfg(feature = "app_api")]
 fn prepare_contract_call(
     state: &CoreState,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
 ) -> core::result::Result<PreparedContractCall, Error> {
     use iroha_data_model::query::error::QueryExecutionFail;
 
     let world = state.world_view();
     let binding = world
         .contract_instances()
-        .get(&(namespace.to_owned(), contract_id.to_owned()))
+        .get(contract_address)
         .copied()
         .ok_or_else(|| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
@@ -15694,6 +15767,19 @@ fn prepare_contract_call(
             QueryExecutionFail::Conversion(err.to_string()),
         ))
     })?;
+    let dataspace_id = contract_address
+        .dataspace_id()
+        .map_err(|err| conversion_error(err.to_string()))?;
+    let dataspace = state
+        .nexus_snapshot()
+        .dataspace_catalog
+        .by_id(dataspace_id)
+        .map(|entry| entry.alias.clone())
+        .ok_or_else(|| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                QueryExecutionFail::NotFound,
+            ))
+        })?;
     let manifest = world
         .contract_manifests()
         .get(&binding)
@@ -15716,9 +15802,9 @@ fn prepare_contract_call(
         code_hash: binding,
         abi_hash: verified.abi_hash,
         manifest,
-        namespace: namespace.to_owned(),
-        contract_id: contract_id.to_owned(),
-        contract_address: contract_id.parse().ok(),
+        dataspace,
+        contract_address: contract_address.clone(),
+        contract_alias,
     })
 }
 
@@ -15727,22 +15813,7 @@ fn prepare_contract_call_by_address(
     state: &CoreState,
     contract_address: &iroha_data_model::smart_contract::ContractAddress,
 ) -> core::result::Result<PreparedContractCall, Error> {
-    let dataspace_id = contract_address
-        .dataspace_id()
-        .map_err(|err| conversion_error(err.to_string()))?;
-    let dataspace_alias = state
-        .nexus_snapshot()
-        .dataspace_catalog
-        .by_id(dataspace_id)
-        .map(|entry| entry.alias.clone())
-        .ok_or_else(|| {
-            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::NotFound,
-            ))
-        })?;
-    let mut prepared = prepare_contract_call(state, &dataspace_alias, contract_address.as_ref())?;
-    prepared.contract_address = Some(contract_address.clone());
-    Ok(prepared)
+    prepare_contract_call(state, contract_address, None)
 }
 
 #[cfg(feature = "app_api")]
@@ -15759,7 +15830,7 @@ fn prepare_contract_call_by_alias(
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,
             ))
         })?;
-    prepare_contract_call_by_address(state, &contract_address)
+    prepare_contract_call(state, &contract_address, Some(contract_alias.clone()))
 }
 
 #[cfg(feature = "app_api")]
@@ -15767,41 +15838,17 @@ fn resolve_contract_call_target(
     state: &CoreState,
     contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
     contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
-    namespace: Option<&str>,
-    contract_id: Option<&str>,
 ) -> core::result::Result<PreparedContractCall, Error> {
-    let namespace = namespace.map(str::trim).filter(|value| !value.is_empty());
-    let contract_id = contract_id.map(str::trim).filter(|value| !value.is_empty());
-    let legacy_target_supplied = namespace.is_some() || contract_id.is_some();
-    let explicit_target_supplied = contract_address.is_some() || contract_alias.is_some();
-
-    if explicit_target_supplied && legacy_target_supplied {
-        return Err(conversion_error(
-            "provide exactly one contract target via contract_address, contract_alias, or namespace + contract_id"
-                .to_owned(),
-        ));
-    }
-
-    match (contract_address, contract_alias, namespace, contract_id) {
-        (Some(_), Some(_), _, _) => Err(conversion_error(
+    match (contract_address, contract_alias) {
+        (Some(_), Some(_)) => Err(conversion_error(
             "exactly one of contract_address or contract_alias must be provided".to_owned(),
         )),
-        (Some(contract_address), None, None, None) => {
-            prepare_contract_call_by_address(state, contract_address)
-        }
-        (None, Some(contract_alias), None, None) => {
+        (Some(contract_address), None) => prepare_contract_call_by_address(state, contract_address),
+        (None, Some(contract_alias)) => {
             prepare_contract_call_by_alias(state, contract_alias, current_time_millis())
         }
-        (None, None, Some(namespace), Some(contract_id)) => {
-            prepare_contract_call(state, namespace, contract_id)
-        }
-        (None, None, Some(_), None) | (None, None, None, Some(_)) => Err(conversion_error(
-            "provide both namespace and contract_id when using legacy contract-call targeting"
-                .to_owned(),
-        )),
         _ => Err(conversion_error(
-            "provide exactly one contract target via contract_address, contract_alias, or namespace + contract_id"
-                .to_owned(),
+            "provide exactly one contract target via contract_address or contract_alias".to_owned(),
         )),
     }
 }
@@ -15902,52 +15949,7 @@ fn metadata_with_default_gas_asset(state: &CoreState) -> Metadata {
     crate::json_macros::JsonSerialize,
     norito::derive::NoritoSerialize,
 )]
-/// Request body for combined deploy + activate workflow.
-pub struct DeployAndActivateInstanceDto {
-    /// Transaction authority
-    pub authority: iroha_data_model::account::AccountId,
-    /// Signing key for submitting the transaction
-    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
-    /// Governance namespace that will host the contract instance
-    pub namespace: String,
-    /// Logical contract identifier within the namespace
-    pub contract_id: String,
-    /// Base64-encoded compiled `.to` bytecode
-    pub code_b64: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    Clone,
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Response returned after a successful deploy + activate request.
-pub struct DeployAndActivateInstanceResponseDto {
-    /// Whether the operation succeeded.
-    pub ok: bool,
-    /// Namespace bound to the deployed instance.
-    pub namespace: String,
-    /// Contract identifier inside the namespace.
-    pub contract_id: String,
-    /// Hex-encoded code hash of the deployed bytecode.
-    pub code_hash_hex: String,
-    /// Hex-encoded ABI hash enforced for the deployment.
-    pub abi_hash_hex: String,
-}
-
-#[cfg(feature = "app_api")]
-#[derive(
-    Debug,
-    crate::json_macros::JsonDeserialize,
-    norito::derive::NoritoDeserialize,
-    crate::json_macros::JsonSerialize,
-    norito::derive::NoritoSerialize,
-)]
-/// Request payload for invoking a deployed contract instance.
+/// Request payload for invoking a deployed contract.
 pub struct ContractCallDto {
     /// Account authorizing the call.
     pub authority: iroha_data_model::account::AccountId,
@@ -15966,12 +15968,6 @@ pub struct ContractCallDto {
     /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
     #[norito(default)]
     pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
-    /// Optional legacy governance namespace used by maintained `apps/<contract_id>` callers.
-    #[norito(default)]
-    pub namespace: Option<String>,
-    /// Optional legacy contract id paired with `namespace`.
-    #[norito(default)]
-    pub contract_id: Option<String>,
     /// Optional entrypoint selector; defaults to `main`.
     #[norito(default)]
     pub entrypoint: Option<String>,
@@ -15992,6 +15988,40 @@ pub struct ContractCallDto {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for simulating a deployed contract call without submitting a transaction.
+pub struct ContractCallSimulateDto {
+    /// Account authorizing the call.
+    pub authority: iroha_data_model::account::AccountId,
+    /// Optional canonical contract address.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
+    #[norito(default)]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Optional entrypoint selector; defaults to `main`.
+    #[norito(default)]
+    pub entrypoint: Option<String>,
+    /// Optional Norito JSON payload forwarded to the contract.
+    #[norito(default)]
+    pub payload: Option<IrohaJson>,
+    /// Optional gas asset id forwarded to transaction metadata.
+    #[norito(default)]
+    pub gas_asset_id: Option<String>,
+    /// Optional fee sponsor account that will be charged for gas/fees when enabled and authorized.
+    #[norito(default)]
+    pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
+    /// Caller-specified gas limit (must be > 0) forwarded to transaction metadata.
+    pub gas_limit: u64,
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Response payload returned after enqueuing a contract call transaction.
 pub struct ContractCallResponseDto {
@@ -16001,8 +16031,6 @@ pub struct ContractCallResponseDto {
     pub submitted: bool,
     /// Dataspace targeted by the call.
     pub dataspace: String,
-    /// Contract id targeted by the call.
-    pub contract_id: String,
     /// Canonical contract address targeted by the call, when available.
     #[norito(default)]
     pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
@@ -16027,6 +16055,43 @@ pub struct ContractCallResponseDto {
     /// Entrypoint selector used for the call, if provided.
     #[norito(default)]
     pub entrypoint: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+/// Response payload returned after simulating a contract call.
+pub struct ContractCallSimulateResponseDto {
+    /// Whether simulation succeeded.
+    pub ok: bool,
+    /// Dataspace targeted by the call.
+    pub dataspace: String,
+    /// Canonical contract address targeted by the call, when available.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Hex-encoded code hash of the invoked bytecode.
+    pub code_hash_hex: String,
+    /// Hex-encoded ABI hash for the invoked bytecode.
+    pub abi_hash_hex: String,
+    /// Entrypoint selector executed for the simulation.
+    pub entrypoint: String,
+    /// Normalized Norito payload actually passed to the VM.
+    #[norito(default)]
+    pub normalized_payload: Option<IrohaJson>,
+    /// Gas limit supplied for the simulation.
+    pub gas_limit: u64,
+    /// Gas consumed by the VM run.
+    pub gas_used: u64,
+    /// Queued instructions produced by the public entrypoint.
+    pub queued_instructions: Vec<norito::json::Value>,
+    /// Decoded return value when the entrypoint returns a non-unit result.
+    #[norito(default)]
+    pub result: Option<IrohaJson>,
+    /// Error message when simulation fails.
+    #[norito(default)]
+    pub error: Option<String>,
+    /// VM diagnostic information when simulation fails.
+    #[norito(default)]
+    pub vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
 }
 
 #[cfg(feature = "app_api")]
@@ -16125,8 +16190,6 @@ pub struct ContractViewResponseDto {
     pub ok: bool,
     /// Dataspace targeted by the query.
     pub dataspace: String,
-    /// Contract id targeted by the query.
-    pub contract_id: String,
     /// Canonical contract address targeted by the query, when available.
     #[norito(default)]
     pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
@@ -16179,7 +16242,6 @@ pub struct ContractViewVmDiagnosticDto {
 pub struct ContractViewErrorResponseDto {
     pub ok: bool,
     pub dataspace: String,
-    pub contract_id: String,
     #[norito(default)]
     pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
     pub code_hash_hex: String,
@@ -16303,10 +16365,12 @@ pub struct MultisigContractCallProposeDto {
     /// Optional fixed creation timestamp for deterministic detached flows.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
-    /// Target namespace hosting the contract instance.
-    pub namespace: String,
-    /// Logical contract identifier within the namespace.
-    pub contract_id: String,
+    /// Optional canonical contract address.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
+    #[norito(default)]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     /// Entrypoint selector.
     pub entrypoint: String,
     /// Optional payload forwarded to the contract.
@@ -16695,9 +16759,9 @@ struct PreparedContractCall {
     code_hash: iroha_crypto::Hash,
     abi_hash: iroha_crypto::Hash,
     manifest: manifest::ContractManifest,
-    namespace: String,
-    contract_id: String,
-    contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    dataspace: String,
+    contract_address: iroha_data_model::smart_contract::ContractAddress,
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
 }
 
 // ---------------------- Subscription API DTOs ----------------------
@@ -17835,8 +17899,7 @@ pub async fn handle_post_contract_deploy(
     instructions.push(dm::InstructionBox::from(isi_code));
     instructions.push(dm::InstructionBox::from(isi_bytes));
     instructions.push(dm::InstructionBox::from(ActivateContractInstance {
-        namespace: dataspace_alias.clone(),
-        contract_id: contract_address.to_string(),
+        contract_address: contract_address.clone(),
         code_hash: prepared.code_hash,
     }));
     instructions.push(dm::InstructionBox::from(dm::SetKeyValue::account(
@@ -17849,6 +17912,7 @@ pub async fn handle_post_contract_deploy(
         .with_metadata(metadata)
         .with_instructions(instructions.into_iter())
         .sign(&private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     // Submit via queue
     handle_transaction_with_metrics(
@@ -17868,6 +17932,7 @@ pub async fn handle_post_contract_deploy(
         contract_address,
         dataspace: dataspace_alias,
         deploy_nonce,
+        tx_hash_hex,
         code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
         abi_hash_hex: hex::encode(<[u8; 32]>::from(prepared.abi_hash)),
     })
@@ -32115,8 +32180,11 @@ mod governance_stream_tests {
         let event = GovernanceEvent::ProposalSubmitted(GovernanceProposalSubmitted {
             id: proposal_id,
             proposer: sample_account(),
-            namespace: "apps".to_owned(),
-            contract_id: "my.contract".to_owned(),
+            contract_address: Some(
+                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                    .parse()
+                    .expect("contract address"),
+            ),
         });
         let payloads = governance_stream_payloads(&EventBox::Data(SharedDataEvent::from(
             iroha_data_model::events::data::DataEvent::Governance(event),

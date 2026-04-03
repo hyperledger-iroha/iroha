@@ -221,16 +221,6 @@ fn nexus_fee_seed_amount() -> Numeric {
     1_000_000_u64.into()
 }
 
-fn nexus_fee_asset_is_preseeded(fee_asset: &AssetDefinitionId) -> bool {
-    static SEEDED_FEE_ASSET: std::sync::OnceLock<AssetDefinitionId> = std::sync::OnceLock::new();
-    let seeded_fee_asset = SEEDED_FEE_ASSET.get_or_init(|| {
-        NexusProfile::sora_defaults()
-            .expect("embedded nexus profile should load")
-            .fee_asset_id
-    });
-    fee_asset == seeded_fee_asset
-}
-
 fn account_from_record(record: &AccountRecord, _domain: &DomainId) -> NewAccount {
     let builder = Account::new(record.id.clone());
     if let Some(uaid) = record.uaid {
@@ -426,7 +416,6 @@ pub fn prepare_state(
                     .parse()
                     .expect("default nexus fee asset id should parse")
             });
-        let fee_asset_preseeded = nexus_fee_asset_is_preseeded(&fee_asset);
         let stake_amount_value = SumeragiNposParameters::default().min_self_bond();
         let bootstrap_lane_count = u64::try_from(bootstrap_public_lanes.len()).unwrap_or(u64::MAX);
         let total_bootstrap_stake_value = stake_amount_value.saturating_mul(bootstrap_lane_count);
@@ -439,7 +428,13 @@ pub fn prepare_state(
         nexus_genesis.push(InstructionBox::from(Register::domain(Domain::new(
             ivm_domain.clone(),
         ))));
-        if fee_asset.domain() != stake_asset.domain() {
+        let needs_universal_domain = fee_asset
+            .try_domain()
+            .zip(stake_asset.try_domain())
+            .map_or(true, |(fee_domain, stake_domain)| {
+                fee_domain != stake_domain
+            });
+        if needs_universal_domain {
             nexus_genesis.push(InstructionBox::from(Register::domain(Domain::new(
                 universal_domain,
             ))));
@@ -448,7 +443,7 @@ pub fn prepare_state(
         nexus_genesis.push(InstructionBox::from(Register::asset_definition(
             AssetDefinition::numeric(stake_asset.clone()).with_name("Nexus Stake".to_owned()),
         )));
-        if fee_asset != stake_asset && !fee_asset_preseeded {
+        if fee_asset != stake_asset {
             nexus_genesis.push(InstructionBox::from(Register::asset_definition(
                 AssetDefinition::numeric(fee_asset.clone()).with_name("Nexus Fee".to_owned()),
             )));
@@ -774,7 +769,6 @@ impl WorkloadEngine {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RecipeKind {
-    RegisterDomain,
     DuplicateDomain,
     RegisterAccount,
     DuplicateAccount,
@@ -825,7 +819,6 @@ pub(crate) enum RecipeKind {
 // Stable runs favor deterministic recipes; contract deployment can be enabled via
 // `allow_contract_deploy_in_stable`.
 const BASE_RECIPES_STABLE: &[RecipeKind] = &[
-    RecipeKind::RegisterDomain,
     RecipeKind::RegisterNft,
     RecipeKind::MintAsset,
     RecipeKind::TransferAsset,
@@ -847,7 +840,6 @@ const BASE_RECIPES_STABLE: &[RecipeKind] = &[
 ];
 
 const BASE_RECIPES_CHAOS: &[RecipeKind] = &[
-    RecipeKind::RegisterDomain,
     RecipeKind::RegisterAssetDefinition,
     RecipeKind::RegisterAccount,
     RecipeKind::RegisterUaidAccount,
@@ -971,7 +963,6 @@ pub(crate) enum RepeatableTriggerState {
 
 #[derive(Debug, Default, Clone)]
 struct ChaosCounters {
-    domain: u64,
     account: u64,
     uaid: u64,
     trigger: u64,
@@ -1157,7 +1148,6 @@ impl ChaosState {
 
     fn produce_plan(&mut self, kind: RecipeKind, rng: &mut StdRng) -> Result<TransactionPlan> {
         match kind {
-            RecipeKind::RegisterDomain => self.plan_register_domain(rng),
             RecipeKind::DuplicateDomain => Ok(self.plan_duplicate_domain()),
             RecipeKind::RegisterAccount => Ok(self.plan_register_account()),
             RecipeKind::DuplicateAccount => self.plan_duplicate_account(rng),
@@ -1207,19 +1197,9 @@ impl ChaosState {
     }
 
     fn plan_register_domain(&mut self, _rng: &mut StdRng) -> Result<TransactionPlan> {
-        let suffix = self.bump_domain();
-        let domain_id = DomainId::try_new(format!("chaos_child_{suffix}"), "universal")
-            .map_err(|_| eyre!("failed to build new domain id"))?;
-        self.created_domains.insert(domain_id.clone());
-        Ok(TransactionPlan {
-            state_updates: Vec::new(),
-            label: "register_domain",
-            instructions: vec![InstructionBox::from(Register::domain(Domain::new(
-                domain_id,
-            )))],
-            signer: self.treasury.clone(),
-            expect_success: true,
-        })
+        Err(eyre!(
+            "runtime domain registration requires an active SNS domain-name lease; Izanami does not synthesize leases"
+        ))
     }
 
     fn plan_duplicate_domain(&mut self) -> TransactionPlan {
@@ -1614,8 +1594,8 @@ impl ChaosState {
 
     fn plan_register_nft(&mut self, _rng: &mut StdRng) -> Result<TransactionPlan> {
         let suffix = self.bump_nft();
-        let domain_name = self.base_domain.name().to_string();
-        let nft_id: NftId = format!("chaos_nft_{suffix}${domain_name}")
+        let domain_id = self.base_domain.to_string();
+        let nft_id: NftId = format!("chaos_nft_{suffix}${domain_id}")
             .parse()
             .map_err(|_| eyre!("failed to parse nft id"))?;
         let nft = Nft::new(nft_id.clone(), Metadata::default());
@@ -1632,8 +1612,8 @@ impl ChaosState {
 
     fn plan_transfer_nft(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
         let suffix = self.bump_nft();
-        let domain_name = self.base_domain.name().to_string();
-        let nft_id: NftId = format!("chaos_nft_{suffix}${domain_name}")
+        let domain_id = self.base_domain.to_string();
+        let nft_id: NftId = format!("chaos_nft_{suffix}${domain_id}")
             .parse()
             .map_err(|_| eyre!("failed to parse nft id"))?;
         let receiver = self.random_user_except(rng, &self.treasury.id)?;
@@ -2942,12 +2922,6 @@ impl ChaosState {
         }
     }
 
-    fn bump_domain(&mut self) -> u64 {
-        let value = self.counters.domain;
-        self.counters.domain += 1;
-        value
-    }
-
     fn bump_account(&mut self) -> u64 {
         let value = self.counters.account;
         self.counters.account += 1;
@@ -3071,7 +3045,7 @@ mod tests {
         assert!(!prepared.genesis.is_empty());
         assert!(!prepared.genesis[0].is_empty());
         assert!(prepared.state.users.len() >= 3);
-        let expected: DomainId = DomainId::try_new("chaosnet", "universal").unwrap();
+        let expected: DomainId = DomainId::parse_fully_qualified("chaosnet.universal").unwrap();
         assert_eq!(prepared.state.base_domain(), &expected);
     }
 
@@ -3457,6 +3431,19 @@ mod tests {
             BASE_RECIPES_CHAOS
                 .iter()
                 .any(|kind| matches!(kind, RecipeKind::DeployKotodamaContract))
+        );
+    }
+
+    #[test]
+    fn register_domain_plan_is_disabled_under_sns_domain_model() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let err = state
+            .plan_register_domain(&mut StdRng::seed_from_u64(7))
+            .expect_err("runtime domain registration should require an external SNS lease");
+        assert!(
+            err.to_string().contains("SNS domain-name lease"),
+            "unexpected error: {err}"
         );
     }
 
@@ -4690,16 +4677,7 @@ mod tests {
     }
 
     #[test]
-    fn default_nexus_fee_asset_is_marked_preseeded() {
-        let profile = NexusProfile::sora_defaults().expect("profile");
-        assert!(
-            nexus_fee_asset_is_preseeded(&profile.fee_asset_id),
-            "embedded Nexus fee asset should reuse the test-network preseeded fee asset"
-        );
-    }
-
-    #[test]
-    fn nexus_prepare_state_reuses_preseeded_fee_asset_definition() {
+    fn nexus_prepare_state_registers_fee_asset_definition() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { genesis, .. } =
             prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
@@ -4720,8 +4698,8 @@ mod tests {
             })
             .count();
         assert_eq!(
-            fee_registration_count, 0,
-            "prepare_state should not re-register the canonical test-network fee asset"
+            fee_registration_count, 1,
+            "prepare_state should register the fee asset definition before minting it"
         );
     }
 

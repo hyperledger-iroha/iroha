@@ -289,24 +289,21 @@ fn write_metrics_snapshot(dir: &Path, metrics: &RelayEpochMetricsV1, suffix: &st
     path
 }
 
-fn proposal_id_hex(namespace: &str, contract_id: &str, code: &[u8; 32], abi: &[u8; 32]) -> String {
+fn proposal_id_hex(contract_address: &str, code: &[u8; 32], abi: &[u8; 32]) -> String {
     use iroha_crypto::blake2::{Blake2b512, digest::Digest as _};
 
-    let namespace_len = u32::try_from(namespace.len()).expect("namespace length fits into u32");
-    let contract_len = u32::try_from(contract_id.len()).expect("contract id length fits into u32");
+    let contract_address_len =
+        u32::try_from(contract_address.len()).expect("contract address length fits into u32");
     let mut input = Vec::with_capacity(
-        b"iroha:gov:proposal:v1|".len()
-            + std::mem::size_of::<u32>() * 2
-            + namespace.len()
-            + contract_id.len()
+        b"iroha:gov:proposal:v2|".len()
+            + std::mem::size_of::<u32>()
+            + contract_address.len()
             + code.len()
             + abi.len(),
     );
-    input.extend_from_slice(b"iroha:gov:proposal:v1|");
-    input.extend_from_slice(&namespace_len.to_le_bytes());
-    input.extend_from_slice(namespace.as_bytes());
-    input.extend_from_slice(&contract_len.to_le_bytes());
-    input.extend_from_slice(contract_id.as_bytes());
+    input.extend_from_slice(b"iroha:gov:proposal:v2|");
+    input.extend_from_slice(&contract_address_len.to_le_bytes());
+    input.extend_from_slice(contract_address.as_bytes());
     input.extend_from_slice(code);
     input.extend_from_slice(abi);
     let digest = Blake2b512::digest(&input);
@@ -673,10 +670,8 @@ fn gov_deploy_meta_outputs_metadata_stub() {
             "gov",
             "deploy",
             "meta",
-            "--namespace",
-            "apps",
-            "--contract-id",
-            "calc.v1",
+            "--contract-address",
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
         ])
         .output()
         .expect("failed to execute iroha app gov deploy meta");
@@ -689,12 +684,8 @@ fn gov_deploy_meta_outputs_metadata_stub() {
     let value: norito::json::Value =
         norito::json::from_str(stdout.trim()).expect("parse deploy meta output");
     assert_eq!(
-        value.get("gov_namespace").and_then(|v| v.as_str()),
-        Some("apps")
-    );
-    assert_eq!(
-        value.get("gov_contract_id").and_then(|v| v.as_str()),
-        Some("calc.v1")
+        value.get("gov_contract_address").and_then(|v| v.as_str()),
+        Some("tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7")
     );
     assert!(
         value.get("gov_manifest_approvers").is_none(),
@@ -720,10 +711,8 @@ fn gov_deploy_meta_accepts_manifest_approvers() {
             "gov",
             "deploy",
             "meta",
-            "--namespace",
-            "apps",
-            "--contract-id",
-            "calc.v1",
+            "--contract-address",
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
         ])
         .args(["--approver", validator.as_str(), "--approver", bob.as_str()])
         .output()
@@ -785,6 +774,7 @@ fn gov_propose_deploy_against_mock() {
 
     let code_hash = "00".repeat(32);
     let abi_hash = "11".repeat(32);
+    let contract_address = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
 
     let summary = command()
         .arg("--config")
@@ -796,10 +786,8 @@ fn gov_propose_deploy_against_mock() {
             "gov",
             "deploy",
             "propose",
-            "--namespace",
-            "apps",
-            "--contract-id",
-            "calc.v1",
+            "--contract-address",
+            contract_address,
             "--code-hash",
             code_hash.as_str(),
             "--abi-hash",
@@ -826,10 +814,8 @@ fn gov_propose_deploy_against_mock() {
             "gov",
             "deploy",
             "propose",
-            "--namespace",
-            "apps",
-            "--contract-id",
-            "calc.v1",
+            "--contract-address",
+            contract_address,
             "--code-hash",
             code_hash.as_str(),
             "--abi-hash",
@@ -1133,74 +1119,6 @@ fn gov_protected_namespaces_flow_against_mock() {
         .filter_map(|v| v.as_str().map(str::to_owned))
         .collect();
     assert_eq!(collected, vec!["apps", "system"]);
-}
-
-#[test]
-fn gov_instances_list_against_mock() {
-    use torii_mock_support::{
-        SpawnError, TempDir, ToriiMockProcess, configure_governance, write_client_config,
-    };
-
-    let mock = match ToriiMockProcess::spawn() {
-        Ok(proc) => proc,
-        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
-            eprintln!("skipping gov_instances_list_against_mock: mock server unavailable");
-            return;
-        }
-        Err(err) => panic!("failed to start Torii mock: {err}"),
-    };
-
-    let config_payload = norito::json!({
-        "instances": {
-            "apps": {
-                "namespace": "apps",
-                "total": 2,
-                "offset": 0,
-                "limit": 10,
-                "instances": [
-                    {"contract_id": "calc.v1", "code_hash_hex": "0x11"},
-                    {"contract_id": "calc.v2", "code_hash_hex": "0x22"}
-                ]
-            }
-        }
-    });
-    configure_governance(mock.base_url(), &config_payload).expect("configure governance");
-
-    let temp_dir = TempDir::new("gov_instances").expect("temp dir");
-    let config_path = temp_dir.path().join("client.toml");
-    write_client_config(&config_path, mock.base_url()).expect("write config");
-
-    let output = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args(["app", "gov", "instance", "list", "--namespace", "apps"])
-        .output()
-        .expect("invoke iroha app gov instance list");
-    assert!(
-        output.status.success(),
-        "expected gov instance list to succeed, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let value: norito::json::Value =
-        norito::json::from_slice(&output.stdout).expect("parse gov instance list JSON");
-    assert_eq!(
-        value.get("total").and_then(norito::json::Value::as_u64),
-        Some(2)
-    );
-    let instances = value
-        .get("instances")
-        .and_then(norito::json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    let ids: Vec<_> = instances
-        .iter()
-        .filter_map(|entry| {
-            entry
-                .get("contract_id")
-                .and_then(norito::json::Value::as_str)
-        })
-        .collect();
-    assert_eq!(ids, vec!["calc.v1", "calc.v2"]);
 }
 
 #[test]
@@ -1650,49 +1568,6 @@ fn gov_council_gen_vrf_outputs_expected_candidate() {
     );
     assert_eq!(pk_b64, expected.1);
     assert_eq!(proof_b64, expected.2);
-}
-
-#[test]
-fn gov_activate_instance_emits_skeleton() {
-    use torii_mock_support::{TempDir, write_client_config};
-
-    let temp_dir = TempDir::new("gov_activate_instance").expect("temp dir");
-    let config_path = temp_dir.path().join("client.toml");
-    write_client_config(&config_path, "http://localhost").expect("write config");
-
-    let code_hash = "00".repeat(32);
-    let output = command()
-        .arg("--config")
-        .arg(&config_path)
-        .args([
-            "app",
-            "gov",
-            "instance",
-            "activate",
-            "--namespace",
-            "apps",
-            "--contract-id",
-            "calc.v1",
-            "--code-hash",
-            code_hash.as_str(),
-        ])
-        .output()
-        .expect("invoke iroha app gov instance activate");
-    assert!(
-        output.status.success(),
-        "expected instance activate to succeed, stderr: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-    let value: norito::json::Value =
-        norito::json::from_slice(&output.stdout).expect("parse instance activate JSON");
-    assert_eq!(
-        value.get("action").and_then(norito::json::Value::as_str),
-        Some("ActivateContractInstance")
-    );
-    assert_eq!(
-        value.get("namespace").and_then(norito::json::Value::as_str),
-        Some("apps")
-    );
 }
 
 #[test]
@@ -2801,8 +2676,7 @@ fn gov_audit_deploy_reports_results_against_mock() {
         Err(err) => panic!("failed to start Torii mock: {err}"),
     };
 
-    let namespace = "apps";
-    let contract_id = "calc.v1";
+    let contract_address = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7";
     let code_bytes = b"mock-contract-code";
     let abi_bytes = b"mock-contract-abi";
     let code_hash = CryptoHash::new(code_bytes);
@@ -2814,7 +2688,7 @@ fn gov_audit_deploy_reports_results_against_mock() {
     code_arr.copy_from_slice(code_hash.as_ref());
     let mut abi_arr = [0u8; 32];
     abi_arr.copy_from_slice(abi_hash.as_ref());
-    let proposal_hex = proposal_id_hex(namespace, contract_id, &code_arr, &abi_arr);
+    let proposal_hex = proposal_id_hex(contract_address, &code_arr, &abi_arr);
 
     let manifest_body = {
         let mut manifest = json::Map::new();
@@ -2841,12 +2715,8 @@ fn gov_audit_deploy_reports_results_against_mock() {
     let proposal_body = {
         let mut deploy = json::Map::new();
         deploy.insert(
-            "namespace".to_string(),
-            json::Value::String(namespace.to_string()),
-        );
-        deploy.insert(
-            "contract_id".to_string(),
-            json::Value::String(contract_id.to_string()),
+            "contract_address".to_string(),
+            json::Value::String(contract_address.to_string()),
         );
         deploy.insert(
             "code_hash_hex".to_string(),
@@ -2870,17 +2740,14 @@ fn gov_audit_deploy_reports_results_against_mock() {
         json::Value::Object(root)
     };
 
-    let mut instances = json::Map::new();
-    instances.insert(
-        namespace.to_string(),
+    let mut gov_contracts = json::Map::new();
+    gov_contracts.insert(
+        contract_address.to_string(),
         norito::json!({
-            "total": 1,
-            "offset": 0,
-            "limit": 10,
-            "instances": [{
-                "contract_id": contract_id,
-                "code_hash_hex": code_hash_hex
-            }]
+            "found": true,
+            "contract_address": contract_address,
+            "dataspace": "universal",
+            "code_hash_hex": code_hash_hex
         }),
     );
     let mut manifests = json::Map::new();
@@ -2892,7 +2759,10 @@ fn gov_audit_deploy_reports_results_against_mock() {
 
     let mut root = json::Map::new();
     root.insert("referenda".to_string(), norito::json!([]));
-    root.insert("instances".to_string(), json::Value::Object(instances));
+    root.insert(
+        "gov_contracts".to_string(),
+        json::Value::Object(gov_contracts),
+    );
     root.insert("manifests".to_string(), json::Value::Object(manifests));
     root.insert(
         "code_bytes".to_string(),
@@ -2908,7 +2778,14 @@ fn gov_audit_deploy_reports_results_against_mock() {
     let output = command()
         .arg("--config")
         .arg(&config_path)
-        .args(["app", "gov", "deploy", "audit", "--namespace", namespace])
+        .args([
+            "app",
+            "gov",
+            "deploy",
+            "audit",
+            "--contract-address",
+            contract_address,
+        ])
         .output()
         .expect("invoke iroha app gov deploy audit");
     assert!(
@@ -2919,14 +2796,14 @@ fn gov_audit_deploy_reports_results_against_mock() {
     let value: norito::json::Value =
         norito::json::from_slice(&output.stdout).expect("parse deploy audit JSON");
     assert_eq!(
-        value.get("namespace").and_then(norito::json::Value::as_str),
-        Some(namespace)
+        value
+            .get("contract_address")
+            .and_then(norito::json::Value::as_str),
+        Some(contract_address)
     );
     assert_eq!(
-        value
-            .get("with_issues")
-            .and_then(norito::json::Value::as_u64),
-        Some(0)
+        value.get("found").and_then(norito::json::Value::as_bool),
+        Some(true)
     );
     assert_eq!(
         value
@@ -2934,28 +2811,19 @@ fn gov_audit_deploy_reports_results_against_mock() {
             .and_then(norito::json::Value::as_u64),
         Some(0)
     );
-    let results = value
-        .get("results")
-        .and_then(norito::json::Value::as_array)
-        .cloned()
-        .unwrap_or_default();
-    assert_eq!(results.len(), 1, "expected single audit record");
-    let record = results[0]
-        .as_object()
-        .expect("audit record to be an object");
     assert_eq!(
-        record
+        value
             .get("has_issues")
             .and_then(norito::json::Value::as_bool),
         Some(false)
     );
-    let issues = record
+    let issues = value
         .get("issues")
         .and_then(norito::json::Value::as_array)
         .cloned()
         .unwrap_or_default();
     assert!(issues.is_empty(), "expected no issues, found: {issues:?}");
-    let manifest = record
+    let manifest = value
         .get("manifest")
         .and_then(norito::json::Value::as_object)
         .expect("manifest section");
@@ -2971,7 +2839,7 @@ fn gov_audit_deploy_reports_results_against_mock() {
             .and_then(norito::json::Value::as_str),
         Some(abi_hash_hex.as_str())
     );
-    let proposal = record
+    let proposal = value
         .get("proposal")
         .and_then(norito::json::Value::as_object)
         .expect("proposal section");

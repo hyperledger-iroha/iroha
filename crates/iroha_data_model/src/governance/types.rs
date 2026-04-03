@@ -22,8 +22,11 @@ use norito::codec::{Decode, Encode};
 use norito::json::{self, JsonDeserialize, JsonSerialize, Parser};
 
 use crate::{
-    account::AccountId, asset::AssetId, isi::governance::CouncilDerivationKind,
-    runtime::RuntimeUpgradeManifest, smart_contract::manifest::ManifestProvenance,
+    account::AccountId,
+    asset::AssetId,
+    isi::governance::CouncilDerivationKind,
+    runtime::RuntimeUpgradeManifest,
+    smart_contract::{ContractAddress, manifest::ManifestProvenance},
 };
 
 /// Errors emitted when parsing hex-encoded hashes used by governance payloads.
@@ -397,7 +400,7 @@ impl JsonDeserialize for AbiVersion {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub enum ProposalKind {
-    /// Deploy an IVM contract identified by namespace + contract id and content hashes.
+    /// Deploy an IVM contract identified by its canonical public address and content hashes.
     DeployContract(DeployContractProposal),
     /// Schedule a runtime upgrade manifest through governance.
     RuntimeUpgrade(RuntimeUpgradeProposal),
@@ -410,10 +413,8 @@ pub enum ProposalKind {
     derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
 )]
 pub struct DeployContractProposal {
-    /// Governance namespace to which the proposal applies.
-    pub namespace: String,
-    /// Logical contract identifier within the namespace.
-    pub contract_id: String,
+    /// Canonical public contract address governed by the proposal.
+    pub contract_address: ContractAddress,
     /// Blake2b-32 hash of the compiled `.to` bytecode.
     pub code_hash_hex: ContractCodeHash,
     /// Blake2b-32 hash of the ABI surface expected by hosts.
@@ -972,8 +973,9 @@ mod tests {
         let code_hash = ContractCodeHash::from_hex_str(&"aa".repeat(32)).expect("code hash");
         let abi_hash = ContractAbiHash::from_hex_str(&"bb".repeat(32)).expect("abi hash");
         let proposal = DeployContractProposal {
-            namespace: "demo".to_owned(),
-            contract_id: "mint".to_owned(),
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address"),
             code_hash_hex: code_hash,
             abi_hash_hex: abi_hash,
             abi_version: AbiVersion::new(1),
@@ -986,7 +988,7 @@ mod tests {
             norito::decode_from_bytes::<ProposalKind>(&framed).expect("decode proposal kind");
         match decoded {
             ProposalKind::DeployContract(inner) => {
-                assert_eq!(inner.contract_id, proposal.contract_id);
+                assert_eq!(inner.contract_address, proposal.contract_address);
                 assert_eq!(
                     inner.code_hash_hex.to_hex(),
                     proposal.code_hash_hex.to_hex()
@@ -1027,8 +1029,9 @@ mod tests {
     #[test]
     fn proposal_fingerprint_matches_manual_derivation() {
         let proposal = DeployContractProposal {
-            namespace: "apps".to_owned(),
-            contract_id: "demo.contract".to_owned(),
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address"),
             code_hash_hex: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),
             abi_hash_hex: ContractAbiHash::from_hex_str(&"22".repeat(32)).expect("abi hash"),
             abi_version: AbiVersion::new(1),
@@ -1052,7 +1055,7 @@ mod tests {
         // Spot check deterministic value to guard accidental changes.
         assert_eq!(
             fp,
-            hex!("43354427fc23f14104fd6da3d0d6e17fcae2c955206fb971e21a901404e7f911")
+            hex!("a2b345f81d80563d51d8ec1c67b940532c48037b5305881ec462bce1b08fe778")
         );
     }
 

@@ -9,11 +9,7 @@ use iroha::{
     client::Client,
     data_model::{
         isi::contract_alias::SetContractAlias,
-        isi::smart_contract_code::{
-            ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
-        },
         metadata::Metadata,
-        name::Name,
         prelude::*,
         transaction::{IvmBytecode, TransactionBuilder},
     },
@@ -26,7 +22,7 @@ use iroha_crypto::{Hash, KeyPair, PrivateKey};
 use ivm::{PointerType, host::IVMHost};
 use reqwest::StatusCode;
 
-use crate::{Run, RunContext};
+use crate::{Run, RunContext, TransactionWaitArgs, wait_for_transaction_status};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -48,15 +44,11 @@ pub enum Command {
     DebugView(DebugViewArgs),
     /// Execute a public contract entrypoint locally against compiled bytecode and optional fixtures
     DebugCall(DebugCallArgs),
-    /// Deploy bytecode, register manifest, and activate a namespace binding in one transaction
-    DeployActivate(DeployActivateArgs),
     /// Contract manifest helpers
     #[command(subcommand)]
     Manifest(ManifestCommand),
     /// Run an offline simulation of IVM bytecode to see the queued ISIs and header metadata
     Simulate(SimulateArgs),
-    /// List active contract instances in a dataspace (supports filters and pagination)
-    Instances(InstancesArgs),
 }
 
 impl Run for Command {
@@ -70,10 +62,8 @@ impl Run for Command {
             Command::View(args) => args.run(context),
             Command::DebugView(args) => args.run(context),
             Command::DebugCall(args) => args.run(context),
-            Command::DeployActivate(args) => args.run(context),
             Command::Manifest(cmd) => cmd.run(context),
             Command::Simulate(args) => args.run(context),
-            Command::Instances(args) => args.run(context),
         }
     }
 }
@@ -256,6 +246,8 @@ pub struct DeployArgs {
     /// Base64-encoded code (mutually exclusive with --code-file)
     #[arg(long, conflicts_with = "code_file")]
     pub code_b64: Option<String>,
+    #[command(flatten)]
+    pub wait: TransactionWaitArgs,
 }
 
 impl Run for DeployArgs {
@@ -281,7 +273,20 @@ impl Run for DeployArgs {
             &code_b64,
             self.dataspace.as_deref(),
         )?;
-        context.print_data(&v)?;
+        if self.wait.is_enabled() {
+            let tx_hash = extract_submitted_transaction_hash(&v)
+                .wrap_err("deploy response missing canonical `tx_hash_hex`")?;
+            let status = wait_for_transaction_status(&client, tx_hash, &self.wait)?;
+            context.print_data(&ContractSubmissionWaitResponse {
+                submit: v,
+                terminal_kind: status.terminal_kind,
+                attempts: status.attempts,
+                elapsed_ms: status.elapsed_ms,
+                r#final: status.r#final,
+            })?;
+        } else {
+            context.print_data(&v)?;
+        }
         Ok(())
     }
 }
@@ -356,11 +361,31 @@ pub struct ContractPayloadArgs {
     pub payload_file: Option<PathBuf>,
 }
 
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+struct ContractSubmissionWaitResponse {
+    submit: norito::json::Value,
+    terminal_kind: String,
+    attempts: u64,
+    elapsed_ms: u64,
+    r#final: iroha_torii_shared::PipelineTransactionStatusResponse,
+}
+
+fn extract_submitted_transaction_hash(
+    value: &norito::json::Value,
+) -> Result<HashOf<iroha::data_model::transaction::SignedTransaction>> {
+    let tx_hash_hex = value
+        .as_object()
+        .and_then(|map| map.get("tx_hash_hex"))
+        .and_then(norito::json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| eyre!("response missing `tx_hash_hex`"))?;
+    tx_hash_hex
+        .parse::<HashOf<iroha::data_model::transaction::SignedTransaction>>()
+        .map_err(|err| eyre!("invalid `tx_hash_hex`: {err}"))
+}
+
 #[derive(clap::Args, Debug)]
 pub struct CallArgs {
-    /// Optional shorthand selector. Supports `entrypoint:alias`, plain alias, or contract address.
-    #[arg(value_name = "SELECTOR")]
-    pub selector: Option<String>,
     /// Authority account identifier. Defaults to the configured client authority.
     #[arg(long)]
     pub authority: Option<String>,
@@ -368,8 +393,11 @@ pub struct CallArgs {
     #[arg(long, value_name = "HEX", conflicts_with = "scaffold_only")]
     pub private_key: Option<String>,
     /// Request an unsigned transaction scaffold instead of direct submission.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "simulate")]
     pub scaffold_only: bool,
+    /// Simulate the contract call locally on Torii without submitting a transaction.
+    #[arg(long, conflicts_with_all = ["scaffold_only", "private_key", "wait"])]
+    pub simulate: bool,
     /// Optional contract entrypoint selector (defaults to `main`).
     #[arg(long)]
     pub entrypoint: Option<String>,
@@ -386,55 +414,81 @@ pub struct CallArgs {
     pub target: ContractTargetArgs,
     #[command(flatten)]
     pub payload: ContractPayloadArgs,
+    #[command(flatten)]
+    pub wait: TransactionWaitArgs,
 }
 
 impl Run for CallArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
         let authority = resolve_contract_authority(context, self.authority.as_deref())?;
-        let private_key = resolve_contract_call_private_key(
-            context,
-            &authority,
-            self.private_key.as_deref(),
-            self.scaffold_only,
-        )?;
+        let private_key = if self.simulate {
+            None
+        } else {
+            resolve_contract_call_private_key(
+                context,
+                &authority,
+                self.private_key.as_deref(),
+                self.scaffold_only,
+            )?
+        };
         let fee_sponsor = self
             .fee_sponsor
             .as_deref()
             .map(|value| crate::resolve_account_id(context, value))
             .transpose()
             .wrap_err("failed to resolve --fee-sponsor")?;
-        let (target, entrypoint) = resolve_contract_target(
-            self.selector.as_deref(),
-            self.entrypoint.as_deref(),
-            self.target,
-        )?;
+        let target = resolve_contract_target(self.target)?;
         let payload = load_contract_payload_value(
             self.payload.payload_json.as_deref(),
             self.payload.payload_file.as_deref(),
         )?;
+        if self.simulate {
+            let value = client.post_contract_call_simulate_json(
+                &authority,
+                target.contract_address.as_ref(),
+                target.contract_alias.as_ref(),
+                self.entrypoint.as_deref(),
+                payload.as_ref(),
+                self.gas_asset_id.as_deref(),
+                fee_sponsor.as_ref(),
+                self.gas_limit,
+            )?;
+            context.print_data(&value)?;
+            return Ok(());
+        }
         let value = client.post_contract_call_json(
             &authority,
             private_key.as_ref(),
             target.contract_address.as_ref(),
             target.contract_alias.as_ref(),
-            entrypoint.as_deref(),
+            self.entrypoint.as_deref(),
             payload.as_ref(),
             None,
             self.gas_asset_id.as_deref(),
             fee_sponsor.as_ref(),
             self.gas_limit,
         )?;
-        context.print_data(&value)?;
+        if self.wait.is_enabled() {
+            let tx_hash = extract_submitted_transaction_hash(&value)
+                .wrap_err("contract call response missing canonical `tx_hash_hex`")?;
+            let status = wait_for_transaction_status(&client, tx_hash, &self.wait)?;
+            context.print_data(&ContractSubmissionWaitResponse {
+                submit: value,
+                terminal_kind: status.terminal_kind,
+                attempts: status.attempts,
+                elapsed_ms: status.elapsed_ms,
+                r#final: status.r#final,
+            })?;
+        } else {
+            context.print_data(&value)?;
+        }
         Ok(())
     }
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ViewArgs {
-    /// Optional shorthand selector. Supports `entrypoint:alias`, plain alias, or contract address.
-    #[arg(value_name = "SELECTOR")]
-    pub selector: Option<String>,
     /// Authority account identifier used as the read context. Defaults to the configured client authority.
     #[arg(long)]
     pub authority: Option<String>,
@@ -454,11 +508,7 @@ impl Run for ViewArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
         let authority = resolve_contract_authority(context, self.authority.as_deref())?;
-        let (target, entrypoint) = resolve_contract_target(
-            self.selector.as_deref(),
-            self.entrypoint.as_deref(),
-            self.target,
-        )?;
+        let target = resolve_contract_target(self.target)?;
         let payload = load_contract_payload_value(
             self.payload.payload_json.as_deref(),
             self.payload.payload_file.as_deref(),
@@ -467,7 +517,7 @@ impl Run for ViewArgs {
             &authority,
             target.contract_address.as_ref(),
             target.contract_alias.as_ref(),
-            entrypoint.as_deref(),
+            self.entrypoint.as_deref(),
             payload.as_ref(),
             self.gas_limit,
         )?;
@@ -567,114 +617,6 @@ impl Run for DebugCallArgs {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct DeployActivateArgs {
-    /// Authority account identifier (canonical I105 account literal)
-    #[arg(long)]
-    pub authority: String,
-    /// Governance namespace to bind (e.g., apps)
-    #[arg(long)]
-    pub namespace: String,
-    /// Contract identifier within the namespace
-    #[arg(long, value_name = "ID")]
-    pub contract_id: String,
-    /// Path to compiled `.to` file (mutually exclusive with --code-b64)
-    #[arg(long, conflicts_with = "code_b64")]
-    pub code_file: Option<PathBuf>,
-    /// Base64-encoded code (mutually exclusive with --code-file)
-    #[arg(long, conflicts_with = "code_file")]
-    pub code_b64: Option<String>,
-    /// Optional path to write the manifest JSON used in the transaction
-    #[arg(long, value_name = "PATH")]
-    pub manifest_out: Option<PathBuf>,
-    /// Preview transaction contents without submitting
-    #[arg(long)]
-    pub dry_run: bool,
-}
-
-impl Run for DeployActivateArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let authority = crate::resolve_account_id(context, &self.authority)
-            .wrap_err("failed to resolve --authority")?;
-        let cfg_authority = context.config().account.clone();
-        if authority != cfg_authority && authority.to_string() != cfg_authority.to_string() {
-            return Err(eyre!(
-                "--authority must match client.toml authority (expected {cfg_authority}, got {authority})"
-            ));
-        }
-        let keypair = &context.config().key_pair;
-        let code = load_code_bytes(self.code_file.clone(), self.code_b64.clone())?;
-        let verified = verify_contract_from_bytes(&code)?;
-        let summary = program_summary_from_bytes(&code)?;
-        let manifest = verified.manifest.signed(&keypair);
-
-        if let Some(path) = self.manifest_out.as_ref() {
-            let json = norito::json::to_json_pretty(&manifest)?;
-            std::fs::write(path, json.as_bytes())
-                .wrap_err_with(|| format!("write manifest to {}", path.display()))?;
-        }
-
-        let instructions = deploy_activate_instructions(
-            &authority,
-            verified.code_hash,
-            code.clone(),
-            manifest.clone(),
-            self.namespace.clone(),
-            self.contract_id.clone(),
-        );
-
-        let mut metadata = context
-            .transaction_metadata()
-            .cloned()
-            .unwrap_or_else(Metadata::default);
-        metadata.insert(
-            Name::from_str("gov_namespace")?,
-            iroha_primitives::json::Json::from(self.namespace.as_str()),
-        );
-        metadata.insert(
-            Name::from_str("gov_contract_id")?,
-            iroha_primitives::json::Json::from(self.contract_id.as_str()),
-        );
-        metadata.insert(
-            Name::from_str("contract_namespace")?,
-            iroha_primitives::json::Json::from(self.namespace.as_str()),
-        );
-        metadata.insert(
-            Name::from_str("contract_id")?,
-            iroha_primitives::json::Json::from(self.contract_id.as_str()),
-        );
-
-        if self.dry_run {
-            let mut preview = norito::json::Map::new();
-            preview.insert(
-                "code_hash_hex".to_string(),
-                norito::json::to_value(&hex::encode(summary.code_hash.as_ref()))?,
-            );
-            preview.insert(
-                "abi_hash_hex".to_string(),
-                norito::json::to_value(&hex::encode(summary.abi_hash.as_ref()))?,
-            );
-            preview.insert(
-                "namespace".to_string(),
-                norito::json::to_value(&self.namespace)?,
-            );
-            preview.insert(
-                "contract_id".to_string(),
-                norito::json::to_value(&self.contract_id)?,
-            );
-            preview.insert(
-                "instruction_count".to_string(),
-                norito::json::to_value(&instructions.len())?,
-            );
-            let preview = norito::json::Value::Object(preview);
-            context.print_data(&preview)?;
-            return Ok(());
-        }
-
-        context.submit_with_metadata(instructions, metadata, true)
-    }
-}
-
-#[derive(clap::Args, Debug)]
 pub struct BuildManifestArgs {
     /// Path to compiled `.to` file (mutually exclusive with --code-b64)
     #[arg(long, conflicts_with = "code_b64")]
@@ -763,63 +705,10 @@ struct ResolvedContractTarget {
 }
 
 fn resolve_contract_target(
-    selector: Option<&str>,
-    entrypoint: Option<&str>,
     args: ContractTargetArgs,
-) -> Result<(ResolvedContractTarget, Option<String>)> {
-    if let Some(selector) = selector.map(str::trim).filter(|value| !value.is_empty()) {
-        if args.contract_address.is_some() || args.contract_alias.is_some() {
-            return Err(eyre!(
-                "selector cannot be combined with --contract-address or --contract-alias"
-            ));
-        }
-
-        if let Some((selector_entrypoint, alias_literal)) = selector
-            .split_once(':')
-            .filter(|(_, alias)| alias.contains("::"))
-        {
-            if entrypoint.is_some() {
-                return Err(eyre!(
-                    "selector shorthand with `entrypoint:alias` cannot be combined with --entrypoint"
-                ));
-            }
-            return Ok((
-                ResolvedContractTarget {
-                    contract_address: None,
-                    contract_alias: Some(
-                        alias_literal
-                            .parse()
-                            .wrap_err("invalid contract alias shorthand")?,
-                    ),
-                },
-                Some(selector_entrypoint.to_owned()),
-            ));
-        }
-
-        if let Ok(contract_address) = selector.parse() {
-            return Ok((
-                ResolvedContractTarget {
-                    contract_address: Some(contract_address),
-                    contract_alias: None,
-                },
-                entrypoint.map(ToOwned::to_owned),
-            ));
-        }
-
-        return Ok((
-            ResolvedContractTarget {
-                contract_address: None,
-                contract_alias: Some(selector.parse().wrap_err("invalid contract alias")?),
-            },
-            entrypoint.map(ToOwned::to_owned),
-        ));
-    }
-
-    match (
-        args.contract_address.as_deref(),
-        args.contract_alias.as_deref(),
-    ) {
-        (Some(address), None) => Ok((
+) -> Result<ResolvedContractTarget> {
+    match (args.contract_address.as_deref(), args.contract_alias.as_deref()) {
+        (Some(address), None) => Ok(
             ResolvedContractTarget {
                 contract_address: Some(
                     address
@@ -828,21 +717,69 @@ fn resolve_contract_target(
                 ),
                 contract_alias: None,
             },
-            entrypoint.map(ToOwned::to_owned),
-        )),
-        (None, Some(alias)) => Ok((
+        ),
+        (None, Some(alias)) => Ok(
             ResolvedContractTarget {
                 contract_address: None,
                 contract_alias: Some(alias.parse().wrap_err("invalid --contract-alias")?),
             },
-            entrypoint.map(ToOwned::to_owned),
-        )),
+        ),
         (None, None) => Err(eyre!(
-            "provide exactly one contract target via SELECTOR, --contract-address, or --contract-alias"
+            "provide exactly one contract target via --contract-address or --contract-alias"
         )),
         _ => Err(eyre!(
-            "provide exactly one contract target via SELECTOR, --contract-address, or --contract-alias"
+            "provide exactly one contract target via --contract-address or --contract-alias"
         )),
+    }
+}
+
+fn resolve_optional_contract_address<C: RunContext>(
+    context: &C,
+    args: &ContractTargetArgs,
+) -> Result<Option<iroha::data_model::smart_contract::ContractAddress>> {
+    match (args.contract_address.as_deref(), args.contract_alias.as_deref()) {
+        (None, None) => Ok(None),
+        (Some(_), Some(_)) => Err(eyre!(
+            "provide exactly one contract target via --contract-address or --contract-alias"
+        )),
+        (Some(contract_address), None) => Ok(Some(
+            contract_address
+                .parse()
+                .wrap_err("invalid --contract-address canonical literal")?,
+        )),
+        (None, Some(contract_alias_raw)) => {
+            let contract_alias: iroha::data_model::smart_contract::ContractAlias = contract_alias_raw
+                .parse()
+                .wrap_err("invalid --contract-alias")?;
+            let client: Client = context.client_from_config();
+            let response = client
+                .post_contract_alias_resolve(&contract_alias)
+                .wrap_err("failed to call `/v1/contracts/aliases/resolve`")?;
+            let status = response.status();
+            let body = response.into_body();
+
+            match status {
+                StatusCode::OK => {
+                    let value: norito::json::Value =
+                        norito::json::from_slice(&body).wrap_err("decode contract alias response")?;
+                    let resolved = value
+                        .get("contract_address")
+                        .and_then(norito::json::Value::as_str)
+                        .ok_or_else(|| eyre!("contract alias response missing `contract_address`"))?;
+                    Ok(Some(
+                        resolved
+                            .parse()
+                            .wrap_err("resolved contract address is invalid")?,
+                    ))
+                }
+                StatusCode::NOT_FOUND => Err(eyre!("contract alias `{contract_alias}` not found")),
+                status => Err(eyre!(
+                    "contract alias resolve request failed with HTTP {}: {}",
+                    status,
+                    std::str::from_utf8(&body).unwrap_or("")
+                )),
+            }
+        }
     }
 }
 
@@ -901,31 +838,6 @@ fn resolve_contract_call_private_key<C: RunContext>(
     Err(eyre!(
         "--private-key is required when --authority does not match client.toml authority"
     ))
-}
-
-fn self_register_authority_instruction(authority: &AccountId) -> InstructionBox {
-    Register::account(Account::new(authority.clone())).into()
-}
-
-fn deploy_activate_instructions(
-    authority: &AccountId,
-    code_hash: Hash,
-    code: Vec<u8>,
-    manifest: iroha_data_model::smart_contract::manifest::ContractManifest,
-    namespace: String,
-    contract_id: String,
-) -> Vec<InstructionBox> {
-    vec![
-        self_register_authority_instruction(authority),
-        RegisterSmartContractBytes { code_hash, code }.into(),
-        RegisterSmartContractCode { manifest }.into(),
-        ActivateContractInstance {
-            namespace,
-            contract_id,
-            code_hash,
-        }
-        .into(),
-    ]
 }
 
 fn verify_contract_from_bytes(bytes: &[u8]) -> Result<ivm::VerifiedContractArtifact> {
@@ -2107,8 +2019,10 @@ mod tests {
             code_file: None,
             code_b64: Some(code_b64),
             gas_limit: 42,
-            namespace: None,
-            contract_id: None,
+            target: ContractTargetArgs {
+                contract_address: None,
+                contract_alias: None,
+            },
         };
         args.run(&mut ctx).expect("simulate");
         let output = ctx.take_output().expect("output");
@@ -2491,38 +2405,6 @@ mod tests {
     }
 
     #[test]
-    fn deploy_activate_instructions_prepend_domainless_self_register() {
-        let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let code = minimal_program();
-        let code_hash = Hash::new(code.as_slice());
-        let manifest = iroha_data_model::smart_contract::manifest::ContractManifest {
-            code_hash: Some(code_hash),
-            abi_hash: None,
-            compiler_fingerprint: None,
-            features_bitmap: None,
-            access_set_hints: None,
-            entrypoints: None,
-            kotoba: None,
-            provenance: None,
-        }
-        .signed(&KeyPair::random());
-        let instructions = deploy_activate_instructions(
-            &authority,
-            code_hash,
-            code,
-            manifest,
-            "apps".to_owned(),
-            "demo".to_owned(),
-        );
-
-        assert_eq!(
-            instructions[0],
-            self_register_authority_instruction(&authority),
-            "first instruction must self-register the domainless authority"
-        );
-    }
-
-    #[test]
     fn load_contract_payload_value_accepts_inline_json() {
         let payload = load_contract_payload_value(Some(r#"{"amount":7}"#), None).expect("payload");
         let object = payload
@@ -2563,30 +2445,21 @@ mod tests {
             iroha::data_model::nexus::DataSpaceId::new(0),
         )
         .expect("contract address");
-        let (resolved, entrypoint) = resolve_contract_target(
-            None,
-            None,
-            ContractTargetArgs {
-                contract_address: Some(contract_address.to_string()),
-                contract_alias: None,
-            },
-        )
+        let resolved = resolve_contract_target(ContractTargetArgs {
+            contract_address: Some(contract_address.to_string()),
+            contract_alias: None,
+        })
         .expect("resolved target");
         assert_eq!(resolved.contract_address, Some(contract_address));
         assert!(resolved.contract_alias.is_none());
-        assert!(entrypoint.is_none());
     }
 
     #[test]
     fn resolve_contract_target_accepts_contract_alias() {
-        let (resolved, entrypoint) = resolve_contract_target(
-            None,
-            None,
-            ContractTargetArgs {
-                contract_address: None,
-                contract_alias: Some("router::dex.universal".to_owned()),
-            },
-        )
+        let resolved = resolve_contract_target(ContractTargetArgs {
+            contract_address: None,
+            contract_alias: Some("router::dex.universal".to_owned()),
+        })
         .expect("resolved target");
         assert_eq!(
             resolved
@@ -2597,30 +2470,19 @@ mod tests {
             Some("router::dex.universal")
         );
         assert!(resolved.contract_address.is_none());
-        assert!(entrypoint.is_none());
     }
 
     #[test]
-    fn resolve_contract_target_accepts_selector_shorthand() {
-        let (resolved, entrypoint) = resolve_contract_target(
-            Some("swap:router::dex.universal"),
-            None,
-            ContractTargetArgs {
-                contract_address: None,
-                contract_alias: None,
-            },
-        )
-        .expect("resolved target");
-        assert_eq!(
-            resolved
-                .contract_alias
-                .as_ref()
-                .map(ToString::to_string)
-                .as_deref(),
-            Some("router::dex.universal")
+    fn resolve_contract_target_rejects_missing_target() {
+        let err = resolve_contract_target(ContractTargetArgs {
+            contract_address: None,
+            contract_alias: None,
+        })
+        .expect_err("missing target should fail");
+        assert!(
+            err.to_string()
+                .contains("provide exactly one contract target via --contract-address or --contract-alias")
         );
-        assert!(resolved.contract_address.is_none());
-        assert_eq!(entrypoint.as_deref(), Some("swap"));
     }
 
     #[test]
@@ -2690,6 +2552,8 @@ mod tests {
             let cfg = iroha::config::Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
                 account,
+                account_chain_discriminant:
+                    iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),
@@ -2770,12 +2634,9 @@ pub struct SimulateArgs {
     /// Required `gas_limit` metadata to include in the simulated transaction
     #[arg(long)]
     pub gas_limit: u64,
-    /// Optional contract namespace metadata for call-time binding checks
-    #[arg(long)]
-    pub namespace: Option<String>,
-    /// Optional contract identifier metadata for call-time binding checks
-    #[arg(long)]
-    pub contract_id: Option<String>,
+    /// Optional canonical contract target metadata for call-time binding checks
+    #[command(flatten)]
+    pub target: ContractTargetArgs,
 }
 
 impl Run for SimulateArgs {
@@ -2785,22 +2646,17 @@ impl Run for SimulateArgs {
         let private_key: PrivateKey = self.private_key.parse().wrap_err("invalid --private-key")?;
         let code = load_code_bytes(self.code_file.clone(), self.code_b64.clone())?;
         let summary = program_summary_from_bytes(&code)?;
+        let contract_address = resolve_optional_contract_address(context, &self.target)?;
 
         let mut metadata = Metadata::default();
         metadata.insert(
             Name::from_str("gas_limit")?,
             iroha_primitives::json::Json::from(self.gas_limit),
         );
-        if let Some(ns) = self.namespace.as_ref() {
+        if let Some(contract_address) = contract_address.as_ref() {
             metadata.insert(
-                Name::from_str("contract_namespace")?,
-                iroha_primitives::json::Json::from(ns.as_str()),
-            );
-        }
-        if let Some(cid) = self.contract_id.as_ref() {
-            metadata.insert(
-                Name::from_str("contract_id")?,
-                iroha_primitives::json::Json::from(cid.as_str()),
+                Name::from_str("contract_address")?,
+                iroha_primitives::json::Json::from(contract_address.as_ref()),
             );
         }
 
@@ -2890,131 +2746,6 @@ impl Run for ManifestArgs {
             context.println(format_args!("Wrote manifest to {}", p.display()))?;
         } else {
             context.print_data(&v)?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct InstancesArgs {
-    /// Dataspace to list (e.g., universal)
-    #[arg(long, value_name = "DATASPACE")]
-    pub dataspace: String,
-    /// Filter: `contract_id` substring (case-sensitive)
-    #[arg(long)]
-    pub contains: Option<String>,
-    /// Filter: code hash hex prefix (lowercase)
-    #[arg(long)]
-    pub hash_prefix: Option<String>,
-    /// Pagination offset
-    #[arg(long)]
-    pub offset: Option<u32>,
-    /// Pagination limit
-    #[arg(long)]
-    pub limit: Option<u32>,
-    /// Order: `cid_asc` (default), `cid_desc`, `hash_asc`, `hash_desc`
-    #[arg(long)]
-    pub order: Option<String>,
-    /// Render as a table instead of raw JSON
-    #[arg(long)]
-    pub table: bool,
-    /// When rendering a table, truncate the code hash (first 12 hex chars with ellipsis)
-    #[arg(long)]
-    pub short_hash: bool,
-}
-
-impl Run for InstancesArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
-        let value = client.get_contracts_instances_by_ns_filtered_json(
-            &self.dataspace,
-            self.contains.as_deref(),
-            self.hash_prefix.as_deref(),
-            self.offset,
-            self.limit,
-            self.order.as_deref(),
-        )?;
-        if self.table {
-            // Pretty table renderer
-            use norito::json::Value;
-            let dataspace = value
-                .get("dataspace")
-                .and_then(Value::as_str)
-                .or_else(|| value.get("namespace").and_then(Value::as_str))
-                .unwrap_or("");
-            let total = value.get("total").and_then(Value::as_u64).unwrap_or(0);
-            let offset = value.get("offset").and_then(Value::as_u64).unwrap_or(0);
-            let limit = value.get("limit").and_then(Value::as_u64).unwrap_or(0);
-            let rows = value
-                .get("instances")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
-            // Compute widths
-            let mut w_dataspace = "Dataspace".len();
-            let mut w_id = "Contract ID".len();
-            let mut w_hash = "Code Hash".len();
-            w_dataspace = w_dataspace.max(dataspace.len());
-            let mut items: Vec<(String, String)> = Vec::new();
-            for row in rows {
-                if let Value::Object(m) = row {
-                    let cid = m
-                        .get("contract_id")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    let full_hash = m
-                        .get("code_hash_hex")
-                        .and_then(Value::as_str)
-                        .unwrap_or("")
-                        .to_string();
-                    let hash = if self.short_hash && full_hash.len() > 12 {
-                        format!("{}…", &full_hash[..12])
-                    } else {
-                        full_hash
-                    };
-                    w_id = w_id.max(cid.len());
-                    w_hash = w_hash.max(hash.len());
-                    items.push((cid, hash));
-                }
-            }
-            let sep = format!(
-                "+-{:-<ns$}-+-{:-<id$}-+-{:-<hash$}-+",
-                "",
-                "",
-                "",
-                ns = w_dataspace,
-                id = w_id,
-                hash = w_hash
-            );
-            // Header
-            context.println(format!(
-                "Dataspace: {dataspace}  (total={total}, offset={offset}, limit={limit})"
-            ))?;
-            context.println(&sep)?;
-            context.println(format!(
-                "| {dataspace:<ns_width$} | {contract:<id_width$} | {hash_label:<hash_width$} |",
-                dataspace = "Dataspace",
-                contract = "Contract ID",
-                hash_label = "Code Hash",
-                ns_width = w_dataspace,
-                id_width = w_id,
-                hash_width = w_hash
-            ))?;
-            context.println(&sep)?;
-            // Rows
-            let ns_width = w_dataspace;
-            let id_width = w_id;
-            let hash_width = w_hash;
-            for (cid, hash) in items {
-                context.println(format!(
-                    "| {dataspace:<ns_width$} | {cid:<id_width$} | {hash:<hash_width$} |",
-                    dataspace = dataspace
-                ))?;
-            }
-            context.println(&sep)?;
-        } else {
-            context.print_data(&value)?;
         }
         Ok(())
     }

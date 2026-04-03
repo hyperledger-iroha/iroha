@@ -1549,6 +1549,10 @@ impl EventFilter for DataEventFilter {
                 DataEventFilter::AssetDefinition(filter),
                 DataEvent::Domain(DomainEvent::AssetDefinition(asset_definition_event)),
             ) => filter.matches(asset_definition_event),
+            (
+                DataEventFilter::AssetDefinition(filter),
+                DataEvent::AssetDefinitionStandalone(asset_definition_event),
+            ) => filter.matches(&asset_definition_event.event),
             (DataEventFilter::Nft(filter), DataEvent::Domain(DomainEvent::Nft(nft_event))) => {
                 filter.matches(nft_event)
             }
@@ -2037,6 +2041,24 @@ mod tests {
         let domain_filter =
             DataEventFilter::Domain(DomainEventFilter::new().for_domain(domain_id.clone()));
         assert!(domain_filter.matches(&nft_event));
+    }
+
+    #[test]
+    fn asset_definition_filter_matches_standalone_opaque_event() {
+        let domain_id: DomainId = DomainId::try_new("reward", "universal").unwrap();
+        let scoped_definition =
+            AssetDefinitionId::new(domain_id, "fee".parse().expect("asset name"));
+        let opaque_definition: AssetDefinitionId = scoped_definition
+            .to_string()
+            .parse()
+            .expect("opaque canonical id");
+        let event = DataEvent::from(AssetDefinitionEvent::Deleted(opaque_definition.clone()));
+
+        let filter = DataEventFilter::AssetDefinition(
+            AssetDefinitionEventFilter::new().for_asset_definition(opaque_definition),
+        );
+        assert!(filter.matches(&event));
+        assert!(matches!(event, DataEvent::AssetDefinitionStandalone(_)));
     }
 
     #[test]

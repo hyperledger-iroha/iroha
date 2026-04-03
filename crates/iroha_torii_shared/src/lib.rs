@@ -99,8 +99,8 @@ pub mod uri {
     pub const GOV_TALLY_GET: &str = "/v1/gov/tally/{id}";
     /// Governance: convenience endpoint to apply protected namespaces parameter
     pub const GOV_PROTECTED_SET: &str = "/v1/gov/protected-namespaces";
-    /// Governance: list active contract instances for a namespace
-    pub const GOV_INSTANCES_BY_NS: &str = "/v1/gov/instances/{ns}";
+    /// Governance: read the active binding for a canonical contract address
+    pub const GOV_CONTRACT_GET: &str = "/v1/gov/contracts/{contract_address}";
     /// Node: capabilities advert (runtime ABI version, etc.)
     pub const NODE_CAPABILITIES: &str = "/v1/node/capabilities";
     /// Runtime: get the active ABI version

@@ -12331,8 +12331,8 @@ mod tests {
 
         telemetry.record_manifest_activation(None, "manifest_inserted");
         let activation = GovernanceManifestActivation {
-            namespace: "apps".to_string(),
-            contract_id: "demo.contract".to_string(),
+            contract_address: "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s"
+                .to_string(),
             code_hash_hex: "deadbeef".to_string(),
             abi_hash_hex: Some("cafebabe".to_string()),
             height: 9,
@@ -12358,7 +12358,7 @@ mod tests {
             .read()
             .expect("governance manifest cache lock poisoned");
         assert_eq!(recent.len(), 1);
-        assert_eq!(recent[0].namespace, activation.namespace);
+        assert_eq!(recent[0].contract_address, activation.contract_address);
     }
 
     impl SystemUnderTest {

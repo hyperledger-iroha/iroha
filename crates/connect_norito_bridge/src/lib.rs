@@ -6025,10 +6025,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
     creation_time_ms: u64,
     ttl_ms: u64,
     ttl_present: c_uchar,
-    namespace_ptr: *const c_char,
-    namespace_len: c_ulong,
-    contract_id_ptr: *const c_char,
-    contract_id_len: c_ulong,
+    contract_address_ptr: *const c_char,
+    contract_address_len: c_ulong,
     code_hash_ptr: *const c_char,
     code_hash_len: c_ulong,
     abi_hash_ptr: *const c_char,
@@ -6057,14 +6055,17 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
 
         let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let namespace = unsafe { read_string_bridge(namespace_ptr, namespace_len) }?;
-        let contract_id = unsafe { read_string_bridge(contract_id_ptr, contract_id_len) }?;
+        let contract_address_raw =
+            unsafe { read_string_bridge(contract_address_ptr, contract_address_len) }?;
         let code_hash_raw = unsafe { read_string_bridge(code_hash_ptr, code_hash_len) }?;
         let abi_hash_raw = unsafe { read_string_bridge(abi_hash_ptr, abi_hash_len) }?;
         let abi_version = unsafe { read_string_bridge(abi_version_ptr, abi_version_len) }?;
 
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
+        let contract_address = contract_address_raw
+            .parse()
+            .map_err(|_| BridgeError::Governance)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let code_hash_arr = parse_hex_32(&code_hash_raw)?;
         let abi_hash_arr = parse_hex_32(&abi_hash_raw)?;
@@ -6101,8 +6102,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         let manifest_provenance = manifest.provenance.clone().ok_or(BridgeError::Governance)?;
 
         let proposal = ProposeDeployContract {
-            namespace,
-            contract_id,
+            contract_address,
             code_hash_hex,
             abi_hash_hex,
             abi_version,
@@ -6137,10 +6137,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
     creation_time_ms: u64,
     ttl_ms: u64,
     ttl_present: c_uchar,
-    namespace_ptr: *const c_char,
-    namespace_len: c_ulong,
-    contract_id_ptr: *const c_char,
-    contract_id_len: c_ulong,
+    contract_address_ptr: *const c_char,
+    contract_address_len: c_ulong,
     code_hash_ptr: *const c_char,
     code_hash_len: c_ulong,
     abi_hash_ptr: *const c_char,
@@ -6171,14 +6169,17 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         let algorithm = parse_algorithm_code(algorithm_code)?;
         let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let namespace = unsafe { read_string_bridge(namespace_ptr, namespace_len) }?;
-        let contract_id = unsafe { read_string_bridge(contract_id_ptr, contract_id_len) }?;
+        let contract_address_raw =
+            unsafe { read_string_bridge(contract_address_ptr, contract_address_len) }?;
         let code_hash_raw = unsafe { read_string_bridge(code_hash_ptr, code_hash_len) }?;
         let abi_hash_raw = unsafe { read_string_bridge(abi_hash_ptr, abi_hash_len) }?;
         let abi_version = unsafe { read_string_bridge(abi_version_ptr, abi_version_len) }?;
 
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
+        let contract_address = contract_address_raw
+            .parse()
+            .map_err(|_| BridgeError::Governance)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let code_hash_arr = parse_hex_32(&code_hash_raw)?;
         let abi_hash_arr = parse_hex_32(&abi_hash_raw)?;
@@ -6215,8 +6216,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         let manifest_provenance = manifest.provenance.clone().ok_or(BridgeError::Governance)?;
 
         let proposal = ProposeDeployContract {
-            namespace,
-            contract_id,
+            contract_address,
             code_hash_hex,
             abi_hash_hex,
             abi_version,

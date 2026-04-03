@@ -257,27 +257,6 @@ fn contract_test_app(
             }),
         )
         .route(
-            "/v1/contracts/instance/activate",
-            post({
-                let chain_id = Arc::new(chain_id.clone());
-                let queue = queue.clone();
-                let state = state.clone();
-                let telemetry = telemetry.clone();
-                move |iroha_torii::NoritoJson(req): iroha_torii::NoritoJson<
-                    iroha_torii::ActivateInstanceDto,
-                >| async move {
-                    iroha_torii::handle_post_contract_instance_activate(
-                        chain_id.clone(),
-                        queue.clone(),
-                        state.clone(),
-                        telemetry.clone(),
-                        iroha_torii::NoritoJson(req),
-                    )
-                    .await
-                }
-            }),
-        )
-        .route(
             "/v1/contracts/call",
             post({
                 let chain_id = Arc::new(chain_id.clone());
@@ -408,26 +387,6 @@ async fn contracts_call_enqueues_transaction() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
-
-    let activate_body = iroha_torii::test_utils::activate_instance_request_json(
-        &creds.account,
-        &creds.private_key,
-        "apps",
-        "calc.v1",
-        &code_hash_hex,
-    );
-    let activate_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/instance/activate")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(activate_body))
-        .unwrap();
-    let activate_resp = app.clone().oneshot(activate_req).await.unwrap();
-    assert_eq!(activate_resp.status(), http::StatusCode::OK);
-
-    let applied_activate =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
-    assert_eq!(applied_activate, 1);
 
     let missing_limit_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
@@ -688,7 +647,7 @@ async fn contracts_view_surfaces_source_path_in_vm_diagnostic() {
 
     let source_path = "contracts/view_trap_test.ko";
     let program = contract_view_trap_program_with_source_path(source_path);
-    let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let _code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
@@ -707,26 +666,6 @@ async fn contracts_view_surfaces_source_path_in_vm_diagnostic() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
-
-    let activate_body = iroha_torii::test_utils::activate_instance_request_json(
-        &creds.account,
-        &creds.private_key,
-        "apps",
-        "viewtrap.v1",
-        &code_hash_hex,
-    );
-    let activate_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/instance/activate")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(activate_body))
-        .unwrap();
-    let activate_resp = app.clone().oneshot(activate_req).await.unwrap();
-    assert_eq!(activate_resp.status(), http::StatusCode::OK);
-
-    let applied_activate =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
-    assert_eq!(applied_activate, 1);
 
     let body = iroha_torii::test_utils::contract_view_request_json(
         &creds.account,
@@ -795,7 +734,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
     );
 
     let program = contract_call_dispatch_program();
-    let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let _code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
@@ -814,26 +753,6 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
-
-    let activate_body = iroha_torii::test_utils::activate_instance_request_json(
-        &creds.account,
-        &creds.private_key,
-        "apps",
-        "dispatch.v1",
-        &code_hash_hex,
-    );
-    let activate_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/instance/activate")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(activate_body))
-        .unwrap();
-    let activate_resp = app.clone().oneshot(activate_req).await.unwrap();
-    assert_eq!(activate_resp.status(), http::StatusCode::OK);
-
-    let applied_activate =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
-    assert_eq!(applied_activate, 1);
 
     let payload = norito::json!({ "amount": 7 });
     let call_body = iroha_torii::test_utils::contract_call_request_json(
@@ -949,7 +868,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
     );
 
     let program = contract_call_declared_state_program();
-    let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let _code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
@@ -968,26 +887,6 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
-
-    let activate_body = iroha_torii::test_utils::activate_instance_request_json(
-        &creds.account,
-        &creds.private_key,
-        "apps",
-        "declared.v1",
-        &code_hash_hex,
-    );
-    let activate_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/instance/activate")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(activate_body))
-        .unwrap();
-    let activate_resp = app.clone().oneshot(activate_req).await.unwrap();
-    assert_eq!(activate_resp.status(), http::StatusCode::OK);
-
-    let applied_activate =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
-    assert_eq!(applied_activate, 1);
 
     let credit_payload = norito::json!({ "amount": 7 });
     let credit_body = iroha_torii::test_utils::contract_call_request_json(
@@ -1129,7 +1028,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
     );
 
     let program = contract_call_declared_state_with_isi_program();
-    let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let _code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
@@ -1148,26 +1047,6 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
-
-    let activate_body = iroha_torii::test_utils::activate_instance_request_json(
-        &creds.account,
-        &creds.private_key,
-        "apps",
-        "declared_isi.v1",
-        &code_hash_hex,
-    );
-    let activate_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/instance/activate")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(activate_body))
-        .unwrap();
-    let activate_resp = app.clone().oneshot(activate_req).await.unwrap();
-    assert_eq!(activate_resp.status(), http::StatusCode::OK);
-
-    let applied_activate =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
-    assert_eq!(applied_activate, 1);
 
     let write_payload = norito::json!({ "amount": 7 });
     let write_body = iroha_torii::test_utils::contract_call_request_json(
@@ -1280,7 +1159,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     );
 
     let program = contract_call_declared_state_with_mint_program();
-    let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let _code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
@@ -1299,26 +1178,6 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
-
-    let activate_body = iroha_torii::test_utils::activate_instance_request_json(
-        &creds.account,
-        &creds.private_key,
-        "apps",
-        "declared_mint.v1",
-        &code_hash_hex,
-    );
-    let activate_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/instance/activate")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(activate_body))
-        .unwrap();
-    let activate_resp = app.clone().oneshot(activate_req).await.unwrap();
-    assert_eq!(activate_resp.status(), http::StatusCode::OK);
-
-    let applied_activate =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
-    assert_eq!(applied_activate, 1);
 
     let write_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("amount", 7),
@@ -1435,7 +1294,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     );
 
     let program = contract_call_n3x_like_program();
-    let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let _code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
@@ -1454,26 +1313,6 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
-
-    let activate_body = iroha_torii::test_utils::activate_instance_request_json(
-        &creds.account,
-        &creds.private_key,
-        "apps",
-        "n3x_like.v1",
-        &code_hash_hex,
-    );
-    let activate_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/instance/activate")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(activate_body))
-        .unwrap();
-    let activate_resp = app.clone().oneshot(activate_req).await.unwrap();
-    assert_eq!(activate_resp.status(), http::StatusCode::OK);
-
-    let applied_activate =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
-    assert_eq!(applied_activate, 1);
 
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
@@ -1605,7 +1444,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     );
 
     let program = contract_call_n3x_like_program();
-    let code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
+    let _code_hash_hex = iroha_torii::test_utils::body_code_hash_hex(&program);
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&program);
     let deploy_body =
         iroha_torii::test_utils::deploy_request_json(&creds.account, &creds.private_key, &code_b64);
@@ -1624,26 +1463,6 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     let applied_deploy =
         iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
     assert_eq!(applied_deploy, 1);
-
-    let activate_body = iroha_torii::test_utils::activate_instance_request_json(
-        &creds.account,
-        &creds.private_key,
-        "apps",
-        "n3x_burn.v1",
-        &code_hash_hex,
-    );
-    let activate_req = http::Request::builder()
-        .method("POST")
-        .uri("/v1/contracts/instance/activate")
-        .header(http::header::CONTENT_TYPE, "application/json")
-        .body(axum::body::Body::from(activate_body))
-        .unwrap();
-    let activate_resp = app.clone().oneshot(activate_req).await.unwrap();
-    assert_eq!(activate_resp.status(), http::StatusCode::OK);
-
-    let applied_activate =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
-    assert_eq!(applied_activate, 1);
 
     let init_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,

@@ -1979,6 +1979,8 @@ mod tests {
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
                 account,
+                account_chain_discriminant:
+                    iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://localhost/").expect("url"),

@@ -12,8 +12,8 @@ use eyre::Result;
 
 pub use audit::AuditDeployArgs;
 pub use deploy::{
-    ActivateInstanceArgs, DeployMetaArgs, EnactArgs, FinalizeArgs, InstancesArgs,
-    ProposeDeployArgs, ProtectedApplyArgs, ProtectedGetArgs, ProtectedSetArgs,
+    DeployMetaArgs, EnactArgs, FinalizeArgs, ProposeDeployArgs, ProtectedApplyArgs,
+    ProtectedGetArgs, ProtectedSetArgs,
 };
 pub use vote::{
     LocksGetArgs, ProposalGetArgs, ReferendumGetArgs, TallyGetArgs, UnlockStatsArgs, VoteArgs,
@@ -55,9 +55,6 @@ pub enum Command {
     /// Protected namespace helpers
     #[command(subcommand)]
     Protected(ProtectedCommand),
-    /// Contract instance helpers
-    #[command(subcommand)]
-    Instance(InstanceCommand),
 }
 
 impl Run for Command {
@@ -81,7 +78,6 @@ impl Run for Command {
             Command::Finalize(args) => args.run(context),
             Command::Enact(args) => args.run(context),
             Command::Protected(cmd) => cmd.run(context),
-            Command::Instance(cmd) => cmd.run(context),
         }
     }
 }
@@ -192,23 +188,6 @@ impl Run for ProtectedCommand {
             ProtectedCommand::Set(args) => args.run(context),
             ProtectedCommand::Apply(args) => args.run(context),
             ProtectedCommand::Get(args) => args.run(context),
-        }
-    }
-}
-
-#[derive(clap::Subcommand, Debug)]
-pub enum InstanceCommand {
-    /// Activate a contract instance (namespace, `contract_id`) -> `code_hash` (admin/testing)
-    Activate(ActivateInstanceArgs),
-    /// List active contract instances for a namespace
-    List(InstancesArgs),
-}
-
-impl Run for InstanceCommand {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        match self {
-            InstanceCommand::Activate(args) => args.run(context),
-            InstanceCommand::List(args) => args.run(context),
         }
     }
 }

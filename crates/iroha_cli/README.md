@@ -20,6 +20,35 @@ Alternatively, check out the [documentation](https://docs.iroha.tech/get-started
 The CLI will attempt to detect your system language for messages. Use `--language <CODE>` to override this selection.
 For automation, prefer `--output-format json --machine` to suppress startup chatter and fail fast when `client.toml` is missing.
 
+### Client configuration
+
+`client.toml` now owns canonical I105 parsing/rendering through `[account].chain_discriminant`.
+Known public chains infer their canonical prefix from `chain`, so Taira and Nexus configs do not
+need a second manual knob:
+
+```toml
+chain = "809574f5-fee7-5e69-bfcf-52451e42d50f"
+torii_url = "https://taira.sora.org/"
+
+[account]
+public_key = "..."
+private_key = "..."
+```
+
+Set `account.chain_discriminant` or `ACCOUNT_CHAIN_DISCRIMINANT` only for custom/private chains
+that are not in the built-in registry.
+
+### Transaction waits
+
+Use the built-in wait flow instead of shell polling:
+
+```bash
+iroha tx status --hash <SIGNED_TX_HASH> --wait
+iroha app contracts deploy --authority <ACCOUNT_ID> --private-key <HEX> --code-file ./contract.to --wait
+iroha app contracts call --contract-alias router::dex.universal --entrypoint swap --wait
+iroha app contracts call --contract-alias router::dex.universal --entrypoint swap --simulate
+```
+
 See [Command-Line Help](CommandLineHelp.md).
 
 Refer to [Iroha Special Instructions](https://docs.iroha.tech/blockchain/instructions.html) for more information about Iroha instructions such as register, mint, grant, and so on.
@@ -139,7 +168,7 @@ Build governance transaction skeletons and query governance state via Torii app 
 
 ```bash
 iroha app gov deploy propose \
-  --namespace apps --contract-id my.contract.v1 \
+  --contract-address tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7 \
   --code-hash 0123...ABCD --abi-hash 0123...ABCD \
   --abi-version v1 --window-lower 12345 --window-upper 12400 \
   --mode Plain
@@ -175,27 +204,19 @@ curl -sS -X POST -H 'Content-Type: application/json' \
 
   iroha app gov protected apply --namespaces apps,system
 
-- Build an ActivateContractInstance skeleton (pass `--blocking` to submit via CLI context):
+- Build governance metadata for protected-namespace admission:
 
-  iroha app gov instance activate --namespace apps --contract-id calc.v1 --code-hash 0xAA..AA [--blocking]
+  iroha app gov deploy meta --contract-address tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7
 
-- List active instances for a namespace (admin/testing):
+- Audit a governed contract binding by canonical address or alias:
 
-  iroha app gov instance list --namespace apps
+  iroha app gov deploy audit --contract-address tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7
 
 - Combined manifest command (prints or saves when --out is provided):
 
   iroha app contracts manifest get --code-hash 0xAA..AA
   iroha app contracts manifest get --code-hash 0xAA..AA --out manifest.json
 
-- List contract instances in a namespace (filters and pagination):
-
-  iroha app contracts instances --dataspace apps \
-    [--contains calc] [--hash-prefix aabb] [--offset 0] [--limit 50] [--order cid_desc]
-
-  Add --table to render a clean table instead of raw JSON (columns: Namespace, Contract ID, Code Hash):
-
-  iroha app contracts instances --dataspace apps --table [--short-hash]
 ```
 
 - Read governance state:
@@ -506,12 +527,11 @@ iroha ledger domain register --id "Soramitsu"
 
 ### Create new Account
 
-To create an account, specify the entity type (`account`) and the command (`register`). Then pass a canonical I105 `AccountId` via `--id` and the explicit account scope via `--domain`:
+To create an account, specify the entity type (`account`) and the command (`register`). Then pass a canonical I105 `AccountId` via `--id`:
 
 ```bash
 iroha ledger account register \
-  --id "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE" \
-  --domain "Soramitsu"
+  --id "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE"
 ```
 
 ### Mint Asset to Account

@@ -7823,8 +7823,7 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
         manifest_quorum: { total_checks: 2, satisfied: 1, rejected: 1 },
         recent_manifest_activations: [
           {
-            namespace: "finance",
-            contract_id: "alpha",
+            contract_address: "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
             code_hash_hex: "deadbeef",
             abi_hash_hex: null,
             height: 10,
@@ -7910,8 +7909,7 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
         manifest_quorum: { total_checks: 3, satisfied: 2, rejected: 1 },
         recent_manifest_activations: [
           {
-            namespace: "finance",
-            contract_id: "alpha",
+            contract_address: "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
             code_hash_hex: "deadbeef",
             abi_hash_hex: "b16b00b5",
             height: 11,
@@ -8061,7 +8059,10 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
   assert.equal(first.status.lane_governance_sealed_total, 2);
   assert.deepEqual(first.status.lane_governance_sealed_aliases, ["archive", "payments"]);
   const activation = first.status.governance?.recent_manifest_activations[0];
-  assert.equal(activation?.namespace, "finance");
+  assert.equal(
+    activation?.contract_address,
+    "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
+  );
   assert.equal(activation?.abi_hash_hex, null);
 
   const second = await client.getStatusSnapshot();
@@ -8762,7 +8763,10 @@ test("getGovernanceProposalTyped parses DeployContract variant", async () => {
   assert.ok(result.proposal);
   assert.equal(result.proposal?.status, "Approved");
   assert.equal(result.proposal?.kind.variant, "DeployContract");
-  assert.equal(result.proposal?.kind.deploy_contract?.contract_id, "router");
+  assert.equal(
+    result.proposal?.kind.deploy_contract?.contract_address,
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  );
 
   const notFoundClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 404 }),
@@ -9123,8 +9127,7 @@ test("governanceProposeDeployContract normalizes payloads", async () => {
     },
   });
   const result = await client.governanceProposeDeployContract({
-    namespace: " apps ",
-    contractId: "calc.v1",
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     codeHash: `0x${"1a".repeat(32)}`,
     abiHash: Buffer.alloc(32, 0xbb),
     abiVersion: "1",
@@ -9132,8 +9135,10 @@ test("governanceProposeDeployContract normalizes payloads", async () => {
     mode: "plain",
     limits: { maxTx: 5 },
   });
-  assert.equal(capturedBody.namespace, "apps");
-  assert.equal(capturedBody.contract_id, "calc.v1");
+  assert.equal(
+    capturedBody.contract_address,
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  );
   assert.equal(capturedBody.code_hash, "1a".repeat(32));
   assert.equal(capturedBody.abi_hash, "bb".repeat(32));
   assert.equal(capturedBody.mode, "Plain");
@@ -9156,8 +9161,7 @@ test("governanceProposeDeployContract accepts byte-array hashes", async () => {
   });
 
   await client.governanceProposeDeployContract({
-    namespace: "apps",
-    contractId: "calc.v1",
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     codeHash: Array.from(Buffer.alloc(32, 0x1a)),
     abiHash: Array.from(Buffer.alloc(32, 0xbb)),
   });
@@ -9179,8 +9183,7 @@ test("governanceProposeDeployContract rejects non-byte hash arrays", async () =>
   await assert.rejects(
     () =>
       client.governanceProposeDeployContract({
-        namespace: "apps",
-        contractId: "calc.v1",
+        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
         codeHash: [256],
         abiHash: Array.from(Buffer.alloc(32, 0xbb)),
       }),
@@ -9360,8 +9363,7 @@ test("governanceProposeDeployContract rejects invalid signal options", async () 
     () =>
       client.governanceProposeDeployContract(
         {
-          namespace: "apps",
-          contractId: "calc.v1",
+          contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
           codeHash: "hash:DEMO",
           abiHash: Buffer.alloc(32, 0xaa),
           abiVersion: "1",
@@ -12839,112 +12841,33 @@ test("iterateAssetHoldersQuery paginates query responses", async () => {
   assert.equal(callCount, 2);
 });
 
-test("iterateContractInstances paginates registry results", async () => {
-  const responses = [
-    {
-      namespace: "apps",
-      total: 3,
-      offset: 0,
-      limit: 2,
-      instances: [
-        { contract_id: "calc.v1", code_hash_hex: fakeHashHex(0xaa) },
-        { contract_id: "mint.v1", code_hash_hex: fakeHashHex(0xbb) },
-      ],
-    },
-    {
-      namespace: "apps",
-      total: 3,
-      offset: 2,
-      limit: 2,
-      instances: [{ contract_id: "vault.v1", code_hash_hex: fakeHashHex(0xcc) }],
-    },
-  ];
-  let callCount = 0;
+test("getGovernanceContract reads one governed binding", async () => {
+  let calledUrl;
   const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/contracts/instances/apps");
-    assert.equal(parsed.searchParams.get("contains"), "calc");
-    assert.equal(parsed.searchParams.get("limit"), "2");
-    assert.equal(parsed.searchParams.get("offset"), String(callCount * 2));
-    const payload = responses[callCount] ?? {
-      namespace: "apps",
-      total: 3,
-      offset: parsed.searchParams.get("offset") ?? "0",
-      limit: 2,
-      instances: [],
-    };
-    callCount += 1;
+    calledUrl = url;
     return createResponse({
       status: 200,
-      jsonData: payload,
+      jsonData: {
+        found: true,
+        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        dataspace: "universal",
+        code_hash_hex: fakeHashHex(0xaa),
+      },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const ids = [];
-  for await (const instance of client.iterateContractInstances("apps", {
-    contains: "calc",
-    pageSize: 2,
-  })) {
-    ids.push(instance.contract_id);
-  }
-  assert.deepEqual(ids, ["calc.v1", "mint.v1", "vault.v1"]);
-  assert.equal(callCount, 2);
-});
-
-test("iterateGovernanceInstances honours maxItems", async () => {
-  const responses = [
-    {
-      namespace: "apps",
-      total: 4,
-      offset: 0,
-      limit: 2,
-      instances: [
-        { contract_id: "calc.v1", code_hash_hex: fakeHashHex(0xaa) },
-        { contract_id: "mint.v1", code_hash_hex: fakeHashHex(0xbb) },
-      ],
-    },
-    {
-      namespace: "apps",
-      total: 4,
-      offset: 2,
-      limit: 2,
-      instances: [
-        { contract_id: "vault.v1", code_hash_hex: fakeHashHex(0xcc) },
-        { contract_id: "audit.v1", code_hash_hex: fakeHashHex(0xdd) },
-      ],
-    },
-  ];
-  let callCount = 0;
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/gov/instances/apps");
-    assert.equal(parsed.searchParams.get("hash_prefix"), "abcd");
-    const payload = responses[callCount] ?? {
-      namespace: "apps",
-      total: 4,
-      offset: parsed.searchParams.get("offset") ?? "0",
-      limit: 2,
-      instances: [],
-    };
-    callCount += 1;
-    return createResponse({
-      status: 200,
-      jsonData: payload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const ids = [];
-  for await (const instance of client.iterateGovernanceInstances("apps", {
-    hashPrefix: "abcd",
-    pageSize: 2,
-    maxItems: 3,
-  })) {
-    ids.push(instance.contract_id);
-  }
-  assert.deepEqual(ids, ["calc.v1", "mint.v1", "vault.v1"]);
-  assert.equal(callCount, 2);
+  const result = await client.getGovernanceContract(
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  );
+  assert.ok(
+    calledUrl?.includes(
+      "/v1/gov/contracts/tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    ),
+  );
+  assert.equal(result.found, true);
+  assert.equal(result.dataspace, "universal");
+  assert.equal(result.code_hash_hex, fakeHashHex(0xaa));
 });
 
 test("iterateTriggers paginates list endpoint", async () => {
@@ -15041,6 +14964,10 @@ test("deployContract submits base64 payload and returns response", async () => {
   let captured;
   const responsePayload = {
     ok: true,
+    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    dataspace: "universal",
+    deploy_nonce: 7,
+    tx_hash_hex: "a".repeat(64),
     code_hash_hex: "b".repeat(64),
     abi_hash_hex: "c".repeat(64),
   };
@@ -15112,86 +15039,17 @@ test("deployContract rejects empty code bytes", async () => {
   );
 });
 
-test("deployContractInstance posts combined payload", async () => {
-  let captured;
-  const responsePayload = {
-    ok: true,
-    namespace: "apps",
-    contract_id: "calc",
-    code_hash_hex: "d".repeat(64),
-    abi_hash_hex: "e".repeat(64),
-  };
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: responsePayload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.deployContractInstance({
-    authority: FIXTURE_ALICE_ID,
-    privateKey: "ed25519:deadbeef",
-    namespace: "apps",
-    contractId: "calc",
-    codeB64: "YmFzZTY0",
-    manifest: { access_set_hints: { read_keys: [`account:${FIXTURE_ALICE_ID}`] } },
-  });
-  assert.equal(captured.url, `${BASE_URL}/v1/contracts/instance`);
-  const body = JSON.parse(captured.init.body);
-  assert.deepEqual(body, {
-    authority: FIXTURE_ALICE_ID,
-    private_key: "ed25519:deadbeef",
-    namespace: "apps",
-    contract_id: "calc",
-    code_b64: "YmFzZTY0",
-    manifest: {
-      code_hash: null,
-      abi_hash: null,
-      compiler_fingerprint: null,
-      features_bitmap: null,
-      access_set_hints: { read_keys: [`account:${FIXTURE_ALICE_ID}`], write_keys: [] },
-      entrypoints: null,
-      kotoba: null,
-      provenance: null,
-    },
-  });
-  assert.deepEqual(result, responsePayload);
-});
-
-test("activateContractInstance normalizes code hash", async () => {
-  let captured;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: { ok: true },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.activateContractInstance({
-    authority: FIXTURE_ALICE_ID,
-    privateKey: "ed25519:deadbeef",
-    namespace: "apps",
-    contractId: "calc",
-    codeHash: "0x" + "f".repeat(64),
-  });
-  const body = JSON.parse(captured.init.body);
-  assert.equal(body.code_hash, "f".repeat(64));
-  assert.deepEqual(result, { ok: true });
-});
-
 test("callContract posts payload metadata and normalizes response", async () => {
   let captured;
   const responsePayload = {
     ok: true,
-    namespace: "apps",
-    contract_id: "calc",
+    submitted: true,
+    dataspace: "universal",
+    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     code_hash_hex: "1".repeat(64),
     abi_hash_hex: "2".repeat(64),
     tx_hash_hex: "3".repeat(64),
+    creation_time_ms: 42,
     entrypoint: "increment",
   };
   const fetchImpl = async (url, init) => {
@@ -15207,8 +15065,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
   const result = await client.callContract({
     authority: FIXTURE_ALICE_ID,
     privateKey: "ed25519:deadbeef",
-    namespace: "apps",
-    contractId: "calc",
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "increment",
     payload,
     gasAssetId: FIXTURE_ASSET_ID_D,
@@ -15219,8 +15076,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
   assert.deepEqual(body, {
     authority: FIXTURE_ALICE_ID,
     private_key: "ed25519:deadbeef",
-    namespace: "apps",
-    contract_id: "calc",
+    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "increment",
     payload,
     gas_asset_id: FIXTURE_ASSET_ID_D,
@@ -15228,12 +15084,17 @@ test("callContract posts payload metadata and normalizes response", async () => 
   });
   assert.deepEqual(result, {
     ok: true,
-    namespace: "apps",
-    contract_id: "calc",
+    submitted: true,
+    dataspace: "universal",
+    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     code_hash_hex: "1".repeat(64),
     abi_hash_hex: "2".repeat(64),
     tx_hash_hex: "3".repeat(64),
+    creation_time_ms: 42,
     entrypoint: "increment",
+    transaction_scaffold_b64: null,
+    signed_transaction_b64: null,
+    signing_message_b64: null,
   });
 });
 
@@ -15248,8 +15109,7 @@ test("callContract rejects missing gasLimit", async () => {
       client.callContract({
         authority: FIXTURE_ALICE_ID,
         privateKey: "ed25519:deadbeef",
-        namespace: "apps",
-        contractId: "calc",
+        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
       }),
     /contractCall\.gasLimit/,
   );
@@ -15267,8 +15127,7 @@ test("callContract rejects non-object options", async () => {
         {
           authority: FIXTURE_ALICE_ID,
           privateKey: "ed25519:deadbeef",
-          namespace: "apps",
-          contractId: "calc",
+          contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
           entrypoint: "ping",
         },
         "invalid",
@@ -15289,8 +15148,7 @@ test("callContract rejects unsupported option fields", async () => {
         {
           authority: FIXTURE_ALICE_ID,
           privateKey: "ed25519:deadbeef",
-          namespace: "apps",
-          contractId: "calc",
+          contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
           entrypoint: "ping",
         },
         { signal: new AbortController().signal, retry: true },
@@ -15322,8 +15180,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
   const result = await client.proposeMultisigContractCall({
     multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
-    namespace: "apps",
-    contractId: "mint",
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "execute",
     payload: { amount: "10" },
     gasAssetId: FIXTURE_ASSET_ID_D,
@@ -15335,8 +15192,7 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
   assert.deepEqual(body, {
     multisig_account_alias: "cbdc@banka",
     signer_account_id: FIXTURE_ALICE_ID,
-    namespace: "apps",
-    contract_id: "mint",
+    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "execute",
     payload: { amount: "10" },
     gas_asset_id: FIXTURE_ASSET_ID_D,
@@ -15591,146 +15447,40 @@ test("getContractCodeBytes returns record", async () => {
   assert.deepEqual(result, { code_b64: "Y29kZQ==" });
 });
 
-test("listContractInstances encodes query params", async () => {
-  const fetchImpl = async (url) => {
-    assert.ok(url.includes("/v1/contracts/instances/apps"));
-    assert.ok(url.includes("contains=calc"));
-    assert.ok(url.includes("limit=5"));
-    assert.ok(url.includes("hash_prefix=aa"));
-    return createResponse({
-      status: 200,
-      jsonData: {
-        namespace: "apps",
-        total: 1,
-        offset: 0,
-        limit: 5,
-        instances: [{ contract_id: "calc", code_hash_hex: "1".repeat(64) }],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listContractInstances("apps", {
-    contains: "calc",
-    hashPrefix: "aa",
-    limit: 5,
-  });
-  assert.deepEqual(result, {
-    namespace: "apps",
-    total: 1,
-    offset: 0,
-    limit: 5,
-    instances: [{ contract_id: "calc", code_hash_hex: "1".repeat(64) }],
-  });
-});
-
-test("listGovernanceInstances mirrors query and response handling", async () => {
+test("getGovernanceContract mirrors response handling", async () => {
   let calledUrl;
   const fetchImpl = async (url) => {
     calledUrl = url;
     return createResponse({
       status: 200,
       jsonData: {
-        namespace: "apps",
-        total: "2",
-        offset: "1",
-        limit: "10",
-        instances: [
-          { contract_id: "calc.v1", code_hash_hex: "1".repeat(64) },
-          { contract_id: "calc.v2", code_hash_hex: "2".repeat(64) },
-        ],
+        found: true,
+        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        dataspace: "universal",
+        code_hash_hex: "1".repeat(64),
       },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listGovernanceInstances("apps", {
-    contains: "calc",
-    hashPrefix: "12",
-    offset: 1,
-    limit: 10,
-    order: "HASH_DESC",
-  });
-  assert.ok(calledUrl?.includes("/v1/gov/instances/apps"));
-  assert.ok(calledUrl?.includes("contains=calc"));
-  assert.ok(calledUrl?.includes("hash_prefix=12"));
-  assert.ok(calledUrl?.includes("offset=1"));
-  assert.ok(calledUrl?.includes("limit=10"));
-  assert.ok(calledUrl?.includes("order=hash_desc"));
-  assert.equal(result.namespace, "apps");
-  assert.equal(result.total, 2);
-  assert.equal(result.offset, 1);
-  assert.equal(result.limit, 10);
-  assert.equal(result.instances.length, 2);
-  assert.equal(result.instances[0].contract_id, "calc.v1");
+  const result = await client.getGovernanceContract(
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  );
+  assert.ok(calledUrl?.includes("/v1/gov/contracts/"));
+  assert.equal(result.contract_address, "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7");
+  assert.equal(result.dataspace, "universal");
+  assert.equal(result.code_hash_hex, "1".repeat(64));
 });
 
-test("listContractInstances rejects non-object options", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not fetch");
-    },
-  });
-  await assert.rejects(
-    () => client.listContractInstances("apps", null),
-    /contractInstances options must be an object/,
-  );
-  await assert.rejects(
-    () => client.listContractInstances("apps", 7),
-    /contractInstances options must be an object/,
-  );
-});
-
-test("listGovernanceInstances rejects invalid order values", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { namespace: "apps", total: 0, offset: 0, limit: 10, instances: [] },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listGovernanceInstances("apps", { order: "recent_first" }),
-    /contractInstances\.order must be one of/,
-  );
-});
-
-test("listGovernanceInstances rejects non-hex hashPrefix values", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { namespace: "apps", total: 0, offset: 0, limit: 10, instances: [] },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listGovernanceInstances("apps", { hashPrefix: "zzzz" }),
-    /contractInstances\.hashPrefix must be a non-empty hexadecimal string/,
-  );
-});
-
-test("listGovernanceInstances rejects unsupported option keys", async () => {
+test("getGovernanceContract rejects unsupported option keys", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be invoked for invalid options");
     },
   });
   await assert.rejects(
-    () => client.listGovernanceInstances("apps", { contains: "calc", cursor: "abc" }),
-    /contractInstances options contains unsupported fields: cursor/,
-  );
-});
-
-test("listContractInstances rejects invalid signal values", async () => {
-  const fetchImpl = async () => {
-    throw new Error("should not fetch");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.listContractInstances("apps", { signal: {} }),
-    /contractInstances options\.signal must be an AbortSignal/,
+    () => client.getGovernanceContract("tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7", { cursor: "abc" }),
+    /getGovernanceContract options contains unsupported fields: cursor/,
   );
 });
 

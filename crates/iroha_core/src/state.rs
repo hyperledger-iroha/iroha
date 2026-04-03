@@ -1593,8 +1593,9 @@ pub struct World {
         Storage<iroha_crypto::Hash, iroha_data_model::smart_contract::manifest::ContractManifest>,
     /// On-chain storage of compiled contract code bytes keyed by code hash.
     pub(crate) contract_code: Storage<iroha_crypto::Hash, Vec<u8>>,
-    /// Active contract instances bound to (namespace, `contract_id`)
-    pub(crate) contract_instances: Storage<(String, String), iroha_crypto::Hash>,
+    /// Active contract instances bound to their canonical contract address.
+    pub(crate) contract_instances:
+        Storage<iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: Storage<Name, Vec<u8>>,
     /// Admitted Soracloud service revisions keyed by `(service_name, service_version)`.
@@ -2000,7 +2001,8 @@ pub struct WorldBlock<'world> {
     /// Contract code bytes keyed by hash
     pub(crate) contract_code: StorageBlock<'world, iroha_crypto::Hash, Vec<u8>>,
     /// Active contract instances
-    pub(crate) contract_instances: StorageBlock<'world, (String, String), iroha_crypto::Hash>,
+    pub(crate) contract_instances:
+        StorageBlock<'world, iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageBlock<'world, Name, Vec<u8>>,
     /// Admitted Soracloud service revisions.
@@ -2586,8 +2588,12 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::smart_contract::manifest::ContractManifest,
     >,
     pub(crate) contract_code: StorageTransaction<'block, 'world, iroha_crypto::Hash, Vec<u8>>,
-    pub(crate) contract_instances:
-        StorageTransaction<'block, 'world, (String, String), iroha_crypto::Hash>,
+    pub(crate) contract_instances: StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::smart_contract::ContractAddress,
+        iroha_crypto::Hash,
+    >,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageTransaction<'block, 'world, Name, Vec<u8>>,
     /// Admitted Soracloud service revisions.
@@ -3341,7 +3347,8 @@ pub struct WorldView<'world> {
         iroha_data_model::smart_contract::manifest::ContractManifest,
     >,
     pub(crate) contract_code: StorageView<'world, iroha_crypto::Hash, Vec<u8>>,
-    pub(crate) contract_instances: StorageView<'world, (String, String), iroha_crypto::Hash>,
+    pub(crate) contract_instances:
+        StorageView<'world, iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageView<'world, Name, Vec<u8>>,
     /// Admitted Soracloud service revisions.
@@ -10105,13 +10112,14 @@ impl DetachedStateTransactionDelta {
                 let def = stx.world.asset_definition_mut(ad)?;
                 def.metadata_mut().insert(key.clone(), val.clone());
                 crate::sumeragi::witness::record_write_asset_def_kv(ad, key, val);
-                stx.world.emit_events(Some(DomainEvent::AssetDefinition(
-                    AssetDefinitionEvent::MetadataInserted(MetadataChanged {
-                        target: ad.clone(),
-                        key: key.clone(),
-                        value: val.clone(),
-                    }),
-                )));
+                stx.world
+                    .emit_events(Some(AssetDefinitionEvent::MetadataInserted(
+                        MetadataChanged {
+                            target: ad.clone(),
+                            key: key.clone(),
+                            value: val.clone(),
+                        },
+                    )));
             }
             for (ad, key_id) in &asset_def_kv_dels {
                 let key = self.name_intern.resolve(*key_id);
@@ -10121,13 +10129,14 @@ impl DetachedStateTransactionDelta {
                     })
                 })?;
                 crate::sumeragi::witness::record_delete_asset_def_kv(ad, key, &val);
-                stx.world.emit_events(Some(DomainEvent::AssetDefinition(
-                    AssetDefinitionEvent::MetadataRemoved(MetadataChanged {
-                        target: ad.clone(),
-                        key: key.clone(),
-                        value: val,
-                    }),
-                )));
+                stx.world
+                    .emit_events(Some(AssetDefinitionEvent::MetadataRemoved(
+                        MetadataChanged {
+                            target: ad.clone(),
+                            key: key.clone(),
+                            value: val,
+                        },
+                    )));
             }
 
             // Apply NFT creates/deletes
@@ -10228,12 +10237,13 @@ impl DetachedStateTransactionDelta {
                     )));
                 }
                 def.set_owned_by(to.clone());
-                stx.world.emit_events(Some(DomainEvent::AssetDefinition(
-                    AssetDefinitionEvent::OwnerChanged(AssetDefinitionOwnerChanged {
-                        asset_definition: ad,
-                        new_owner: to,
-                    }),
-                )));
+                stx.world
+                    .emit_events(Some(AssetDefinitionEvent::OwnerChanged(
+                        AssetDefinitionOwnerChanged {
+                            asset_definition: ad,
+                            new_owner: to,
+                        },
+                    )));
             }
 
             // Apply peer registrations/removals
@@ -11874,8 +11884,10 @@ pub trait WorldReadOnly {
     >;
     /// Get stored contract code bytes by hash (read-only)
     fn contract_code(&self) -> &impl StorageReadOnly<iroha_crypto::Hash, Vec<u8>>;
-    /// Contract instances mapping (`namespace`, `contract_id`) -> `code_hash` (read-only)
-    fn contract_instances(&self) -> &impl StorageReadOnly<(String, String), iroha_crypto::Hash>;
+    /// Contract instances mapping `contract_address` -> `code_hash` (read-only)
+    fn contract_instances(
+        &self,
+    ) -> &impl StorageReadOnly<iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>;
     /// Durable smart-contract state keyed by logical path (read-only).
     fn smart_contract_state(&self) -> &impl StorageReadOnly<Name, Vec<u8>>;
     /// Admitted Soracloud service revisions keyed by `(service_name, service_version)` (read-only).
@@ -12956,7 +12968,12 @@ macro_rules! impl_world_ro {
             fn contract_code(&self) -> &impl StorageReadOnly<iroha_crypto::Hash, Vec<u8>> {
                 &self.contract_code
             }
-            fn contract_instances(&self) -> &impl StorageReadOnly<(String, String), iroha_crypto::Hash> {
+            fn contract_instances(
+                &self,
+            ) -> &impl StorageReadOnly<
+                iroha_data_model::smart_contract::ContractAddress,
+                iroha_crypto::Hash,
+            > {
                 &self.contract_instances
             }
             fn smart_contract_state(&self) -> &impl StorageReadOnly<Name, Vec<u8>> {
@@ -15134,14 +15151,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             new_total
         );
 
-        self.emit_events({
-            Some(DomainEvent::AssetDefinition(
-                AssetDefinitionEvent::TotalQuantityChanged(AssetDefinitionTotalQuantityChanged {
-                    asset_definition: definition_id.clone(),
-                    total_amount: new_total,
-                }),
-            ))
-        });
+        self.emit_events(Some(AssetDefinitionEvent::TotalQuantityChanged(
+            AssetDefinitionTotalQuantityChanged {
+                asset_definition: definition_id.clone(),
+                total_amount: new_total,
+            },
+        )));
 
         Ok(())
     }
@@ -15182,14 +15197,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             new_total
         );
 
-        self.emit_events({
-            Some(DomainEvent::AssetDefinition(
-                AssetDefinitionEvent::TotalQuantityChanged(AssetDefinitionTotalQuantityChanged {
-                    asset_definition: definition_id.clone(),
-                    total_amount: new_total,
-                }),
-            ))
-        });
+        self.emit_events(Some(AssetDefinitionEvent::TotalQuantityChanged(
+            AssetDefinitionTotalQuantityChanged {
+                asset_definition: definition_id.clone(),
+                total_amount: new_total,
+            },
+        )));
 
         Ok(())
     }

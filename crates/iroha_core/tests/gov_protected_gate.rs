@@ -8,7 +8,7 @@ use iroha_core::{
     smartcontracts::Execute,
     state::{State, World},
 };
-use iroha_data_model::smart_contract::manifest::ContractManifest;
+use iroha_data_model::{nexus::DataSpaceId, smart_contract::manifest::ContractManifest};
 use iroha_primitives::json::Json;
 
 const TEST_GAS_LIMIT: u64 = 1_000_000;
@@ -19,45 +19,43 @@ fn insert_gas_limit(md: &mut iroha_data_model::metadata::Metadata) {
 }
 
 fn compute_proposal_id(
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
     code_hex: &str,
     abi_hex: &str,
 ) -> [u8; 32] {
     use core::convert::TryInto;
 
     use iroha_crypto::blake2::{Blake2b512, Digest as _};
-    let namespace = namespace.trim();
-    let contract_id = contract_id.trim();
+    let contract_address = contract_address.as_ref();
     let code = hex::decode(code_hex).expect("valid code hex");
     let abi = hex::decode(abi_hex).expect("valid abi hex");
-    let ns_len: u32 = namespace
+    let contract_address_len: u32 = contract_address
         .len()
         .try_into()
-        .expect("namespace length fits u32");
-    let cid_len: u32 = contract_id
-        .len()
-        .try_into()
-        .expect("contract length fits u32");
+        .expect("contract address length fits u32");
     let mut input = Vec::with_capacity(
-        b"iroha:gov:proposal:v1|".len()
-            + core::mem::size_of::<u32>() * 2
-            + namespace.len()
-            + contract_id.len()
+        b"iroha:gov:proposal:v2|".len()
+            + core::mem::size_of::<u32>()
+            + contract_address.len()
             + code.len()
             + abi.len(),
     );
-    input.extend_from_slice(b"iroha:gov:proposal:v1|");
-    input.extend_from_slice(&ns_len.to_le_bytes());
-    input.extend_from_slice(namespace.as_bytes());
-    input.extend_from_slice(&cid_len.to_le_bytes());
-    input.extend_from_slice(contract_id.as_bytes());
+    input.extend_from_slice(b"iroha:gov:proposal:v2|");
+    input.extend_from_slice(&contract_address_len.to_le_bytes());
+    input.extend_from_slice(contract_address.as_bytes());
     input.extend_from_slice(&code);
     input.extend_from_slice(&abi);
     let digest = Blake2b512::digest(&input);
     let mut out = [0u8; 32];
     out.copy_from_slice(&digest[..32]);
     out
+}
+
+fn sample_contract_address(
+    authority: &iroha_data_model::account::AccountId,
+) -> iroha_data_model::smart_contract::ContractAddress {
+    iroha_data_model::smart_contract::ContractAddress::derive(0, authority, 0, DataSpaceId::new(0))
+        .expect("contract address")
 }
 
 #[test]
@@ -123,15 +121,13 @@ fn protected_namespace_requires_enacted_proposal() {
     let abi_hash =
         iroha_crypto::Hash::prehashed(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1));
 
+    let contract_address = sample_contract_address(&authority);
+
     // Build tx with metadata for protected namespace
     let mut md = iroha_data_model::metadata::Metadata::default();
     md.insert(
-        "gov_namespace".parse().unwrap(),
-        iroha_primitives::json::Json::new("apps"),
-    );
-    md.insert(
-        "gov_contract_id".parse().unwrap(),
-        iroha_primitives::json::Json::new("calc.v1"),
+        "gov_contract_address".parse().unwrap(),
+        iroha_primitives::json::Json::new(contract_address.to_string()),
     );
     insert_gas_limit(&mut md);
     let chain: ChainId = "chain".parse().unwrap();
@@ -155,7 +151,7 @@ fn protected_namespace_requires_enacted_proposal() {
     let mut stx3 = block3.transaction();
     // Grant propose/enact
     let gp: Permission = CanProposeContractDeployment {
-        contract_id: "calc.v1".into(),
+        contract_address: contract_address.clone(),
     }
     .into();
     Grant::account_permission(gp, authority.clone())
@@ -189,8 +185,7 @@ fn protected_namespace_requires_enacted_proposal() {
     .provenance
     .expect("manifest should be signed");
     ProposeDeployContract {
-        namespace: "apps".into(),
-        contract_id: "calc.v1".into(),
+        contract_address: contract_address.clone(),
         code_hash_hex: want_code_hex.clone(),
         abi_hash_hex: want_abi_hex.clone(),
         abi_version: "1".into(),
@@ -201,7 +196,7 @@ fn protected_namespace_requires_enacted_proposal() {
     .execute(&authority, &mut stx3)
     .expect("propose");
     // Recompute the proposal id like in core and enact it
-    let pid = compute_proposal_id("apps", "calc.v1", &want_code_hex, &want_abi_hex);
+    let pid = compute_proposal_id(&contract_address, &want_code_hex, &want_abi_hex);
     stx3.world
         .governance_proposals_mut()
         .get_mut(&pid)
@@ -225,12 +220,8 @@ fn protected_namespace_requires_enacted_proposal() {
         .with_metadata({
             let mut md = iroha_data_model::metadata::Metadata::default();
             md.insert(
-                "gov_namespace".parse().unwrap(),
-                iroha_primitives::json::Json::new("apps"),
-            );
-            md.insert(
-                "gov_contract_id".parse().unwrap(),
-                iroha_primitives::json::Json::new("calc.v1"),
+                "gov_contract_address".parse().unwrap(),
+                iroha_primitives::json::Json::new(contract_address.to_string()),
             );
             insert_gas_limit(&mut md);
             md

@@ -144,18 +144,18 @@ field.
 
 ## contracts.mjs
 
-- Automates `/v1/contracts/deploy` and `/v1/contracts/instance` so roadmap JS-06
-  deliverables have a reproducible CLI. Bytecode is read from
+- Automates the canonical address-first `POST /v1/contracts/deploy` flow so
+  roadmap JS-06 deliverables have a reproducible CLI. Bytecode is read from
   `CONTRACT_CODE_PATH`, optional manifest JSON is pulled from
   `CONTRACT_MANIFEST_PATH` or `CONTRACT_MANIFEST_JSON`, and the helper enforces
-  the same validation rules as `ToriiClient.deployContract/Instance` (non-empty
-  namespace/contract IDs, 32-byte hashes, base64-encoded payloads).
-- `CONTRACT_STAGE=register|instance|both` selects whether to only upload
-  manifest/bytecode, only activate an instance, or perform both operations. The
-  script also honours `TORII_AUTH_TOKEN`/`TORII_API_TOKEN` and accepts private
-  keys via `PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`.
-- Prints the Torii responses (code/ABI hashes, namespace bindings) so CI jobs
-  can archive evidence bundles alongside release artifacts.
+  the same validation rules as `ToriiClient.deployContract`.
+- `CONTRACT_DATASPACE` optionally selects the deploy dataspace (default
+  `universal`). The script also honours `TORII_AUTH_TOKEN`/`TORII_API_TOKEN`
+  and accepts private keys via `PRIVATE_KEY=ed25519:<hex>` or
+  `PRIVATE_KEY_HEX=<hex>`.
+- Prints the Torii response including `contract_address`, `dataspace`,
+  `tx_hash_hex`, `code_hash_hex`, and `abi_hash_hex` so CI jobs can archive
+  evidence bundles alongside release artifacts.
 
 Run with:
 
@@ -167,17 +167,14 @@ node ./recipes/contracts.mjs \
   PRIVATE_KEY_HEX=$(cat ~/.iroha/keys/alice.hex) \
   CONTRACT_CODE_PATH=./artifacts/demo_contract.to \
   CONTRACT_MANIFEST_PATH=./artifacts/demo_manifest.json \
-  CONTRACT_STAGE=both \
-  CONTRACT_NAMESPACE=apps \
-  CONTRACT_ID=demo.contract
+  CONTRACT_DATASPACE=universal
 ```
 
 Environment variables:
 
-- `CONTRACT_STAGE` — `register`, `instance`, or `both` (default) to control which REST calls run.
 - `CONTRACT_CODE_PATH` — path to the Kotodama `.to` artifact (required).
 - `CONTRACT_MANIFEST_PATH` / `CONTRACT_MANIFEST_JSON` — manifest source (optional but recommended).
-- `CONTRACT_NAMESPACE` / `CONTRACT_ID` — required when staging the `instance` leg.
+- `CONTRACT_DATASPACE` — optional dataspace alias for the deploy target.
 - `TORII_AUTH_TOKEN` / `TORII_API_TOKEN` — optional headers for locked-down deployments.
 - `PRIVATE_KEY` / `PRIVATE_KEY_HEX` — signer credentials; defaults to `ed25519` when unspecified.
 

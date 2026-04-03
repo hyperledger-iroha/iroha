@@ -4,6 +4,7 @@ use core::mem;
 
 use crate::{CliOutputFormat, RunContext};
 use eyre::{Result, eyre};
+use iroha::client::Client;
 use iroha_crypto::blake2::{Blake2b512, digest::Digest};
 use norito::json::Value;
 
@@ -60,34 +61,71 @@ pub(super) fn decode_hex32(hex_str: &str) -> Result<[u8; 32]> {
 
 /// Compute the governance proposal id using the stable hash recipe.
 pub(super) fn compute_proposal_id(
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha::data_model::smart_contract::ContractAddress,
     code_hash: &[u8; 32],
     abi_hash: &[u8; 32],
 ) -> [u8; 32] {
-    let namespace_len =
-        u32::try_from(namespace.len()).expect("namespace length must fit in u32 for hashing");
-    let contract_len =
-        u32::try_from(contract_id.len()).expect("contract id length must fit in u32 for hashing");
+    let contract_address_literal = contract_address.as_ref();
+    let contract_address_len = u32::try_from(contract_address_literal.len())
+        .expect("contract address length must fit in u32 for hashing");
     let mut input = Vec::with_capacity(
-        b"iroha:gov:proposal:v1|".len()
-            + mem::size_of::<u32>() * 2
-            + namespace.len()
-            + contract_id.len()
+        b"iroha:gov:proposal:v2|".len()
+            + mem::size_of::<u32>()
+            + contract_address_literal.len()
             + code_hash.len()
             + abi_hash.len(),
     );
-    input.extend_from_slice(b"iroha:gov:proposal:v1|");
-    input.extend_from_slice(&namespace_len.to_le_bytes());
-    input.extend_from_slice(namespace.as_bytes());
-    input.extend_from_slice(&contract_len.to_le_bytes());
-    input.extend_from_slice(contract_id.as_bytes());
+    input.extend_from_slice(b"iroha:gov:proposal:v2|");
+    input.extend_from_slice(&contract_address_len.to_le_bytes());
+    input.extend_from_slice(contract_address_literal.as_bytes());
     input.extend_from_slice(code_hash);
     input.extend_from_slice(abi_hash);
     let digest = Blake2b512::digest(&input);
     let mut out = [0u8; 32];
     out.copy_from_slice(&digest[..32]);
     out
+}
+
+pub(super) fn resolve_contract_address_target(
+    client: &Client,
+    contract_address: Option<&str>,
+    contract_alias: Option<&str>,
+) -> Result<iroha::data_model::smart_contract::ContractAddress> {
+    match (contract_address, contract_alias) {
+        (Some(_), Some(_)) => Err(eyre!(
+            "exactly one of --contract-address or --contract-alias must be provided"
+        )),
+        (Some(contract_address), None) => contract_address
+            .parse()
+            .map_err(|err| eyre!("invalid --contract-address: {err}")),
+        (None, Some(contract_alias)) => {
+            let contract_alias: iroha::data_model::smart_contract::ContractAlias = contract_alias
+                .parse()
+                .map_err(|err| eyre!("invalid --contract-alias: {err}"))?;
+            let response = client
+                .post_contract_alias_resolve(&contract_alias)
+                .map_err(|err| eyre!("failed to resolve contract alias `{contract_alias}`: {err}"))?;
+            if response.status() != reqwest::StatusCode::OK {
+                return Err(eyre!(
+                    "contract alias resolve request failed with HTTP {}: {}",
+                    response.status(),
+                    std::str::from_utf8(response.body()).unwrap_or("")
+                ));
+            }
+            let value: Value = norito::json::from_slice(response.body())
+                .map_err(|err| eyre!("failed to decode contract alias response: {err}"))?;
+            let resolved = value
+                .get("contract_address")
+                .and_then(Value::as_str)
+                .ok_or_else(|| eyre!("contract alias response missing `contract_address`"))?;
+            resolved
+                .parse()
+                .map_err(|err| eyre!("resolved contract address is invalid: {err}"))
+        }
+        (None, None) => Err(eyre!(
+            "provide exactly one contract target via --contract-address or --contract-alias"
+        )),
+    }
 }
 
 #[cfg(test)]
@@ -121,27 +159,26 @@ mod tests {
     fn compute_proposal_id_matches_reference_logic() {
         use iroha_crypto::blake2::{Blake2b512, digest::Digest as _};
 
-        let ns = "apps";
-        let cid = "calc.v1";
+        let contract_address: iroha::data_model::smart_contract::ContractAddress =
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address");
         let code = [0x11u8; 32];
         let abi = [0x22u8; 32];
 
         let mut input = Vec::new();
-        input.extend_from_slice(b"iroha:gov:proposal:v1|");
-        let ns_len = u32::try_from(ns.len()).expect("namespace length must fit in u32 for hashing");
-        input.extend_from_slice(&ns_len.to_le_bytes());
-        input.extend_from_slice(ns.as_bytes());
-        let cid_len =
-            u32::try_from(cid.len()).expect("contract id length must fit in u32 for hashing");
-        input.extend_from_slice(&cid_len.to_le_bytes());
-        input.extend_from_slice(cid.as_bytes());
+        input.extend_from_slice(b"iroha:gov:proposal:v2|");
+        let contract_address_len = u32::try_from(contract_address.as_ref().len())
+            .expect("contract address length must fit in u32 for hashing");
+        input.extend_from_slice(&contract_address_len.to_le_bytes());
+        input.extend_from_slice(contract_address.as_ref().as_bytes());
         input.extend_from_slice(&code);
         input.extend_from_slice(&abi);
         let digest = Blake2b512::digest(&input);
         let mut expected = [0u8; 32];
         expected.copy_from_slice(&digest[..32]);
 
-        let candidate = compute_proposal_id(ns, cid, &code, &abi);
+        let candidate = compute_proposal_id(&contract_address, &code, &abi);
         assert_eq!(candidate, expected);
     }
 }

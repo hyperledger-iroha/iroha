@@ -483,23 +483,24 @@ pub(crate) fn parse_gas_limit(metadata: &Metadata) -> Result<Option<u64>, Valida
 
 #[derive(Clone, Debug)]
 pub(crate) struct ContractRuntimeExecutionContext {
-    pub(crate) namespace: String,
-    pub(crate) contract_id: String,
+    #[allow(dead_code)]
+    pub(crate) contract_address: iroha_data_model::smart_contract::ContractAddress,
+    pub(crate) contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     pub(crate) entrypoint: String,
 }
 
 impl ContractRuntimeExecutionContext {
     fn allows_bisp_runtime_asset_transfer_bypass(&self) -> bool {
-        self.namespace == "bisp"
-            && self.contract_id == "bisp"
-            && matches!(self.entrypoint.as_str(), "spend_to_merchant" | "spend_many")
+        self.contract_alias.as_ref().is_some_and(|contract_alias| {
+            contract_alias.name_segment() == "bisp" && contract_alias.dataspace_segment() == "bisp"
+        }) && matches!(self.entrypoint.as_str(), "spend_to_merchant" | "spend_many")
     }
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct ContractCallExecutionContext {
-    namespace: Option<String>,
-    contract_id: Option<String>,
+    contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     entrypoint: Option<String>,
     entrypoint_pc: Option<u64>,
     args: Json,
@@ -508,8 +509,8 @@ pub(crate) struct ContractCallExecutionContext {
 impl ContractCallExecutionContext {
     pub(crate) fn runtime_context(&self) -> Option<ContractRuntimeExecutionContext> {
         Some(ContractRuntimeExecutionContext {
-            namespace: self.namespace.clone()?,
-            contract_id: self.contract_id.clone()?,
+            contract_address: self.contract_address.clone()?,
+            contract_alias: self.contract_alias.clone(),
             entrypoint: self.entrypoint.clone()?,
         })
     }
@@ -527,35 +528,51 @@ pub(crate) fn parse_contract_call_execution_context(
     metadata: &Metadata,
     bytecode: &[u8],
 ) -> Result<Option<ContractCallExecutionContext>, ValidationFail> {
-    let namespace = metadata
-        .get("contract_namespace")
+    let contract_address = metadata
+        .get("contract_address")
         .map(|raw| {
             raw.try_into_any_norito::<String>().map_err(|err| {
-                ValidationFail::NotPermitted(format!("invalid contract_namespace metadata: {err}"))
+                ValidationFail::NotPermitted(format!("invalid contract_address metadata: {err}"))
             })
         })
         .transpose()?
-        .map(|value| value.trim().to_owned());
-    if namespace.as_deref().is_some_and(str::is_empty) {
-        return Err(ValidationFail::NotPermitted(
-            "contract_namespace must not be empty".to_owned(),
-        ));
-    }
+        .map(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(ValidationFail::NotPermitted(
+                    "contract_address must not be empty".to_owned(),
+                ));
+            }
+            trimmed.parse().map_err(|err| {
+                ValidationFail::NotPermitted(format!(
+                    "invalid contract_address metadata literal `{trimmed}`: {err}"
+                ))
+            })
+        })
+        .transpose()?;
 
-    let contract_id = metadata
-        .get("contract_id")
+    let contract_alias = metadata
+        .get("contract_alias")
         .map(|raw| {
             raw.try_into_any_norito::<String>().map_err(|err| {
-                ValidationFail::NotPermitted(format!("invalid contract_id metadata: {err}"))
+                ValidationFail::NotPermitted(format!("invalid contract_alias metadata: {err}"))
             })
         })
         .transpose()?
-        .map(|value| value.trim().to_owned());
-    if contract_id.as_deref().is_some_and(str::is_empty) {
-        return Err(ValidationFail::NotPermitted(
-            "contract_id must not be empty".to_owned(),
-        ));
-    }
+        .map(|value| {
+            let trimmed = value.trim();
+            if trimmed.is_empty() {
+                return Err(ValidationFail::NotPermitted(
+                    "contract_alias must not be empty".to_owned(),
+                ));
+            }
+            trimmed.parse().map_err(|err| {
+                ValidationFail::NotPermitted(format!(
+                    "invalid contract_alias metadata literal `{trimmed}`: {err}"
+                ))
+            })
+        })
+        .transpose()?;
 
     let entrypoint = metadata
         .get("contract_entrypoint")
@@ -575,6 +592,11 @@ pub(crate) fn parse_contract_call_execution_context(
     let payload = metadata.get("contract_payload").cloned();
     if entrypoint.is_none() && payload.is_none() {
         return Ok(None);
+    }
+    if contract_address.is_none() {
+        return Err(ValidationFail::NotPermitted(
+            "contract call metadata requires contract_address".to_owned(),
+        ));
     }
 
     let entrypoint_pc = if let Some(selector) = entrypoint.as_deref() {
@@ -611,8 +633,8 @@ pub(crate) fn parse_contract_call_execution_context(
     };
 
     Ok(Some(ContractCallExecutionContext {
-        namespace,
-        contract_id,
+        contract_address,
+        contract_alias,
         entrypoint,
         entrypoint_pc,
         args: payload.unwrap_or_default(),
@@ -1531,11 +1553,32 @@ impl Executor {
         {
             use iroha_data_model::proof::{ProofAttachment, ProofAttachmentList, VerifyingKeyId};
 
-            let namespace_hint = md.get("contract_namespace").and_then(|value| {
-                let raw = value.as_ref().to_string();
-                let trimmed = raw.trim().trim_matches('"').trim();
-                (!trimmed.is_empty()).then(|| trimmed.to_owned())
-            });
+            let namespace_hint = md
+                .get("contract_alias")
+                .and_then(|value| value.try_into_any_norito::<String>().ok())
+                .and_then(|raw| {
+                    raw.trim()
+                        .parse::<iroha_data_model::smart_contract::ContractAlias>()
+                        .ok()
+                })
+                .map(|alias| alias.dataspace_segment().to_owned())
+                .or_else(|| {
+                    md.get("contract_address")
+                        .and_then(|value| value.try_into_any_norito::<String>().ok())
+                        .and_then(|raw| {
+                            raw.trim()
+                                .parse::<iroha_data_model::smart_contract::ContractAddress>()
+                                .ok()
+                        })
+                        .and_then(|contract_address| contract_address.dataspace_id().ok())
+                        .and_then(|dataspace_id| {
+                            state_transaction
+                                .nexus
+                                .dataspace_catalog
+                                .by_id(dataspace_id)
+                                .map(|entry| entry.alias.clone())
+                        })
+                });
 
             // Process ZK attachments embedded in V2 transactions.
             if let Some(ProofAttachmentList(list)) = transaction.attachments().cloned() {
@@ -5015,9 +5058,16 @@ mod tests {
             1_u32,
             user2.clone(),
         ));
+        let contract_address = ContractAddress::derive(
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+            &alice_id,
+            0,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("bisp contract address");
         let context = ContractRuntimeExecutionContext {
-            namespace: "bisp".to_owned(),
-            contract_id: "bisp".to_owned(),
+            contract_address,
+            contract_alias: Some("bisp::bisp".parse().expect("bisp alias")),
             entrypoint: "spend_to_merchant".to_owned(),
         };
 
@@ -5082,9 +5132,16 @@ mod tests {
             1_u32,
             user2.clone(),
         ));
+        let contract_address = ContractAddress::derive(
+            iroha_config::parameters::defaults::common::chain_discriminant(),
+            &alice_id,
+            0,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("bisp contract address");
         let context = ContractRuntimeExecutionContext {
-            namespace: "bisp".to_owned(),
-            contract_id: "bisp".to_owned(),
+            contract_address,
+            contract_alias: Some("bisp::bisp".parse().expect("bisp alias")),
             entrypoint: "create_tranche".to_owned(),
         };
 

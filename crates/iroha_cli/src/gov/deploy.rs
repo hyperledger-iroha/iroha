@@ -1,6 +1,6 @@
 //! Governance deployment CLI helpers.
 
-use super::shared::{decode_hex32, print_with_summary};
+use super::shared::{print_with_summary, resolve_contract_address_target};
 use crate::{
     Run, RunContext,
     json_utils::{json_array, json_object, json_value},
@@ -15,10 +15,10 @@ use iroha::data_model::{
 
 #[derive(clap::Args, Debug)]
 pub struct ProposeDeployArgs {
-    #[arg(long)]
-    pub namespace: String,
-    #[arg(long, value_name = "ID")]
-    pub contract_id: String,
+    #[arg(long, conflicts_with = "contract_alias")]
+    pub contract_address: Option<String>,
+    #[arg(long, conflicts_with = "contract_address")]
+    pub contract_alias: Option<String>,
     #[arg(long)]
     pub code_hash: String,
     #[arg(long)]
@@ -62,15 +62,43 @@ impl Run for ProposeDeployArgs {
             _ => norito::json::Value::Null,
         };
         let mode_value = json_value(&mode_norm)?;
-        let body = json_object(vec![
-            ("namespace", json_value(&self.namespace)?),
-            ("contract_id", json_value(&self.contract_id)?),
+        let mut pairs = vec![
             ("code_hash", json_value(&self.code_hash)?),
             ("abi_hash", json_value(&self.abi_hash)?),
             ("abi_version", json_value(&self.abi_version)?),
             ("window", window),
             ("mode", mode_value),
-        ])?;
+        ];
+        match (
+            self.contract_address.as_deref(),
+            self.contract_alias.as_deref(),
+        ) {
+            (Some(_), Some(_)) => {
+                return Err(eyre!(
+                    "exactly one of --contract-address or --contract-alias must be provided"
+                ));
+            }
+            (Some(contract_address), None) => {
+                let contract_address: iroha::data_model::smart_contract::ContractAddress =
+                    contract_address
+                        .parse()
+                        .map_err(|err| eyre!("invalid --contract-address: {err}"))?;
+                pairs.push(("contract_address", json_value(&contract_address)?));
+            }
+            (None, Some(contract_alias)) => {
+                let contract_alias: iroha::data_model::smart_contract::ContractAlias =
+                    contract_alias
+                        .parse()
+                        .map_err(|err| eyre!("invalid --contract-alias: {err}"))?;
+                pairs.push(("contract_alias", json_value(&contract_alias)?));
+            }
+            (None, None) => {
+                return Err(eyre!(
+                    "provide exactly one contract target via --contract-address or --contract-alias"
+                ));
+            }
+        }
+        let body = json_object(pairs)?;
         let value = client.post_gov_propose_deploy_json(&body)?;
         let ok = value
             .get("ok")
@@ -267,116 +295,11 @@ impl Run for ProtectedGetArgs {
 }
 
 #[derive(clap::Args, Debug)]
-pub struct ActivateInstanceArgs {
-    #[arg(long)]
-    pub namespace: String,
-    #[arg(long)]
-    pub contract_id: String,
-    /// code hash hex (64 chars, 0x optional)
-    #[arg(long, value_name = "HEX64")]
-    pub code_hash: String,
-    /// Submit and wait until committed or rejected
-    #[arg(long, default_value_t = false)]
-    pub blocking: bool,
-}
-
-impl Run for ActivateInstanceArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let Self {
-            namespace,
-            contract_id,
-            code_hash,
-            blocking,
-        } = self;
-        let hash_bytes = decode_hex32(&code_hash)?;
-        let code_hash_hex = format!("0x{}", hex::encode(hash_bytes));
-        if blocking {
-            let instruction =
-                iroha::data_model::isi::smart_contract_code::ActivateContractInstance {
-                    namespace,
-                    contract_id,
-                    code_hash: iroha_crypto::Hash::prehashed(hash_bytes),
-                };
-            let boxed: iroha::data_model::isi::InstructionBox = instruction.into();
-            context.finish([boxed])?;
-        } else {
-            let out = json_object(vec![
-                ("action", json_value("ActivateContractInstance")?),
-                ("namespace", json_value(&namespace)?),
-                ("contract_id", json_value(&contract_id)?),
-                ("code_hash", json_value(&code_hash_hex)?),
-                (
-                    "hint",
-                    json_value(
-                        "pass --blocking to submit via CLI context; otherwise this is a skeleton payload",
-                    )?,
-                ),
-            ])?;
-            context.print_data(&out)?;
-        }
-        Ok(())
-    }
-}
-
-#[derive(clap::Args, Debug)]
-pub struct InstancesArgs {
-    /// Namespace to list (e.g., apps)
-    #[arg(long, value_name = "NS")]
-    pub namespace: String,
-    /// Filter: `contract_id` substring (case-sensitive)
-    #[arg(long)]
-    pub contains: Option<String>,
-    /// Filter: code hash hex prefix (lowercase)
-    #[arg(long)]
-    pub hash_prefix: Option<String>,
-    /// Pagination offset
-    #[arg(long)]
-    pub offset: Option<u32>,
-    /// Pagination limit
-    #[arg(long)]
-    pub limit: Option<u32>,
-    /// Order: `cid_asc` (default), `cid_desc`, `hash_asc`, `hash_desc`
-    #[arg(long)]
-    pub order: Option<String>,
-}
-
-impl Run for InstancesArgs {
-    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-        let client: Client = context.client_from_config();
-        let value = client.get_gov_instances_by_ns_filtered_json(
-            &self.namespace,
-            self.contains.as_deref(),
-            self.hash_prefix.as_deref(),
-            self.offset,
-            self.limit,
-            self.order.as_deref(),
-        )?;
-        let total = value
-            .get("total")
-            .and_then(norito::json::Value::as_u64)
-            .unwrap_or(0);
-        let offset = value
-            .get("offset")
-            .and_then(norito::json::Value::as_u64)
-            .unwrap_or(0);
-        let limit = value
-            .get("limit")
-            .and_then(norito::json::Value::as_u64)
-            .unwrap_or(0);
-        let summary = Some(format!(
-            "instance list: namespace={} total={} offset={} limit={}",
-            self.namespace, total, offset, limit
-        ));
-        print_with_summary(context, summary, &value)
-    }
-}
-
-#[derive(clap::Args, Debug)]
 pub struct DeployMetaArgs {
-    #[arg(long)]
-    pub namespace: String,
-    #[arg(long)]
-    pub contract_id: String,
+    #[arg(long, conflicts_with = "contract_alias")]
+    pub contract_address: Option<String>,
+    #[arg(long, conflicts_with = "contract_address")]
+    pub contract_alias: Option<String>,
     /// Optional validator account IDs (canonical I105 account literals) authorizing the deployment alongside the authority.
     #[arg(long = "approver", value_name = "ACCOUNT")]
     pub approvers: Vec<String>,
@@ -384,9 +307,14 @@ pub struct DeployMetaArgs {
 
 impl Run for DeployMetaArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let client: Client = context.client_from_config();
+        let contract_address = resolve_contract_address_target(
+            &client,
+            self.contract_address.as_deref(),
+            self.contract_alias.as_deref(),
+        )?;
         let mut pairs = vec![
-            ("gov_namespace", json_value(&self.namespace)?),
-            ("gov_contract_id", json_value(&self.contract_id)?),
+            ("gov_contract_address", json_value(&contract_address)?),
         ];
 
         if !self.approvers.is_empty() {
@@ -440,6 +368,8 @@ mod tests {
             let cfg = Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
                 account,
+                account_chain_discriminant:
+                    iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),
@@ -527,20 +457,18 @@ mod tests {
     fn deploy_meta_args_outputs_expected_keys() {
         let mut ctx = TestContext::new();
         let args = DeployMetaArgs {
-            namespace: "apps".into(),
-            contract_id: "calc.v1".into(),
+            contract_address: Some(
+                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7".into(),
+            ),
+            contract_alias: None,
             approvers: Vec::new(),
         };
         args.run(&mut ctx).expect("deploy-meta run");
         assert_eq!(ctx.printed.len(), 1);
         let value = &ctx.printed[0];
         assert_eq!(
-            value.get("gov_namespace").and_then(|v| v.as_str()),
-            Some("apps")
-        );
-        assert_eq!(
-            value.get("gov_contract_id").and_then(|v| v.as_str()),
-            Some("calc.v1")
+            value.get("gov_contract_address").and_then(|v| v.as_str()),
+            Some("tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7")
         );
         assert!(value.get("gov_manifest_approvers").is_none());
     }
@@ -551,8 +479,10 @@ mod tests {
         let validator = sample_account_string("validator");
         let bob = sample_account_string("bob");
         let args = DeployMetaArgs {
-            namespace: "apps".into(),
-            contract_id: "calc.v1".into(),
+            contract_address: Some(
+                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7".into(),
+            ),
+            contract_alias: None,
             approvers: vec![validator.clone(), format!("   {bob}   ")],
         };
         args.run(&mut ctx).expect("deploy-meta run");
@@ -572,8 +502,10 @@ mod tests {
     fn deploy_meta_args_rejects_invalid_approver() {
         let mut ctx = TestContext::new();
         let args = DeployMetaArgs {
-            namespace: "apps".into(),
-            contract_id: "calc.v1".into(),
+            contract_address: Some(
+                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7".into(),
+            ),
+            contract_alias: None,
             approvers: vec!["not-an-id".into()],
         };
         let err = args
@@ -589,8 +521,10 @@ mod tests {
     fn deploy_meta_args_rejects_legacy_approver_with_domain_suffix() {
         let mut ctx = TestContext::new();
         let args = DeployMetaArgs {
-            namespace: "apps".into(),
-            contract_id: "calc.v1".into(),
+            contract_address: Some(
+                "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7".into(),
+            ),
+            contract_alias: None,
             approvers: vec!["alice@invalid-domain".into()],
         };
         let err = args
@@ -613,61 +547,6 @@ mod tests {
         let v: norito::json::Value = norito::json::from_str(&s).expect("roundtrip");
         assert_eq!(v["referendum_id"].as_str(), Some("ref-123"));
         assert_eq!(v["proposal_id"].as_str().unwrap().len(), 66);
-    }
-
-    #[test]
-    fn activate_instance_skeleton_prints_json() {
-        let mut ctx = TestContext::new();
-        let args = ActivateInstanceArgs {
-            namespace: "apps".to_string(),
-            contract_id: "calc.v1".to_string(),
-            code_hash: "0x".to_string() + &"ab".repeat(32),
-            blocking: false,
-        };
-        args.run(&mut ctx).expect("run skeleton path");
-        assert!(
-            ctx.submitted.is_none(),
-            "should not submit without --blocking"
-        );
-        assert_eq!(ctx.printed.len(), 1, "expect single JSON output");
-        let value = &ctx.printed[0];
-        assert_eq!(value["action"].as_str(), Some("ActivateContractInstance"));
-        assert_eq!(value["namespace"].as_str(), Some("apps"));
-        assert_eq!(value["contract_id"].as_str(), Some("calc.v1"));
-        let expected_hex = format!("0x{}", "ab".repeat(32));
-        assert_eq!(value["code_hash"].as_str(), Some(expected_hex.as_str()));
-        assert!(value.get("hint").is_some(), "hint field should be present");
-    }
-
-    #[test]
-    fn activate_instance_blocking_submits_instruction() {
-        let mut ctx = TestContext::new();
-        let args = ActivateInstanceArgs {
-            namespace: "apps".to_string(),
-            contract_id: "calc.v1".to_string(),
-            code_hash: "0x".to_string() + &"cd".repeat(32),
-            blocking: true,
-        };
-        args.run(&mut ctx).expect("run blocking path");
-        assert!(
-            ctx.printed.is_empty(),
-            "blocking path should not print skeleton"
-        );
-        let submitted = ctx
-            .submitted
-            .expect("expected instructions to be submitted");
-        assert_eq!(submitted.len(), 1, "exactly one instruction submitted");
-        let instruction = &submitted[0];
-        let any = instruction.as_any();
-        let concret = any
-            .downcast_ref::<iroha::data_model::isi::smart_contract_code::ActivateContractInstance>()
-            .expect("downcast to ActivateContractInstance");
-        assert_eq!(concret.namespace, "apps");
-        assert_eq!(concret.contract_id, "calc.v1");
-        assert_eq!(
-            hex::encode(<[u8; 32]>::from(concret.code_hash)),
-            "cd".repeat(32)
-        );
     }
 
     fn sample_account_string(name: &str) -> String {

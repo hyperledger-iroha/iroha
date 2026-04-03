@@ -144,10 +144,12 @@ impl norito::core::DecodeFromSlice<'_> for AtWindowDto {
 ///
 /// All hashes are 32-byte hex, with or without `0x` prefix.
 pub struct ProposeDeployContractDto {
-    /// Contract identifier (namespace-qualified)
-    pub contract_id: String,
-    /// Namespace for governance gating
-    pub namespace: String,
+    /// Optional canonical contract address targeted by the proposal.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Optional on-chain contract alias resolved to the canonical contract address.
+    #[norito(default)]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     /// ABI version (e.g., "1")
     pub abi_version: String,
     /// Deterministic code hash (blake2b-32; prefixed or raw hex)
@@ -1169,34 +1171,69 @@ fn canonical_hex32(value: &str, field: &str) -> Result<(String, [u8; 32]), crate
 }
 
 fn compute_proposal_id(
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
     code_hash: &[u8; 32],
     abi_hash: &[u8; 32],
 ) -> [u8; 32] {
     use iroha_crypto::blake2::{Blake2b512, digest::Digest};
 
-    let namespace_len = namespace.len() as u32;
-    let contract_len = contract_id.len() as u32;
+    let contract_address_literal = contract_address.as_ref();
+    let contract_address_len = contract_address_literal.len() as u32;
     let mut input = Vec::with_capacity(
-        b"iroha:gov:proposal:v1|".len()
-            + core::mem::size_of::<u32>() * 2
-            + namespace.len()
-            + contract_id.len()
+        b"iroha:gov:proposal:v2|".len()
+            + core::mem::size_of::<u32>()
+            + contract_address_literal.len()
             + code_hash.len()
             + abi_hash.len(),
     );
-    input.extend_from_slice(b"iroha:gov:proposal:v1|");
-    input.extend_from_slice(&namespace_len.to_le_bytes());
-    input.extend_from_slice(namespace.as_bytes());
-    input.extend_from_slice(&contract_len.to_le_bytes());
-    input.extend_from_slice(contract_id.as_bytes());
+    input.extend_from_slice(b"iroha:gov:proposal:v2|");
+    input.extend_from_slice(&contract_address_len.to_le_bytes());
+    input.extend_from_slice(contract_address_literal.as_bytes());
     input.extend_from_slice(code_hash);
     input.extend_from_slice(abi_hash);
     let digest = Blake2b512::digest(&input);
     let mut out = [0u8; 32];
     out.copy_from_slice(&digest[..32]);
     out
+}
+
+fn resolve_governance_contract_target(
+    state: &iroha_core::state::State,
+    contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
+    contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
+) -> Result<iroha_data_model::smart_contract::ContractAddress, crate::Error> {
+    match (contract_address, contract_alias) {
+        (Some(_), Some(_)) => Err(crate::Error::Query(
+            iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                    "exactly one of contract_address or contract_alias must be provided".into(),
+                ),
+            ),
+        )),
+        (Some(contract_address), None) => Ok(contract_address.clone()),
+        (None, Some(contract_alias)) => {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            state
+                .world_view()
+                .contract_address_by_alias_at(contract_alias, now_ms)
+                .ok_or_else(|| {
+                    crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                        iroha_data_model::query::error::QueryExecutionFail::NotFound,
+                    ))
+                })
+        }
+        (None, None) => Err(crate::Error::Query(
+            iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(
+                    "provide exactly one contract target via contract_address or contract_alias"
+                        .into(),
+                ),
+            ),
+        )),
+    }
 }
 
 #[derive(Debug, JsonSerialize)]
@@ -1704,109 +1741,69 @@ pub async fn handle_gov_protected_get(
     }))
 }
 
-#[derive(Debug, JsonSerialize, Clone)]
-/// Contract instance descriptor
-pub struct InstanceDto {
-    /// Contract id (namespace-qualified)
-    pub contract_id: String,
-    /// Code hash in hex
-    pub code_hash_hex: String,
-}
-
 #[derive(Debug, JsonSerialize)]
-/// Response for listing instances by namespace
-pub struct InstancesByNamespaceResponse {
-    /// The queried namespace
-    pub namespace: String,
-    /// Matching instances
-    pub instances: Vec<InstanceDto>,
-    /// Total number of matches
-    pub total: usize,
-    /// Page offset
-    pub offset: u32,
-    /// Page limit
-    pub limit: u32,
+/// Response for reading governance-managed contract binding state by canonical address.
+pub struct GovernedContractResponse {
+    /// Whether the contract is currently bound in state.
+    pub found: bool,
+    /// Canonical public contract address queried.
+    pub contract_address: iroha_data_model::smart_contract::ContractAddress,
+    /// Dataspace alias derived from the contract address, when known.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub dataspace: Option<String>,
+    /// Active code hash bound to the contract address, when present.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub code_hash_hex: Option<String>,
 }
 
-/// GET /v1/gov/instances/{ns} — lists active contract instances for a namespace.
+/// GET /v1/gov/contracts/{contract_address} — read the active governance binding for a contract.
 ///
 /// # Errors
-/// This handler never returns an error; filters and pagination only affect the response content.
-pub async fn handle_gov_instances_by_ns(
+/// Returns `crate::Error::Query` when the contract address is malformed or the dataspace alias
+/// encoded in the address is unknown to the current node.
+pub async fn handle_gov_contract_get(
     state: Arc<iroha_core::state::State>,
-    ns: axum::extract::Path<String>,
-    NoritoQuery(q): NoritoQuery<InstancesQuery>,
-) -> Result<JsonBody<InstancesByNamespaceResponse>, crate::Error> {
-    let namespace = ns.0;
-    let world = state.world_view();
-    let mut out: Vec<InstanceDto> = world
+    contract_address: axum::extract::Path<String>,
+) -> Result<JsonBody<GovernedContractResponse>, crate::Error> {
+    let contract_address: iroha_data_model::smart_contract::ContractAddress =
+        contract_address.0.parse().map_err(|err| {
+            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                    "invalid contract_address: {err}"
+                )),
+            ))
+        })?;
+    let dataspace_id = contract_address.dataspace_id().map_err(|err| {
+        crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(format!(
+                "invalid contract_address dataspace: {err}"
+            )),
+        ))
+    })?;
+    let dataspace = state
+        .nexus_snapshot()
+        .dataspace_catalog
+        .by_id(dataspace_id)
+        .map(|entry| entry.alias.clone())
+        .ok_or_else(|| {
+            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::NotFound,
+            ))
+        })?;
+    let code_hash_hex = state
+        .world_view()
         .contract_instances()
-        .iter()
-        .filter_map(|((ns_key, cid), h)| {
-            if ns_key == &namespace {
-                let bytes: [u8; 32] = (*h).into();
-                Some(InstanceDto {
-                    contract_id: cid.clone(),
-                    code_hash_hex: hex::encode(bytes),
-                })
-            } else {
-                None
-            }
-        })
-        .collect();
-
-    // Filters
-    if let Some(s) = q.contains.as_deref() {
-        out.retain(|x| x.contract_id.contains(s));
-    }
-    if let Some(pref) = q.hash_prefix.as_deref() {
-        let pref_l = pref.to_ascii_lowercase();
-        out.retain(|x| x.code_hash_hex.starts_with(&pref_l));
-    }
-
-    // Sort
-    match q.order.as_deref() {
-        Some("cid_desc") => out.sort_by(|a, b| b.contract_id.cmp(&a.contract_id)),
-        Some("hash_asc") => out.sort_by(|a, b| a.code_hash_hex.cmp(&b.code_hash_hex)),
-        Some("hash_desc") => out.sort_by(|a, b| b.code_hash_hex.cmp(&a.code_hash_hex)),
-        _ => out.sort_by(|a, b| a.contract_id.cmp(&b.contract_id)), // cid_asc default
-    }
-
-    // Pagination
-    let total = out.len();
-    let offset = q.offset.unwrap_or(0);
-    let limit = q.limit.unwrap_or(100).min(10_000);
-    let start = offset as usize;
-    let end = start.saturating_add(limit as usize).min(total);
-    let view = if start < end {
-        out[start..end].to_vec()
-    } else {
-        Vec::new()
-    };
-    Ok(JsonBody(InstancesByNamespaceResponse {
-        namespace,
-        instances: view,
-        total,
-        offset,
-        limit,
+        .get(&contract_address)
+        .map(|hash| {
+            let bytes: [u8; 32] = (*hash).into();
+            hex::encode(bytes)
+        });
+    Ok(JsonBody(GovernedContractResponse {
+        found: code_hash_hex.is_some(),
+        contract_address,
+        dataspace: Some(dataspace),
+        code_hash_hex,
     }))
-}
-
-#[derive(Debug, Default, JsonDeserialize)]
-/// Optional filters for listing contract instances by namespace.
-///
-/// All fields are optional; pagination defaults to `offset = 0`, `limit = 100`.
-pub struct InstancesQuery {
-    /// Filter: contract_id contains substring (case-sensitive)
-    pub contains: Option<String>,
-    /// Filter: code_hash hex prefix (lowercase)
-    pub hash_prefix: Option<String>,
-    /// Pagination offset (default 0)
-    pub offset: Option<u32>,
-    /// Pagination limit (default 100, max 10_000)
-    pub limit: Option<u32>,
-    /// Order: one of cid_asc (default), cid_desc, hash_asc, hash_desc
-    pub order: Option<String>,
 }
 
 /// POST /v1/gov/propose-deploy — build a proposal id and instruction skeleton.
@@ -1815,7 +1812,7 @@ pub struct InstancesQuery {
 /// signed transactions after building the draft instructions.
 ///
 /// # Errors
-/// Returns `crate::Error::Query` when the namespace, contract id, hashes, ABI version, or request
+/// Returns `crate::Error::Query` when the contract target, hashes, ABI version, or request
 /// options fail validation (e.g., malformed hex or unsupported voting mode).
 pub async fn handle_gov_propose_deploy(
     chain_id: Arc<iroha_data_model::ChainId>,
@@ -1826,44 +1823,11 @@ pub async fn handle_gov_propose_deploy(
 ) -> Result<JsonBody<ProposeDeployContractResponse>, crate::Error> {
     use iroha_data_model::isi::governance as gov;
 
-    let namespace = body.namespace.trim();
-    if namespace.is_empty() {
-        return Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "namespace must not be empty".into(),
-                ),
-            ),
-        ));
-    }
-    if namespace.len() > u32::MAX as usize {
-        return Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "namespace length exceeds 2^32 bytes".into(),
-                ),
-            ),
-        ));
-    }
-    let contract_id = body.contract_id.trim();
-    if contract_id.is_empty() {
-        return Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "contract_id must not be empty".into(),
-                ),
-            ),
-        ));
-    }
-    if contract_id.len() > u32::MAX as usize {
-        return Err(crate::Error::Query(
-            iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                    "contract_id length exceeds 2^32 bytes".into(),
-                ),
-            ),
-        ));
-    }
+    let contract_address = resolve_governance_contract_target(
+        &state,
+        body.contract_address.as_ref(),
+        body.contract_alias.as_ref(),
+    )?;
 
     let (code_hash_hex, code_hash_bytes) = canonical_hex32(&body.code_hash, "code_hash")?;
     let (abi_hash_hex, abi_hash_bytes) = canonical_hex32(&body.abi_hash, "abi_hash")?;
@@ -1924,8 +1888,7 @@ pub async fn handle_gov_propose_deploy(
     }
 
     let instr = gov::ProposeDeployContract {
-        namespace: namespace.to_string(),
-        contract_id: contract_id.to_string(),
+        contract_address: contract_address.clone(),
         code_hash_hex,
         abi_hash_hex,
         abi_version: abi_version.to_string(),
@@ -1934,12 +1897,8 @@ pub async fn handle_gov_propose_deploy(
         manifest_provenance: body.manifest_provenance.clone(),
     };
 
-    let proposal_id_bytes = compute_proposal_id(
-        &instr.namespace,
-        &instr.contract_id,
-        &code_hash_bytes,
-        &abi_hash_bytes,
-    );
+    let proposal_id_bytes =
+        compute_proposal_id(&instr.contract_address, &code_hash_bytes, &abi_hash_bytes);
     let proposal_id = hex::encode(proposal_id_bytes);
     let _submitted = maybe_submit_optional_signer(
         chain_id,
@@ -2987,6 +2946,12 @@ mod tests {
             .expect("signed manifest should carry provenance")
     }
 
+    fn sample_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
+        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            .parse()
+            .expect("contract address")
+    }
+
     fn apply_queued_block_allow_errors(
         state: &Arc<State>,
         queue: &Arc<Queue>,
@@ -3032,8 +2997,8 @@ mod tests {
     fn serde_shapes_compile() {
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let req = ProposeDeployContractDto {
-            contract_id: "my.contract.v1".to_string(),
-            namespace: "apps".to_string(),
+            contract_address: Some(sample_contract_address()),
+            contract_alias: None,
             abi_version: "1".to_string(),
             code_hash: "0x".to_string() + &"aa".repeat(32),
             abi_hash: format!("0x{}", hex::encode(canonical_abi)),
@@ -3080,8 +3045,8 @@ mod tests {
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let abi_hash_input = format!("0x{}", hex::encode(canonical_abi));
         let dto = ProposeDeployContractDto {
-            contract_id: "my.contract.v1".to_string(),
-            namespace: "apps".to_string(),
+            contract_address: Some(sample_contract_address()),
+            contract_alias: None,
             abi_version: "1".to_string(),
             code_hash: code_hash_input.clone(),
             abi_hash: abi_hash_input.clone(),
@@ -3112,7 +3077,7 @@ mod tests {
 
         // Canonical hashing matches core logic
         let expected_id =
-            super::compute_proposal_id("apps", "my.contract.v1", &code_bytes, &abi_bytes);
+            super::compute_proposal_id(&sample_contract_address(), &code_bytes, &abi_bytes);
         assert_eq!(body.proposal_id, hex::encode(expected_id));
 
         // Payload decodes to sanitized ProposeDeployContract
@@ -3120,8 +3085,7 @@ mod tests {
         let payload = hex::decode(&tx.payload_hex).expect("payload hex");
         let decoded: iroha_data_model::isi::governance::ProposeDeployContract =
             norito::decode_from_bytes(&payload).expect("decode payload");
-        assert_eq!(decoded.namespace, "apps");
-        assert_eq!(decoded.contract_id, "my.contract.v1");
+        assert_eq!(decoded.contract_address, sample_contract_address());
         assert_eq!(decoded.code_hash_hex, code_hex);
         assert_eq!(decoded.abi_hash_hex, abi_hex);
         assert_eq!(decoded.abi_version, "1");
@@ -3132,8 +3096,8 @@ mod tests {
         let (state, queue, chain_id) = mk_basic_context();
         let canonical_abi = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let dto = ProposeDeployContractDto {
-            contract_id: "my.contract.v1".to_string(),
-            namespace: "apps".to_string(),
+            contract_address: Some(sample_contract_address()),
+            contract_alias: None,
             abi_version: "1".to_string(),
             code_hash: format!("{}", "11".repeat(32)),
             abi_hash: format!("{}", hex::encode(canonical_abi)),
@@ -3160,8 +3124,8 @@ mod tests {
     async fn propose_deploy_rejects_mismatched_abi_hash() {
         let (state, queue, chain_id) = mk_basic_context();
         let dto = ProposeDeployContractDto {
-            contract_id: "my.contract.v1".to_string(),
-            namespace: "apps".to_string(),
+            contract_address: Some(sample_contract_address()),
+            contract_alias: None,
             abi_version: "1".to_string(),
             code_hash: format!("{}", "11".repeat(32)),
             abi_hash: format!("{}", "22".repeat(32)),
@@ -3619,10 +3583,11 @@ mod tests {
         let abi_hash_bytes = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let manifest_provenance =
             mk_manifest_provenance(&harness.authority_keypair, code_hash_bytes, abi_hash_bytes);
+        let contract_address = sample_contract_address();
 
         let propose = ProposeDeployContractDto {
-            contract_id: "demo.contract".to_string(),
-            namespace: "apps".to_string(),
+            contract_address: Some(contract_address.clone()),
+            contract_alias: None,
             abi_version: "1".to_string(),
             code_hash: format!("0x{}", hex::encode(code_hash_bytes)),
             abi_hash: format!("0x{}", hex::encode(abi_hash_bytes)),
@@ -3780,11 +3745,10 @@ mod tests {
 
         let view = harness.state.view();
         let code_hash = iroha_crypto::Hash::prehashed(code_hash_bytes);
-        let instance_key = ("apps".to_string(), "demo.contract".to_string());
         let bound_hash = view
             .world()
             .contract_instances()
-            .get(&instance_key)
+            .get(&contract_address)
             .copied()
             .expect("instance bound");
         assert_eq!(bound_hash, code_hash);
@@ -3809,8 +3773,8 @@ mod tests {
         let manifest_provenance =
             mk_manifest_provenance(&harness.authority_keypair, code_hash_bytes, abi_hash_bytes);
         let propose = ProposeDeployContractDto {
-            contract_id: "demo.contract".to_string(),
-            namespace: "apps".to_string(),
+            contract_address: Some(sample_contract_address()),
+            contract_alias: None,
             abi_version: "1".to_string(),
             code_hash: format!("0x{}", hex::encode(code_hash_bytes)),
             abi_hash: format!("0x{}", hex::encode(abi_hash_bytes)),

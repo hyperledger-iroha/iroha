@@ -247,8 +247,8 @@ export interface MultisigAccountSelector {
 
 export interface MultisigContractCallProposeRequest extends MultisigAccountSelector {
   signerAccountId: string;
-  namespace: string;
-  contractId: string;
+  contractAddress?: string;
+  contractAlias?: string;
   entrypoint: string;
   payload?: JsonValue;
   gasAssetId?: string | null;
@@ -265,7 +265,8 @@ export interface MultisigContractCallProposeRequest extends MultisigAccountSelec
   multisig_account_id?: string;
   multisig_account_alias?: string;
   signer_account_id?: string;
-  contract_id?: string;
+  contract_address?: string;
+  contract_alias?: string;
   gas_asset_id?: string | null;
   fee_sponsor?: string | null;
   gas_limit?: number | string | bigint | null;
@@ -283,8 +284,8 @@ export interface MultisigContractCallProposePayload {
   multisig_account_id?: string;
   multisig_account_alias?: string;
   signer_account_id: string;
-  namespace: string;
-  contract_id: string;
+  contract_address?: string;
+  contract_alias?: string;
   entrypoint: string;
   payload: JsonValue;
   gas_asset_id?: string;
@@ -3282,8 +3283,7 @@ export interface ToriiGovernanceManifestQuorumSnapshot {
 }
 
 export interface ToriiGovernanceManifestActivationSnapshot {
-  namespace: string;
-  contract_id: string;
+  contract_address: string;
   code_hash_hex: string;
   abi_hash_hex?: string | null;
   height: number;
@@ -3303,11 +3303,17 @@ export interface ToriiGovernanceStatusSnapshot {
 export type ToriiGovernanceProposalStatus = "Proposed" | "Approved" | "Rejected" | "Enacted";
 
 export interface ToriiGovernanceDeployContractProposal {
-  namespace: string;
-  contract_id: string;
+  contract_address: string;
   code_hash_hex: string;
   abi_hash_hex: string;
   abi_version: string;
+}
+
+export interface ToriiGovernanceContractResponse {
+  found: boolean;
+  contract_address: string;
+  dataspace: string | null;
+  code_hash_hex: string | null;
 }
 
 export interface ToriiGovernanceProposalKind {
@@ -3493,8 +3499,8 @@ export interface ToriiGovernanceDraftResponse {
 export type ToriiGovernanceBallotDirection = "Aye" | "Nay" | "Abstain";
 
 export interface ToriiGovernanceDeployContractProposalRequest {
-  namespace: string;
-  contractId: string;
+  contractAddress?: string;
+  contractAlias?: string;
   codeHash: string | BinaryLike;
   abiHash: string | BinaryLike;
   abiVersion?: string;
@@ -5335,8 +5341,8 @@ export interface GovernanceWindowInput {
 }
 
 export interface ProposeDeployContractInstructionInput {
-  namespace: string;
-  contractId: string;
+  contractAddress?: string;
+  contractAlias?: string;
   codeHash: HashLike;
   abiHash: HashLike;
   abiVersion?: string;
@@ -5574,43 +5580,26 @@ export interface RegisterContractCodeRequest {
 export interface DeployContractRequest {
   authority: string;
   privateKey: string;
+  dataspace?: string | null;
   codeB64: string | ArrayBufferView | ArrayBuffer | Buffer;
   manifest?: ToriiContractManifestInput | null;
 }
 
 export interface DeployContractResponse {
   ok: boolean;
+  contract_address: string | null;
+  dataspace: string | null;
+  deploy_nonce: number | null;
+  tx_hash_hex: string | null;
   code_hash_hex: string;
   abi_hash_hex: string;
-}
-
-export interface DeployContractInstanceRequest extends DeployContractRequest {
-  namespace: string;
-  contractId: string;
-}
-
-export interface DeployContractInstanceResponse extends DeployContractResponse {
-  namespace: string;
-  contract_id: string;
-}
-
-export interface ActivateContractInstanceRequest {
-  authority: string;
-  privateKey: string;
-  namespace: string;
-  contractId: string;
-  codeHash: string;
-}
-
-export interface ActivateContractInstanceResponse {
-  ok: boolean;
 }
 
 export interface ContractCallRequest {
   authority: string;
   privateKey: string;
-  namespace: string;
-  contractId: string;
+  contractAddress?: string;
+  contractAlias?: string;
   entrypoint?: string | null;
   payload?: unknown;
   gasAssetId?: string | null;
@@ -5619,12 +5608,17 @@ export interface ContractCallRequest {
 
 export interface ContractCallResponse {
   ok: boolean;
-  namespace: string;
-  contract_id: string;
+  submitted: boolean;
+  dataspace: string;
+  contract_address?: string;
   code_hash_hex: string;
   abi_hash_hex: string;
-  tx_hash_hex: string;
+  creation_time_ms: number;
+  tx_hash_hex: string | null;
   entrypoint: string | null;
+  transaction_scaffold_b64: string | null;
+  signed_transaction_b64: string | null;
+  signing_message_b64: string | null;
 }
 
 export interface ContractManifestRecord {
@@ -5656,33 +5650,6 @@ export interface ContractManifestRecord {
 
 export interface ContractCodeBytesRecord {
   code_b64: string;
-}
-
-export interface ContractInstanceRecord {
-  contract_id: string;
-  code_hash_hex: string;
-}
-
-export interface ContractInstanceListResponse {
-  namespace: string;
-  total: number;
-  offset: number;
-  limit: number;
-  instances: ReadonlyArray<ContractInstanceRecord>;
-}
-
-export interface ContractInstanceListOptions {
-  contains?: string | null;
-  hashPrefix?: string | null;
-  offset?: number | string | bigint;
-  limit?: number | string | bigint;
-  order?: "cid_asc" | "cid_desc" | "hash_asc" | "hash_desc" | null;
-  signal?: AbortSignal;
-}
-
-export interface ContractInstanceIteratorOptions extends ContractInstanceListOptions {
-  pageSize?: NumericLike;
-  maxItems?: NumericLike;
 }
 
 export interface SorafsPinResponse {
@@ -6452,18 +6419,6 @@ export interface RegisterSmartContractBytesInstructionInput {
   code: ArrayBufferView | ArrayBuffer | Buffer | string;
 }
 
-export interface DeactivateContractInstanceInstructionInput {
-  namespace: string;
-  contractId: string;
-  reason?: string | null;
-}
-
-export interface ActivateContractInstanceInstructionInput {
-  namespace: string;
-  contractId: string;
-  codeHash: HashLike;
-}
-
 export interface RemoveSmartContractBytesInstructionInput {
   codeHash: HashLike;
   reason?: string | null;
@@ -6782,32 +6737,6 @@ export interface RegisterSmartContractBytesTransactionInput {
   authority: string;
   codeHash: HashLike;
   code: ArrayBufferView | ArrayBuffer | Buffer | string;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-}
-
-export interface DeactivateContractInstanceTransactionInput {
-  chainId: string;
-  authority: string;
-  namespace: string;
-  contractId: string;
-  reason?: string | null;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-}
-
-export interface ActivateContractInstanceTransactionInput {
-  chainId: string;
-  authority: string;
-  namespace: string;
-  contractId: string;
-  codeHash: HashLike;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -7704,12 +7633,6 @@ export declare class ToriiClient {
   ): RbcSampleRequestOptions;
   registerContractCode(request: RegisterContractCodeRequest): Promise<unknown | null>;
   deployContract(request: DeployContractRequest): Promise<DeployContractResponse | null>;
-  deployContractInstance(
-    request: DeployContractInstanceRequest,
-  ): Promise<DeployContractInstanceResponse | null>;
-  activateContractInstance(
-    request: ActivateContractInstanceRequest,
-  ): Promise<ActivateContractInstanceResponse | null>;
   callContract(
     request: ContractCallRequest,
     options?: { signal?: AbortSignal },
@@ -7739,22 +7662,10 @@ export declare class ToriiClient {
   ): Promise<MultisigProposalGetResponse>;
   getContractManifest(codeHashHex: string): Promise<ContractManifestRecord | null>;
   getContractCodeBytes(codeHashHex: string): Promise<ContractCodeBytesRecord | null>;
-  listContractInstances(
-    namespace: string,
-    options?: ContractInstanceListOptions,
-  ): Promise<ContractInstanceListResponse>;
-  iterateContractInstances(
-    namespace: string,
-    options?: ContractInstanceIteratorOptions,
-  ): AsyncGenerator<ContractInstanceRecord, void, unknown>;
-  listGovernanceInstances(
-    namespace: string,
-    options?: ContractInstanceListOptions,
-  ): Promise<ContractInstanceListResponse>;
-  iterateGovernanceInstances(
-    namespace: string,
-    options?: ContractInstanceIteratorOptions,
-  ): AsyncGenerator<ContractInstanceRecord, void, unknown>;
+  getGovernanceContract(
+    contractAddress: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiGovernanceContractResponse>;
   listTriggers(options?: TriggerListOptions): Promise<ToriiTriggerListPage>;
   iterateTriggers(
     options?: TriggerIteratorOptions,
@@ -8698,12 +8609,6 @@ export function buildRegisterSmartContractCodeTransaction(
 export function buildRegisterSmartContractBytesTransaction(
   input: RegisterSmartContractBytesTransactionInput,
 ): SignedTransactionResult;
-export function buildDeactivateContractInstanceTransaction(
-  input: DeactivateContractInstanceTransactionInput,
-): SignedTransactionResult;
-export function buildActivateContractInstanceTransaction(
-  input: ActivateContractInstanceTransactionInput,
-): SignedTransactionResult;
 export function buildRemoveSmartContractBytesTransaction(
   input: RemoveSmartContractBytesTransactionInput,
 ): SignedTransactionResult;
@@ -9203,14 +9108,6 @@ export function buildRegisterSmartContractCodeInstruction(
 
 export function buildRegisterSmartContractBytesInstruction(
   input: RegisterSmartContractBytesInstructionInput,
-): object;
-
-export function buildDeactivateContractInstanceInstruction(
-  input: DeactivateContractInstanceInstructionInput,
-): object;
-
-export function buildActivateContractInstanceInstruction(
-  input: ActivateContractInstanceInstructionInput,
 ): object;
 
 export function buildRemoveSmartContractBytesInstruction(

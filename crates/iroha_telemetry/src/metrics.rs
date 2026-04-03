@@ -5439,10 +5439,8 @@ pub struct GovernanceManifestQuorumCounters {
     crate::json_macros::JsonDeserialize,
 )]
 pub struct GovernanceManifestActivation {
-    /// Namespace whose manifest was activated.
-    pub namespace: String,
-    /// Identifier of the deployed contract.
-    pub contract_id: String,
+    /// Canonical contract address whose manifest was activated.
+    pub contract_address: String,
     /// Hex-encoded code hash pinned by the activation.
     pub code_hash_hex: String,
     /// Optional ABI hash associated with the activation.
@@ -5695,8 +5693,7 @@ impl<'a> DecodeFromSlice<'a> for GovernanceManifestQuorumCounters {
 impl norito::core::NoritoSerialize for GovernanceManifestActivation {
     fn serialize<W: std::io::Write>(&self, writer: W) -> Result<(), norito::core::Error> {
         let payload = (
-            self.namespace.clone(),
-            self.contract_id.clone(),
+            self.contract_address.clone(),
             self.code_hash_hex.clone(),
             self.abi_hash_hex.clone(),
             self.height,
@@ -5708,8 +5705,7 @@ impl norito::core::NoritoSerialize for GovernanceManifestActivation {
 
 impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceManifestActivation {
     fn deserialize(archived: &'a norito::core::Archived<GovernanceManifestActivation>) -> Self {
-        let (namespace, contract_id, code_hash_hex, abi_hash_hex, height, activated_at_ms): (
-            String,
+        let (contract_address, code_hash_hex, abi_hash_hex, height, activated_at_ms): (
             String,
             String,
             Option<String>,
@@ -5717,8 +5713,7 @@ impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceManifestActivation {
             u64,
         ) = norito::core::NoritoDeserialize::deserialize(archived.cast());
         Self {
-            namespace,
-            contract_id,
+            contract_address,
             code_hash_hex,
             abi_hash_hex,
             height,
@@ -5729,12 +5724,11 @@ impl<'a> norito::core::NoritoDeserialize<'a> for GovernanceManifestActivation {
 
 impl<'a> DecodeFromSlice<'a> for GovernanceManifestActivation {
     fn decode_from_slice(bytes: &'a [u8]) -> Result<(Self, usize), norito::core::Error> {
-        let ((namespace, contract_id, code_hash_hex, abi_hash_hex, height, activated_at_ms), used) =
-            <(String, String, String, Option<String>, u64, u64)>::decode_from_slice(bytes)?;
+        let ((contract_address, code_hash_hex, abi_hash_hex, height, activated_at_ms), used) =
+            <(String, String, Option<String>, u64, u64)>::decode_from_slice(bytes)?;
         Ok((
             Self {
-                namespace,
-                contract_id,
+                contract_address,
                 code_hash_hex,
                 abi_hash_hex,
                 height,
@@ -18107,8 +18101,8 @@ mod test {
                     rejected: 1,
                 },
                 recent_manifest_activations: vec![GovernanceManifestActivation {
-                    namespace: "apps".to_string(),
-                    contract_id: "demo.contract".to_string(),
+                    contract_address: "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s"
+                        .to_string(),
                     code_hash_hex: "deadbeef".to_string(),
                     abi_hash_hex: Some("cafebabe".to_string()),
                     height: 42,
@@ -18279,8 +18273,7 @@ mod test {
                     "rejected": 1
                 },
                 "recent_manifest_activations": [{
-                    "namespace": "apps",
-                    "contract_id": "demo.contract",
+                    "contract_address": "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
                     "code_hash_hex": "deadbeef",
                     "abi_hash_hex": "cafebabe",
                     "height": 42,
@@ -18439,8 +18432,7 @@ mod test {
                 },
                 "recent_manifest_activations": [
                   {
-                    "namespace": "apps",
-                    "contract_id": "demo.contract",
+                    "contract_address": "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
                     "code_hash_hex": "deadbeef",
                     "abi_hash_hex": "cafebabe",
                     "height": 42,

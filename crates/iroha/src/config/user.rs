@@ -5,7 +5,7 @@ use std::{path::PathBuf, time::Duration};
 use error_stack::{Report, ResultExt};
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_config_base::{
-    ReadConfig, WithOrigin,
+    ParameterOrigin, ReadConfig, WithOrigin,
     attach::ConfigValueAndOrigin,
     util::{DurationMs, Emitter, EmitterResultExt},
 };
@@ -21,6 +21,18 @@ use crate::{
 
 /// Minimal allowed transaction time-to-live.
 const MIN_TRANSACTION_TTL: Duration = Duration::from_secs(1);
+const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
+const PUBLIC_NEXUS_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000753";
+const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
+const NEXUS_CHAIN_DISCRIMINANT: u16 = 753;
+
+fn known_chain_discriminant_for_chain_id(chain_id: &ChainId) -> Option<u16> {
+    match chain_id.as_str() {
+        "iroha3-taira" | PUBLIC_TAIRA_CHAIN_ID => Some(TAIRA_CHAIN_DISCRIMINANT),
+        "iroha3-nexus" | PUBLIC_NEXUS_CHAIN_ID => Some(NEXUS_CHAIN_DISCRIMINANT),
+        _ => None,
+    }
+}
 
 /// Root of the user-facing configuration loaded from TOML + env.
 #[derive(Clone, Debug, ReadConfig)]
@@ -131,6 +143,7 @@ impl Root {
                     domain: domain_literal,
                     public_key,
                     private_key,
+                    chain_discriminant,
                 },
             transaction:
                 Transaction {
@@ -253,6 +266,21 @@ impl Root {
             );
         }
 
+        let chain_discriminant = match chain_discriminant.origin() {
+            ParameterOrigin::Default { .. } => known_chain_discriminant_for_chain_id(&chain_id)
+                .map(|value| {
+                    WithOrigin::new(
+                        value,
+                        ParameterOrigin::custom(format!(
+                            "derived from chain `{}`",
+                            chain_id.as_str()
+                        )),
+                    )
+                })
+                .unwrap_or(chain_discriminant),
+            _ => chain_discriminant,
+        };
+
         let (public_key, public_key_origin) = public_key.into_tuple();
         let (private_key, private_key_origin) = private_key.into_tuple();
         if DomainId::parse_fully_qualified(&domain_literal).is_err() {
@@ -322,6 +350,7 @@ impl Root {
         Ok(super::Config {
             chain: chain_id,
             account: account_id,
+            account_chain_discriminant: chain_discriminant.into_value(),
             key_pair: key_pair.unwrap(),
             torii_api_url,
             torii_api_version,
@@ -352,6 +381,12 @@ pub struct Account {
     /// Private key of the account.
     #[config(env = "ACCOUNT_PRIVATE_KEY")]
     pub private_key: WithOrigin<PrivateKey>,
+    /// I105 chain discriminant used when parsing and rendering account literals.
+    #[config(
+        env = "ACCOUNT_CHAIN_DISCRIMINANT",
+        default = "defaults::common::chain_discriminant()"
+    )]
+    pub chain_discriminant: WithOrigin<u16>,
 }
 
 /// Transaction defaults used by the client.
@@ -500,6 +535,13 @@ mod tests {
                 domain: "wonderland.universal".to_owned(),
                 public_key: WithOrigin::inline(key_pair.public_key().clone()),
                 private_key: WithOrigin::inline(key_pair.private_key().clone()),
+                chain_discriminant: WithOrigin::new(
+                    defaults::common::chain_discriminant(),
+                    ParameterOrigin::default(iroha_config_base::ParameterId::from([
+                        "account",
+                        "chain_discriminant",
+                    ])),
+                ),
             },
             transaction: Transaction {
                 time_to_live_ms: WithOrigin::inline(DurationMs::from(ttl)),
@@ -522,6 +564,26 @@ mod tests {
 
         assert_eq!(config.transaction_ttl, ttl);
         assert_eq!(config.transaction_status_timeout, timeout);
+    }
+
+    #[test]
+    fn parse_preserves_account_chain_discriminant() {
+        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
+        root.account.chain_discriminant = WithOrigin::inline(777);
+
+        let config = root.parse().expect("configuration should be valid");
+
+        assert_eq!(config.account_chain_discriminant, 777);
+    }
+
+    #[test]
+    fn parse_infers_taira_account_chain_discriminant_from_chain_id() {
+        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
+        root.chain = ChainId::from(PUBLIC_TAIRA_CHAIN_ID);
+
+        let config = root.parse().expect("configuration should be valid");
+
+        assert_eq!(config.account_chain_discriminant, TAIRA_CHAIN_DISCRIMINANT);
     }
 
     #[test]

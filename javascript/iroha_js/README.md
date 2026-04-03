@@ -302,8 +302,7 @@ const proposalInstruction = buildProposeMultisigExecuteTriggerInstruction({
 const request = buildMultisigContractCallProposeRequest({
   multisigAccountAlias: "mintops@banka",
   signerAccountId: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
-  namespace: "apps",
-  contractId: "mint",
+  contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
   entrypoint: "execute",
   trigger: "staged_mint_request_hbl",
   args,
@@ -2044,7 +2043,7 @@ console.log(address.toI105());
 import {
   buildRegisterSmartContractCodeTransaction,
   buildRegisterSmartContractBytesTransaction,
-  buildActivateContractInstanceInstruction,
+  buildRemoveSmartContractBytesTransaction,
 } from "@iroha/iroha-js";
 import fs from "node:fs";
 
@@ -2071,21 +2070,6 @@ const codeTx = buildRegisterSmartContractBytesTransaction({
   privateKey,
 });
 
-const activateInstruction = buildActivateContractInstanceInstruction({
-  namespace: "apps",
-  contractId: "ledger",
-  codeHash: Buffer.alloc(32, 0xaa),
-});
-
-const deactivateTx = buildDeactivateContractInstanceTransaction({
-  chainId: "test-chain",
-  authority,
-  namespace: "apps",
-  contractId: "ledger",
-  reason: "rotate after audit finding",
-  privateKey,
-});
-
 const removeBytesTx = buildRemoveSmartContractBytesTransaction({
   chainId: "test-chain",
   authority,
@@ -2099,28 +2083,22 @@ const removeBytesTx = buildRemoveSmartContractBytesTransaction({
 when governance stages code hashes separately, and the JS-only Norito path now
 round-trips the full current manifest metadata surface including
 `entrypoints`, `kotoba`, and `provenance`. Bytecode helpers enforce the 32-byte
-hash length and accept `Buffer`, typed arrays, or base64 strings.
-Activation helpers normalise namespace/contract IDs into the canonical
-`ActivateContractInstance` shape so governance workflows can bind a manifest to
-an `{namespace, contract_id}` tuple deterministically.
-
-`buildDeactivateContractInstanceInstruction/Transaction` exposes the governance
-kill-switch path with optional audit reasons, and
+hash length and accept `Buffer`, typed arrays, or base64 strings. Public
+deployment and activation are now address-first through `ToriiClient.deployContract`,
+which returns the canonical `contract_address` alongside the code and ABI hashes.
 `buildRemoveSmartContractBytesInstruction/Transaction` wires the bytecode
-reclamation ISI into CI/governance tooling. Both helpers reject empty namespace,
-contract, or reason strings before submitting payloads so operators get fast
-feedback during rehearsals.
+reclamation ISI into CI/governance tooling and rejects empty reason strings
+before submission so operators get fast feedback during rehearsals.
 
 The recipe mirrors the same validation rules: keys can be supplied as
-`PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`, namespace/contract ids
-must be non-empty strings, and manifest overrides use camelCase fields so CI
-orchestrators can reuse governance artefacts directly, including
+`PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`, and manifest overrides
+use camelCase fields so CI orchestrators can reuse governance artefacts directly, including
 `accessSetHints`, `entrypoints`, `kotoba`, and `provenance`.
 
 ### Contract calls via Torii
 
 `ToriiClient.callContract` wraps `/v1/contracts/call`, preparing the JSON
-payload that Torii expects (authority credentials, namespace/contract id,
+payload that Torii expects (authority credentials, `contract_address` or `contract_alias`,
 optional entrypoint/payload plus gas settings with a required `gasLimit`) and normalising all hash fields. The
 helper returns the queued transaction hash along with the code/ABI hashes Torii
 resolved for the call.
@@ -2135,8 +2113,7 @@ const torii = new ToriiClient(process.env.IROHA_TORII_URL, {
 const response = await torii.callContract({
   authority: AUTHORITY_ACCOUNT_ID,
   privateKey: process.env.IROHA_TORII_PRIVATE_KEY,
-  namespace: "apps",
-  contractId: "ledger",
+  contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
   entrypoint: "increment",
   payload: { amount: 1 },
   gasAssetId: "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
@@ -2149,7 +2126,7 @@ console.log("code hash:", response.code_hash_hex);
 
 Any JSON-compatible payload is cloned before submission so callers can reuse the
 object elsewhere without mutation. The helper rejects malformed entrypoint
-selectors, missing or invalid gas limits, or empty namespace/contract identifiers
+selectors, missing or invalid gas limits, or invalid contract target selectors
 before the request reaches Torii.
 
 ## Governance Voting Helpers
@@ -2179,8 +2156,7 @@ const proposalTx = buildProposeDeployContractTransaction({
   chainId: "test-chain",
   authority,
   proposal: {
-    namespace: "apps",
-    contractId: "ledger",
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     codeHash: Buffer.alloc(32, 0xaa),
     abiHash: "hash:…#…",
     abiVersion: "1",
@@ -2913,7 +2889,7 @@ without provisioning infrastructure.
 - `IROHA_TORII_INTEGRATION_CONNECT_SESSION` — optional JSON string containing the payload for `createConnectSession()` (`{"sid":"<hex>","node":"torii.devnet.example"}` is a common pattern).
 - `IROHA_TORII_INTEGRATION_CONNECT_PREVIEW` — optional JSON object consumed by the Connect preview bootstrapper test (`{"node":"torii.devnet.example","sessionOptions":{"node":"ingress.devnet.example"}}` is sufficient). When present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite calls `bootstrapConnectPreviewSession()`, validates the deeplink URIs/tokens, and deletes the staged session.
 - `IROHA_TORII_INTEGRATION_CONNECT_APP` — optional JSON object describing a Connect app registration payload (`{"appId":"demo","namespaces":["apps"],"metadata":{"suite":"ci"}}`); when present and `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite registers the app, verifies that list/get/iterator APIs return it, and then deletes it.
-- `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"namespace":"apps","contractId":"calc.v1","entrypoint":"ping","payload":{"value":1},"gasLimit":50000}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.callContract`, waits for the resulting transaction status, and asserts success. The helper accepts camelCase keys plus overrides for `authority`, `privateKeyHex`, `gasAssetId`, and `gasLimit` (required).
+- `IROHA_TORII_INTEGRATION_CONTRACT_CALL` — optional JSON object describing a contract call payload (for example: `{"contractAddress":"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7","entrypoint":"ping","payload":{"value":1},"gasLimit":50000}`). When supplied alongside `IROHA_TORII_INTEGRATION_MUTATE=1`, the suite invokes `ToriiClient.callContract`, waits for the resulting transaction status, and asserts success. The helper accepts camelCase keys plus overrides for `authority`, `privateKeyHex`, `gasAssetId`, and `gasLimit` (required).
 - `IROHA_TORII_INTEGRATION_GOV_BALLOT` — optional JSON object ({`referendumId`,`owner`,`amount`,`durationBlocks`,`direction`} are the common keys) submitted via `governanceSubmitPlainBallot` when `IROHA_TORII_INTEGRATION_MUTATE=1`. Missing fields default to the configured `authority`/`chainId`, so the env var only needs to override vote-specific fields.
 - `IROHA_TORII_INTEGRATION_CHAIN_ID` — optional override for the default devnet chain id (`00000000-0000-0000-0000-000000000000`).
 - `IROHA_TORII_INTEGRATION_ACCOUNT_ID` / `IROHA_TORII_INTEGRATION_PRIVATE_KEY_HEX` — optional overrides for the default signer (`defaults/client.toml`); the defaults target the canonical encoded account id derived from `account.public_key`.
@@ -3018,7 +2994,7 @@ yourself.
 
 Alongside accounts/domains/asset definitions, the helpers now cover NFTs,
 per-account asset balances, asset-definition holder lists, account
-transaction history, the contract/gov instance registries, and both list/query
+transaction history, and both list/query
 trigger surfaces so SDK consumers can reuse the same pagination ergonomics
 across Torii's JSON endpoints (including query projections via
 `iterateAccountsQuery`, `iterateDomainsQuery`, `iterateAssetDefinitionsQuery`,
@@ -3187,12 +3163,10 @@ for await (const balance of torii.iterateAccountAssetsQuery("sorauロ1Nタセhj�
   console.log("filtered holding", balance.asset_id, balance.quantity);
 }
 
-for await (const instance of torii.iterateGovernanceInstances("apps", {
-  pageSize: 25,
-  contains: "calc",
-})) {
-  console.log("governance instance:", instance.contract_id);
-}
+const governedContract = await torii.getGovernanceContract(
+  "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+);
+console.log("governed contract:", governedContract.contract_address, governedContract.code_hash_hex);
 
 for await (const trigger of torii.iterateTriggersQuery({
   pageSize: 50,
@@ -3334,18 +3308,12 @@ for await (const event of torii.streamEvents({
   break; // stop after the first event in this example
 }
 
-const governanceInstances = await torii.listGovernanceInstances("apps", {
-  contains: "ledger",
-  limit: 5,
-  hashPrefix: "deadbeef",
-  order: "hash_desc",
-});
-for (const instance of governanceInstances.instances) {
-  console.log(`${instance.contract_id} :: ${instance.code_hash_hex}`);
-}
-
-// `order` accepts "cid_asc" (default), "cid_desc", "hash_asc", or "hash_desc".
-// `hashPrefix` must be hexadecimal; it is lowercased automatically.
+const governanceBinding = await torii.getGovernanceContract(
+  "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+);
+console.log(
+  `${governanceBinding.contract_address} :: ${governanceBinding.code_hash_hex}`,
+);
 
 // Governance read helpers accept an AbortSignal so long-running requests can be cancelled.
 const controller = new AbortController();
@@ -3374,8 +3342,7 @@ if (!tallyResult.found) {
 // Governance write helpers also accept AbortSignal options so transactions can be cancelled.
 const writeController = new AbortController();
 const deployDraft = await torii.governanceProposeDeployContract({
-  namespace: "apps",
-  contractId: "calc.v1",
+  contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
   codeHash: "hash:7B38...#ABCD",
   abiHash: Buffer.alloc(32, 0xaa),
   abiVersion: "1",

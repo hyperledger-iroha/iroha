@@ -26,7 +26,7 @@ mod staking;
 mod subscriptions;
 mod sumeragi;
 mod zk; // ZK helpers (app API convenience) // IVM/ABI helpers
-use clap::{CommandFactory, FromArgMatches, error::ErrorKind};
+use clap::{ArgAction, CommandFactory, FromArgMatches, error::ErrorKind};
 use iroha_i18n::{Bundle, Localizer, detect_language};
 use iroha_version::BuildLine;
 use std::{
@@ -46,6 +46,7 @@ use iroha::{
     config::{Config, LoadPath},
     data_model::{prelude::*, transaction::IvmBytecode},
 };
+use iroha::data_model::account::address::ChainDiscriminantGuard;
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_crypto::{Algorithm, KeyPair};
 use std::num::NonZeroU64;
@@ -78,6 +79,81 @@ pub enum CliOutputFormat {
     Json,
     /// Emit human-readable text when available.
     Text,
+}
+
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum TransactionWaitTerminalStatusArg {
+    Queued,
+    Approved,
+    Committed,
+    Applied,
+    Rejected,
+    Expired,
+}
+
+impl From<TransactionWaitTerminalStatusArg> for iroha::client::TransactionWaitTerminalStatus {
+    fn from(value: TransactionWaitTerminalStatusArg) -> Self {
+        match value {
+            TransactionWaitTerminalStatusArg::Queued => Self::Queued,
+            TransactionWaitTerminalStatusArg::Approved => Self::Approved,
+            TransactionWaitTerminalStatusArg::Committed => Self::Committed,
+            TransactionWaitTerminalStatusArg::Applied => Self::Applied,
+            TransactionWaitTerminalStatusArg::Rejected => Self::Rejected,
+            TransactionWaitTerminalStatusArg::Expired => Self::Expired,
+        }
+    }
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub(crate) struct TransactionWaitArgs {
+    /// Poll `/v1/pipeline/transactions/status` until the transaction reaches a stop state.
+    #[arg(long)]
+    pub wait: bool,
+    /// Maximum time to wait before failing.
+    #[arg(long, default_value_t = 30_000, requires = "wait")]
+    pub timeout_ms: u64,
+    /// Poll interval used while waiting.
+    #[arg(long, default_value_t = 500, requires = "wait")]
+    pub poll_interval_ms: u64,
+    /// Stop when the pipeline reaches any of these statuses. Applied, rejected, and expired always stop.
+    #[arg(
+        long = "terminal-status",
+        value_enum,
+        action = ArgAction::Append,
+        requires = "wait"
+    )]
+    pub terminal_statuses: Vec<TransactionWaitTerminalStatusArg>,
+}
+
+impl TransactionWaitArgs {
+    pub(crate) fn is_enabled(&self) -> bool {
+        self.wait
+    }
+
+    pub(crate) fn to_options(&self) -> Result<iroha::client::TransactionWaitOptions> {
+        if self.poll_interval_ms == 0 {
+            eyre::bail!("--poll-interval-ms must be greater than 0");
+        }
+
+        Ok(iroha::client::TransactionWaitOptions {
+            timeout: Duration::from_millis(self.timeout_ms),
+            poll_interval: Duration::from_millis(self.poll_interval_ms),
+            terminal_statuses: self
+                .terminal_statuses
+                .iter()
+                .copied()
+                .map(Into::into)
+                .collect(),
+        })
+    }
+}
+
+pub(crate) fn wait_for_transaction_status(
+    client: &Client,
+    hash: HashOf<iroha::data_model::transaction::SignedTransaction>,
+    wait: &TransactionWaitArgs,
+) -> Result<iroha::client::TransactionWaitOutcome> {
+    client.wait_for_transaction_terminal_status(hash, wait.to_options()?)
 }
 
 /// Iroha Client CLI provides a simple way to interact with the Iroha Web API.
@@ -886,6 +962,8 @@ fn run_with_line(build_line: BuildLine) -> ReportResult<(), MainError> {
         context.transaction_metadata = Some(metadata);
     }
 
+    let _account_chain_discriminant =
+        ChainDiscriminantGuard::enter(context.config.account_chain_discriminant);
     args.command
         .run(&mut context)
         .into_report()
@@ -1045,6 +1123,7 @@ pub(crate) fn fallback_config() -> Config {
     Config {
         chain,
         account,
+        account_chain_discriminant: defaults::common::chain_discriminant(),
         key_pair,
         basic_auth: None,
         torii_api_url: Url::parse("http://127.0.0.1:8080/").expect("fallback url"),
@@ -1075,6 +1154,10 @@ fn config_to_json(config: &Config) -> Result<norito::json::Value> {
     json_utils::json_object(vec![
         ("chain", json_utils::json_value(&config.chain)?),
         ("account", json_utils::json_value(&config.account)?),
+        (
+            "account_chain_discriminant",
+            json_utils::json_value(&config.account_chain_discriminant)?,
+        ),
         ("key_pair", json_utils::json_value(&config.key_pair)?),
         ("basic_auth", json_utils::json_value(&config.basic_auth)?),
         (
@@ -4458,15 +4541,22 @@ mod transaction {
         /// Hash of the signed transaction to inspect
         #[arg(short('H'), long)]
         pub hash: HashOf<iroha::data_model::transaction::SignedTransaction>,
+        #[command(flatten)]
+        pub wait: TransactionWaitArgs,
     }
 
     impl Run for Status {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
-            let status = client
-                .get_transaction_status_response(self.hash)?
-                .ok_or_else(|| eyre!("Transaction status not found"))?;
-            context.print_data(&status)
+            if self.wait.is_enabled() {
+                let status = crate::wait_for_transaction_status(&client, self.hash, &self.wait)?;
+                context.print_data(&status)
+            } else {
+                let status = client
+                    .get_transaction_status_response(self.hash)?
+                    .ok_or_else(|| eyre!("Transaction status not found"))?;
+                context.print_data(&status)
+            }
         }
     }
 
@@ -7251,19 +7341,6 @@ fn resolve_account_id_with(literal: &str) -> Result<AccountId> {
         eyre::bail!("account literal must be canonical I105; canonical hex is not accepted");
     }
 
-    if let Some(raw_discriminant) = std::env::var_os("IROHA_ACCOUNT_CHAIN_DISCRIMINANT") {
-        let raw_discriminant = raw_discriminant.to_string_lossy();
-        let discriminant = raw_discriminant.parse::<u16>().map_err(|_| {
-            eyre!("IROHA_ACCOUNT_CHAIN_DISCRIMINANT must be a valid u16, got `{raw_discriminant}`")
-        })?;
-        let parsed = iroha::account_address::parse_account_address(trimmed, Some(discriminant))
-            .map_err(|err| eyre!("account literal must be canonical I105: {err}"))?;
-        return parsed
-            .address
-            .to_account_id()
-            .map_err(|err| eyre!("account literal must be canonical I105: {err}"));
-    }
-
     let parsed = AccountId::parse_encoded(trimmed)
         .map_err(|err| eyre!("account literal must be canonical I105: {err}"))?;
     Ok(parsed.into_account_id())
@@ -7349,20 +7426,6 @@ fn parse_register_account_id(literal: &str) -> Result<AccountId> {
         eyre::bail!(
             "`ledger account register --id` must be canonical I105; canonical hex is not accepted"
         );
-    }
-
-    if let Some(raw_discriminant) = std::env::var_os("IROHA_ACCOUNT_CHAIN_DISCRIMINANT") {
-        let raw_discriminant = raw_discriminant.to_string_lossy();
-        let discriminant = raw_discriminant.parse::<u16>().map_err(|_| {
-            eyre!("IROHA_ACCOUNT_CHAIN_DISCRIMINANT must be a valid u16, got `{raw_discriminant}`")
-        })?;
-        let parsed = iroha::account_address::parse_account_address(trimmed, Some(discriminant))
-            .map_err(|err| {
-                eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
-            })?;
-        return parsed.address.to_account_id().map_err(|err| {
-            eyre!("`ledger account register --id` must be a canonical I105 account id: {err}")
-        });
     }
 
     let parsed = AccountId::parse_encoded(trimmed).map_err(|err| {
@@ -8007,6 +8070,8 @@ transaction_status_timeout = "77s"
             let cfg = iroha::config::Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
                 account,
+                account_chain_discriminant:
+                    iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),

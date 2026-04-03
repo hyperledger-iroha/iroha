@@ -1901,9 +1901,7 @@ pub mod isi {
 
             state_transaction
                 .world
-                .emit_events(Some(DomainEvent::AssetDefinition(
-                    AssetDefinitionEvent::Created(asset_definition),
-                )));
+                .emit_events(Some(AssetDefinitionEvent::Created(asset_definition)));
 
             Ok(())
         }
@@ -2306,23 +2304,10 @@ pub mod isi {
                     err.to_string().into(),
                 ))
             })?;
-            let Some(contract_dataspace) = state_transaction
-                .nexus
-                .dataspace_catalog
-                .by_id(contract_dataspace_id)
-            else {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    "contract address dataspace is unknown".to_owned().into(),
-                )
-                .into());
-            };
             if state_transaction
                 .world
                 .contract_instances()
-                .get(&(
-                    contract_dataspace.alias.clone(),
-                    contract_address.to_string(),
-                ))
+                .get(&contract_address)
                 .is_none()
             {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -6073,8 +6058,9 @@ mod tests {
         let proposal_id = [0xA5; 32];
         let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
             iroha_data_model::governance::types::DeployContractProposal {
-                namespace: "gov".to_string(),
-                contract_id: "proposal-guard".to_string(),
+                contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                    .parse()
+                    .expect("contract address"),
                 code_hash_hex: iroha_data_model::governance::types::ContractCodeHash::new(
                     [0x11; 32],
                 ),
@@ -6437,8 +6423,9 @@ mod tests {
         let proposal_id = [0xC5; 32];
         let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
             iroha_data_model::governance::types::DeployContractProposal {
-                namespace: "gov".to_string(),
-                contract_id: "snapshot-guard".to_string(),
+                contract_address: "tairac1qyqqqqqqqqqqqqyrj5zgey92heas6qafh205258mch2mg6qlfmpzl"
+                    .parse()
+                    .expect("contract address"),
                 code_hash_hex: iroha_data_model::governance::types::ContractCodeHash::new(
                     [0x51; 32],
                 ),
@@ -6878,10 +6865,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        tx.world.contract_instances.insert(
-            ("universal".to_owned(), contract_address.to_string()),
-            Hash::new("contract-alias"),
-        );
+        tx.world
+            .contract_instances
+            .insert(contract_address.clone(), Hash::new("contract-alias"));
 
         let alias: ContractAlias = "router::universal".parse().expect("alias");
         SetContractAlias::bind(contract_address.clone(), alias.clone(), Some(11_000))
@@ -6917,10 +6903,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        tx.world.contract_instances.insert(
-            ("universal".to_owned(), contract_address.to_string()),
-            Hash::new("contract-alias"),
-        );
+        tx.world
+            .contract_instances
+            .insert(contract_address.clone(), Hash::new("contract-alias"));
         seed_account_alias_lease(&mut tx, &authority, &label);
 
         let err = SetContractAlias::bind(
@@ -6964,10 +6949,9 @@ mod tests {
             }),
         );
         seed_account_alias_lease(&mut tx, &authority, &label);
-        tx.world.contract_instances.insert(
-            ("universal".to_owned(), contract_address.clone().to_string()),
-            Hash::new("contract-alias"),
-        );
+        tx.world
+            .contract_instances
+            .insert(contract_address.clone(), Hash::new("contract-alias"));
         tx.world
             .bind_contract_alias(
                 &contract_address,

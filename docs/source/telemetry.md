@@ -214,12 +214,12 @@ for the escalation tree that ties these metrics back to pager rotations.
   `allowed` / `rejected` whenever runtime upgrade submissions pass or fail manifest policy.
 - `governance_manifest_activations_total{event}` (counter): manifest lifecycle
   events emitted by `EnactReferendum`. `event="manifest_inserted"` counts new
-  manifests keyed by `code_hash`; `event="instance_bound"` counts namespace
-  bindings (contract instance activations).
+  manifests keyed by `code_hash`; `event="instance_bound"` counts canonical
+  contract activations.
 - `/status` now includes a `governance` object with proposal counts, protected
   namespace totals, aggregated manifest admission outcomes, and a
   `recent_manifest_activations` array listing the most
-  recent enactments (namespace, contract id, code/ABI hash, block height, and
+  recent enactments (contract address, code/ABI hash, block height, and
   activation timestamp in milliseconds).
 
 Example `governance` excerpt from `/status`:
@@ -251,8 +251,7 @@ Example `governance` excerpt from `/status`:
   },
 "recent_manifest_activations": [
     {
-      "namespace": "apps",
-      "contract_id": "demo.contract",
+      "contract_address": "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
       "code_hash_hex": "deadbeef",
       "abi_hash_hex": "cafebabe",
       "height": 42,

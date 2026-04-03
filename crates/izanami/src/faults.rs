@@ -29,6 +29,12 @@ use tracing::{debug, error, info, warn};
 pub struct FaultConfig {
     /// Delay range between injected fault actions.
     pub interval: RangeInclusive<Duration>,
+    /// Whether crash-and-restart faults may be scheduled.
+    pub crash_restart: bool,
+    /// Whether wipe-storage-and-restart faults may be scheduled.
+    pub wipe_storage: bool,
+    /// Whether invalid-transaction spam faults may be scheduled.
+    pub spam_invalid_transactions: bool,
     /// Optional network-latency fault settings.
     pub network_latency: Option<NetworkLatencyConfig>,
     /// Optional network-partition fault settings.
@@ -240,11 +246,16 @@ struct FaultApplyCtx<'a, P: FaultPeer> {
 
 impl FaultScenario {
     fn random<R: Rng>(rng: &mut R, config: &FaultConfig) -> Self {
-        let mut scenarios = vec![
-            Self::CrashRestart,
-            Self::WipeStorage,
-            Self::SpamInvalidTransactions,
-        ];
+        let mut scenarios = Vec::with_capacity(7);
+        if config.crash_restart {
+            scenarios.push(Self::CrashRestart);
+        }
+        if config.wipe_storage {
+            scenarios.push(Self::WipeStorage);
+        }
+        if config.spam_invalid_transactions {
+            scenarios.push(Self::SpamInvalidTransactions);
+        }
         if config.network_latency.is_some() {
             scenarios.push(Self::NetworkLatencySpike);
         }
@@ -918,6 +929,9 @@ mod tests {
     fn interval_sampling_within_bounds() {
         let cfg = FaultConfig {
             interval: Duration::from_secs(1)..=Duration::from_secs(3),
+            crash_restart: true,
+            wipe_storage: true,
+            spam_invalid_transactions: true,
             network_latency: None,
             network_partition: None,
             cpu_stress: None,
@@ -935,6 +949,9 @@ mod tests {
     fn random_includes_enabled_scenarios() {
         let config = FaultConfig {
             interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            crash_restart: true,
+            wipe_storage: true,
+            spam_invalid_transactions: true,
             network_latency: Some(NetworkLatencyConfig::default()),
             network_partition: Some(NetworkPartitionConfig::default()),
             cpu_stress: Some(CpuStressConfig::default()),
@@ -955,6 +972,28 @@ mod tests {
             FaultScenario::DiskSaturation,
         ]);
         assert_eq!(observed, expected);
+    }
+
+    #[test]
+    fn random_excludes_disabled_scenarios() {
+        let config = FaultConfig {
+            interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            crash_restart: false,
+            wipe_storage: false,
+            spam_invalid_transactions: false,
+            network_latency: Some(NetworkLatencyConfig::default()),
+            network_partition: None,
+            cpu_stress: None,
+            disk_saturation: None,
+        };
+        let mut rng = StdRng::seed_from_u64(17);
+        for _ in 0..32 {
+            assert_eq!(
+                FaultScenario::random(&mut rng, &config),
+                FaultScenario::NetworkLatencySpike,
+                "disabled fault scenarios must never be scheduled"
+            );
+        }
     }
 
     #[test]
@@ -987,6 +1026,9 @@ mod tests {
         let stop_notify = Arc::new(Notify::new());
         let config = FaultConfig {
             interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            crash_restart: true,
+            wipe_storage: true,
+            spam_invalid_transactions: true,
             network_latency: None,
             network_partition: None,
             cpu_stress: None,
@@ -994,7 +1036,8 @@ mod tests {
         };
         let config_layers = Arc::new(Vec::new());
         let genesis = dummy_genesis();
-        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         run_fault_loop(
             peer.clone(),
             config,
@@ -1021,6 +1064,9 @@ mod tests {
         let stop_notify = Arc::new(Notify::new());
         let config = FaultConfig {
             interval: Duration::from_secs(10)..=Duration::from_secs(10),
+            crash_restart: true,
+            wipe_storage: true,
+            spam_invalid_transactions: true,
             network_latency: None,
             network_partition: None,
             cpu_stress: None,
@@ -1028,7 +1074,8 @@ mod tests {
         };
         let config_layers = Arc::new(Vec::new());
         let genesis = dummy_genesis();
-        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         let deadline = Instant::now() + Duration::from_secs(30);
 
         let handle = tokio::spawn(run_fault_loop(
@@ -1059,9 +1106,13 @@ mod tests {
         let config_layers = Arc::new(Vec::new());
         let genesis = dummy_genesis();
         let mut rng = StdRng::seed_from_u64(9);
-        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         let config = FaultConfig {
             interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            crash_restart: false,
+            wipe_storage: false,
+            spam_invalid_transactions: false,
             network_latency: Some(NetworkLatencyConfig {
                 duration: Duration::from_millis(5)..=Duration::from_millis(5),
                 gossip_delay: Duration::from_millis(10)..=Duration::from_millis(10),
@@ -1121,9 +1172,13 @@ mod tests {
         let config_layers = Arc::new(Vec::new());
         let genesis = dummy_genesis();
         let mut rng = StdRng::seed_from_u64(17);
-        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         let config = FaultConfig {
             interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            crash_restart: false,
+            wipe_storage: false,
+            spam_invalid_transactions: false,
             network_latency: Some(NetworkLatencyConfig {
                 duration: Duration::from_millis(5)..=Duration::from_millis(5),
                 gossip_delay: Duration::from_millis(10)..=Duration::from_millis(10),
@@ -1167,7 +1222,8 @@ mod tests {
         let config_layers = Arc::new(Vec::new());
         let genesis = dummy_genesis();
         let mut rng = StdRng::seed_from_u64(11);
-        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         let storage = peer.kura_store_dir();
         if storage.exists() {
             std::fs::remove_dir_all(&storage).unwrap();
@@ -1175,6 +1231,9 @@ mod tests {
         std::fs::create_dir_all(&storage).unwrap();
         let config = FaultConfig {
             interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            crash_restart: false,
+            wipe_storage: false,
+            spam_invalid_transactions: false,
             network_latency: None,
             network_partition: None,
             cpu_stress: None,
@@ -1223,9 +1282,13 @@ mod tests {
         let config_layers = Arc::new(Vec::new());
         let genesis = dummy_genesis();
         let mut rng = StdRng::seed_from_u64(25);
-        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         let config = FaultConfig {
             interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            crash_restart: false,
+            wipe_storage: false,
+            spam_invalid_transactions: false,
             network_latency: None,
             network_partition: Some(NetworkPartitionConfig {
                 duration: Duration::from_millis(5)..=Duration::from_millis(5),
@@ -1319,9 +1382,13 @@ mod tests {
         let config_layers = Arc::new(Vec::new());
         let genesis = dummy_genesis();
         let mut rng = StdRng::seed_from_u64(51);
-        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
+        let domain: DomainId =
+            DomainId::parse_fully_qualified("wonderland.universal").expect("domain");
         let config = FaultConfig {
             interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            crash_restart: false,
+            wipe_storage: false,
+            spam_invalid_transactions: false,
             network_latency: None,
             network_partition: Some(NetworkPartitionConfig {
                 duration: Duration::from_millis(5)..=Duration::from_millis(5),

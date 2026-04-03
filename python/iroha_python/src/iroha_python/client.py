@@ -2022,8 +2022,7 @@ class GovernanceProposalStatus(str, Enum):
 class GovernanceProposalDeployContract:
     """`DeployContract` payload embedded in governance proposals."""
 
-    namespace: str
-    contract_id: str
+    contract_address: str
     code_hash_hex: str
     abi_hash_hex: str
     abi_version: str
@@ -2038,17 +2037,46 @@ class GovernanceProposalDeployContract:
                 raise TypeError(f"DeployContract payload missing string `{field_name}` field")
             return value
 
-        namespace = _require_str("namespace")
-        contract_id = _require_str("contract_id")
+        contract_address = _require_str("contract_address")
         code_hash_hex = _require_str("code_hash_hex")
         abi_hash_hex = _require_str("abi_hash_hex")
         abi_version = _require_str("abi_version")
         return cls(
-            namespace=namespace,
-            contract_id=contract_id,
+            contract_address=contract_address,
             code_hash_hex=code_hash_hex,
             abi_hash_hex=abi_hash_hex,
             abi_version=abi_version,
+        )
+
+
+@dataclass(frozen=True)
+class GovernanceContractRecord:
+    """Governance binding returned by `GET /v1/gov/contracts/{contract_address}`."""
+
+    found: bool
+    contract_address: str
+    dataspace: Optional[str]
+    code_hash_hex: Optional[str]
+
+    @classmethod
+    def from_payload(cls, payload: Mapping[str, Any]) -> "GovernanceContractRecord":
+        if not isinstance(payload, Mapping):
+            raise TypeError("governance contract payload must be an object")
+        found = bool(payload.get("found", False))
+        contract_address = payload.get("contract_address")
+        if not isinstance(contract_address, str):
+            raise TypeError("governance contract payload missing string `contract_address` field")
+        dataspace = payload.get("dataspace")
+        if dataspace is not None and not isinstance(dataspace, str):
+            raise TypeError("governance contract payload `dataspace` must be a string or null")
+        code_hash_hex = payload.get("code_hash_hex")
+        if code_hash_hex is not None and not isinstance(code_hash_hex, str):
+            raise TypeError("governance contract payload `code_hash_hex` must be a string or null")
+        return cls(
+            found=found,
+            contract_address=contract_address,
+            dataspace=dataspace,
+            code_hash_hex=code_hash_hex,
         )
 
 
@@ -2261,66 +2289,6 @@ class GovernanceUnlockStats:
             expired_locks_now=expired_locks_now,
             referenda_with_expired=referenda_with_expired,
             last_sweep_height=last_sweep_height,
-        )
-
-
-@dataclass(frozen=True)
-class ContractInstance:
-    """Contract instance metadata returned by Torii listings."""
-
-    contract_id: str
-    code_hash_hex: str
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractInstance":
-        if not isinstance(payload, Mapping):
-            raise TypeError("instance payload must be an object")
-        contract_id = payload.get("contract_id")
-        code_hash_hex = payload.get("code_hash_hex")
-        if not isinstance(contract_id, str):
-            raise TypeError("instance payload missing string `contract_id` field")
-        if not isinstance(code_hash_hex, str):
-            raise TypeError("instance payload missing string `code_hash_hex` field")
-        return cls(contract_id=contract_id, code_hash_hex=code_hash_hex)
-
-
-@dataclass(frozen=True)
-class ContractInstancesPage:
-    """Paginated response for contract instance listings."""
-
-    namespace: str
-    instances: List[ContractInstance]
-    total: int
-    offset: int
-    limit: int
-
-    @classmethod
-    def from_payload(cls, payload: Mapping[str, Any]) -> "ContractInstancesPage":
-        if not isinstance(payload, Mapping):
-            raise TypeError("instances response must be an object")
-        namespace = payload.get("namespace")
-        if not isinstance(namespace, str):
-            raise TypeError("instances response missing string `namespace` field")
-        instances_payload = payload.get("instances")
-        if not isinstance(instances_payload, list):
-            raise TypeError("instances response missing list `instances` field")
-        instances: List[ContractInstance] = []
-        for item in instances_payload:
-            if not isinstance(item, Mapping):
-                raise TypeError("instance entry must be an object")
-            instances.append(ContractInstance.from_payload(item))
-        try:
-            total = int(payload.get("total", 0))
-            offset = int(payload.get("offset", 0))
-            limit = int(payload.get("limit", len(instances)))
-        except (TypeError, ValueError) as exc:
-            raise TypeError("instances response pagination fields must be numeric") from exc
-        return cls(
-            namespace=namespace,
-            instances=instances,
-            total=total,
-            offset=offset,
-            limit=limit,
         )
 
 
@@ -6072,8 +6040,7 @@ class GovernanceManifestQuorumSnapshot:
 
 @dataclass(frozen=True)
 class GovernanceManifestActivationSnapshot:
-    namespace: str
-    contract_id: str
+    contract_address: str
     code_hash_hex: str
     abi_hash_hex: Optional[str]
     height: int
@@ -6385,8 +6352,7 @@ class ToriiStatusPayload:
                     raise TypeError(
                         f"governance manifest activation at index {idx} must be an object"
                     )
-                namespace = item.get("namespace", "")
-                contract_id = item.get("contract_id", "")
+                contract_address = item.get("contract_address", "")
                 code_hash = item.get("code_hash_hex", "")
                 abi_hash = item.get("abi_hash_hex")
                 try:
@@ -6398,8 +6364,7 @@ class ToriiStatusPayload:
                     ) from exc
                 recent_activations.append(
                     GovernanceManifestActivationSnapshot(
-                        namespace=str(namespace),
-                        contract_id=str(contract_id),
+                        contract_address=str(contract_address),
                         code_hash_hex=str(code_hash),
                         abi_hash_hex=str(abi_hash) if abi_hash is not None else None,
                         height=height,
@@ -9847,20 +9812,6 @@ class ToriiClient(_BaseToriiClient):
         self._expect_status(response, {200, 404})
         return self._maybe_json(response)
 
-    def list_contract_instances(
-        self,
-        namespace: str,
-        *,
-        params: Optional[Dict[str, Any]] = None,
-    ) -> Optional[Any]:
-        response = self._request(
-            "GET",
-            f"/v1/contracts/instances/{namespace}",
-            params=params,
-        )
-        self._expect_status(response, {200})
-        return self._maybe_json(response)
-
     # ------------------------------------------------------------------
     # Connect API
     # ------------------------------------------------------------------
@@ -10588,94 +10539,30 @@ class ToriiClient(_BaseToriiClient):
             expected_status=(200,),
         )
 
-    def list_governance_instances(
+    def get_governance_contract(
         self,
-        namespace: str,
-        *,
-        contains: Optional[str] = None,
-        hash_prefix: Optional[str] = None,
-        offset: Optional[int] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
+        contract_address: str,
     ) -> Optional[Any]:
-        """List contract instances tracked by governance (`GET /v1/gov/instances/{namespace}`)."""
+        """Fetch one governance-managed contract binding (`GET /v1/gov/contracts/{contract_address}`)."""
 
-        params: Dict[str, Any] = {}
-        if contains is not None:
-            params["contains"] = contains
-        if hash_prefix is not None:
-            params["hash_prefix"] = hash_prefix
-        if offset is not None:
-            params["offset"] = int(offset)
-        if limit is not None:
-            params["limit"] = int(limit)
-        if order is not None:
-            params["order"] = order
         return self.request_json(
             "GET",
-            f"/v1/gov/instances/{namespace}",
-            params=params or None,
+            f"/v1/gov/contracts/{contract_address}",
             expected_status=(200,),
         )
 
-    def list_governance_instances_typed(
+    def get_governance_contract_typed(
         self,
-        namespace: str,
-        *,
-        contains: Optional[str] = None,
-        hash_prefix: Optional[str] = None,
-        offset: Optional[int] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
-    ) -> ContractInstancesPage:
-        """Typed wrapper for :meth:`list_governance_instances`."""
+        contract_address: str,
+    ) -> GovernanceContractRecord:
+        """Typed wrapper for :meth:`get_governance_contract`."""
 
-        payload = self.list_governance_instances(
-            namespace,
-            contains=contains,
-            hash_prefix=hash_prefix,
-            offset=offset,
-            limit=limit,
-            order=order,
-        )
+        payload = self.get_governance_contract(contract_address)
         if payload is None:
-            raise RuntimeError("governance instances endpoint returned no payload")
+            raise RuntimeError("governance contract endpoint returned no payload")
         if not isinstance(payload, Mapping):
-            raise RuntimeError("governance instances endpoint returned non-object payload")
-        return ContractInstancesPage.from_payload(payload)
-
-    def list_contract_instances_typed(
-        self,
-        namespace: str,
-        *,
-        contains: Optional[str] = None,
-        hash_prefix: Optional[str] = None,
-        offset: Optional[int] = None,
-        limit: Optional[int] = None,
-        order: Optional[str] = None,
-    ) -> ContractInstancesPage:
-        """Typed wrapper for :meth:`list_contract_instances`."""
-
-        payload = self.list_contract_instances(
-            namespace,
-            params={
-                key: value
-                for key, value in {
-                    "contains": contains,
-                    "hash_prefix": hash_prefix,
-                    "offset": None if offset is None else int(offset),
-                    "limit": None if limit is None else int(limit),
-                    "order": order,
-                }.items()
-                if value is not None
-            }
-            or None,
-        )
-        if payload is None:
-            raise RuntimeError("contract instances endpoint returned no payload")
-        if not isinstance(payload, Mapping):
-            raise RuntimeError("contract instances endpoint returned non-object payload")
-        return ContractInstancesPage.from_payload(payload)
+            raise RuntimeError("governance contract endpoint returned non-object payload")
+        return GovernanceContractRecord.from_payload(payload)
 
     def governance_deploy_contract_proposal(self, payload: Mapping[str, Any]) -> Optional[Any]:
         """POST `/v1/gov/proposals/deploy-contract`."""
