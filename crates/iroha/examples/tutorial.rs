@@ -2,6 +2,7 @@
 
 use eyre::{Error, WrapErr};
 use iroha::config::{Config, LoadPath};
+use iroha::data_model::DomainId;
 // #region rust_config_crates
 // #endregion rust_config_crates
 

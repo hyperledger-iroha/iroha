@@ -15,7 +15,6 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Numeric;
 use norito::core::to_bytes;
 use norito::to_bytes as norito_bytes;
-use std::str::FromStr;
 
 fn fixture_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))

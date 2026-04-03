@@ -30,6 +30,48 @@ Open work for this slice now remains:
 - after that fix, rerun the same controlled sweep and then the more aggressive
   high-load matrix to see where the real NPoS knee now moves.
 
+Latest sync (2026-04-03 workspace-wide test compilation `--no-run`):
+the full workspace test-compilation pass is now green under
+`CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test --workspace --no-run`.
+The last `DomainId` fallout after the earlier `cargo check --workspace` run
+was confined to examples, benches, and test modules, and has now been removed.
+
+- shipped in this follow-up:
+  - explicit `DomainId` imports or fully qualified construction in the last
+    remaining examples/tests/bench helpers;
+  - removal of stale `.parse::<DomainId>()` helpers from benchmark setup and
+    example code; and
+  - update of the remaining JSON test expectation to the canonical
+    `domain.dataspace` form.
+- broader verification is now green:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test --workspace --no-run`
+- remaining open work:
+  - the `DomainId` migration itself is no longer blocked on compile-time
+    fallout; any further work is runtime test execution and non-compile cleanup.
+
+Latest sync (2026-04-03 workspace-wide `DomainId` compile sweep):
+the broader `cargo check --workspace` pass is now green. The last compile-time
+fallout outside the main ledger/runtime slice was removed from `iroha_kagami`,
+`iroha_python_rs`, `mochi-core`, `mochi-ui-egui`, and `izanami`.
+
+- shipped in this follow-up:
+  - explicit fully qualified domain parsing in Kagami asset/domain helpers;
+  - explicit `DomainId` parsing in Python bindings for `DomainId`,
+    `register_domain`, and `transfer_domain`;
+  - removal of stale bare-domain and old constructor assumptions in Mochi
+    genesis/compose/chaos/supervisor/UI code; and
+  - explicit `DomainId::try_new(..., "universal")` construction in Izanami
+    chaos-plan helpers.
+- broader verification is now green:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p iroha_python_rs`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p mochi-core -p izanami`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check --workspace`
+- remaining open work:
+  - if we want to push verification further, the next step is test compilation
+    or execution rather than more `DomainId` migration.
+
 Latest sync (2026-04-03 Izanami domain-workload fix):
 Izanami no longer schedules raw runtime domain registration now that domains
 require an external SNS lease, but focused validation is blocked by unrelated
@@ -226,11 +268,9 @@ grep for removed `DomainId` construction patterns is now clean across
   - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p integration_tests --tests`
   - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p connect_norito_bridge --tests`
 - remaining open work:
-  - sweep translated and versioned docs under `docs/source/` and
-    `docs/portal/` that still show `DomainId::from_str("wonderland")` or bare
-    `"wonderland".parse()` examples; and
-  - optionally run a broader workspace verification pass once the docs sweep is
-    finished, to refresh the top-level green stamp beyond the focused crates.
+  - optionally run a broader workspace verification pass to refresh the
+    top-level green stamp beyond the focused crates, now that the Rust-code and
+    docs sweeps are both complete.
 
 Latest sync (2026-04-03 explicit `DomainId` constructors):
 `DomainId` no longer implements `FromStr`; runtime code now uses explicit

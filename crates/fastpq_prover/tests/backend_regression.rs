@@ -15,7 +15,6 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Numeric;
 use norito::core::to_bytes;
 use norito::to_bytes as norito_bytes;
-use std::str::FromStr;
 
 fn synthetic_batch(rows: usize) -> TransitionBatch {
     let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());

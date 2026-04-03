@@ -441,7 +441,7 @@ where
         None,
         None,
     )));
-    let base_domain: DomainId = "wonderland".parse().expect("static domain id");
+    let base_domain = DomainId::try_new("wonderland", "universal").expect("static domain id");
     let deadline = Instant::now() + duration.max(Duration::from_secs(1));
     handle
         .block_on(async {

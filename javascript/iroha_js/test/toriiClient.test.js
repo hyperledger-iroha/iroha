@@ -8762,7 +8762,10 @@ test("getGovernanceProposalTyped parses DeployContract variant", async () => {
   assert.ok(result.proposal);
   assert.equal(result.proposal?.status, "Approved");
   assert.equal(result.proposal?.kind.variant, "DeployContract");
-  assert.equal(result.proposal?.kind.deploy_contract?.contract_id, "router");
+  assert.equal(
+    result.proposal?.kind.deploy_contract?.contract_address,
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  );
 
   const notFoundClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 404 }),

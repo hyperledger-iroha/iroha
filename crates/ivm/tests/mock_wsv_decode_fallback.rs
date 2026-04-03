@@ -5,7 +5,7 @@ use ivm::{self, IVM, IVMHost, Memory};
 
 fn sample_account() -> ivm::mock_wsv::AccountId {
     let _domain: ivm::mock_wsv::DomainId =
-        DomainId::try_new("domain", "universal").expect("domain id");
+        iroha_data_model::DomainId::try_new("domain", "universal").expect("domain id");
     ivm::mock_wsv::AccountId::new(
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()

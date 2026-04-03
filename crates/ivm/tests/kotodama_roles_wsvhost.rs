@@ -11,7 +11,7 @@ use ivm::{
 
 fn make_vm_with_wsv() -> (IVM, AccountId) {
     let _domain: ivm::mock_wsv::DomainId =
-        DomainId::try_new("wonderland", "universal").expect("domain id");
+        iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain id");
     let alice: AccountId = AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
@@ -72,7 +72,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
             .downcast_mut::<WsvHost>()
             .expect("downcast WsvHost");
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonder", "universal").unwrap(),
+            iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let tok = PermissionToken::MintAsset(asset);
@@ -100,7 +100,7 @@ fn kotodama_roles_roundtrip_on_wsvhost() {
             .downcast_mut::<WsvHost>()
             .expect("downcast WsvHost");
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("wonder", "universal").unwrap(),
+            iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let tok = PermissionToken::MintAsset(asset);

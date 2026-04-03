@@ -713,6 +713,7 @@ fn numeric_to_u64(field: &'static str, value: &Numeric) -> Result<u64, Error> {
 mod tests {
     use iroha_crypto::Hash;
     use iroha_data_model::{
+        DomainId,
         asset::id::AssetDefinitionId,
         fastpq::{TransferDeltaTranscript, TransferTranscript},
     };

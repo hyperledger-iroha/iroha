@@ -6819,7 +6819,7 @@ pub mod tests {
         let (account_id, key_pair) = gen_account_in("wonderland");
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
         let domain_name = format!("tagged{}", rand::random::<u64>());
-        let unregister = Unregister::domain(domain_name.parse().unwrap());
+        let unregister = Unregister::domain(DomainId::try_new(&domain_name, "universal").unwrap());
         let tx =
             TransactionBuilder::new_with_time_source(chain_id.clone(), account_id, &time_source)
                 .with_instructions([unregister])

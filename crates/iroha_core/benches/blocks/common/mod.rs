@@ -287,7 +287,7 @@ pub fn build_state(
 }
 
 fn construct_domain_id(i: usize) -> DomainId {
-    format!("non_inlinable_domain_name_{i}").parse().unwrap()
+    DomainId::try_new(format!("non_inlinable_domain_name_{i}"), "universal").unwrap()
 }
 
 fn generate_account_id(domain_id: DomainId) -> AccountId {

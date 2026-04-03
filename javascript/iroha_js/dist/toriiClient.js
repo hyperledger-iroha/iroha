@@ -18048,10 +18048,6 @@ function normalizeContractCallResponse(payload) {
       record.dataspace,
       "contractCall response.dataspace",
     ),
-    contract_id: requireNonEmptyString(
-      record.contract_id,
-      "contractCall response.contract_id",
-    ),
     code_hash_hex: normalizeHex32String(
       record.code_hash_hex,
       "contractCall response.code_hash_hex",

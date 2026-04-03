@@ -1,6 +1,7 @@
 //! Kotodama DEX demo: compile and run a simple XYK pool on IVM.
 use std::collections::HashMap;
 
+use iroha_data_model::DomainId;
 use iroha_primitives::numeric::Numeric;
 use ivm::{
     AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken,

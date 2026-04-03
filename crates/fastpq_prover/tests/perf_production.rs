@@ -20,7 +20,6 @@ use iroha_data_model::{
 use iroha_primitives::numeric::Numeric;
 use norito::core::to_bytes;
 use norito::to_bytes as norito_bytes;
-use std::str::FromStr;
 
 const PARAMETER_SET: &str = "fastpq-lane-balanced";
 const DEFAULT_ROW_COUNT: usize = 20_000;

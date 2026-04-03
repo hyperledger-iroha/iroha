@@ -1901,9 +1901,7 @@ pub mod isi {
 
             state_transaction
                 .world
-                .emit_events(Some(DomainEvent::AssetDefinition(
-                    AssetDefinitionEvent::Created(asset_definition),
-                )));
+                .emit_events(Some(AssetDefinitionEvent::Created(asset_definition)));
 
             Ok(())
         }

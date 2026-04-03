@@ -293,8 +293,8 @@ pub fn prepare_state(
     allow_contract_deploy_in_stable: bool,
 ) -> Result<PreparedChaos> {
     let effective_accounts = account_count.max(3);
-    let base_domain = DomainId::parse_fully_qualified("chaosnet.universal")
-        .map_err(|_| eyre!("invalid base domain"))?;
+    let base_domain =
+        DomainId::try_new("chaosnet", "universal").map_err(|_| eyre!("invalid base domain"))?;
     let treasury_key = KeyPair::random();
     let treasury_id = AccountId::new(treasury_key.public_key().clone());
     let treasury = AccountRecord {
@@ -386,11 +386,11 @@ pub fn prepare_state(
     let mut nexus_staking = None;
     let mut npos_bootstrap_stake = None;
     if nexus.is_some() {
-        let nexus_domain = DomainId::parse_fully_qualified("nexus.universal")
+        let nexus_domain = DomainId::try_new("nexus", "universal")
             .map_err(|_| eyre!("failed to parse nexus domain id"))?;
-        let ivm_domain = DomainId::parse_fully_qualified("ivm.universal")
+        let ivm_domain = DomainId::try_new("ivm", "universal")
             .map_err(|_| eyre!("failed to parse ivm domain id"))?;
-        let universal_domain = DomainId::parse_fully_qualified("universal.universal")
+        let universal_domain = DomainId::try_new("universal", "universal")
             .map_err(|_| eyre!("failed to parse universal domain id"))?;
         let gas_account_id = nexus_gas_account_id();
         let gas_label: Name = "gas"

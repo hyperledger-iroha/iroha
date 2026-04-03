@@ -1945,6 +1945,7 @@ mod tests {
     use fastpq_isi::CANONICAL_PARAMETER_SETS;
     use iroha_crypto::Hash;
     use iroha_data_model::{
+        DomainId,
         asset::id::AssetDefinitionId,
         fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
     };

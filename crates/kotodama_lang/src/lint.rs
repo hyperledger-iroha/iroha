@@ -1551,6 +1551,7 @@ fn warn_if_unused_pointer_call(
 mod tests {
     use super::*;
     use crate::{i18n::Language, parser::parse};
+    use iroha_data_model::DomainId;
 
     #[test]
     fn record_expr_idents_collects_only_states() {

@@ -24,7 +24,7 @@ fn kotodama_create_and_grant_role_enables_mint() {
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile");
     let _domain: ivm::mock_wsv::DomainId =
-        DomainId::try_new("wonderland", "universal").expect("domain id");
+        iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain id");
     let caller: ivm::mock_wsv::AccountId = ivm::mock_wsv::AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
@@ -60,7 +60,7 @@ fn kotodama_grant_role_accepts_runtime_account_argument() {
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile");
     let _domain: ivm::mock_wsv::DomainId =
-        DomainId::try_new("wonderland", "universal").expect("domain id");
+        iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain id");
     let caller: ivm::mock_wsv::AccountId = ivm::mock_wsv::AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
@@ -94,7 +94,7 @@ fn kotodama_grant_permission_accepts_runtime_account_argument() {
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile");
     let _domain: ivm::mock_wsv::DomainId =
-        DomainId::try_new("wonderland", "universal").expect("domain id");
+        iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain id");
     let caller: ivm::mock_wsv::AccountId = ivm::mock_wsv::AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
@@ -127,7 +127,7 @@ fn kotodama_runtime_account_argument_survives_syscall_before_grant_permission() 
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile");
     let _domain: ivm::mock_wsv::DomainId =
-        DomainId::try_new("wonderland", "universal").expect("domain id");
+        iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain id");
     let caller: ivm::mock_wsv::AccountId = ivm::mock_wsv::AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()
@@ -156,7 +156,7 @@ fn kotodama_authority_matches_domainless_account_literal() {
     let compiler = KotodamaCompiler::new();
     let prog = compiler.compile_source(src).expect("compile");
     let _domain: ivm::mock_wsv::DomainId =
-        DomainId::try_new("wonderland", "universal").expect("domain id");
+        iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain id");
     let caller: ivm::mock_wsv::AccountId = ivm::mock_wsv::AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()

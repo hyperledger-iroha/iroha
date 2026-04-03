@@ -143,8 +143,7 @@ fn collect_topology_peers(manifest: &RawGenesisTransaction) -> Vec<PeerId> {
 
 fn default_npos_bootstrap_stake_asset_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
-        DEFAULT_NPOS_BOOTSTRAP_DOMAIN
-            .parse()
+        DomainId::parse_fully_qualified(DEFAULT_NPOS_BOOTSTRAP_DOMAIN)
             .expect("static stake asset domain must remain valid"),
         DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME
             .parse()

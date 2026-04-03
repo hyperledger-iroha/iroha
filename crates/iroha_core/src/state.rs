@@ -10105,13 +10105,14 @@ impl DetachedStateTransactionDelta {
                 let def = stx.world.asset_definition_mut(ad)?;
                 def.metadata_mut().insert(key.clone(), val.clone());
                 crate::sumeragi::witness::record_write_asset_def_kv(ad, key, val);
-                stx.world.emit_events(Some(DomainEvent::AssetDefinition(
-                    AssetDefinitionEvent::MetadataInserted(MetadataChanged {
-                        target: ad.clone(),
-                        key: key.clone(),
-                        value: val.clone(),
-                    }),
-                )));
+                stx.world
+                    .emit_events(Some(AssetDefinitionEvent::MetadataInserted(
+                        MetadataChanged {
+                            target: ad.clone(),
+                            key: key.clone(),
+                            value: val.clone(),
+                        },
+                    )));
             }
             for (ad, key_id) in &asset_def_kv_dels {
                 let key = self.name_intern.resolve(*key_id);
@@ -10121,13 +10122,14 @@ impl DetachedStateTransactionDelta {
                     })
                 })?;
                 crate::sumeragi::witness::record_delete_asset_def_kv(ad, key, &val);
-                stx.world.emit_events(Some(DomainEvent::AssetDefinition(
-                    AssetDefinitionEvent::MetadataRemoved(MetadataChanged {
-                        target: ad.clone(),
-                        key: key.clone(),
-                        value: val,
-                    }),
-                )));
+                stx.world
+                    .emit_events(Some(AssetDefinitionEvent::MetadataRemoved(
+                        MetadataChanged {
+                            target: ad.clone(),
+                            key: key.clone(),
+                            value: val,
+                        },
+                    )));
             }
 
             // Apply NFT creates/deletes
@@ -10228,12 +10230,13 @@ impl DetachedStateTransactionDelta {
                     )));
                 }
                 def.set_owned_by(to.clone());
-                stx.world.emit_events(Some(DomainEvent::AssetDefinition(
-                    AssetDefinitionEvent::OwnerChanged(AssetDefinitionOwnerChanged {
-                        asset_definition: ad,
-                        new_owner: to,
-                    }),
-                )));
+                stx.world
+                    .emit_events(Some(AssetDefinitionEvent::OwnerChanged(
+                        AssetDefinitionOwnerChanged {
+                            asset_definition: ad,
+                            new_owner: to,
+                        },
+                    )));
             }
 
             // Apply peer registrations/removals
@@ -15134,14 +15137,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             new_total
         );
 
-        self.emit_events({
-            Some(DomainEvent::AssetDefinition(
-                AssetDefinitionEvent::TotalQuantityChanged(AssetDefinitionTotalQuantityChanged {
-                    asset_definition: definition_id.clone(),
-                    total_amount: new_total,
-                }),
-            ))
-        });
+        self.emit_events(Some(AssetDefinitionEvent::TotalQuantityChanged(
+            AssetDefinitionTotalQuantityChanged {
+                asset_definition: definition_id.clone(),
+                total_amount: new_total,
+            },
+        )));
 
         Ok(())
     }
@@ -15182,14 +15183,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             new_total
         );
 
-        self.emit_events({
-            Some(DomainEvent::AssetDefinition(
-                AssetDefinitionEvent::TotalQuantityChanged(AssetDefinitionTotalQuantityChanged {
-                    asset_definition: definition_id.clone(),
-                    total_amount: new_total,
-                }),
-            ))
-        });
+        self.emit_events(Some(AssetDefinitionEvent::TotalQuantityChanged(
+            AssetDefinitionTotalQuantityChanged {
+                asset_definition: definition_id.clone(),
+                total_amount: new_total,
+            },
+        )));
 
         Ok(())
     }
