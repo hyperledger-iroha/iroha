@@ -2,6 +2,27 @@
 
 Last updated: 2026-04-03
 
+## 2026-04-03 Follow-up: multisig domain bootstrap now recovers from inconclusive submit timeouts
+- Hardened `integration_tests/tests/multisig.rs` after the remaining
+  broad-workspace executor-upgrade failure reproduced only as an inconclusive
+  `transaction queued for too long` during runtime-domain bootstrap, not as a
+  real multisig behavior regression.
+- `register_runtime_domain(...)` now:
+  - treats confirmation/queue timeouts during `Register<Domain>` as
+    inconclusive rather than immediately terminal;
+  - polls for the domain to appear before failing, so a transaction that
+    actually committed despite a missed confirmation still lets the test
+    continue; and
+  - retries the domain registration once when the first submit timed out and
+    the domain still is not visible, then accepts the retry or any late first
+    commit that makes the domain visible.
+- Added focused regression coverage for the timeout classifier used by the new
+  recovery path.
+- Verification completed:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test multisig multisig_register_materializes_missing_signatory_account_after_executor_upgrade -- --exact --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test multisig -- --nocapture --test-threads=1`
+
 ## 2026-04-03 Follow-up: valid sequential full stable reruns are green in both modes
 - Reran the full stable envelopes **sequentially**, not concurrently, on the
   current release binaries:

@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-03
 
+Latest sync (2026-04-03 multisig submit-timeout recovery):
+the remaining broad-run executor-upgrade multisig failure is hardened on the
+patched tree without changing multisig semantics.
+
+- shipped in `integration_tests/tests/multisig.rs`:
+  - inconclusive `Register<Domain>` confirmation failures during multisig
+    runtime-domain bootstrap now trigger a domain-visibility check before the
+    test aborts; and
+  - the helper retries the domain registration once if the first submit timed
+    out and the domain still is not visible, plus there is small regression
+    coverage for the timeout classifier used by that path.
+- focused verification is green, including:
+  - `cargo test -p integration_tests --test multisig multisig_register_materializes_missing_signatory_account_after_executor_upgrade -- --exact --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test multisig -- --nocapture --test-threads=1`
+  - `cargo fmt --all`
+
+Open work for this slice now remains:
+- rerun `cargo test --workspace` from a clean post-patch slot if a fresh
+  full-repo green stamp is needed; and
+- if any later broad replay still reports queued/status timeouts in other test
+  helpers, harden those helpers the same way rather than treating every
+  confirmation miss as a functional regression.
+
 Latest sync (2026-04-03 valid sequential full stable reruns):
 the corrected sequential rerun pair is green in both modes on the current
 release binaries.
