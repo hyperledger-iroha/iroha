@@ -11940,7 +11940,7 @@ mod multisig_selector_tests {
                 namespace: "apps".to_owned(),
                 contract_id: "demo".to_owned(),
                 entrypoint: "main".to_owned(),
-                payload: Some(IrohaJson::new(norito::json!({ "invoice_id": "INV-1" }))),
+                payload: None,
                 gas_asset_id: None,
                 fee_sponsor: None,
                 gas_limit: Some(10_000),
@@ -13267,7 +13267,7 @@ mod multisig_selector_tests {
                 namespace: "apps".to_owned(),
                 contract_id: "demo".to_owned(),
                 entrypoint: "main".to_owned(),
-                payload: Some(IrohaJson::new(norito::json!({ "invoice_id": "INV-1" }))),
+                payload: None,
                 gas_asset_id: None,
                 fee_sponsor: None,
                 gas_limit: Some(10_000),
@@ -41513,27 +41513,14 @@ fn account_from_world_entry(
 
 #[cfg(feature = "app_api")]
 fn account_read_response_from_world_entry(
-    world: &impl WorldReadOnly,
     entry: iroha_data_model::account::AccountEntry<'_>,
 ) -> iroha_torii_shared::AccountReadResponse {
     let details = entry.value().clone().into_inner();
-    let linked_domains = world
-        .bound_account_aliases(entry.id())
-        .into_iter()
-        .filter_map(|alias| {
-            alias
-                .domain
-                .map(|domain| DomainId::new(domain.name().clone()))
-        })
-        .collect::<BTreeSet<_>>()
-        .into_iter()
-        .collect();
     iroha_torii_shared::AccountReadResponse {
         account_id: entry.id().clone(),
         label: details.label,
         uaid: details.uaid,
         opaque_ids: details.opaque_ids,
-        linked_domains,
     }
 }
 
@@ -42738,7 +42725,7 @@ pub async fn handle_v1_account_get(
     let world = state.world_view();
     let response = world
         .account(&account_id)
-        .map(|entry| account_read_response_from_world_entry(&world, entry))
+        .map(account_read_response_from_world_entry)
         .map_err(|_| {
             Error::Query(iroha_data_model::ValidationFail::QueryFailed(
                 iroha_data_model::query::error::QueryExecutionFail::NotFound,

@@ -2470,7 +2470,7 @@ fn reconstruct_multisig_account_state(
             },
         )?
     } else {
-        None
+        infer_multisig_home_domain(state_transaction, &resolved_account)
     };
 
     if let Some(raw) = account.metadata().get(&spec_key()) {
@@ -2525,6 +2525,64 @@ fn reconstruct_multisig_account_state(
             transaction_ttl_ms,
         },
     )))
+}
+
+fn infer_multisig_home_domain(
+    state_transaction: &StateTransaction<'_, '_>,
+    account_id: &AccountId,
+) -> Option<iroha_data_model::domain::DomainId> {
+    infer_multisig_home_domain_from_aliases(state_transaction, account_id)
+        .or_else(|| infer_multisig_home_domain_from_roles(state_transaction, account_id))
+}
+
+fn infer_multisig_home_domain_from_aliases(
+    state_transaction: &StateTransaction<'_, '_>,
+    account_id: &AccountId,
+) -> Option<iroha_data_model::domain::DomainId> {
+    let mut domains = BTreeSet::new();
+    for alias in state_transaction.world.bound_account_aliases(account_id) {
+        let Some(domain) = alias.domain.as_ref() else {
+            continue;
+        };
+        let Ok(domain_id) = domain.name().as_ref().parse() else {
+            continue;
+        };
+        domains.insert(domain_id);
+    }
+    unique_home_domain_candidate(domains)
+}
+
+fn infer_multisig_home_domain_from_roles(
+    state_transaction: &StateTransaction<'_, '_>,
+    account_id: &AccountId,
+) -> Option<iroha_data_model::domain::DomainId> {
+    let mut domains = BTreeSet::new();
+    for role_id in state_transaction.world.account_roles_iter(account_id) {
+        let mut segments = role_id.name().as_ref().split(DELIMITER);
+        let (Some(prefix), Some(domain), Some(_suffix), None) = (
+            segments.next(),
+            segments.next(),
+            segments.next(),
+            segments.next(),
+        ) else {
+            continue;
+        };
+        if prefix != MULTISIG_SIGNATORY || domain == DOMAINLESS_NAMESPACE {
+            continue;
+        }
+        let Ok(domain_id) = domain.parse() else {
+            continue;
+        };
+        domains.insert(domain_id);
+    }
+    unique_home_domain_candidate(domains)
+}
+
+fn unique_home_domain_candidate(
+    mut domains: BTreeSet<iroha_data_model::domain::DomainId>,
+) -> Option<iroha_data_model::domain::DomainId> {
+    let domain = domains.pop_first()?;
+    domains.is_empty().then_some(domain)
 }
 
 fn load_multisig_account_state(
@@ -2904,6 +2962,43 @@ mod tests {
         );
     }
 
+    fn seed_domain_name_lease_tx(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        owner: &AccountId,
+        domain_id: &iroha_data_model::domain::DomainId,
+    ) {
+        let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
+        let address =
+            iroha_data_model::account::AccountAddress::from_account_id(owner).expect("address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        state_transaction.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+    }
+
+    fn register_domain_with_name_lease(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        domain_id: &iroha_data_model::domain::DomainId,
+        label: &str,
+    ) {
+        seed_domain_name_lease_tx(state_transaction, authority, domain_id);
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(authority, state_transaction)
+            .expect(label);
+    }
+
     #[test]
     fn initial_executor_runs_multisig_flow() {
         let kura = Kura::blank_kura_for_testing();
@@ -2924,9 +3019,12 @@ mod tests {
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            "domain registration",
+        );
 
         register_account_in_domain(
             &mut state_transaction,
@@ -3027,9 +3125,12 @@ mod tests {
 
         let owner = KeyPair::random();
         let owner_id = new_account_id(&owner);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3081,9 +3182,12 @@ mod tests {
 
         let owner = KeyPair::random();
         let owner_id = new_account_id(&owner);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3134,9 +3238,12 @@ mod tests {
 
         let owner = KeyPair::random();
         let owner_id = new_account_id(&owner);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3223,9 +3330,12 @@ mod tests {
 
         let owner = KeyPair::random();
         let owner_id = new_account_id(&owner);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -4455,9 +4565,12 @@ mod tests {
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            "domain registration",
+        );
 
         register_account_in_domain(
             &mut state_transaction,
@@ -4533,9 +4646,12 @@ mod tests {
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &signer1_id,
@@ -4609,9 +4725,12 @@ mod tests {
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &signer1_id,
@@ -4718,9 +4837,12 @@ mod tests {
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &signer1_id,
@@ -5098,9 +5220,12 @@ seiyaku TriggerDispatch {
             let mut block = state.block(block_header);
             let mut state_transaction = block.transaction();
 
-            Register::domain(Domain::new(domain_id.clone()))
-                .execute(&signer1_id, &mut state_transaction)
-                .expect("domain registration");
+            register_domain_with_name_lease(
+                &mut state_transaction,
+                &signer1_id,
+                &domain_id,
+                "domain registration",
+            );
             register_account_in_domain(
                 &mut state_transaction,
                 &signer1_id,
@@ -5183,12 +5308,18 @@ seiyaku TriggerDispatch {
         let signer1_remote = new_account_id(&signer1);
         let signer2_remote = new_account_id(&signer2);
 
-        Register::domain(Domain::new(multisig_domain.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("register multisig domain");
-        Register::domain(Domain::new(signer_domain.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("register signer domain");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &multisig_domain,
+            "register multisig domain",
+        );
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &signer_domain,
+            "register signer domain",
+        );
 
         register_account_in_domain(
             &mut state_transaction,
@@ -5303,12 +5434,18 @@ seiyaku TriggerDispatch {
         let signer_b_id = new_account_id(&signer_b);
         let signer_c_id = new_account_id(&signer_c);
 
-        Register::domain(Domain::new(home_domain.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("register home domain");
-        Register::domain(Domain::new(alt_domain.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("register alt domain");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &home_domain,
+            "register home domain",
+        );
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &alt_domain,
+            "register alt domain",
+        );
 
         for account in [
             owner_id.clone(),
@@ -5437,9 +5574,12 @@ seiyaku TriggerDispatch {
         let first_leaf_account_id = new_account_id(&leaf_a);
         let second_leaf_account_id = new_account_id(&leaf_b);
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         for (account_id, label) in [
             (owner_id.clone(), "register owner"),
             (first_leaf_account_id.clone(), "register leaf a"),
@@ -5513,9 +5653,12 @@ seiyaku TriggerDispatch {
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -5578,9 +5721,12 @@ seiyaku TriggerDispatch {
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -5700,9 +5846,12 @@ seiyaku TriggerDispatch {
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -5812,9 +5961,12 @@ seiyaku TriggerDispatch {
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,

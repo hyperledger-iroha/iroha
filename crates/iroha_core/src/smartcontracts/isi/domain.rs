@@ -3488,6 +3488,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register unlabeled multisig account");
@@ -3711,6 +3712,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register unlabeled multisig account");

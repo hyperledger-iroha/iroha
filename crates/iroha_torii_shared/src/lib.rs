@@ -1,7 +1,6 @@
 //! Constant values used in Torii that might be re-used by client libraries as well.
 use iroha_data_model::{
     account::{AccountAlias, AccountId, OpaqueAccountId},
-    domain::DomainId,
     nexus::UniversalAccountId,
     transaction::error::TransactionRejectionReason,
 };
@@ -276,10 +275,6 @@ pub struct AccountReadResponse {
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub opaque_ids: Vec<OpaqueAccountId>,
-    /// Distinct domains implied by the account's currently bound domain-qualified aliases.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
-    pub linked_domains: Vec<DomainId>,
 }
 
 #[cfg(test)]
@@ -364,7 +359,6 @@ mod tests {
             )),
             uaid: None,
             opaque_ids: Vec::new(),
-            linked_domains: Vec::new(),
         };
 
         let encoded = norito::to_bytes(&response).expect("encode account response");

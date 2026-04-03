@@ -7047,7 +7047,7 @@ fn openapi_schemas() -> Map {
         "AccountReadResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["account_id", "opaque_ids", "linked_domains"],
+            "required": ["account_id", "opaque_ids"],
             "additionalProperties": false,
             "properties": {
                 "account_id": {
@@ -7068,11 +7068,6 @@ fn openapi_schemas() -> Map {
                     "type": "array",
                     "description": "Opaque identifiers currently mapped to the account UAID.",
                     "items": { "$ref": "#/components/schemas/JsonValue" }
-                },
-                "linked_domains": {
-                    "type": "array",
-                    "description": "Domains currently linked to the subject in state indexes.",
-                    "items": { "type": "string" }
                 }
             }
         }),

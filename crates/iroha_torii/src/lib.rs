@@ -1051,6 +1051,20 @@ fn normalize_tx_history_alias(alias: &str) -> String {
 }
 
 #[cfg(feature = "app_api")]
+fn canonical_tx_history_subject_alias(
+    catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    subject: &str,
+) -> Result<Option<String>, Error> {
+    let normalized_subject = subject.trim().to_ascii_lowercase();
+    if normalized_subject.is_empty() || !normalized_subject.contains('@') {
+        return Ok(None);
+    }
+
+    let (canonical, _) = parse_account_alias_label_with_catalog(&normalized_subject, catalog)?;
+    Ok(Some(canonical))
+}
+
+#[cfg(feature = "app_api")]
 fn parse_tx_history_mandatory_aliases(path: &Path) -> HashMap<String, HashSet<String>> {
     let raw = fs::read_to_string(path).unwrap_or_else(|err| {
         panic!(
@@ -22062,24 +22076,6 @@ fn decode_tx_history_jwt_claims(
 }
 
 #[cfg(feature = "app_api")]
-fn tx_history_subject_alias_candidates(subject: &str, dataspace_id: &str) -> Vec<String> {
-    let normalized_subject = subject.trim().to_ascii_lowercase();
-    if normalized_subject.is_empty() {
-        return Vec::new();
-    }
-    if normalized_subject.contains('@') {
-        return vec![normalize_tx_history_alias(&normalized_subject)];
-    }
-    if normalized_subject.contains(':') {
-        return Vec::new();
-    }
-    vec![normalize_tx_history_alias(&format!(
-        "{normalized_subject}@{}",
-        dataspace_id.trim().to_ascii_lowercase()
-    ))]
-}
-
-#[cfg(feature = "app_api")]
 fn resolve_tx_history_alias_account_id(
     app: &SharedAppState,
     alias_input: &str,
@@ -22148,7 +22144,25 @@ fn tx_history_viewer_from_headers(
             )
         })?;
 
-    let alias_candidates = tx_history_subject_alias_candidates(&subject, &dataspace_id);
+    let canonical_account_id = AccountId::parse_encoded(subject.trim())
+        .ok()
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id);
+    let alias_candidates = if canonical_account_id.is_some() {
+        Vec::new()
+    } else {
+        let nexus = app.state.nexus_snapshot();
+        match canonical_tx_history_subject_alias(&nexus.dataspace_catalog, &subject) {
+            Ok(Some(alias)) => vec![alias],
+            Ok(None) => {
+                return Err(tx_history_reject(
+                    StatusCode::UNAUTHORIZED,
+                    "tx_history_subject_invalid",
+                    "sub claim must be a canonical account id or account alias literal",
+                ));
+            }
+            Err(err) => return Err(tx_history_alias_resolution_reject(err)),
+        }
+    };
     let is_mandatory_alias = alias_candidates.iter().any(|alias| {
         app.tx_history_access_policy
             .is_mandatory_alias(&dataspace_id, alias)
@@ -22157,8 +22171,7 @@ fn tx_history_viewer_from_headers(
     let mut dedupe = HashSet::new();
     let mut account_ids = Vec::new();
 
-    if let Ok(parsed) = AccountId::parse_encoded(subject.trim()) {
-        let account_id = parsed.into_account_id();
+    if let Some(account_id) = canonical_account_id {
         if dedupe.insert(account_id.to_string()) {
             account_ids.push(account_id);
         }
@@ -30571,9 +30584,15 @@ pub(crate) mod tests_runtime_handlers {
         let json_bytes = axum::body::to_bytes(json_resp.into_body(), usize::MAX)
             .await
             .expect("json body");
+        let json_value: norito::json::Value =
+            norito::json::from_slice(&json_bytes).expect("json account payload value");
         let json_payload: AccountReadResponse =
             norito::json::from_slice(&json_bytes).expect("json account payload");
         assert_eq!(json_payload.account_id, account_id);
+        assert!(
+            json_value.get("linked_domains").is_none(),
+            "account read payload should not expose linked_domains"
+        );
 
         let norito_resp = super::handler_account_get(
             State(app),
@@ -36805,19 +36824,97 @@ mod tests {
 
     #[cfg(feature = "app_api")]
     #[test]
-    fn tx_history_subject_alias_candidates_preserve_short_alias_literals() {
+    fn canonical_tx_history_subject_alias_accepts_canonical_literals() {
+        let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: DataSpaceId::new(10),
+                alias: "banka".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
         assert_eq!(
-            tx_history_subject_alias_candidates("operator1@banka", "banka"),
-            vec!["operator1@banka".to_string()]
+            canonical_tx_history_subject_alias(&catalog, "operator1@banka")
+                .expect("canonical dataspace alias should parse"),
+            Some("operator1@banka".to_string())
         );
         assert_eq!(
-            tx_history_subject_alias_candidates("operator2", "bankb"),
-            vec!["operator2@bankb".to_string()]
+            canonical_tx_history_subject_alias(&catalog, "banking@universal")
+                .expect("canonical dataspace alias should parse"),
+            Some("banking@universal".to_string())
         );
         assert_eq!(
-            tx_history_subject_alias_candidates("banking", "universal"),
-            vec!["banking@universal".to_string()]
+            canonical_tx_history_subject_alias(&catalog, "operator1@branch.banka")
+                .expect("canonical domain alias should parse"),
+            Some("operator1@branch.banka".to_string())
         );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[test]
+    fn canonical_tx_history_subject_alias_rejects_bare_subjects() {
+        let catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: DataSpaceId::new(10),
+                alias: "banka".to_owned(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        assert_eq!(
+            canonical_tx_history_subject_alias(&catalog, "operator1")
+                .expect("bare subjects should not parse as aliases"),
+            None
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn tx_history_viewer_from_headers_rejects_bare_subject_aliases() {
+        let mut app = mk_app_state_for_tests();
+        let secret = "shared-secret";
+        let claims = TxHistoryJwtClaimsFixture {
+            sub: "operator1".to_string(),
+            dataspace_id: "banka".to_string(),
+            roles: vec!["FI_OPERATOR".to_string()],
+            iat: 1_700_000_000,
+            nbf: 1_700_000_000,
+            exp: 4_102_444_800,
+            iss: "pk-cbdc-dev".to_string(),
+            aud: "pk-cbdc".to_string(),
+        };
+        let token = encode(
+            &Header::new(JwtAlgorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .expect("sample tx-history jwt should sign");
+        let app_state = Arc::get_mut(&mut app).expect("unique app state");
+        app_state.tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {
+            jwt: Some(TxHistoryJwtConfig {
+                algorithm: JwtAlgorithm::HS256,
+                key: TxHistoryJwtKey::Hmac(secret.as_bytes().to_vec()),
+                issuer: Some("pk-cbdc-dev".to_string()),
+                audience: Some("pk-cbdc".to_string()),
+            }),
+            ..TxHistoryAccessPolicy::default()
+        });
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            axum::http::header::AUTHORIZATION,
+            format!("Bearer {token}")
+                .parse()
+                .expect("authorization header"),
+        );
+
+        let response = tx_history_viewer_from_headers(&app, &headers)
+            .expect_err("bare subject aliases must be rejected");
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[cfg(feature = "app_api")]
