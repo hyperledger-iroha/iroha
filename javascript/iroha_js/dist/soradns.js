@@ -48,6 +48,15 @@ function normalisePattern(pattern) {
   return trimmed.toLowerCase();
 }
 
+function readDerivedField(object, ...names) {
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(object, name)) {
+      return object[name];
+    }
+  }
+  return undefined;
+}
+
 /**
  * Compute the deterministic gateway hosts for a SoraDNS FQDN.
  * Returns an immutable object with the canonical host, pretty host,
@@ -70,12 +79,23 @@ export function deriveGatewayHosts(fqdn) {
   }
   const binding = requireSoradnsNativeBinding();
   const derived = binding.soradnsDeriveGatewayHosts(fqdn);
-  const normalizedName = String(derived.normalized_name ?? "");
-  const canonicalLabel = String(derived.canonical_label ?? "");
-  const canonicalHost = String(derived.canonical_host ?? "");
-  const canonicalWildcard = String(derived.canonical_wildcard ?? "");
-  const prettyHost = String(derived.pretty_host ?? "");
-  const hostPatternsSource = derived.host_patterns ?? [];
+  const normalizedName = String(
+    readDerivedField(derived, "normalized_name", "normalizedName") ?? "",
+  );
+  const canonicalLabel = String(
+    readDerivedField(derived, "canonical_label", "canonicalLabel") ?? "",
+  );
+  const canonicalHost = String(
+    readDerivedField(derived, "canonical_host", "canonicalHost") ?? "",
+  );
+  const canonicalWildcard = String(
+    readDerivedField(derived, "canonical_wildcard", "canonicalWildcard") ?? "",
+  );
+  const prettyHost = String(
+    readDerivedField(derived, "pretty_host", "prettyHost") ?? "",
+  );
+  const hostPatternsSource =
+    readDerivedField(derived, "host_patterns", "hostPatterns") ?? [];
   const hostPatterns = Array.isArray(hostPatternsSource)
     ? hostPatternsSource.map((pattern) => String(pattern))
     : [];

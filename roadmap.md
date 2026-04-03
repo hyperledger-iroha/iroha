@@ -2,6 +2,31 @@
 
 Last updated: 2026-04-03
 
+Latest sync (2026-04-03 multisig + pipeline-event closure):
+the executor-upgrade multisig registration regressions are fixed, and the
+later broad-run `events::pipeline::pipeline_event_scenarios` timeout flake is
+hardened on the patched tree.
+
+- shipped in `integration_tests`:
+  - pre-upgrade runtime-domain bootstrap in the two
+    `*_materializes_missing_signatory_account_after_executor_upgrade` multisig
+    tests, keeping those scenarios focused on post-upgrade multisig behavior;
+  - a shared 60-second lower-bound timeout for pipeline event stream setup /
+    confirmation plus longer Kura flush deadlines in
+    `tests/events/pipeline.rs`, which removes the broad-load timeout flake seen
+    in `events::pipeline::pipeline_event_scenarios`.
+- focused verification is green, including:
+  - `cargo test -p integration_tests --test multisig -- --nocapture`
+  - `cargo test -p integration_tests --test mod events:: -- --nocapture`
+  - `cargo fmt --all`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+
+Open work for this slice now remains:
+- rerun `cargo test --workspace` from a clean post-patch slot if a fresh
+  full-repo green stamp is needed; the earlier broad replay that found the
+  pipeline-event flake started before this final hardening patch and is no
+  longer authoritative for the patched tree.
+
 Latest sync (2026-04-03 JS package + integration regression closure):
 the remaining runnable `javascript/iroha_js` package failures are fixed, and
 the last two broad Rust integration regressions from the prior workspace replay

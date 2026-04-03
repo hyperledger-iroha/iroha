@@ -40,6 +40,15 @@ function requireSorafsNativeBinding() {
   return binding;
 }
 
+function readPayloadField(object, ...names) {
+  for (const name of names) {
+    if (Object.prototype.hasOwnProperty.call(object, name)) {
+      return object[name];
+    }
+  }
+  return undefined;
+}
+
 function formatAssignment(raw) {
   if (!raw || typeof raw !== "object") {
     return {
@@ -48,18 +57,20 @@ function formatAssignment(raw) {
       lane: null,
     };
   }
+  const providerValue = readPayloadField(raw, "provider_id_hex", "providerIdHex");
   const providerIdHex =
-    typeof raw.provider_id_hex === "string" ? raw.provider_id_hex : "";
-  const sliceValue = raw.slice_gib;
+    typeof providerValue === "string" ? providerValue : "";
+  const sliceValue = readPayloadField(raw, "slice_gib", "sliceGib");
+  const laneValue = readPayloadField(raw, "lane");
   return {
     providerIdHex,
     sliceGiB: typeof sliceValue === "number" ? sliceValue : Number(sliceValue ?? 0),
     lane:
-      typeof raw.lane === "string"
-        ? raw.lane
-        : raw.lane === null || raw.lane === undefined
+      typeof laneValue === "string"
+        ? laneValue
+        : laneValue === null || laneValue === undefined
         ? null
-        : String(raw.lane),
+        : String(laneValue),
   };
 }
 
@@ -81,9 +92,21 @@ function formatSla(raw) {
       minPorSuccessPercentMilli: 0,
     };
   }
-  const ingest = raw.ingest_deadline_secs;
-  const availability = raw.min_availability_percent_milli;
-  const por = raw.min_por_success_percent_milli;
+  const ingest = readPayloadField(
+    raw,
+    "ingest_deadline_secs",
+    "ingestDeadlineSecs",
+  );
+  const availability = readPayloadField(
+    raw,
+    "min_availability_percent_milli",
+    "minAvailabilityPercentMilli",
+  );
+  const por = readPayloadField(
+    raw,
+    "min_por_success_percent_milli",
+    "minPorSuccessPercentMilli",
+  );
   return {
     ingestDeadlineSecs: Number(ingest ?? 0),
     minAvailabilityPercentMilli: Number(availability ?? 0),
@@ -147,7 +170,11 @@ export function decodeReplicationOrder(bytes) {
   const binding = getNativeBinding();
   let payload;
   if (binding && typeof binding.sorafsDecodeReplicationOrder === "function") {
-    payload = binding.sorafsDecodeReplicationOrder(buffer);
+    try {
+      payload = binding.sorafsDecodeReplicationOrder(buffer);
+    } catch {
+      payload = decodeReplicationOrderFallback(buffer);
+    }
   } else {
     payload = decodeReplicationOrderFallback(buffer);
   }
@@ -157,31 +184,59 @@ export function decodeReplicationOrder(bytes) {
   const metadata = Array.isArray(payload.metadata)
     ? payload.metadata.map((entry) => formatMetadata(entry))
     : [];
-  const schemaVersion = Number(payload.schema_version ?? 0);
-  const orderIdHex =
-    typeof payload.order_id_hex === "string" ? payload.order_id_hex : "";
+  const schemaVersion = Number(
+    readPayloadField(payload, "schema_version", "schemaVersion") ?? 0,
+  );
+  const orderIdValue = readPayloadField(payload, "order_id_hex", "orderIdHex");
+  const orderIdHex = typeof orderIdValue === "string" ? orderIdValue : "";
+  const manifestCidUtf8Value = readPayloadField(
+    payload,
+    "manifest_cid_utf8",
+    "manifestCidUtf8",
+  );
   const manifestCidUtf8 =
-    payload.manifest_cid_utf8 === null
+    manifestCidUtf8Value === null
       ? null
-      : typeof payload.manifest_cid_utf8 === "string"
-      ? payload.manifest_cid_utf8
+      : typeof manifestCidUtf8Value === "string"
+      ? manifestCidUtf8Value
       : null;
+  const manifestCidBase64Value = readPayloadField(
+    payload,
+    "manifest_cid_base64",
+    "manifestCidBase64",
+  );
   const manifestCidBase64 =
-    typeof payload.manifest_cid_base64 === "string"
-      ? payload.manifest_cid_base64
-      : "";
+    typeof manifestCidBase64Value === "string" ? manifestCidBase64Value : "";
+  const manifestDigestValue = readPayloadField(
+    payload,
+    "manifest_digest_hex",
+    "manifestDigestHex",
+  );
   const manifestDigestHex =
-    typeof payload.manifest_digest_hex === "string"
-      ? payload.manifest_digest_hex
-      : "";
+    typeof manifestDigestValue === "string" ? manifestDigestValue : "";
+  const chunkingProfileValue = readPayloadField(
+    payload,
+    "chunking_profile",
+    "chunkingProfile",
+  );
   const chunkingProfile =
-    typeof payload.chunking_profile === "string"
-      ? payload.chunking_profile
-      : "";
-  const targetReplicas = payload.target_replicas ?? 0;
-  const issuedAtUnix = payload.issued_at_unix ?? 0;
-  const deadlineAtUnix = payload.deadline_at_unix ?? 0;
-  const sla = formatSla(payload.sla);
+    typeof chunkingProfileValue === "string" ? chunkingProfileValue : "";
+  const targetReplicas = readPayloadField(
+    payload,
+    "target_replicas",
+    "targetReplicas",
+  ) ?? 0;
+  const issuedAtUnix = readPayloadField(
+    payload,
+    "issued_at_unix",
+    "issuedAtUnix",
+  ) ?? 0;
+  const deadlineAtUnix = readPayloadField(
+    payload,
+    "deadline_at_unix",
+    "deadlineAtUnix",
+  ) ?? 0;
+  const sla = formatSla(readPayloadField(payload, "sla"));
   return {
     schemaVersion,
     orderIdHex,

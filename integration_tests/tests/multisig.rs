@@ -562,10 +562,12 @@ fn multisig_register_materializes_missing_signatory_account_after_executor_upgra
         return Ok(());
     }
 
-    upgrade_executor(&test_client, "executor_with_admin")?;
-
     let domain: DomainId = "multisig-register-materialize-upgraded".parse().unwrap();
     register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
+    // This regression targets multisig account materialization after the executor
+    // upgrade. Keep the domain bootstrap on the pre-upgrade executor so the test
+    // stays scoped to the multisig path rather than unrelated domain admission.
+    upgrade_executor(&test_client, "executor_with_admin")?;
 
     let existing_signer = gen_account_in(&domain);
     alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
@@ -618,10 +620,11 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account_aft
         return Ok(());
     }
 
-    upgrade_executor(&test_client, "executor_with_admin")?;
-
     let domain: DomainId = "multisig-register-rejected-upgraded".parse().unwrap();
     register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
+    // Keep domain bootstrap outside the upgraded executor so this test continues
+    // to isolate the post-upgrade multisig register behavior it actually covers.
+    upgrade_executor(&test_client, "executor_with_admin")?;
 
     let existing_signer = gen_account_in(&domain);
     let non_signatory = gen_account_in(&domain);

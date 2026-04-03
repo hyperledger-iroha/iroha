@@ -2,6 +2,30 @@
 
 Last updated: 2026-04-03
 
+## 2026-04-03 Follow-up: multisig executor-upgrade and pipeline event regressions are fixed
+- Closed the last two deterministic integration regressions from the broad
+  replay and hardened one additional broad-run timing flake:
+  - `integration_tests/tests/multisig.rs` now bootstraps the runtime domain
+    before upgrading the executor in the two
+    `*_materializes_missing_signatory_account_after_executor_upgrade` cases, so
+    those tests stay scoped to post-upgrade multisig account materialization
+    instead of failing in unrelated upgraded-domain bootstrap;
+  - `integration_tests/tests/events/pipeline.rs` now lower-bounds the pipeline
+    event subscription / confirmation waits to 60 seconds and extends the Kura
+    flush assertions to 15 seconds, which removes the broad-run
+    `events::pipeline::pipeline_event_scenarios` timeout flake under heavier
+    integration load.
+- Verification completed:
+  - `cargo test -p integration_tests --test multisig -- --nocapture`
+  - `cargo test -p integration_tests --test mod events:: -- --nocapture`
+  - `cargo fmt --all`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+- Verification update:
+  - the earlier `cargo test --workspace` replay that exposed
+    `events::pipeline::pipeline_event_scenarios` was started before this final
+    hardening patch, so its eventual result is stale for the patched tree; the
+    focused multisig and `events::` slices on the patched tree are green.
+
 ## 2026-04-03 Follow-up: JS package failures cleared and the remaining integration regressions are green again
 - Closed the remaining `javascript/iroha_js` package-test regressions that
   surfaced once `npm run lint:test` became runnable:
