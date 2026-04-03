@@ -12196,6 +12196,77 @@ mod tests {
     }
 
     #[test]
+    fn print_sample_claim_identifier_wire_payload_hex() {
+        use iroha_crypto::Signature;
+        use iroha_data_model::identifier::IdentifierResolutionReceipt;
+        use iroha_data_model::isi::{Instruction, InstructionBox, identifier::ClaimIdentifier};
+
+        let payload = sample_identifier_receipt_payload();
+        let receipt = IdentifierResolutionReceipt {
+            payload: payload.clone(),
+            signature: Some(
+                Signature::from_hex(sample_identifier_signature_hex())
+                    .expect("valid signature hex"),
+            ),
+            proof: None,
+        };
+        let instruction = ClaimIdentifier {
+            account: payload.account_id.clone(),
+            receipt,
+        };
+        let bare = Instruction::dyn_encode(&instruction);
+        let boxed = InstructionBox::from(instruction);
+        let framed = norito::core::to_bytes(&boxed).expect("serialize instruction");
+        let (wire_name, framed_payload) =
+            norito::decode_from_bytes::<(String, Vec<u8>)>(&framed).expect("decode wire tuple");
+
+        println!("RUST_CLAIM_WIRE_NAME={wire_name}");
+        println!("RUST_CLAIM_BARE_HEX={}", hex::encode_upper(&bare));
+        println!(
+            "RUST_CLAIM_FRAMED_HEX={}",
+            hex::encode_upper(framed_payload)
+        );
+    }
+
+    #[test]
+    fn print_live_claim_identifier_wire_payload_hex() {
+        use iroha_crypto::Signature;
+        use iroha_data_model::identifier::IdentifierResolutionReceipt;
+        use iroha_data_model::isi::{Instruction, InstructionBox, identifier::ClaimIdentifier};
+        use norito::codec::DecodeAll as _;
+
+        let payload_bytes =
+            hex::decode(LIVE_EMAIL_CLAIM_PAYLOAD_HEX).expect("hex decode live payload");
+        let payload =
+            IdentifierResolutionReceiptPayload::decode_all(&mut payload_bytes.as_slice())
+                .expect("decode live payload bytes");
+        let receipt = IdentifierResolutionReceipt {
+            payload: payload.clone(),
+            signature: Some(
+                Signature::from_hex(LIVE_EMAIL_CLAIM_SIGNATURE_HEX)
+                    .expect("valid live signature hex"),
+            ),
+            proof: None,
+        };
+        let instruction = ClaimIdentifier {
+            account: payload.account_id.clone(),
+            receipt,
+        };
+        let bare = Instruction::dyn_encode(&instruction);
+        let boxed = InstructionBox::from(instruction);
+        let framed = norito::core::to_bytes(&boxed).expect("serialize instruction");
+        let (wire_name, framed_payload) =
+            norito::decode_from_bytes::<(String, Vec<u8>)>(&framed).expect("decode wire tuple");
+
+        println!("RUST_LIVE_CLAIM_WIRE_NAME={wire_name}");
+        println!("RUST_LIVE_CLAIM_BARE_HEX={}", hex::encode_upper(&bare));
+        println!(
+            "RUST_LIVE_CLAIM_FRAMED_HEX={}",
+            hex::encode_upper(framed_payload)
+        );
+    }
+
+    #[test]
     fn parse_identifier_receipt_accepts_swift_normalized_payload_fallback() {
         let payload_bytes =
             hex::decode(LIVE_EMAIL_CLAIM_PAYLOAD_HEX).expect("hex decode live payload");

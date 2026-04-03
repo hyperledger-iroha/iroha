@@ -11542,7 +11542,7 @@ mod multisig_selector_tests {
     #[tokio::test]
     async fn contract_call_rejects_partial_legacy_target() {
         let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
-        let err = handle_post_contract_call(
+        let result = handle_post_contract_call(
             Arc::new("contract-call-legacy-target".parse().expect("chain id")),
             build_queue(),
             build_state(World::default()),
@@ -11564,8 +11564,12 @@ mod multisig_selector_tests {
                 gas_limit: 10_000,
             }),
         )
-        .await
-        .expect_err("partial legacy target must fail");
+        .await;
+
+        let err = match result {
+            Ok(_) => panic!("partial legacy target must fail"),
+            Err(err) => err,
+        };
 
         let message = expect_conversion(err);
         assert!(message.contains("provide both namespace and contract_id"));
