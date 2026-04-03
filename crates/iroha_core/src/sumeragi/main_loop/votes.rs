@@ -3057,6 +3057,15 @@ impl Actor {
     ) -> Vec<PeerId> {
         let canonicalize =
             |roster| super::roster::canonicalize_roster_for_mode(roster, consensus_mode);
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        // Keep vote/RBC validation aligned with pacemaker proposal assembly for the active round.
+        // Roster changes committed at height N must be visible for votes at N+1 immediately.
+        if height == committed_height.saturating_add(1) {
+            let live = self.roster_for_live_vote_with_mode(height, consensus_mode);
+            if !live.is_empty() {
+                return canonicalize(live);
+            }
+        }
         if let Some(cached) = self.vote_roster_cache.get(&block_hash) {
             if !cached.roster.is_empty() {
                 return canonicalize(cached.roster.clone());
@@ -3086,15 +3095,6 @@ impl Actor {
         }) {
             if !selection.roster.is_empty() {
                 return canonicalize(selection.roster);
-            }
-        }
-        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
-        // Keep vote/RBC validation aligned with pacemaker proposal assembly for the active round.
-        // Roster changes committed at height N must be visible for votes at N+1 immediately.
-        if height == committed_height.saturating_add(1) {
-            let live = self.roster_for_live_vote_with_mode(height, consensus_mode);
-            if !live.is_empty() {
-                return canonicalize(live);
             }
         }
         if height <= committed_height {

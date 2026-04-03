@@ -15440,6 +15440,8 @@ impl State {
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) {
         let path = self.commit_roster_journal_path();
+        let mut journal = self.commit_roster_journal.write();
+        journal.upsert(commit_qc.clone(), checkpoint.clone(), stake_snapshot);
         if path.as_os_str().is_empty() {
             return;
         }
@@ -15458,8 +15460,6 @@ impl State {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
-        let mut journal = self.commit_roster_journal.write();
-        journal.upsert(commit_qc.clone(), checkpoint.clone(), stake_snapshot);
         if let Err(err) = journal.persist() {
             warn!(
                 ?err,
@@ -15520,6 +15520,7 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
         update_world: bool,
+        update_status: bool,
     ) -> bool {
         if !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             warn!(
@@ -15603,8 +15604,10 @@ impl State {
         if update_world {
             self.upsert_commit_qc_in_world(commit_qc);
         }
-        status::record_commit_qc(commit_qc.clone());
-        status::record_validator_checkpoint(checkpoint.clone());
+        if update_status {
+            status::record_commit_qc(commit_qc.clone());
+            status::record_validator_checkpoint(checkpoint.clone());
+        }
         let sidecar_snapshot = stake_snapshot.clone();
         self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot);
         let sidecar = crate::kura::RosterSidecar::new(
@@ -15627,7 +15630,7 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
-        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true)
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true, true)
     }
 
     fn record_commit_roster_without_world(
@@ -15636,7 +15639,16 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
-        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false)
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false, true)
+    }
+
+    fn record_commit_roster_without_world_or_status(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) -> bool {
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false, false)
     }
 
     fn restore_commit_roster_history(&self) {
@@ -21500,6 +21512,24 @@ impl<'state> StateBlock<'state> {
         block: &CommittedBlock,
         topology: Vec<PeerId>,
     ) -> Vec<EventBox> {
+        self.apply_without_execution_with_commit_qc(block, topology, None)
+    }
+
+    /// Apply post-execution block effects, optionally using an explicit commit certificate hint
+    /// instead of relying on the global status cache to recover per-block commit-roster evidence.
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::needless_pass_by_value)]
+    #[iroha_logger::log(
+        skip_all,
+        fields(block_height = block.as_ref().header().height())
+    )]
+    #[must_use]
+    pub fn apply_without_execution_with_commit_qc(
+        &mut self,
+        block: &CommittedBlock,
+        topology: Vec<PeerId>,
+        commit_qc_hint: Option<&Qc>,
+    ) -> Vec<EventBox> {
         let block_hash = block.as_ref().hash();
         trace!(%block_hash, "Applying block");
 
@@ -21587,16 +21617,25 @@ impl<'state> StateBlock<'state> {
         let checkpoint_topology = topology;
         let checkpoint_block_height = block.as_ref().header().height().get();
         let checkpoint_block_hash = block.as_ref().hash();
+        let hinted_commit_cert = commit_qc_hint
+            .filter(|cert| {
+                cert.height == checkpoint_block_height
+                    && cert.subject_block_hash == checkpoint_block_hash
+                    && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
+            })
+            .cloned();
         let commit_cert_for_block = if checkpoint_topology.is_empty() {
             None
         } else {
-            crate::sumeragi::status::commit_qc_history()
-                .into_iter()
-                .find(|cert| {
-                    cert.height == checkpoint_block_height
-                        && cert.subject_block_hash == checkpoint_block_hash
-                        && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
-                })
+            hinted_commit_cert.clone().or_else(|| {
+                crate::sumeragi::status::commit_qc_history()
+                    .into_iter()
+                    .find(|cert| {
+                        cert.height == checkpoint_block_height
+                            && cert.subject_block_hash == checkpoint_block_hash
+                            && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
+                    })
+            })
         };
         let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
         let (status_mode_tag, _, _, _) = crate::sumeragi::status::mode_tags();
@@ -21698,11 +21737,22 @@ impl<'state> StateBlock<'state> {
                         commit_cert.validator_set_hash_version,
                         None,
                     );
-                    let recorded = self.state_ref.record_commit_roster_without_world(
-                        &commit_cert,
-                        &checkpoint,
-                        stake_snapshot,
-                    );
+                    let recorded = if hinted_commit_cert
+                        .as_ref()
+                        .is_some_and(|hint| hint == &commit_cert)
+                    {
+                        self.state_ref.record_commit_roster_without_world_or_status(
+                            &commit_cert,
+                            &checkpoint,
+                            stake_snapshot,
+                        )
+                    } else {
+                        self.state_ref.record_commit_roster_without_world(
+                            &commit_cert,
+                            &checkpoint,
+                            stake_snapshot,
+                        )
+                    };
                     if recorded {
                         let should_update =
                             match self.world.commit_qcs.get(&commit_cert.subject_block_hash) {
@@ -34008,6 +34058,108 @@ mod tests {
             stored,
             Some(cert),
             "commit certificate should be recorded in world storage"
+        );
+
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
+    fn apply_without_execution_with_commit_qc_hint_persists_roster_without_status_history() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+
+        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![
+            PeerId::new(kp_a.public_key().clone()),
+            PeerId::new(kp_b.public_key().clone()),
+        ];
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 1);
+        let signed_block = iroha_data_model::block::builder::BlockBuilder::new(header)
+            .build_with_signature(1, kp_b.private_key());
+
+        let mut state_block = state.block(signed_block.header());
+        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let signers_bitmap = signer_bitmap(&[0, 1], roster.len());
+        let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
+        let height = committed.as_ref().header().height().get();
+        let view = committed.as_ref().header().view_change_index();
+        let vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            block_hash: committed.as_ref().hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view,
+            epoch: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage = crate::sumeragi::consensus::vote_preimage(
+            &super::DEFAULT_TEST_CHAIN_ID,
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            &vote,
+        );
+        let signatures: Vec<Vec<u8>> = [kp_a, kp_b]
+            .iter()
+            .map(|kp| {
+                Signature::new(kp.private_key(), &preimage)
+                    .payload()
+                    .to_vec()
+            })
+            .collect();
+        let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
+        let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&sig_refs)
+            .expect("aggregate commit QC signatures");
+        let commit_cert = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: committed.as_ref().hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view,
+            epoch: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: aggregate_signature,
+            },
+        };
+
+        let _ = state_block.apply_without_execution_with_commit_qc(
+            &committed,
+            roster.clone(),
+            Some(&commit_cert),
+        );
+        state_block.commit().expect("commit");
+
+        let history = status::commit_qc_history();
+        assert!(
+            history.is_empty(),
+            "explicit commit-QC hints should not populate status history during state apply"
+        );
+        let snapshot = state
+            .commit_roster_snapshot_for_block(height, committed.as_ref().hash())
+            .expect("commit-roster snapshot");
+        assert_eq!(snapshot.commit_qc, commit_cert);
+        let view = state.view();
+        let stored = view.world().commit_qcs().get(&committed.as_ref().hash());
+        assert_eq!(
+            stored,
+            Some(&snapshot.commit_qc),
+            "explicit commit-QC hints should still persist durable roster evidence"
         );
 
         status::reset_commit_certs_for_tests();

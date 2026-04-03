@@ -81600,6 +81600,210 @@ async fn vote_roster_for_next_height_prefers_active_topology_over_commit_qc_hist
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn vote_roster_for_next_height_prefers_active_topology_over_cached_roster() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let next_height = committed_height.saturating_add(1);
+    let (consensus_mode, _, _) = actor.consensus_context_for_height(next_height);
+    assert_eq!(
+        consensus_mode,
+        ConsensusMode::Permissioned,
+        "test assumes permissioned consensus"
+    );
+
+    let active_roster = actor.effective_commit_topology();
+    assert!(
+        active_roster.len() > 2,
+        "test requires at least three active validators"
+    );
+    let local = actor.common_config.peer.id().clone();
+    let stale_roster: Vec<_> = active_roster
+        .iter()
+        .filter(|peer| *peer != &local)
+        .cloned()
+        .collect();
+    assert_ne!(
+        stale_roster, active_roster,
+        "stale roster should differ from the active topology"
+    );
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAA; Hash::LENGTH]));
+    actor.cache_vote_roster(block_hash, next_height, 0, stale_roster);
+
+    let vote_roster = actor.roster_for_vote_with_mode(block_hash, next_height, 0, consensus_mode);
+    let live_roster = actor.roster_for_live_vote_with_mode(next_height, consensus_mode);
+    assert_eq!(
+        vote_roster, live_roster,
+        "vote roster should match the live roster at committed+1 even when a stale cache exists"
+    );
+    assert_eq!(
+        vote_roster, active_roster,
+        "vote roster should ignore stale cached rosters at committed+1"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn maybe_emit_local_commit_vote_uses_live_roster_when_cached_roster_excludes_local() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let active_roster = actor.effective_commit_topology();
+    assert!(
+        active_roster.len() > 2,
+        "test requires at least three active validators"
+    );
+    let local = actor.common_config.peer.id().clone();
+    let stale_roster: Vec<_> = active_roster
+        .iter()
+        .filter(|peer| *peer != &local)
+        .cloned()
+        .collect();
+    assert_ne!(
+        stale_roster, active_roster,
+        "stale roster should exclude the local peer"
+    );
+
+    let view = 0;
+    let block = sample_block(height, view, actor.state.latest_block_hash_fast());
+    let block_hash = insert_validated_pending(actor, block);
+
+    let emitted = actor.maybe_emit_local_commit_vote_for_pending_event(
+        block_hash,
+        height,
+        view,
+        &stale_roster,
+        "test",
+    );
+
+    assert!(
+        emitted,
+        "local commit-vote emission should use the live roster at committed+1"
+    );
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block retained");
+    assert!(
+        pending.local_commit_vote_emitted(),
+        "pending block should record the local commit vote"
+    );
+    let has_vote = actor.vote_log.values().any(|vote| {
+        vote.phase == Phase::Commit
+            && vote.block_hash == block_hash
+            && vote.height == height
+            && vote.view == view
+    });
+    assert!(
+        has_vote,
+        "local commit vote should be recorded even when the cached roster is stale"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_pipeline_emits_local_precommit_with_live_roster_when_cached_roster_excludes_local()
+{
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let active_roster = actor.effective_commit_topology();
+    assert!(
+        active_roster.len() > 2,
+        "test requires at least three active validators"
+    );
+    let local = actor.common_config.peer.id().clone();
+    let stale_roster: Vec<_> = active_roster
+        .iter()
+        .filter(|peer| *peer != &local)
+        .cloned()
+        .collect();
+    assert_ne!(
+        stale_roster, active_roster,
+        "stale roster should exclude the local peer"
+    );
+
+    let view = 0;
+    let signature_topology = super::topology_for_view(
+        &super::network_topology::Topology::new(stale_roster.clone()),
+        height,
+        view,
+        PERMISSIONED_TAG,
+        None,
+    );
+    let signer_peer = signature_topology
+        .as_ref()
+        .first()
+        .expect("stale topology should not be empty");
+    let signer_kp = harness
+        .key_pairs
+        .iter()
+        .find(|kp| kp.public_key() == signer_peer.public_key())
+        .expect("signer keypair exists in harness");
+    let header = BlockHeader {
+        height: NonZeroU64::new(height).expect("block height must be non-zero"),
+        prev_block_hash: actor.state.latest_block_hash_fast(),
+        merkle_root: None,
+        result_merkle_root: None,
+        da_proof_policies_hash: None,
+        da_commitments_hash: None,
+        da_pin_intents_hash: None,
+        prev_roster_evidence_hash: None,
+        sccp_commitment_root: None,
+        creation_time_ms: 0,
+        view_change_index: view,
+        confidential_features: None,
+    };
+    let signature = SignatureOf::from_hash(signer_kp.private_key(), header.hash());
+    let block_signature = BlockSignature::new(0, signature);
+    let block = SignedBlock::presigned(block_signature, header, Vec::new());
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.validation_status = ValidationStatus::Valid;
+    pending.parent_state_root = Some(zero_state_root());
+    pending.post_state_root = Some(zero_state_root());
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.note_proposal_seen(height, view, payload_hash);
+    actor.cache_vote_roster(block_hash, height, view, stale_roster);
+    actor.pending.last_commit_pipeline_run = Instant::now() - Duration::from_secs(10);
+
+    actor.process_commit_candidates_with_trigger(CommitPipelineTrigger::Tick, None);
+
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block retained");
+    assert!(
+        pending.local_commit_vote_emitted(),
+        "commit pipeline should emit a local precommit using the live roster"
+    );
+    let has_vote = actor.vote_log.values().any(|vote| {
+        vote.phase == Phase::Commit
+            && vote.block_hash == block_hash
+            && vote.height == height
+            && vote.view == view
+    });
+    assert!(
+        has_vote,
+        "commit pipeline should record the local precommit vote"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_qc_roll_forward_prefers_active_roster_when_keys_disabled() {
     use crate::sumeragi::status;
     use iroha_data_model::consensus::ConsensusKeyStatus;
