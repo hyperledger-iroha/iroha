@@ -12667,9 +12667,8 @@ mod tests {
 
         let payload_bytes =
             hex::decode(LIVE_EMAIL_CLAIM_PAYLOAD_HEX).expect("hex decode live payload");
-        let payload =
-            IdentifierResolutionReceiptPayload::decode_all(&mut payload_bytes.as_slice())
-                .expect("decode live payload bytes");
+        let payload = IdentifierResolutionReceiptPayload::decode_all(&mut payload_bytes.as_slice())
+            .expect("decode live payload bytes");
         let receipt = IdentifierResolutionReceipt {
             payload: payload.clone(),
             signature: Some(

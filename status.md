@@ -2,6 +2,19 @@
 
 Last updated: 2026-04-03
 
+## 2026-04-03 Follow-up: Kaigi localnet bootstrap now signs overlays with the real localnet genesis key
+- `crates/iroha_kagami/examples/taira_kaigi_localnet.rs` now accepts either the base localnet seed or an explicit genesis private key, derives the same signer contract as `kagami localnet`, and aborts if the derived signer does not match the expected genesis public key from `peer0.toml`.
+- `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` now reads `[genesis].public_key` from `peer0.toml`, picks up the recorded base seed from the generated localnet `README.md` or `IROHA_TAIRA_LOCALNET_SEED`, and passes `--expected-genesis-public-key` to the helper so stale or mismatched signers fail fast.
+- `crates/iroha_kagami/src/localnet.rs` now records the base seed in generated localnet `README.md` output so later Kaigi bootstrap runs can recover the signer deterministically.
+- Verification completed:
+  - `cargo fmt --all`
+  - `bash -n configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+  - `cargo test -p iroha_kagami --example taira_kaigi_localnet -- --nocapture`
+  - `cargo test -p iroha_kagami localnet_readme_records_base_seed_when_present -- --nocapture`
+  - `cargo test -p iroha_config survives_chain_override -- --nocapture`
+  - `cargo build --release -p iroha_kagami --example taira_kaigi_localnet`
+  - `IROHA_TAIRA_LOCALNET_SEED=Iroha bash configs/soranexus/taira/bootstrap_kaigi_localnet.sh` (pass; local `/v1/kaigi/relays` returned 3 healthy relays)
+
 ## 2026-04-03 Follow-up: multisig domain bootstrap now recovers from inconclusive submit timeouts
 - Hardened `integration_tests/tests/multisig.rs` after the remaining
   broad-workspace executor-upgrade failure reproduced only as an inconclusive
