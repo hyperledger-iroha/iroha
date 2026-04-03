@@ -5256,6 +5256,7 @@ fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
         Err(_) => return false,
     };
     let mut tr = Transcript::new(&env.transcript_label);
+    let metadata = env.transcript_metadata();
     let res = match decoded {
         DecodedEnvelope::Pallas {
             params,
@@ -5263,7 +5264,15 @@ fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
             z,
             t,
             p_g,
-        } => pallas::Polynomial::verify_open(params.as_ref(), &mut tr, z, p_g, t, proof.as_ref()),
+        } => pallas::Polynomial::verify_open_with_metadata(
+            params.as_ref(),
+            &mut tr,
+            z,
+            p_g,
+            t,
+            proof.as_ref(),
+            metadata,
+        ),
         #[cfg(feature = "goldilocks_backend")]
         DecodedEnvelope::Goldilocks {
             params,
@@ -5271,9 +5280,15 @@ fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
             z,
             t,
             p_g,
-        } => {
-            goldilocks::Polynomial::verify_open(params.as_ref(), &mut tr, z, p_g, t, proof.as_ref())
-        }
+        } => goldilocks::Polynomial::verify_open_with_metadata(
+            params.as_ref(),
+            &mut tr,
+            z,
+            p_g,
+            t,
+            proof.as_ref(),
+            metadata,
+        ),
         #[cfg(not(feature = "goldilocks_backend"))]
         DecodedEnvelope::Goldilocks => return false,
         DecodedEnvelope::Bn254 {
@@ -5282,7 +5297,15 @@ fn verify_ipa_open_envelope(proof: &ProofBox) -> bool {
             z,
             t,
             p_g,
-        } => bn254::Polynomial::verify_open(params.as_ref(), &mut tr, z, p_g, t, proof.as_ref()),
+        } => bn254::Polynomial::verify_open_with_metadata(
+            params.as_ref(),
+            &mut tr,
+            z,
+            p_g,
+            t,
+            proof.as_ref(),
+            metadata,
+        ),
     };
     res.is_ok()
 }

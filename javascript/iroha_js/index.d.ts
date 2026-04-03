@@ -94,6 +94,7 @@ export interface AccountAddressDisplay {
 
 export interface CurveSupportOptions {
   allowMlDsa?: boolean;
+  allowBls?: boolean;
   allowGost?: boolean;
   allowSm2?: boolean;
 }
@@ -185,6 +186,185 @@ export interface MultisigSpecPayload {
 }
 
 export type MultisigSpecLike = MultisigSpec | MultisigSpecPayload;
+
+export type MultisigTriggerArgsPreset = "lifecycle" | "lookup";
+
+export interface MultisigLifecycleTriggerArgsInput {
+  action: string;
+  requestId?: string;
+  request_id?: string;
+  fiId?: string | null;
+  fi_id?: string | null;
+  toAccountId?: string | null;
+  to_account_id?: string | null;
+  amountI64?: number | string | bigint | null;
+  amount_i64?: number | string | bigint | null;
+  requestedByActorId?: JsonValue;
+  requested_by_actor_id?: JsonValue;
+  createdAtMs?: number | string | bigint | null;
+  created_at_ms?: number | string | bigint | null;
+  expiresAtMs?: number | string | bigint | null;
+  expires_at_ms?: number | string | bigint | null;
+}
+
+export interface MultisigLookupTriggerArgsInput {
+  requestId?: string;
+  request_id?: string;
+  requestedByActorId?: JsonValue;
+  requested_by_actor_id?: JsonValue;
+}
+
+export interface ExecuteTriggerInstructionPayload {
+  ExecuteTrigger: {
+    trigger: string;
+    args: JsonValue | null;
+  };
+}
+
+export interface MultisigExecuteTriggerOptions {
+  trigger: string;
+  args?: JsonValue;
+  argPreset?: MultisigTriggerArgsPreset;
+  preset?: MultisigTriggerArgsPreset;
+  argInput?: MultisigLifecycleTriggerArgsInput | MultisigLookupTriggerArgsInput;
+  presetInput?: MultisigLifecycleTriggerArgsInput | MultisigLookupTriggerArgsInput;
+  signerAccountId?: string;
+  multisigSpec?: MultisigSpecLike;
+  spec?: MultisigSpecLike;
+  strictSignerCheck?: boolean;
+}
+
+export interface ProposeMultisigExecuteTriggerOptions extends MultisigExecuteTriggerOptions {
+  accountId: string;
+  spec: MultisigSpecLike;
+  transactionTtlMs?: number | null;
+}
+
+export interface MultisigAccountSelector {
+  multisigAccountId?: string;
+  multisigAccountAlias?: string;
+}
+
+export interface MultisigContractCallProposeRequest extends MultisigAccountSelector {
+  signerAccountId: string;
+  namespace: string;
+  contractId: string;
+  entrypoint: string;
+  payload?: JsonValue;
+  gasAssetId?: string | null;
+  feeSponsor?: string | null;
+  gasLimit?: number | string | bigint | null;
+  publicKeyHex?: string | null;
+  signatureB64?: string | null;
+  creationTimeMs?: number | string | bigint | null;
+  privateKey?: string | BinaryLike | null;
+  privateKeyHex?: string | null;
+  privateKeyMultihash?: string | null;
+  privateKeyBytes?: BinaryLike | number[] | null;
+  privateKeyAlgorithm?: string | null;
+  multisig_account_id?: string;
+  multisig_account_alias?: string;
+  signer_account_id?: string;
+  contract_id?: string;
+  gas_asset_id?: string | null;
+  fee_sponsor?: string | null;
+  gas_limit?: number | string | bigint | null;
+  public_key_hex?: string | null;
+  signature_b64?: string | null;
+  creation_time_ms?: number | string | bigint | null;
+  private_key?: string | BinaryLike | null;
+  private_key_hex?: string | null;
+  private_key_multihash?: string | null;
+  private_key_bytes?: BinaryLike | number[] | null;
+  private_key_algorithm?: string | null;
+}
+
+export interface MultisigContractCallProposePayload {
+  multisig_account_id?: string;
+  multisig_account_alias?: string;
+  signer_account_id: string;
+  namespace: string;
+  contract_id: string;
+  entrypoint: string;
+  payload: JsonValue;
+  gas_asset_id?: string;
+  fee_sponsor?: string;
+  gas_limit?: number;
+  public_key_hex?: string;
+  signature_b64?: string;
+  creation_time_ms?: number;
+  private_key?: string | BinaryLike;
+}
+
+export interface MultisigContractCallApproveRequest extends MultisigAccountSelector {
+  signerAccountId: string;
+  proposalId?: string | null;
+  instructionsHash?: string | null;
+  publicKeyHex?: string | null;
+  signatureB64?: string | null;
+  creationTimeMs?: number | string | bigint | null;
+  privateKey?: string | BinaryLike | null;
+  privateKeyHex?: string | null;
+  privateKeyMultihash?: string | null;
+  privateKeyBytes?: BinaryLike | number[] | null;
+  privateKeyAlgorithm?: string | null;
+  multisig_account_id?: string;
+  multisig_account_alias?: string;
+  signer_account_id?: string;
+  proposal_id?: string | null;
+  instructions_hash?: string | null;
+  public_key_hex?: string | null;
+  signature_b64?: string | null;
+  creation_time_ms?: number | string | bigint | null;
+  private_key?: string | BinaryLike | null;
+  private_key_hex?: string | null;
+  private_key_multihash?: string | null;
+  private_key_bytes?: BinaryLike | number[] | null;
+  private_key_algorithm?: string | null;
+}
+
+export interface MultisigContractCallApprovePayload {
+  multisig_account_id?: string;
+  multisig_account_alias?: string;
+  signer_account_id: string;
+  proposal_id?: string;
+  instructions_hash?: string;
+  public_key_hex?: string;
+  signature_b64?: string;
+  creation_time_ms?: number;
+  private_key?: string | BinaryLike;
+}
+
+export interface MultisigContractCallResponse {
+  ok: boolean;
+  resolved_multisig_account_id: string;
+  submitted: boolean | null;
+  proposal_id: string | null;
+  instructions_hash: string | null;
+  executed_tx_hash_hex: string | null;
+  creation_time_ms: number | null;
+  signing_message_b64: string | null;
+}
+
+export interface MultisigSpecResponse {
+  resolved_multisig_account_id: string;
+  spec: JsonValue;
+}
+
+export interface MultisigProposalEntry {
+  proposal_id: string;
+  instructions_hash: string;
+  proposal: JsonValue;
+}
+
+export interface MultisigProposalListResponse {
+  resolved_multisig_account_id: string;
+  proposals: ReadonlyArray<MultisigProposalEntry>;
+}
+
+export interface MultisigProposalGetResponse extends MultisigProposalEntry {
+  resolved_multisig_account_id: string;
+}
 
 export interface SoradnsGatewayHosts {
   readonly normalizedName: string;
@@ -5337,6 +5517,26 @@ export interface ContractEntrypointInput {
   permission?: string | null;
 }
 
+export interface ContractKotobaTranslationInput {
+  lang: string;
+  text: string;
+}
+
+export type ContractKotobaEntryInput =
+  | {
+      msgId: string;
+      translations: ReadonlyArray<ContractKotobaTranslationInput>;
+    }
+  | {
+      msg_id: string;
+      translations: ReadonlyArray<ContractKotobaTranslationInput>;
+    };
+
+export interface ContractManifestProvenanceInput {
+  signer: string;
+  signature: string;
+}
+
 export interface ContractManifestInput {
   codeHash?: HashLike | null;
   abiHash?: HashLike | null;
@@ -5344,6 +5544,8 @@ export interface ContractManifestInput {
   featuresBitmap?: NumericLike | null;
   accessSetHints?: ContractAccessSetHintsInput | null;
   entrypoints?: ReadonlyArray<ContractEntrypointInput> | null;
+  kotoba?: ReadonlyArray<ContractKotobaEntryInput> | null;
+  provenance?: ContractManifestProvenanceInput | null;
 }
 
 /**
@@ -5358,6 +5560,8 @@ export interface ToriiContractManifestInput {
   featuresBitmap?: NumericLike | null;
   accessSetHints?: ContractAccessSetHintsInput | null;
   entrypoints?: ReadonlyArray<ContractEntrypointInput> | null;
+  kotoba?: ReadonlyArray<ContractKotobaEntryInput> | null;
+  provenance?: ContractManifestProvenanceInput | null;
 }
 
 export interface RegisterContractCodeRequest {
@@ -5444,6 +5648,8 @@ export interface ContractManifestRecord {
         }>
       | null
       | undefined;
+    kotoba?: JsonValue | null | undefined;
+    provenance?: JsonValue | null | undefined;
   };
   code_bytes: string | null;
 }
@@ -7508,6 +7714,29 @@ export declare class ToriiClient {
     request: ContractCallRequest,
     options?: { signal?: AbortSignal },
   ): Promise<ContractCallResponse>;
+  proposeMultisigContractCall(
+    request: MultisigContractCallProposeRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<MultisigContractCallResponse>;
+  approveMultisigContractCall(
+    request: MultisigContractCallApproveRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<MultisigContractCallResponse>;
+  getMultisigSpec(
+    request: MultisigAccountSelector,
+    options?: { signal?: AbortSignal },
+  ): Promise<MultisigSpecResponse>;
+  listMultisigProposals(
+    request: MultisigAccountSelector,
+    options?: { signal?: AbortSignal },
+  ): Promise<MultisigProposalListResponse>;
+  getMultisigProposal(
+    request: MultisigAccountSelector & {
+      proposalId?: string | null;
+      instructionsHash?: string | null;
+    },
+    options?: { signal?: AbortSignal },
+  ): Promise<MultisigProposalGetResponse>;
   getContractManifest(codeHashHex: string): Promise<ContractManifestRecord | null>;
   getContractCodeBytes(codeHashHex: string): Promise<ContractCodeBytesRecord | null>;
   listContractInstances(
@@ -8615,6 +8844,56 @@ export function buildRegisterAccountInstruction({
   metadata?: object | null;
 }): object;
 
+export function buildExecuteTriggerInstruction(
+  trigger: string,
+  args?: JsonValue,
+): ExecuteTriggerInstructionPayload;
+export function buildExecuteTriggerInstruction(options: {
+  trigger: string;
+  args?: JsonValue;
+}): ExecuteTriggerInstructionPayload;
+export function buildExecuteTriggerNorito(
+  trigger: string,
+  args?: JsonValue,
+): Buffer;
+export function buildExecuteTriggerNorito(options: {
+  trigger: string;
+  args?: JsonValue;
+}): Buffer;
+
+export function buildMultisigTriggerArgs(
+  preset: "lifecycle",
+  input: MultisigLifecycleTriggerArgsInput,
+): {
+  action: string;
+  request_id: string;
+  fi_id?: string;
+  to_account_id?: string;
+  amount_i64?: number;
+  requested_by_actor_id?: JsonValue;
+  created_at_ms?: number;
+  expires_at_ms?: number;
+};
+export function buildMultisigTriggerArgs(
+  preset: "lookup",
+  input: MultisigLookupTriggerArgsInput,
+): {
+  request_id: string;
+  requested_by_actor_id?: JsonValue;
+};
+
+export function isMultisigSignerAuthorized(
+  spec: MultisigSpecLike,
+  signerAccountId: string,
+): boolean;
+
+export function buildMultisigExecuteTriggerInstruction(
+  options: MultisigExecuteTriggerOptions,
+): ExecuteTriggerInstructionPayload;
+export function buildMultisigExecuteTriggerNorito(
+  options: MultisigExecuteTriggerOptions,
+): Buffer;
+
 /**
  * Build a multisig registration instruction payload.
  */
@@ -8640,6 +8919,31 @@ export function buildProposeMultisigInstruction({
   spec: MultisigSpecLike;
   transactionTtlMs?: number | null;
 }): object;
+
+export function buildProposeMultisigExecuteTriggerInstruction(
+  options: ProposeMultisigExecuteTriggerOptions,
+): object;
+export function buildProposeMultisigExecuteTriggerNorito(
+  options: ProposeMultisigExecuteTriggerOptions,
+): Buffer;
+
+export function buildMultisigContractCallProposeRequest(
+  options: MultisigContractCallProposeRequest & {
+    trigger: string;
+    args?: JsonValue;
+    argPreset?: MultisigTriggerArgsPreset;
+    preset?: MultisigTriggerArgsPreset;
+    argInput?: MultisigLifecycleTriggerArgsInput | MultisigLookupTriggerArgsInput;
+    presetInput?: MultisigLifecycleTriggerArgsInput | MultisigLookupTriggerArgsInput;
+    multisigSpec?: MultisigSpecLike;
+    spec?: MultisigSpecLike;
+    strictSignerCheck?: boolean;
+  },
+): MultisigContractCallProposePayload;
+
+export function buildMultisigContractCallApproveRequest(
+  options: MultisigContractCallApproveRequest,
+): MultisigContractCallApprovePayload;
 
 export function buildTransferAssetInstruction({
   sourceAssetHoldingId,

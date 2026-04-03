@@ -8,6 +8,8 @@ status: complete
 translator: manual
 ---
 
+> **Translation status:** The canonical, up-to-date version of this page is [zk_envelopes.md](zk_envelopes.md). This translation has not yet been refreshed for the 2026-04-02 native IPA transcript-metadata changes (`vk_commitment`, `public_inputs_schema_hash`, `domain_tag`) or the `halo2/ipa/poly-open` terminology update.
+
 <div dir="rtl">
 
 # מעטפות ZK (Norito)

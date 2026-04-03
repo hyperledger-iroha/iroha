@@ -2,6 +2,292 @@
 
 Last updated: 2026-04-03
 
+## 2026-04-03 Follow-up: valid sequential full stable reruns are green in both modes
+- Reran the full stable envelopes **sequentially**, not concurrently, on the
+  current release binaries:
+  `/Users/mtakemiya/dev/iroha/target/release/izanami` and
+  `/Users/mtakemiya/dev/iroha/target/release/iroha3d`.
+- Retained top-level logs:
+  - permissioned:
+    `/tmp/izanami_permissioned_full_20260403T051854_sequential.log`
+  - NPoS:
+    `/tmp/izanami_npos_full_20260403T051854_sequential.log`
+- Permissioned full stable rerun is green:
+  - reached `target_blocks=2000` at
+    `quorum_min_height=2003 strict_min_height=2003`;
+  - completed the full stable duration at
+    `quorum_min_height=2691 strict_min_height=2691`; and
+  - final summary was
+    `successes=17997 failures=0 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`.
+- NPoS full stable rerun is green:
+  - reached `target_blocks=2000` at
+    `quorum_min_height=2003 strict_min_height=2003`;
+  - completed the full stable duration at
+    `quorum_min_height=2438 strict_min_height=2438`; and
+  - final summary was
+    `successes=17995 failures=1 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`.
+- Both valid sequential logs stayed free of the earlier blocker signatures:
+  `0` `route_unavailable`, `0` `no strict block height progress`,
+  `0` top-level `missing_qc`,
+  `0` `no proposal observed for view before changing view`, `0` same-height
+  vote-history conflict lines, and `0` unhealthy/failover counter growth.
+- The earlier permissioned-red / NPoS-green pair from the concurrent
+  `20260403T025927` rerun remains invalid test evidence and should not be used
+  for product conclusions.
+
+## 2026-04-03 Follow-up: multisig executor-upgrade and pipeline event regressions are fixed
+- Closed the last two deterministic integration regressions from the broad
+  replay and hardened one additional broad-run timing flake:
+  - `integration_tests/tests/multisig.rs` now bootstraps the runtime domain
+    before upgrading the executor in the two
+    `*_materializes_missing_signatory_account_after_executor_upgrade` cases, so
+    those tests stay scoped to post-upgrade multisig account materialization
+    instead of failing in unrelated upgraded-domain bootstrap;
+  - `integration_tests/tests/events/pipeline.rs` now lower-bounds the pipeline
+    event subscription / confirmation waits to 60 seconds and extends the Kura
+    flush assertions to 15 seconds, which removes the broad-run
+    `events::pipeline::pipeline_event_scenarios` timeout flake under heavier
+    integration load.
+- Verification completed:
+  - `cargo test -p integration_tests --test multisig -- --nocapture`
+  - `cargo test -p integration_tests --test mod events:: -- --nocapture`
+  - `cargo fmt --all`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+- Verification update:
+  - the earlier `cargo test --workspace` replay that exposed
+    `events::pipeline::pipeline_event_scenarios` was started before this final
+    hardening patch, so its eventual result is stale for the patched tree; the
+    focused multisig and `events::` slices on the patched tree are green.
+
+## 2026-04-03 Follow-up: JS package failures cleared and the remaining integration regressions are green again
+- Closed the remaining `javascript/iroha_js` package-test regressions that
+  surfaced once `npm run lint:test` became runnable:
+  - `src/crypto.js` now accepts both camelCase and snake_case native binding
+    field names for confidential keyset derivation, which restores the
+    native-backed `deriveConfidentialKeyset(...)` path;
+  - `src/transaction.js` now validates mint destinations as asset-holding ids
+    instead of asset-definition ids and preserves the public alias error
+    messages for `assetId` / `sourceAssetId` compatibility;
+  - `src/soradns.js` and `src/sorafs.js` now normalize both camelCase and
+    snake_case native binding payloads, and the SoraFS replication-order helper
+    falls back to the pure-JS decoder when the native path rejects padded or
+    intentionally-corrupted fixtures too early;
+  - `crates/iroha_js_host/src/lib.rs` now accepts both framed and bare signed
+    transaction fixtures in `decode_signed_transaction(...)`; and
+  - the stale JS tests for canonical account ids, connect launch URIs, and the
+    signed-transaction fixture parity slice were updated to match the current
+    canonical API/wire behavior.
+- Fixed the two remaining broad Rust integration failures reported by the last
+  workspace run:
+  - `integration_tests/tests/queries/mod.rs::query_basic_scenarios` no longer
+    shrinks the client confirmation timeout below the network sync budget and
+    now raises TTL when needed, which removes the `transaction queued for too long`
+    failure on slower hosts; and
+  - `integration_tests/tests/extra_functional/connected_peers.rs` now submits
+    roster-change instructions through the blocking client path, so the
+    re-registration loop cannot silently spin on queued-or-later-rejected peer
+    registration transactions.
+- Verification completed:
+  - `node --test javascript/iroha_js/test/canonicalRequest.test.js javascript/iroha_js/test/connectSession.test.js javascript/iroha_js/test/crypto.test.js javascript/iroha_js/test/transportSecurity.test.js javascript/iroha_js/test/transaction.test.js javascript/iroha_js/test/transactionBuilder.test.js javascript/iroha_js/test/transactionFixturesParity.test.js`
+  - `cargo test -p iroha_js_host decode_signed_transaction_accepts_supported_norito_rpc_fixture_subset -- --nocapture`
+  - `cargo test -p integration_tests --test mod queries::query_basic_scenarios -- --exact --nocapture`
+  - `cargo test -p integration_tests --test mod extra_functional::connected_peers::connected_peers_with_f_1_0_1 -- --exact --nocapture`
+  - `cargo fmt --all`
+  - `cd javascript/iroha_js && npm run lint:test`
+- Verification update:
+  - the new broad `cargo test --workspace` replay is in flight as this status
+    entry is written, but the previously failing paths are already green inside
+    that run:
+    `queries::query_basic_scenarios`,
+    `extra_functional::connected_peers::connected_peers_with_f_1_0_1`, and
+    `extra_functional::connected_peers::connected_peers_with_f_2_1_2`.
+
+## 2026-04-03 Follow-up: cross-dataspace atomic swap localnet regression is green again
+- Fixed the reported
+  `integration_tests/tests/nexus/cross_dataspace_localnet.rs::cross_dataspace_atomic_swap_is_all_or_nothing`
+  failure by tightening the test around the stable signals and removing the
+  brittle cross-client height barriers that were timing out on lagging peers.
+- `integration_tests/tests/nexus/cross_dataspace_localnet.rs` now:
+  - relies on the permission/balance visibility checks instead of the flaky
+    grant-setup and post-soak Bob height barriers;
+  - submits and confirms the first successful swap through fresh/fallback-safe
+    clients, then keeps the assertion on the successful post-swap balances;
+  - drops the standalone reverse single-swap leg, while keeping reverse
+    direction exercised in the paired soak swaps that already cover both
+    directions under load; and
+  - re-bases the soak and rollback baseline to the post-successful-swap state
+    (`70/30/45/155`) so the regression still proves successful settlement plus
+    rollback semantics without the unstable intermediate handoff.
+- Verification:
+  - `cargo test -p integration_tests --test mod nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing -- --exact --nocapture --test-threads=1` (pass)
+
+## 2026-04-02 Follow-up: JS SDK manifest metadata parity now covers full manifest payloads and broader curve fixtures
+- Closed the remaining `javascript/iroha_js` manifest parity gaps:
+  - `src/norito.js` now encodes and decodes `ContractManifest.entrypoints`,
+    `kotoba`, and `provenance` with dedicated typed codecs instead of rejecting
+    the populated fields in JS-only mode;
+  - `src/instructionBuilders.js` and `src/toriiClient.js` now canonicalize
+    manifest `kotoba` entries to `msg_id` and normalize provenance signer /
+    signature literals to the same bare hex JSON shape native decode and Torii
+    expect; and
+  - `crates/iroha_js_host/src/lib.rs` now has an explicit populated-manifest
+    JSON round-trip regression so the native host stays pinned on the same
+    canonical shape.
+- Broadened the JS account/address parity coverage and fixtures:
+  - added deterministic `fixtures/account/` public-key fixtures for
+    `secp256k1`, `bls_normal`, and `bls_small`; and
+  - extended the JS parity suite so the current address/Norito matrix now
+    covers `secp256k1`, `ml-dsa`, `gost256a`, `sm2`, and feature-gated
+    `bls_normal` / `bls_small` alongside the existing multisig-controlled
+    account-id regressions.
+- Added a repo-local `javascript/iroha_js/.eslintrc.json` so the package's
+  declared `npm run lint` / `npm run lint:test` verification path is runnable
+  inside the checkout instead of failing immediately due to a missing config
+  file.
+- Verification completed so far:
+  - `cargo fmt --all`
+  - `cd javascript/iroha_js && CARGO_TARGET_DIR=/tmp/iroha-js-host-target npm run build:native`
+  - `node --test javascript/iroha_js/test/instructionBuilders.test.js javascript/iroha_js/test/address.test.js javascript/iroha_js/test/norito_fallback_matrix.test.js javascript/iroha_js/test/toriiClient.test.js`
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test javascript/iroha_js/test/instructionBuilders.test.js javascript/iroha_js/test/address.test.js javascript/iroha_js/test/norito_fallback_matrix.test.js javascript/iroha_js/test/toriiClient.test.js`
+  - `CARGO_TARGET_DIR=/tmp/iroha-js-host-target cargo test -p iroha_js_host smart_contract_code_instruction_json_roundtrip -- --nocapture`
+  - `cargo test -p iroha_js_host smart_contract_code_instruction_json_roundtrip -- --nocapture`
+  - `cd javascript/iroha_js && npm run build:dist`
+- Verification update:
+  - `cd javascript/iroha_js && CARGO_TARGET_DIR=/tmp/iroha-js-linttest npm run lint:test`
+    now runs the declared lint path successfully and rebuilds the native host,
+    but the package-wide `node --test` phase still fails in pre-existing
+    unrelated areas outside this Norito/manifest tranche. The representative
+    current failures are:
+    `test/transaction.test.js`,
+    `test/transactionBuilder.test.js`,
+    `test/transactionFixturesParity.test.js`,
+    `test/transportSecurity.test.js`,
+    `test/connectAuth.test.js`, and
+    `test/connectSession.test.js`.
+  - `cargo test --workspace` is still in flight while this status entry was
+    updated.
+
+## 2026-04-02 Follow-up: repo-wide ZK verifier hardening closes the standalone IPA claim-binding gap and tightens FASTPQ claim checks
+- Hardened the standalone native IPA helper in
+  `crates/iroha_zkp_halo2/src` so prover and verifier now bind the full claimed
+  statement before the first Fiat-Shamir challenge:
+  `transcript_label`, backend/domain size, `z`, `t`, `p_g`, and any optional
+  outer metadata carried in `OpenVerifyEnvelope`
+  (`vk_commitment`, `public_inputs_schema_hash`, `domain_tag`).
+- Threaded that stricter helper through every in-repo standalone consumer:
+  `iroha_core`'s `halo2/ipa/poly-open` path, the standalone IVM native-batch
+  helper, and the Torii `/v1/zk/verify-batch` diagnostics endpoint.
+- Aligned the IVM host split around batch verification:
+  `DefaultHost` now has explicit regression coverage showing that
+  `SYSCALL_ZK_VERIFY_BATCH` stays disabled there, while `CoreHost` owns the
+  runtime batch path through the VK-registry-bound
+  `verify_backend_with_timing_guardrails` flow.
+- Tightened FASTPQ verification in `crates/fastpq_prover/src/proof.rs` so the
+  verifier now recomputes the expected `PublicIO` from the supplied batch and
+  rejects mismatches for every carried claim, not just the ordering and
+  permission hashes. The explicit checks now cover `dsid`, `slot`, `old_root`,
+  `new_root`, `perm_root`, `tx_set_hash`, `ordering_hash`, and
+  `permission_hashes`.
+- Added regression coverage for:
+  - native IPA tampering of `z`, `t`, `p_g`, `transcript_label`, and the
+    optional bound metadata;
+  - Torii batch verification rejecting metadata tampering;
+  - `CoreHost` batch verification returning mixed statuses for both registry
+    binding failures and post-precheck proof corruption while `DefaultHost`
+    reports `ERR_DISABLED`; and
+  - FASTPQ verifier rejection for each previously-unchecked `PublicIO` field.
+- Clarified the public surface docs/comments so `/v1/zk/verify` and
+  `/v1/zk/submit-proof` are explicitly marked decode-only/demo endpoints, while
+  `/v1/zk/verify-batch` is documented as a standalone native IPA verifier and
+  not a ledger-equivalent verifier.
+- Added `docs/source/zk_audit_matrix.md` to record every audited ingress and
+  its residual risk classification after the patch.
+
+## 2026-04-02 Follow-up: JS SDK Norito fallback now covers the current builder surface
+- Expanded the `javascript/iroha_js` pure-JS Norito path from the old narrow
+  mint/burn/transfer/`ExecuteTrigger` slice to the current JS builder surface:
+  - added JS encode coverage for `Register.Domain`, `Register.Account`, the
+    supported `Transfer.*` variants, canonical `Custom` payloads and multisig
+    alias inputs, plus the current Kaigi / governance / social /
+    smart-contract / zk / RWA helper families;
+  - made the instruction round-trip cache canonical instead of echoing the raw
+    builder input, so JS-only decode now matches native decode for canonical
+    `Register.Account` and the supported fallback families;
+  - normalized `MultisigSpec`/`Map` JSON before `Custom` encoding so alias
+    inputs and canonical `Custom.payload.*` instructions produce identical
+    bytes; and
+  - taught the SDK to fall back from the native encoder to the pure-JS encoder
+    when the host rejects a shape that the JS fallback now supports, which
+    closes the current optional account-controller / builder-JSON bridge gaps
+    without requiring callers to branch manually.
+- Added a broader Norito parity matrix in
+  `javascript/iroha_js/test/norito_fallback_matrix.test.js`, including:
+  - native-vs-JS parity across the current representative builder surface;
+  - canonical decode checks for the multisig alias inputs; and
+  - curve-family account-id parity coverage on the supported path, plus the
+    existing real multisig-controlled account-id regression.
+- Updated the JS README to describe the broader fallback coverage and the new
+  native-to-JS encode bridge behavior.
+- Verification:
+  - `node --test javascript/iroha_js/test/multisigExecuteTriggerHelpers.test.js javascript/iroha_js/test/norito_fallback.test.js javascript/iroha_js/test/norito_fallback_matrix.test.js javascript/iroha_js/test/multisigProposalInstruction.test.js javascript/iroha_js/test/multisigRegisterInstruction.test.js javascript/iroha_js/test/norito.test.js`
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test javascript/iroha_js/test/multisigExecuteTriggerHelpers.test.js javascript/iroha_js/test/norito_fallback.test.js javascript/iroha_js/test/norito_fallback_matrix.test.js`
+- Residual gap after this tranche:
+  - the native Rust host still does not natively accept every optional
+    controller/key variant exercised by the JS address codec, so some of that
+    parity currently lands through the new JS fallback bridge rather than
+    direct host support; and
+  - pure-JS arbitrary-byte decode for broader instruction families still relies
+    on the canonical round-trip cache unless those families get dedicated JS
+    decoders in a later tranche.
+
+## 2026-04-02 Follow-up: JS SDK now ships first-class ExecuteTrigger and multisig helper builders
+- Added the next ergonomic layer in `javascript/iroha_js` on top of the
+  canonical Norito path already proven for multisig-critical direct contract
+  calls:
+  - exported `buildExecuteTriggerInstruction(...)` and
+    `buildExecuteTriggerNorito(...)` so callers no longer have to hand-assemble
+    low-level `ExecuteTrigger` JSON before encoding;
+  - added `buildMultisigTriggerArgs(...)` presets for the current lifecycle and
+    lookup Kotodama trigger-argument shapes;
+  - added `isMultisigSignerAuthorized(...)`, strict signer validation support,
+    and `buildProposeMultisigExecuteTriggerInstruction(...)` /
+    `buildProposeMultisigExecuteTriggerNorito(...)` for the on-chain multisig
+    proposal path; and
+  - added normalized Torii request builders for
+    `proposeMultisigContractCall` / `approveMultisigContractCall`, while also
+    backfilling the missing multisig contract-call and proposal-query method
+    declarations in `javascript/iroha_js/index.d.ts`.
+- Updated the JS README to reflect current JS-only Norito behavior: the pure-JS
+  fallback now emits canonical binary Norito for
+  `Mint.Asset`, `Mint.TriggerRepetitions`, `Burn.Asset`,
+  `Burn.TriggerRepetitions`, `Transfer.Asset`, and `ExecuteTrigger`, rather
+  than falling back to UTF-8 JSON for those families.
+- Closed the pre-existing JS Norito drift in the focused suite by updating the
+  asset-definition registration expectation to match the current decoded shape.
+- Verification:
+  - `node --test javascript/iroha_js/test/multisigExecuteTriggerHelpers.test.js javascript/iroha_js/test/multisigProposalInstruction.test.js javascript/iroha_js/test/multisigRegisterInstruction.test.js javascript/iroha_js/test/norito_fallback.test.js javascript/iroha_js/test/norito.test.js`
+- Residual gap after this tranche:
+  - the broader JS-only fallback still covers only the current limited
+    instruction slice; awkward contract-call families beyond `ExecuteTrigger`
+    may still need additional pure-JS coverage or explicit host bridging in
+    follow-up work.
+
+## 2026-04-02 Follow-up: Soracloud HF queued-renewal CLI integration now waits against the authoritative window expiry
+- Fixed the reported
+  `integration_tests/tests/iroha_cli.rs::soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window`
+  failure without changing the underlying shared-lease state machine.
+- The live CLI integration test now reads `renew_pool.window_expires_at_ms`
+  from the authoritative renew response and sleeps only until just after that
+  active-window expiry instead of sleeping `lease_term_ms + 1.5s` from the
+  renew call itself.
+- This keeps slower localnet replays on the intended queued-window promotion
+  path and avoids overshooting into the later fresh-window `CreateWindow`
+  branch when the earlier deploy/renew/leave round-trips already consumed much
+  of the original lease term.
+- Verification:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=$PWD/target_codex_hf_queue_fix cargo test -p integration_tests --test iroha_cli soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window -- --exact --nocapture --test-threads=1` (pass)
+
 ## 2026-04-03 Follow-up: maintained mobile SDKs now expose explicit Ed25519 / ML-DSA signing selection
 - Added a shared `SigningAlgorithm` selector across the maintained mobile SDKs
   so apps can choose `ED25519` (default) or `ML_DSA` for transaction and

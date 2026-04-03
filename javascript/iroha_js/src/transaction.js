@@ -683,7 +683,9 @@ function resolveAssetHoldingIdForMint(assetDefinitionId, mint, context = "mint")
     return normalizedAssetHoldingId;
   }
   if (!mint.accountId) {
-    throw new TypeError(`${context}.assetHoldingId or ${context}.accountId must be provided`);
+    throw new TypeError(
+      `${context}.assetId, ${context}.assetHoldingId, or ${context}.accountId must be provided`,
+    );
   }
   return composeAssetHoldingIdFromDefinitionAndAccount(assetDefinitionId, mint.accountId, context);
 }
@@ -692,12 +694,15 @@ function normalizeDomainMintSpec(value, context) {
   if (!value || typeof value !== "object") {
     throw new TypeError(`${context} must be an object`);
   }
-  const assetId = value.assetId;
-  if (typeof assetId !== "string" || assetId.length === 0) {
+  const assetHoldingId = value.assetHoldingId ?? value.assetId;
+  if (typeof assetHoldingId !== "string" || assetHoldingId.length === 0) {
     throw new TypeError(`${context}.assetId must be a non-empty string`);
   }
   return {
-    assetId: ToriiClient._normalizeAssetId(assetId, `${context}.assetId`),
+    assetHoldingId: ToriiClient._normalizeAssetHoldingId(
+      assetHoldingId,
+      value.assetHoldingId !== undefined ? `${context}.assetHoldingId` : `${context}.assetId`,
+    ),
     quantity: value.quantity,
   };
 }
@@ -747,7 +752,9 @@ function normalizeTransferSpec(value, context, options = {}) {
     destinationAccountId: value.destinationAccountId,
   };
   if (requireSource && !spec.sourceAssetHoldingId) {
-    throw new TypeError(`${context}.sourceAssetHoldingId is required`);
+    throw new TypeError(
+      `${context}.sourceAssetId is required (or ${context}.sourceAssetHoldingId)`,
+    );
   }
   return spec;
 }

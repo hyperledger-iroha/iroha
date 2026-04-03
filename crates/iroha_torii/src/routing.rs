@@ -4089,12 +4089,13 @@ pub fn signed_find_proof_by_id(
 }
 
 #[cfg(feature = "app_api")]
-/// POST /v1/zk/verify — minimal demo endpoint that accepts either Norito
+/// POST /v1/zk/verify — minimal demo decode endpoint that accepts either Norito
 /// (`application/x-norito`) or JSON and returns `{ "ok": true|false }`.
 ///
 /// This is a convenience, non-consensus-critical handler intended for quick
-/// end-to-end demos. It does not perform cryptographic verification; it only
-/// checks the body decodes under the declared content type.
+/// end-to-end demos. It does not perform cryptographic verification or any
+/// VK/circuit/schema binding checks; it only checks that the body decodes under
+/// the declared content type.
 pub async fn handle_v1_zk_verify(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
@@ -5287,7 +5288,8 @@ pub async fn handle_v1_sumeragi_params(
 ///
 /// This is a convenience, non-consensus-critical handler intended for quick
 /// end-to-end demos. It does not perform cryptographic verification or durable
-/// storage. The returned `id` is a deterministic Blake2b-32 hash of the raw
+/// storage, and it does not imply that the payload would pass the runtime ZK
+/// verifier. The returned `id` is a deterministic Blake2b-32 hash of the raw
 /// request body bytes (after any JSON serialization).
 pub async fn handle_v1_zk_submit_proof(
     headers: axum::http::HeaderMap,
@@ -5324,12 +5326,19 @@ pub async fn handle_v1_zk_submit_proof(
 }
 
 #[cfg(feature = "zk-verify-batch")]
-/// POST /v1/zk/verify-batch — verify a batch of OpenVerify envelopes (transparent IPA)
-/// and return JSON `{ "ok": true, "statuses": [true|false, ...] }`.
+/// POST /v1/zk/verify-batch — verify a batch of standalone native IPA
+/// polynomial-opening envelopes and return JSON
+/// `{ "ok": true, "statuses": [true|false, ...] }`.
+///
+/// This endpoint is intentionally narrower than the ledger/runtime verifier:
+/// it replays `iroha_zkp_halo2::OpenVerifyEnvelope` proofs directly and does
+/// not consult the WSV VK registry or enforce circuit/schema policy. It is
+/// useful for native poly-open diagnostics, but it is not equivalent to
+/// `iroha_core::zk::verify_backend_with_timing_guardrails`.
 ///
 /// Content types:
 /// - `application/x-norito`: request body is a Norito-encoded `Vec<iroha_zkp_halo2::OpenVerifyEnvelope>`.
-/// - `application/json`: currently not supported by this minimal handler (returns ok=false).
+/// - `application/json`: array of base64-encoded Norito envelopes.
 pub async fn handle_v1_zk_verify_batch(
     headers: axum::http::HeaderMap,
     body: axum::body::Bytes,
@@ -8485,6 +8494,8 @@ pub async fn handle_post_contract_call(
         signature_b64,
         contract_address,
         contract_alias,
+        namespace,
+        contract_id,
         entrypoint,
         payload,
         creation_time_ms,
@@ -8497,25 +8508,13 @@ pub async fn handle_post_contract_call(
         return Err(conversion_error("gas_limit must be positive".to_owned()));
     }
 
-    let prepared = match (contract_address.as_ref(), contract_alias.as_ref()) {
-        (Some(_), Some(_)) => {
-            return Err(conversion_error(
-                "exactly one of contract_address or contract_alias must be provided".to_owned(),
-            ));
-        }
-        (Some(contract_address), None) => {
-            prepare_contract_call_by_address(&state, contract_address)?
-        }
-        (None, Some(contract_alias)) => {
-            prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
-        }
-        _ => {
-            return Err(conversion_error(
-                "provide exactly one contract target via contract_address or contract_alias"
-                    .to_owned(),
-            ));
-        }
-    };
+    let prepared = resolve_contract_call_target(
+        &state,
+        contract_address.as_ref(),
+        contract_alias.as_ref(),
+        namespace.as_deref(),
+        contract_id.as_deref(),
+    )?;
     let PreparedContractCall {
         code_bytes,
         code_hash,
@@ -11254,6 +11253,7 @@ mod contract_payload_normalization_tests {
 mod multisig_selector_tests {
     use std::num::{NonZeroU16, NonZeroU64};
 
+    use axum::response::IntoResponse as _;
     use http_body_util::BodyExt as _;
     use iroha_core::{
         kura::Kura,
@@ -11604,6 +11604,24 @@ mod multisig_selector_tests {
         namespace: &str,
         contract_id: &str,
     ) {
+        install_contract_instance_with_code(
+            state,
+            authority,
+            authority_keypair,
+            namespace,
+            contract_id,
+            minimal_ivm_program(1),
+        );
+    }
+
+    fn install_contract_instance_with_code(
+        state: &State,
+        authority: &dm::AccountId,
+        authority_keypair: &KeyPair,
+        namespace: &str,
+        contract_id: &str,
+        code: Vec<u8>,
+    ) {
         let mut block = state.block(dm::BlockHeader::new(
             NonZeroU64::new(1).expect("height"),
             None,
@@ -11624,7 +11642,6 @@ mod multisig_selector_tests {
             .execute(authority, &mut stx)
             .expect("grant CanEnactGovernance");
 
-        let code = minimal_ivm_program(1);
         let verified = ivm::verify_contract_artifact(&code).expect("verify contract artifact");
         let code_hash =
             register_code_bytes(authority, code, &mut stx).expect("register contract bytes");
@@ -11771,6 +11788,85 @@ mod multisig_selector_tests {
         .expect_err("non-multisig alias must fail");
         let message = expect_app_conflict(err, "multisig_account_not_authority");
         assert!(message.contains("resolved account is not a multisig authority"));
+    }
+
+    #[tokio::test]
+    async fn contract_call_accepts_legacy_namespace_and_contract_id_target() {
+        let authority_keypair = KeyPair::random();
+        let authority = dm::AccountId::new(authority_keypair.public_key().clone());
+        let authority_account = Account::new(authority.clone()).build(&authority);
+        let state = build_state(World::with([], [authority_account], []));
+        install_contract_instance(
+            state.as_ref(),
+            &authority,
+            &authority_keypair,
+            "apps",
+            "demo",
+        );
+
+        let response = handle_post_contract_call(
+            Arc::new("contract-call-legacy-target".parse().expect("chain id")),
+            build_queue(),
+            state,
+            MaybeTelemetry::disabled(),
+            NoritoJson(ContractCallDto {
+                authority: authority.clone(),
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                contract_address: None,
+                contract_alias: None,
+                namespace: Some("apps".to_owned()),
+                contract_id: Some("demo".to_owned()),
+                entrypoint: Some("main".to_owned()),
+                payload: None,
+                creation_time_ms: Some(1_700_000_000_234),
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: 10_000,
+            }),
+        )
+        .await
+        .expect("legacy contract target should prepare");
+
+        let payload = decode_json_response(response.into_response()).await;
+        assert_eq!(payload["ok"].as_bool(), Some(true));
+        assert_eq!(payload["submitted"].as_bool(), Some(false));
+        assert_eq!(payload["dataspace"].as_str(), Some("apps"));
+        assert_eq!(payload["contract_id"].as_str(), Some("demo"));
+        assert!(payload["signing_message_b64"].as_str().is_some());
+    }
+
+    #[tokio::test]
+    async fn contract_call_rejects_partial_legacy_target() {
+        let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let err = handle_post_contract_call(
+            Arc::new("contract-call-legacy-target".parse().expect("chain id")),
+            build_queue(),
+            build_state(World::default()),
+            MaybeTelemetry::disabled(),
+            NoritoJson(ContractCallDto {
+                authority,
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                contract_address: None,
+                contract_alias: None,
+                namespace: Some("apps".to_owned()),
+                contract_id: None,
+                entrypoint: Some("main".to_owned()),
+                payload: None,
+                creation_time_ms: Some(1_700_000_000_234),
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: 10_000,
+            }),
+        )
+        .await
+        .expect_err("partial legacy target must fail");
+
+        let message = expect_conversion(err);
+        assert!(message.contains("provide both namespace and contract_id"));
     }
 
     #[tokio::test]
@@ -13165,6 +13261,105 @@ mod multisig_selector_tests {
     }
 
     #[tokio::test]
+    async fn multisig_contract_propose_normalizes_payload_before_hashing() {
+        let (
+            state,
+            multisig_account_id,
+            authority_account_id,
+            signer_two_id,
+            alias_literal,
+            authority_keypair,
+        ) = multisig_contract_test_fixture();
+        let code = ivm::KotodamaCompiler::new()
+            .compile_source(
+                r#"
+seiyaku BlobPayloadNormalizeTest {
+  meta { abi_version: 1; }
+
+  kotoage fn main() {}
+
+  kotoage fn create(alias_literal: Blob) {}
+}
+"#,
+            )
+            .expect("compile blob contract");
+        install_contract_instance_with_code(
+            state.as_ref(),
+            &authority_account_id,
+            &authority_keypair,
+            "apps",
+            "demo_blob",
+            code,
+        );
+
+        let request_payload = IrohaJson::new(norito::json!({
+            "alias_literal": "banking@centralbank"
+        }));
+        let response = handle_post_contract_call_multisig_propose(
+            Arc::new("multisig-selector-test".parse().expect("chain id")),
+            build_queue(),
+            Arc::clone(&state),
+            MaybeTelemetry::disabled(),
+            NoritoJson(MultisigContractCallProposeDto {
+                selector: alias_selector(&alias_literal),
+                signer_account_id: signer_two_id,
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                creation_time_ms: Some(1_700_000_000_345),
+                namespace: "apps".to_owned(),
+                contract_id: "demo_blob".to_owned(),
+                entrypoint: "create".to_owned(),
+                payload: Some(request_payload.clone()),
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: Some(10_000),
+            }),
+        )
+        .await
+        .expect("blob propose response");
+
+        let response_payload = decode_json_response(response).await;
+        let proposal_id = response_payload["proposal_id"]
+            .as_str()
+            .expect("proposal id")
+            .to_owned();
+        let PreparedContractCall {
+            code_bytes,
+            code_hash,
+            manifest,
+            ..
+        } = prepare_contract_call(state.as_ref(), "apps", "demo_blob")
+            .expect("prepared contract call");
+        let entrypoint = ensure_public_contract_entrypoint(&manifest, "create")
+            .expect("blob entrypoint descriptor");
+        let normalized_payload = normalize_contract_payload(entrypoint, Some(&request_payload))
+            .expect("blob payload should normalize")
+            .expect("normalized payload");
+        let (_, expected_hash) = build_multisig_contract_call_instructions(
+            &multisig_account_id,
+            "apps",
+            "demo_blob",
+            "create",
+            Some(&normalized_payload),
+            None,
+            None,
+            10_000,
+            &manifest,
+            &code_hash,
+            code_bytes,
+        )
+        .expect("normalized instructions");
+        let expected_hash = expected_hash.to_string();
+
+        assert_eq!(proposal_id, expected_hash);
+        assert_eq!(
+            response_payload["instructions_hash"].as_str(),
+            Some(expected_hash.as_str())
+        );
+    }
+
+    #[tokio::test]
     async fn multisig_generic_propose_accepts_alias_selector_and_returns_resolved_account_id() {
         let (
             state,
@@ -13314,14 +13509,15 @@ pub async fn handle_post_contract_call_multisig_propose(
         manifest,
         ..
     } = prepared;
-    ensure_public_contract_entrypoint(&manifest, &entrypoint)?;
+    let entrypoint_descriptor = ensure_public_contract_entrypoint(&manifest, &entrypoint)?;
+    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
     let tx_metadata = build_contract_call_metadata(
         &manifest,
         &namespace,
         &contract_id,
         None,
         Some(&entrypoint),
-        payload.as_ref(),
+        normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
         fee_sponsor.as_ref(),
         gas_limit,
@@ -13331,7 +13527,7 @@ pub async fn handle_post_contract_call_multisig_propose(
         &namespace,
         &contract_id,
         &entrypoint,
-        payload.as_ref(),
+        normalized_payload.as_ref(),
         gas_asset_id.as_deref(),
         fee_sponsor.as_ref(),
         gas_limit,
@@ -15483,6 +15679,50 @@ fn prepare_contract_call_by_alias(
 }
 
 #[cfg(feature = "app_api")]
+fn resolve_contract_call_target(
+    state: &CoreState,
+    contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
+    contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
+    namespace: Option<&str>,
+    contract_id: Option<&str>,
+) -> core::result::Result<PreparedContractCall, Error> {
+    let namespace = namespace.map(str::trim).filter(|value| !value.is_empty());
+    let contract_id = contract_id.map(str::trim).filter(|value| !value.is_empty());
+    let legacy_target_supplied = namespace.is_some() || contract_id.is_some();
+    let explicit_target_supplied = contract_address.is_some() || contract_alias.is_some();
+
+    if explicit_target_supplied && legacy_target_supplied {
+        return Err(conversion_error(
+            "provide exactly one contract target via contract_address, contract_alias, or namespace + contract_id"
+                .to_owned(),
+        ));
+    }
+
+    match (contract_address, contract_alias, namespace, contract_id) {
+        (Some(_), Some(_), _, _) => Err(conversion_error(
+            "exactly one of contract_address or contract_alias must be provided".to_owned(),
+        )),
+        (Some(contract_address), None, None, None) => {
+            prepare_contract_call_by_address(state, contract_address)
+        }
+        (None, Some(contract_alias), None, None) => {
+            prepare_contract_call_by_alias(state, contract_alias, current_time_millis())
+        }
+        (None, None, Some(namespace), Some(contract_id)) => {
+            prepare_contract_call(state, namespace, contract_id)
+        }
+        (None, None, Some(_), None) | (None, None, None, Some(_)) => Err(conversion_error(
+            "provide both namespace and contract_id when using legacy contract-call targeting"
+                .to_owned(),
+        )),
+        _ => Err(conversion_error(
+            "provide exactly one contract target via contract_address, contract_alias, or namespace + contract_id"
+                .to_owned(),
+        )),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn resolve_public_contract_deploy_dataspace(
     state: &CoreState,
     dataspace_alias: Option<&str>,
@@ -15642,6 +15882,12 @@ pub struct ContractCallDto {
     /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
     #[norito(default)]
     pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Optional legacy governance namespace used by maintained `apps/<contract_id>` callers.
+    #[norito(default)]
+    pub namespace: Option<String>,
+    /// Optional legacy contract id paired with `namespace`.
+    #[norito(default)]
+    pub contract_id: Option<String>,
     /// Optional entrypoint selector; defaults to `main`.
     #[norito(default)]
     pub entrypoint: Option<String>,

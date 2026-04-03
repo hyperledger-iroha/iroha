@@ -72,11 +72,11 @@ use iroha_data_model::{
     domain::{Domain, DomainId, NewDomain},
     events::time::{ExecutionTime, Schedule as TimeSchedule, TimeEventFilter},
     isi::{
-        Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, Instruction as InstructionTrait,
-        InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox, RecordKaigiUsage, Register,
-        RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop, RemoveKeyValue,
-        ReportKaigiRelayHealth, SetKaigiRelayManifest, SetKeyValue, Transfer, TransferBox,
-        Unregister, UnregisterBox,
+        Burn, BurnBox, CreateKaigi, CustomInstruction, EndKaigi, ExecuteTrigger,
+        Instruction as InstructionTrait, InstructionBox, JoinKaigi, LeaveKaigi, Mint, MintBox,
+        RecordKaigiUsage, Register, RegisterBox, RegisterKaigiRelay, RegisterPeerWithPop,
+        RemoveKeyValue, ReportKaigiRelayHealth, SetKaigiRelayManifest, SetKeyValue, Transfer,
+        TransferBox, Unregister, UnregisterBox,
         governance::{
             CastPlainBallot, CastZkBallot, CouncilDerivationKind, EnactReferendum,
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
@@ -142,7 +142,7 @@ use napi::{
 };
 use napi_derive::napi;
 use norito::{
-    codec::{Decode, DecodeAll, Encode},
+    codec::{DecodeAll, Encode},
     core::{self, DecodeFromSlice},
     decode_from_bytes,
     json::{self, JsonDeserialize, Map, Value},
@@ -5546,6 +5546,19 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     "unsupported Burn instruction variant; expected keys: Asset or TriggerRepetitions",
                 ));
             }
+            if let Some(json::Value::Object(mut execute_fields)) = map.remove("ExecuteTrigger") {
+                let trigger: TriggerId = json::from_value(required_value(
+                    &mut execute_fields,
+                    "trigger",
+                    "ExecuteTrigger",
+                )?)
+                .map_err(norito_to_napi)?;
+                let args = execute_fields
+                    .remove("args")
+                    .map(Json::from)
+                    .unwrap_or_default();
+                return Ok(InstructionBox::from(ExecuteTrigger { trigger, args }));
+            }
             if let Some(json::Value::Object(mut transfer_map)) = map.remove("Transfer") {
                 if let Some(json::Value::Object(mut asset_fields)) = transfer_map.remove("Asset") {
                     let source_value = asset_fields.remove("source").ok_or_else(|| {
@@ -6184,16 +6197,16 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     required_value(&mut fields, "abi_version", "ProposeDeployContract")?,
                     "ProposeDeployContract.abi_version",
                 )?;
-                let window = fields
-                    .remove("window")
-                    .map(|value| json::from_value(value).map_err(norito_to_napi))
-                    .transpose()?;
+                let window = match fields.remove("window") {
+                    None | Some(json::Value::Null) => None,
+                    Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
+                };
                 let mode =
                     parse_optional_voting_mode(fields.remove("mode"), "ProposeDeployContract")?;
-                let manifest_provenance = fields
-                    .remove("manifest_provenance")
-                    .map(|value| json::from_value(value).map_err(norito_to_napi))
-                    .transpose()?;
+                let manifest_provenance = match fields.remove("manifest_provenance") {
+                    None | Some(json::Value::Null) => None,
+                    Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
+                };
                 let instruction = ProposeDeployContract {
                     namespace,
                     contract_id,
@@ -6829,6 +6842,24 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
             outer.insert("Burn".to_owned(), json::Value::Object(burn_map));
             return Ok(json::Value::Object(outer));
         }
+    }
+
+    if let Some(execute_trigger) = instruction_ref.as_any().downcast_ref::<ExecuteTrigger>() {
+        let mut payload = json::Map::new();
+        payload.insert(
+            "trigger".to_owned(),
+            json::to_value(execute_trigger.trigger()).map_err(norito_to_napi)?,
+        );
+        let args = json::parse_value(execute_trigger.args().get()).map_err(|error| {
+            napi::Error::new(
+                napi::Status::InvalidArg,
+                format!("ExecuteTrigger.args is not valid JSON: {error}"),
+            )
+        })?;
+        payload.insert("args".to_owned(), args);
+        let mut outer = json::Map::new();
+        outer.insert("ExecuteTrigger".to_owned(), json::Value::Object(payload));
+        return Ok(json::Value::Object(outer));
     }
 
     if let Some(rwa_box) = instruction_ref.as_any().downcast_ref::<RwaInstructionBox>() {
@@ -7692,8 +7723,18 @@ fn zk_json_value(tag: &str, payload: json::Value) -> json::Value {
 }
 
 fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
-    let mut cursor = bytes;
-    SignedTransaction::decode(&mut cursor).map_err(norito_to_napi)
+    match norito::decode_from_bytes::<SignedTransaction>(bytes) {
+        Ok(decoded) => Ok(decoded),
+        Err(norito::core::Error::InvalidMagic) => {
+            let (decoded, used) =
+                SignedTransaction::decode_from_slice(bytes).map_err(norito_to_napi)?;
+            if used != bytes.len() {
+                return Err(norito_to_napi(norito::core::Error::LengthMismatch));
+            }
+            Ok(decoded)
+        }
+        Err(err) => Err(norito_to_napi(err)),
+    }
 }
 
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
@@ -8481,7 +8522,7 @@ pub fn build_precommit_trigger_action(
 mod tests {
     use std::{fs, io::Cursor, path::PathBuf, str::FromStr, sync::Arc};
 
-    use base64::engine::general_purpose::STANDARD as BASE64;
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         HasMetadata,
@@ -8519,7 +8560,10 @@ mod tests {
         nft::NftId,
         peer::{Peer, PeerId},
         rwa::{NewRwa, RwaControlPolicy, RwaId, RwaParentRef},
-        smart_contract::manifest::{AccessSetHints, ContractManifest},
+        smart_contract::manifest::{
+            AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
+            EntrypointParamDescriptor, KotobaTranslation, KotobaTranslationEntry,
+        },
         transaction::{
             Executable, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
         },
@@ -10841,6 +10885,7 @@ mod tests {
 
     #[test]
     fn smart_contract_code_instruction_json_roundtrip() {
+        let signing_key = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
         let manifest = ContractManifest {
             code_hash: Some(Hash::prehashed(sample_hash(0xAA))),
             abi_hash: Some(Hash::prehashed(sample_hash(0xBB))),
@@ -10850,10 +10895,31 @@ mod tests {
                 read_keys: vec!["account:alice".to_owned()],
                 write_keys: vec!["contract:foo".to_owned()],
             }),
-            entrypoints: None,
-            kotoba: None,
+            entrypoints: Some(vec![EntrypointDescriptor {
+                name: "upgrade_ledger".to_owned(),
+                kind: EntryPointKind::Kaizen,
+                params: vec![EntrypointParamDescriptor {
+                    name: "reason".to_owned(),
+                    type_name: "String".to_owned(),
+                }],
+                return_type: Some("bool".to_owned()),
+                permission: Some("can_upgrade".to_owned()),
+                read_keys: vec!["contract:ledger".to_owned()],
+                write_keys: vec!["contract:ledger".to_owned()],
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+            }]),
+            kotoba: Some(vec![KotobaTranslationEntry {
+                msg_id: "contract.title".to_owned(),
+                translations: vec![KotobaTranslation {
+                    lang: "en".to_owned(),
+                    text: "Ledger Contract".to_owned(),
+                }],
+            }]),
             provenance: None,
-        };
+        }
+        .signed(&signing_key);
         let instruction: InstructionBox = Box::new(RegisterSmartContractCode {
             manifest: manifest.clone(),
         })
@@ -10871,6 +10937,46 @@ mod tests {
         let reconstructed = value_to_instruction(json_value.clone())
             .expect("deserialize RegisterSmartContractCode");
         assert_eq!(reconstructed, instruction);
+    }
+
+    #[test]
+    fn decode_signed_transaction_accepts_supported_norito_rpc_fixture_subset() {
+        let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/norito_rpc/transaction_fixtures.manifest.json");
+        let manifest_bytes = fs::read(&manifest_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", manifest_path.display()));
+        let manifest: Value = json::from_slice(&manifest_bytes)
+            .unwrap_or_else(|err| panic!("failed to parse {}: {err}", manifest_path.display()));
+        let names = [
+            "ivm_transfer",
+            "grant_revoke_role_permission",
+            "set_parameter_next_mode",
+            "executor_upgrade_demo",
+            "register_peer_with_pop_demo",
+            "register_nft_demo",
+            "trigger_repetitions_demo",
+        ];
+
+        for name in names {
+            let fixture = manifest
+                .get("fixtures")
+                .and_then(Value::as_array)
+                .and_then(|fixtures| {
+                    fixtures
+                        .iter()
+                        .find(|fixture| fixture.get("name").and_then(Value::as_str) == Some(name))
+                })
+                .unwrap_or_else(|| panic!("fixture {name} missing from norito fixture manifest"));
+            let signed_base64 = fixture
+                .get("signed_base64")
+                .and_then(Value::as_str)
+                .expect("fixture signed_base64");
+            let signed_bytes = BASE64
+                .decode(signed_base64)
+                .unwrap_or_else(|err| panic!("failed to decode {name} signed payload: {err}"));
+            decode_signed_transaction(&signed_bytes)
+                .unwrap_or_else(|err| panic!("failed to decode fixture {name}: {err}"));
+        }
     }
 
     #[test]
