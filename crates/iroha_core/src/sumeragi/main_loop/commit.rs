@@ -278,7 +278,7 @@ pub(super) fn execute_commit_work(
         signature_topology,
         consensus_mode,
         qc_signers: _qc_signers,
-        commit_qc: _commit_qc,
+        commit_qc,
         allow_quorum_bypass: _allow_quorum_bypass,
         allow_signature_index_recovery,
         persist_required,
@@ -521,8 +521,11 @@ pub(super) fn execute_commit_work(
             log_stage_start("state_apply");
             let apply_start = Instant::now();
             let stake_snapshot_roster = commit_topology.clone();
-            let state_events =
-                state_block.apply_without_execution(&committed_block, commit_topology);
+            let state_events = state_block.apply_without_execution_with_commit_qc(
+                &committed_block,
+                commit_topology,
+                commit_qc.as_ref(),
+            );
             let post_apply_snapshot = {
                 let world = state_block.world();
                 let world_peers = world.peers().iter().cloned().collect::<Vec<_>>();
@@ -3050,6 +3053,9 @@ impl Actor {
                 continue;
             }
             let topology = super::network_topology::Topology::new(commit_topology.clone());
+            let local_vote_topology = super::network_topology::Topology::new(
+                self.local_commit_vote_roster(pending_height, &commit_topology),
+            );
             let roster_len = topology.as_ref().len();
             let min_votes_for_commit = self.commit_min_votes(&topology);
             let missing_local_data = da_enabled && !payload_available;
@@ -3232,7 +3238,7 @@ impl Actor {
                     pending_view,
                     vote_epoch,
                     pending.validation_status,
-                    &topology,
+                    &local_vote_topology,
                     parent_hash,
                     pending_roots,
                 ) {
@@ -3242,7 +3248,7 @@ impl Actor {
                         hash,
                         pending_height,
                         pending_view,
-                        topology.as_ref(),
+                        local_vote_topology.as_ref(),
                         "local_commit_vote_emitted",
                     );
                     precommit_action = Some("emitted");
@@ -3846,11 +3852,12 @@ impl Actor {
         {
             return false;
         }
-        if commit_topology.is_empty() {
+        let local_commit_topology = self.local_commit_vote_roster(height, commit_topology);
+        if local_commit_topology.is_empty() {
             return false;
         }
 
-        let topology = super::network_topology::Topology::new(commit_topology.to_vec());
+        let topology = super::network_topology::Topology::new(local_commit_topology);
         let vote_epoch = self.epoch_for_height(height);
         let parent_hash = pending.block.header().prev_block_hash();
         let pending_roots = pending.parent_state_root.zip(pending.post_state_root);
@@ -3885,6 +3892,19 @@ impl Actor {
             None,
         );
         true
+    }
+
+    fn local_commit_vote_roster(&self, height: u64, commit_topology: &[PeerId]) -> Vec<PeerId> {
+        let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
+        if height == committed_height.saturating_add(1) {
+            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+            let live = self.roster_for_live_vote_with_mode(height, consensus_mode);
+            if !live.is_empty() {
+                return live;
+            }
+        }
+
+        commit_topology.to_vec()
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -7013,7 +7033,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_commit_work_defers_commit_qc_record_until_main_loop() {
+    fn execute_commit_work_persists_commit_roster_without_recording_status_history() {
         let _guard = crate::sumeragi::status::commit_history_test_guard();
         crate::sumeragi::status::reset_commit_certs_for_tests();
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();
@@ -7087,7 +7107,7 @@ mod tests {
             signature_topology: topology,
             consensus_mode: ConsensusMode::Permissioned,
             qc_signers: None,
-            commit_qc: Some(qc),
+            commit_qc: Some(qc.clone()),
             allow_quorum_bypass: false,
             allow_signature_index_recovery: false,
             persist_required: true,
@@ -7112,6 +7132,18 @@ mod tests {
         assert!(
             history.is_empty(),
             "commit worker should not record commit QC before the main loop applies the result"
+        );
+        let view = state.view();
+        let stored = view.world().commit_qcs().get(&block_hash);
+        assert_eq!(
+            stored,
+            Some(&qc),
+            "commit worker should persist commit QC into world state for restart recovery"
+        );
+        let snapshot = state.commit_roster_snapshot_for_block(height, block_hash);
+        assert!(
+            snapshot.is_some(),
+            "commit worker should persist commit-roster evidence before the main loop records status history"
         );
         crate::sumeragi::status::reset_commit_certs_for_tests();
         crate::sumeragi::status::reset_validator_checkpoints_for_tests();

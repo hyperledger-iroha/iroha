@@ -6,7 +6,8 @@ LOCALNET_DIR="${IROHA_TAIRA_LOCALNET_DIR:-$ROOT_DIR/dist/taira-localnet}"
 SCREEN_SESSION="${IROHA_TAIRA_SCREEN_SESSION:-taira-localnet}"
 GENESIS_JSON="${IROHA_TAIRA_GENESIS_JSON:-$LOCALNET_DIR/genesis.json}"
 GENESIS_SIGNED="${IROHA_TAIRA_GENESIS_SIGNED:-$LOCALNET_DIR/genesis.signed.nrt}"
-GENESIS_SEED="${IROHA_TAIRA_GENESIS_SEED:-taira-localgenesis}"
+GENESIS_PRIVATE_KEY="${IROHA_TAIRA_GENESIS_PRIVATE_KEY:-}"
+LOCALNET_BASE_SEED_OVERRIDE="${IROHA_TAIRA_LOCALNET_SEED:-}"
 TAIRA_PROFILE_CONFIG="${IROHA_TAIRA_PROFILE_CONFIG:-$ROOT_DIR/configs/soranexus/taira/config.toml}"
 CALL_DOMAIN="${IROHA_TAIRA_KAIGI_CALL_DOMAIN:-wonderland}"
 CALL_NAME="${IROHA_TAIRA_KAIGI_CALL_NAME:-taira-relay-bootstrap}"
@@ -66,6 +67,41 @@ PY
   TAIRA_TORII_MAX_CONTENT_LEN="${IROHA_TAIRA_TORII_MAX_CONTENT_LEN:-${values[2]}}"
   TAIRA_STORAGE_PIN_MAX_EVENTS="${IROHA_TAIRA_STORAGE_PIN_MAX_EVENTS:-${values[3]}}"
   TAIRA_STORAGE_PIN_WINDOW_SECS="${IROHA_TAIRA_STORAGE_PIN_WINDOW_SECS:-${values[4]}}"
+}
+
+load_localnet_genesis_signer_config() {
+  local values=()
+  local line
+  while IFS= read -r line; do
+    values+=("$line")
+  done < <(
+    LOCALNET_BASE_SEED_OVERRIDE="$LOCALNET_BASE_SEED_OVERRIDE" \
+      python3 - "$LOCALNET_DIR/peer0.toml" "$LOCALNET_DIR/README.md" <<'PY'
+import os
+import re
+import sys
+import tomllib
+
+peer_cfg = tomllib.load(open(sys.argv[1], 'rb'))
+print(peer_cfg['genesis']['public_key'])
+seed = os.environ.get('LOCALNET_BASE_SEED_OVERRIDE', '')
+if not seed:
+    try:
+        readme = open(sys.argv[2], encoding='utf-8').read()
+    except FileNotFoundError:
+        readme = ''
+    match = re.search(r'^- Base seed: `([^`]+)`$', readme, re.MULTILINE)
+    if match:
+        seed = match.group(1)
+print(seed)
+PY
+  )
+  if [[ "${#values[@]}" -lt 2 ]]; then
+    echo "failed to load localnet genesis signer config from $LOCALNET_DIR" >&2
+    exit 1
+  fi
+  LOCALNET_GENESIS_PUBLIC_KEY="${values[0]}"
+  LOCALNET_BASE_SEED="${values[1]}"
 }
 
 patch_peer_configs_for_taira_authority() {
@@ -235,7 +271,7 @@ extract_toml_string() {
 helper_supports_cli() {
   local candidate="$1"
   [[ -x "$candidate" ]] || return 1
-  "$candidate" --help 2>&1 | grep -q -- '--genesis'
+  "$candidate" --help 2>&1 | grep -q -- '--expected-genesis-public-key'
 }
 
 discover_helper_bin() {
@@ -283,6 +319,7 @@ need_file "$LOCALNET_DIR/peer2.toml"
 need_file "$TAIRA_PROFILE_CONFIG"
 ensure_launchd_runner
 load_taira_authority
+load_localnet_genesis_signer_config
 
 HOST_PUBLIC_KEY="$(extract_toml_string public_key "$LOCALNET_DIR/client.toml")"
 PEER0_PUBLIC_KEY="$(extract_toml_string public_key "$LOCALNET_DIR/peer0.toml")"
@@ -290,8 +327,8 @@ PEER1_PUBLIC_KEY="$(extract_toml_string public_key "$LOCALNET_DIR/peer1.toml")"
 PEER2_PUBLIC_KEY="$(extract_toml_string public_key "$LOCALNET_DIR/peer2.toml")"
 FEE_ASSET_ID="$(extract_toml_string fee_asset_id "$LOCALNET_DIR/peer0.toml")"
 
-if [[ -z "$HOST_PUBLIC_KEY" || -z "$PEER0_PUBLIC_KEY" || -z "$PEER1_PUBLIC_KEY" || -z "$PEER2_PUBLIC_KEY" || -z "$FEE_ASSET_ID" ]]; then
-  echo "failed to extract host/relay public keys or fee asset from localnet configs" >&2
+if [[ -z "$HOST_PUBLIC_KEY" || -z "$PEER0_PUBLIC_KEY" || -z "$PEER1_PUBLIC_KEY" || -z "$PEER2_PUBLIC_KEY" || -z "$FEE_ASSET_ID" || -z "$LOCALNET_GENESIS_PUBLIC_KEY" ]]; then
+  echo "failed to extract host/relay public keys, fee asset, or genesis signer from localnet configs" >&2
   exit 1
 fi
 
@@ -299,38 +336,31 @@ patch_peer_configs_for_taira_authority "$FEE_ASSET_ID"
 
 helper_bin="$(discover_helper_bin || true)"
 echo "building signed Kaigi overlay genesis"
+helper_args=(
+  --genesis "$GENESIS_JSON"
+  --out-file "$GENESIS_SIGNED"
+  --expected-genesis-public-key "$LOCALNET_GENESIS_PUBLIC_KEY"
+  --host-public-key "$HOST_PUBLIC_KEY"
+  --relay-domain "$RELAY_DOMAIN"
+  --call-domain "$CALL_DOMAIN"
+  --call-name "$CALL_NAME"
+  --reported-at-ms "$REPORTED_AT_MS"
+  --bootstrap-authority-account "$TAIRA_AUTHORITY"
+  --bootstrap-authority-domain "$RELAY_DOMAIN"
+  --bootstrap-authority-fee-asset-id "$FEE_ASSET_ID"
+  --relay-spec "${PEER0_PUBLIC_KEY}:${RELAY_HPKE_KEYS[0]}:${RELAY_BANDWIDTH_CLASSES[0]}"
+  --relay-spec "${PEER1_PUBLIC_KEY}:${RELAY_HPKE_KEYS[1]}:${RELAY_BANDWIDTH_CLASSES[1]}"
+  --relay-spec "${PEER2_PUBLIC_KEY}:${RELAY_HPKE_KEYS[2]}:${RELAY_BANDWIDTH_CLASSES[2]}"
+)
+if [[ -n "$GENESIS_PRIVATE_KEY" ]]; then
+  helper_args+=(--genesis-private-key "$GENESIS_PRIVATE_KEY")
+elif [[ -n "$LOCALNET_BASE_SEED" ]]; then
+  helper_args+=(--seed "$LOCALNET_BASE_SEED")
+fi
 if [[ -n "$helper_bin" ]]; then
-  "$helper_bin" \
-    --genesis "$GENESIS_JSON" \
-    --out-file "$GENESIS_SIGNED" \
-    --seed "$GENESIS_SEED" \
-    --host-public-key "$HOST_PUBLIC_KEY" \
-    --relay-domain "$RELAY_DOMAIN" \
-    --call-domain "$CALL_DOMAIN" \
-    --call-name "$CALL_NAME" \
-    --reported-at-ms "$REPORTED_AT_MS" \
-    --bootstrap-authority-account "$TAIRA_AUTHORITY" \
-    --bootstrap-authority-domain "$RELAY_DOMAIN" \
-    --bootstrap-authority-fee-asset-id "$FEE_ASSET_ID" \
-    --relay-spec "${PEER0_PUBLIC_KEY}:${RELAY_HPKE_KEYS[0]}:${RELAY_BANDWIDTH_CLASSES[0]}" \
-    --relay-spec "${PEER1_PUBLIC_KEY}:${RELAY_HPKE_KEYS[1]}:${RELAY_BANDWIDTH_CLASSES[1]}" \
-    --relay-spec "${PEER2_PUBLIC_KEY}:${RELAY_HPKE_KEYS[2]}:${RELAY_BANDWIDTH_CLASSES[2]}"
+  "$helper_bin" "${helper_args[@]}"
 else
-  cargo run -p iroha_kagami --example taira_kaigi_localnet --release -- \
-    --genesis "$GENESIS_JSON" \
-    --out-file "$GENESIS_SIGNED" \
-    --seed "$GENESIS_SEED" \
-    --host-public-key "$HOST_PUBLIC_KEY" \
-    --relay-domain "$RELAY_DOMAIN" \
-    --call-domain "$CALL_DOMAIN" \
-    --call-name "$CALL_NAME" \
-    --reported-at-ms "$REPORTED_AT_MS" \
-    --bootstrap-authority-account "$TAIRA_AUTHORITY" \
-    --bootstrap-authority-domain "$RELAY_DOMAIN" \
-    --bootstrap-authority-fee-asset-id "$FEE_ASSET_ID" \
-    --relay-spec "${PEER0_PUBLIC_KEY}:${RELAY_HPKE_KEYS[0]}:${RELAY_BANDWIDTH_CLASSES[0]}" \
-    --relay-spec "${PEER1_PUBLIC_KEY}:${RELAY_HPKE_KEYS[1]}:${RELAY_BANDWIDTH_CLASSES[1]}" \
-    --relay-spec "${PEER2_PUBLIC_KEY}:${RELAY_HPKE_KEYS[2]}:${RELAY_BANDWIDTH_CLASSES[2]}"
+  cargo run -p iroha_kagami --example taira_kaigi_localnet --release -- "${helper_args[@]}"
 fi
 
 echo "stopping existing taira localnet session"

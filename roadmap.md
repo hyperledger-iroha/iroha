@@ -153,6 +153,65 @@ Open work for this slice now remains:
 - add a narrower stress sweep that separates restart/wipe faults from
   network-only perturbation at the Sumeragi layer, so the next pass can locate
   the first disruption level where each mode still converges.
+Latest sync (2026-04-03 Kaigi localnet signer alignment):
+the Taira Kaigi overlay/bootstrap path now uses the same genesis signer contract
+as `kagami localnet` and fails fast on signer mismatches instead of producing an
+unusable signed genesis.
+
+- shipped in `iroha_kagami` / `configs/soranexus/taira`:
+  - the `taira_kaigi_localnet` helper now accepts either the base localnet seed
+    or an explicit genesis private key, derives the real localnet genesis key,
+    and checks it against the expected public key from `peer0.toml`;
+  - the Kaigi bootstrap script now reads the genesis public key from
+    `peer0.toml`, recovers the base seed from the generated localnet
+    `README.md` or `IROHA_TAIRA_LOCALNET_SEED`, and passes the new
+    `--expected-genesis-public-key` guard through both the prebuilt and
+    `cargo run` helper paths; and
+  - generated localnet `README.md` files now record `Base seed` so later Kaigi
+    bootstrap runs can recover the signer deterministically.
+- focused verification is green, including:
+  - `cargo fmt --all`
+  - `bash -n configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+  - `cargo test -p iroha_kagami --example taira_kaigi_localnet -- --nocapture`
+  - `cargo test -p iroha_kagami localnet_readme_records_base_seed_when_present -- --nocapture`
+  - `cargo test -p iroha_config survives_chain_override -- --nocapture`
+  - `cargo build --release -p iroha_kagami --example taira_kaigi_localnet`
+  - `IROHA_TAIRA_LOCALNET_SEED=Iroha bash configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+
+Open work for this slice now remains:
+- regenerate any older seeded localnet bundles so their generated `README.md`
+  includes `Base seed`, or keep exporting `IROHA_TAIRA_LOCALNET_SEED` when
+  bootstrapping bundles generated before this patch; and
+- rerun broader repo-wide verification if a fresh full-workspace green stamp is
+  needed beyond the focused Kaigi / config coverage above.
+
+Latest sync (2026-04-03 Kotodama state-map helper ergonomics):
+the first durable-handle ergonomics tranche is landed for Kotodama, with
+method-only map/path/json helper syntax enforced for new code.
+
+- shipped in `crates/kotodama_lang` / `crates/ivm` / docs:
+  - internal helper functions can accept `state Map<K, V>` parameters and keep
+    durable map root provenance across calls;
+  - direct free-call helper spellings for map/path/json access are rejected by
+    the parser in favor of `map.contains/get_or/ensure`, `base.path`, and
+    `json.get_*`;
+  - the canonical samples, parser/semantic/IR/compiler tests, and the durable
+    `Map<Name, int>` runtime regressions now use the new method surface.
+- focused verification is green, including:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang`
+  - `cargo test -p ivm --test kotodama_state_name_map_runtime -- --nocapture`
+  - `cargo test -p ivm --test debug_contains -- --nocapture`
+  - `cargo test -p ivm kotodama_invalid_literals -- --nocapture`
+
+Open work for this slice now remains:
+- decide whether to extend `state` parameters beyond `Map<K, V>`; the current
+  pass intentionally stops short of generic `state T` handles because the
+  flattened durable-struct path model still makes that awkward;
+- migrate the translated Kotodama docs to the method-only helper spelling so
+  non-English references match the canonical English docs; and
+- clear the unrelated current reds in `cargo test -p ivm --test kotodama -- --nocapture`
+  before claiming a fully green `ivm` Kotodama slice on this dirty workspace.
 
 Latest sync (2026-04-03 multisig submit-timeout recovery):
 the remaining broad-run executor-upgrade multisig failure is hardened on the

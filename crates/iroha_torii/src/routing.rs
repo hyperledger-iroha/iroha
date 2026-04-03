@@ -10302,6 +10302,39 @@ fn load_multisig_proposal_record(
 }
 
 #[cfg(feature = "app_api")]
+const MULTISIG_PROPOSAL_VISIBILITY_WAIT_WINDOW: Duration = Duration::from_secs(15);
+
+#[cfg(feature = "app_api")]
+const MULTISIG_PROPOSAL_VISIBILITY_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+#[cfg(feature = "app_api")]
+async fn wait_for_multisig_proposal_record_visibility(
+    state: &CoreState,
+    multisig_account_id: &iroha_data_model::account::AccountId,
+    spec: &iroha_executor_data_model::isi::multisig::MultisigSpec,
+    instructions_hash: &HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
+) -> Result<Option<MultisigProposalRecord>> {
+    let started_at = std::time::Instant::now();
+    loop {
+        if let Some(record) =
+            load_multisig_proposal_record(state, multisig_account_id, spec, instructions_hash)?
+        {
+            return Ok(Some(record));
+        }
+        let elapsed = started_at.elapsed();
+        if elapsed >= MULTISIG_PROPOSAL_VISIBILITY_WAIT_WINDOW {
+            return Ok(None);
+        }
+        let remaining = MULTISIG_PROPOSAL_VISIBILITY_WAIT_WINDOW.saturating_sub(elapsed);
+        let poll = MULTISIG_PROPOSAL_VISIBILITY_POLL_INTERVAL.min(remaining);
+        if poll.is_zero() {
+            return Ok(None);
+        }
+        tokio::time::sleep(poll).await;
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn multisig_proposal_is_cancel_wrapper(
     proposal: &iroha_executor_data_model::isi::multisig::MultisigProposalValue,
 ) -> bool {
@@ -13610,12 +13643,27 @@ pub async fn handle_post_contract_call_multisig_propose(
             handle_transaction_with_metrics(
                 chain_id,
                 queue,
-                state,
+                Arc::clone(&state),
                 tx,
                 telemetry,
                 ENDPOINT_CONTRACTS_CALL_MULTISIG_PROPOSE,
             )
             .await?;
+            if wait_for_multisig_proposal_record_visibility(
+                state.as_ref(),
+                &multisig_account_id,
+                &spec,
+                &proposal_hash,
+            )
+            .await?
+            .is_none()
+            {
+                iroha_logger::warn!(
+                    multisig_account_id = %multisig_account_id,
+                    proposal_id = %proposal_id,
+                    "submitted multisig contract-call proposal did not become visible within the wait window"
+                );
+            }
             MultisigContractCallResponseDto {
                 ok: true,
                 resolved_multisig_account_id: multisig_account_id.clone(),
@@ -13938,12 +13986,28 @@ pub async fn handle_post_multisig_cancel(
             handle_transaction_with_metrics(
                 chain_id,
                 queue,
-                state,
+                Arc::clone(&state),
                 tx,
                 telemetry,
                 ENDPOINT_MULTISIG_CANCEL,
             )
             .await?;
+            if action == "PROPOSE"
+                && wait_for_multisig_proposal_record_visibility(
+                    state.as_ref(),
+                    &multisig_account_id,
+                    &spec,
+                    &cancel_hash,
+                )
+                .await?
+                .is_none()
+            {
+                iroha_logger::warn!(
+                    multisig_account_id = %multisig_account_id,
+                    proposal_id = %cancel_hash_literal,
+                    "submitted multisig cancel proposal did not become visible within the wait window"
+                );
+            }
             MultisigCancelResponseDto {
                 ok: true,
                 resolved_multisig_account_id: multisig_account_id.clone(),
@@ -14076,12 +14140,27 @@ pub async fn handle_post_multisig_propose(
             handle_transaction_with_metrics(
                 chain_id,
                 queue,
-                state,
+                Arc::clone(&state),
                 tx,
                 telemetry,
                 ENDPOINT_MULTISIG_PROPOSE,
             )
             .await?;
+            if wait_for_multisig_proposal_record_visibility(
+                state.as_ref(),
+                &multisig_account_id,
+                &spec,
+                &proposal_hash,
+            )
+            .await?
+            .is_none()
+            {
+                iroha_logger::warn!(
+                    multisig_account_id = %multisig_account_id,
+                    proposal_id = %proposal_id,
+                    "submitted multisig proposal did not become visible within the wait window"
+                );
+            }
             MultisigContractCallResponseDto {
                 ok: true,
                 resolved_multisig_account_id: multisig_account_id.clone(),

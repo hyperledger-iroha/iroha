@@ -1007,6 +1007,7 @@ fn generate_localnet_with_line<T: Write>(
         &out_dir,
         &chain_id,
         build_line,
+        opts.seed.as_deref(),
         opts.consensus_mode,
         opts.peers.get(),
         &primary_torii_url,
@@ -2505,6 +2506,7 @@ fn write_localnet_readme(
     out_dir: &Path,
     chain_id: &str,
     build_line: BuildLine,
+    seed: Option<&str>,
     consensus_mode: SumeragiConsensusMode,
     peers: u16,
     torii_url: &str,
@@ -2515,11 +2517,15 @@ fn write_localnet_readme(
     stop_path: &Path,
 ) -> Result<()> {
     let readme_path = out_dir.join("README.md");
+    let seed_line = seed
+        .map(|seed| format!("- Base seed: `{seed}`\n"))
+        .unwrap_or_default();
     let rendered = format!(
         concat!(
             "# Kagami Localnet\n\n",
             "- Chain ID: `{chain_id}`\n",
             "- Build line: `{build_line}`\n",
+            "{seed_line}",
             "- Consensus mode: `{consensus_mode}`\n",
             "- Peer count: `{peers}`\n",
             "- Primary Torii URL: `{torii_url}`\n",
@@ -2539,6 +2545,7 @@ fn write_localnet_readme(
         ),
         chain_id = chain_id,
         build_line = build_line.as_str(),
+        seed_line = seed_line,
         consensus_mode = consensus_mode_label(consensus_mode),
         peers = peers,
         torii_url = torii_url,
@@ -4387,6 +4394,28 @@ mod tests {
         let contents =
             fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
         assert!(contents.contains("torii_url = \"http://[::1]:8080/\""));
+    }
+
+    #[test]
+    fn localnet_readme_records_base_seed_when_present() {
+        let tmp = tempfile::tempdir().expect("tmp dir");
+        write_localnet_readme(
+            tmp.path(),
+            DEFAULT_CHAIN_ID,
+            BuildLine::Iroha3,
+            Some("Iroha"),
+            SumeragiConsensusMode::Npos,
+            4,
+            "http://127.0.0.1:29080/",
+            &tmp.path().join("genesis.json"),
+            &tmp.path().join("genesis.signed.nrt"),
+            &tmp.path().join("client.toml"),
+            &tmp.path().join("start.sh"),
+            &tmp.path().join("stop.sh"),
+        )
+        .expect("write readme");
+        let contents = fs::read_to_string(tmp.path().join("README.md")).expect("read readme");
+        assert!(contents.contains("- Base seed: `Iroha`"));
     }
 
     #[test]

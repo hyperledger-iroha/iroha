@@ -542,6 +542,7 @@ fn is_submit_timeout_error(err: &eyre::Report) -> bool {
     err.chain().any(|cause| {
         let message = cause.to_string();
         message.contains("queued for too long")
+            || message.contains("haven't got tx confirmation within")
             || message.contains("operation timed out")
             || message.contains("timed out")
     })
