@@ -1,6 +1,29 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-02
+Last updated: 2026-04-03
+
+Latest sync (2026-04-03 cross-dataspace localnet atomic-swap stabilization):
+the reported `cross_dataspace_atomic_swap_is_all_or_nothing` regression is
+green again after pruning the flaky cross-client height waits and simplifying
+the scenario to the stable coverage already present in the test.
+
+- shipped in `integration_tests/tests/nexus/cross_dataspace_localnet.rs`:
+  - removed the redundant routed Bob height barriers around grant setup and the
+    soak tail, which were failing on lagging peers without affecting the swap
+    or rollback assertions;
+  - refreshed the successful-swap submit/confirmation path so the first swap is
+    still explicitly exercised and verified; and
+  - dropped the standalone reverse single-swap phase, while keeping reverse
+    direction coverage in the paired soak swaps and rebasing the soak/rollback
+    baseline to the post-successful-swap balances.
+- focused verification is green with:
+  - `cargo test -p integration_tests --test mod nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing -- --exact --nocapture --test-threads=1`
+
+Open work for this slice now remains:
+- replay the broader `cargo test -p integration_tests --test mod -- --nocapture --test-threads=1`
+  shard in a clean slot to make sure no neighboring Nexus localnet scenario was
+  implicitly depending on the removed standalone reverse-swap phase or the old
+  height-barrier timings.
 
 Latest sync (2026-04-02 repo-wide ZK hardening tranche):
 the standalone native IPA helper now binds the full claimed statement into the
