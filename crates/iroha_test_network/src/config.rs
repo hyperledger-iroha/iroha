@@ -387,7 +387,6 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     let garden_name: Name = "garden_of_live_flowers"
         .parse()
         .expect("garden_of_live_flowers domain");
-    let aid_name: Name = "aid".parse().expect("aid domain");
     let cabbage_name: Name = "cabbage".parse().expect("cabbage asset name");
     let alice_metadata = Metadata::default();
 
@@ -401,15 +400,12 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         .domain(garden_name)
         .account(CARPENTER_KEYPAIR.public_key().clone())
         .asset(cabbage_name, NumericSpec::default())
-        .finish_domain()
-        .domain(aid_name)
         .finish_domain();
 
     let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain id");
     let garden_domain: DomainId = "garden_of_live_flowers"
         .parse()
         .expect("garden_of_live_flowers domain id");
-    let aid_domain: DomainId = "aid".parse().expect("aid domain id");
     let rose_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
         "wonderland".parse().unwrap(),
         "rose".parse().unwrap(),
@@ -428,11 +424,6 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     builder = builder.append_instruction(Transfer::domain(
         genesis_id.clone(),
         wonderland_domain.clone(),
-        alice_id.clone(),
-    ));
-    builder = builder.append_instruction(Transfer::domain(
-        genesis_id.clone(),
-        aid_domain.clone(),
         alice_id.clone(),
     ));
     builder = builder.append_instruction(Mint::asset_numeric(13u32, rose_asset_id));
@@ -471,12 +462,6 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         InstructionBox::from(Grant::account_permission(
             CanRegisterAccount {
                 domain: garden_domain.clone(),
-            },
-            alice_id.clone(),
-        )),
-        InstructionBox::from(Grant::account_permission(
-            CanRegisterAccount {
-                domain: aid_domain.clone(),
             },
             alice_id.clone(),
         )),

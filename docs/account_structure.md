@@ -177,7 +177,7 @@ the public API.
 
 Account aliases are a separate binding layer on top of that canonical subject:
 
-- `merchant@hbl.sbp` means the alias binding carries both `domain = hbl` and
+- `merchant@banka.sbp` means the alias binding carries both `domain = banka` and
   `dataspace = sbp`, while the bound account is still the same canonical
   domainless `AccountId`.
 - `merchant@sbp` is a dataspace-root alias with no domain segment at all; it

@@ -50,7 +50,7 @@ Este documento explica as estruturas, identificadores, características e protoc
 - Modelo alternativo:
   - A identidade da conta canônica nunca inclui um segmento de domínio ou espaço de dados.
   - Os valores `AccountAlias` são ligações SNS separadas em camadas sobre `AccountId`.
-  - Aliases qualificados de domínio, como `merchant@hbl.sbp`, carregam um domínio e um espaço de dados na ligação de alias.
+  - Aliases qualificados de domínio, como `merchant@banka.sbp`, carregam um domínio e um espaço de dados na ligação de alias.
   - Os aliases raiz do espaço de dados, como `merchant@sbp`, carregam apenas o espaço de dados e, portanto, emparelham naturalmente com `Account::new(...)`.
   - Os testes e acessórios devem propagar primeiro o `AccountId` universal e, em seguida, adicionar concessões de alias, permissões de alias e qualquer estado de propriedade do domínio separadamente, em vez de codificar suposições de domínio na própria identidade da conta.
   - A pesquisa de conta pública singular agora se concentra em aliases (`FindAliasesByAccountId`); a própria identidade da conta permanece sem domínio.### Definições de ativos e ativos
@@ -249,7 +249,7 @@ Referência rápida de ID/alias de definição de ativo (CLI + Torii):
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl.sbp
+  --alias pkr#bankb.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
@@ -259,14 +259,14 @@ iroha ledger asset definition register \
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl.sbp \
+  --definition-alias pkr#bankb.sbp \
   --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl.sbp"}'
+  -d '{"alias":"pkr#bankb.sbp"}'
 ```Nota de migração:
 - IDs de definição de ativos `name#domain` antigos não são aceitos na v1.
 - Os seletores de ativos públicos usam apenas um formato de definição de ativos: ids canônicos Base58. Os aliases permanecem seletores opcionais, mas resolvem para o mesmo ID canônico.

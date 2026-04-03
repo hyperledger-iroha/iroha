@@ -50,7 +50,7 @@ translator: machine-google-reviewed
 - Alias მოდელი:
   - კანონიკური ანგარიშის იდენტურობა არასოდეს მოიცავს დომენს ან მონაცემთა სივრცის სეგმენტს.
   - `AccountAlias` მნიშვნელობები არის ცალკეული SNS აკინძები, რომლებიც განლაგებულია `AccountId`-ის თავზე.
-  - დომენის კვალიფიცირებული მეტსახელები, როგორიცაა `merchant@hbl.sbp`, ატარებენ როგორც დომენს, ასევე მონაცემთა სივრცეს ალიასის სავალდებულოში.
+  - დომენის კვალიფიცირებული მეტსახელები, როგორიცაა `merchant@banka.sbp`, ატარებენ როგორც დომენს, ასევე მონაცემთა სივრცეს ალიასის სავალდებულოში.
   - Dataspace-root მეტსახელები, როგორიცაა `merchant@sbp`, შეიცავს მხოლოდ მონაცემთა სივრცეს და, შესაბამისად, ბუნებრივად წყვილდება `Account::new(...)`-თან.
   - ტესტები და მოწყობილობები ჯერ უნივერსალური `AccountId` უნდა ჩათესონ, შემდეგ დაემატოს ალიასის იჯარა, მეტსახელის ნებართვები და დომენის მფლობელობაში მყოფი ნებისმიერი სახელმწიფო ცალ-ცალკე, ნაცვლად იმისა, რომ დაშიფროს დომენის დაშვებები თავად ანგარიშის იდენტურობაში.
   - საჯარო სინგულარული ანგარიშის ძებნა ახლა ფოკუსირებულია მეტსახელებზე (`FindAliasesByAccountId`); თავად ანგარიშის იდენტიფიკაცია რჩება დომენის გარეშე.### აქტივების განმარტებები და აქტივები
@@ -249,7 +249,7 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl.sbp
+  --alias pkr#bankb.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
@@ -259,14 +259,14 @@ iroha ledger asset definition register \
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl.sbp \
+  --definition-alias pkr#bankb.sbp \
   --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl.sbp"}'
+  -d '{"alias":"pkr#bankb.sbp"}'
 ```მიგრაციის შენიშვნა:
 - ძველი `name#domain` აქტივების განსაზღვრის ID არ არის მიღებული v1-ში.
 - საჯარო აქტივების სელექტორები იყენებენ მხოლოდ ერთ აქტივის განსაზღვრის ფორმატს: კანონიკურ Base58 ID-ებს. მეტსახელები რჩება არასავალდებულო ამომრჩეველად, მაგრამ გადაწყდება იგივე კანონიკური ID.

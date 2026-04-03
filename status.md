@@ -2,29 +2,55 @@
 
 Last updated: 2026-04-03
 
-## 2026-04-03 Follow-up: Kotodama `state Map` helper parameters and method-only map/json helpers landed
-- Landed the first durable-handle ergonomics pass for Kotodama:
-  - internal helper functions can now accept `state Map<K, V>` parameters,
-    preserving durable map roots across calls without falling back to forbidden
-    local state aliasing;
-  - the public helper surface now prefers method syntax for map/path/json
-    operations (`map.contains(...)`, `map.get_or(...)`, `map.ensure(...)`,
-    `base.path(...)`, `json.get_* (...)`); and
-  - direct free-call spellings for those helpers are rejected by the parser
-    with migration hints so new code cannot keep using the removed surface.
-- Updated the canonical Kotodama samples/tests/docs around that surface:
-  - `crates/kotodama_lang` parser/semantic/IR/compiler tests now use the new
-    method syntax and cover the parse-time rejection path;
-  - the durable `Map<Name, int>` runtime regression tests now exercise
-    `state Map` helper parameters and method-form map/path helpers; and
-  - the canonical English grammar/examples plus `crates/ivm/docs` now describe
-    the method-first surface.
+## 2026-04-03 Follow-up: opaque asset-definition IDs no longer fabricate synthetic `aid` domains
+- Removed the old synthetic-domain compatibility projection from
+  `AssetDefinitionId`: raw UUID/Base58 opaque IDs now stay opaque instead of
+  silently manufacturing `("aid", <hex>)` domain/name components.
+- `AssetDefinitionId::new(domain, name)` still carries an explicit
+  domain-scoped projection for first-release domain-owned asset definitions,
+  while callers handling arbitrary canonical IDs must now use
+  `try_domain()` / `try_name()` or fetch alias/definition metadata explicitly.
+- Updated the main runtime paths that legitimately see opaque IDs so they now:
+  - skip domain-index/domain-filter logic when no projection exists;
+  - fall back cleanly in CLI formatting instead of reading a synthetic name; and
+  - stop seeding offline-allowance genesis fixtures with a fake `aid` domain or
+    fake asset name.
+- Removed the last bundled `aid`-domain scaffolding from the test harnesses:
+  `iroha_test_network` no longer injects an `aid` domain into default genesis,
+  and the integration/Torii tests that used to preregister that domain now run
+  directly against the current alias model.
+- Focused verification completed:
+  - `cargo check -p iroha_data_model`
+  - `cargo check -p iroha_torii`
+  - `cargo check -p iroha_cli`
+- Verification note:
+  - `cargo check -p iroha_data_model -p iroha_core -p iroha_torii -p iroha_cli -p integration_tests`
+    still reports unrelated pre-existing failures in `crates/kotodama_lang`
+    (`lower_state_binding_value`, `lower_surface_builtin_call`, and a
+    non-exhaustive `Builtin` match), so broad-workspace validation remains
+    blocked outside this asset-ID slice.
+
+## 2026-04-03 Follow-up: Kotodama legacy helper aliases are now closed for devex
+- Finished the method-surface cleanup on top of the earlier `state Map<K, V>`
+  ergonomics tranche:
+  - parser method-call sugar now rejects the remaining legacy spellings with
+    migration hints (`map.has(...)`, `map.get_or_insert_default(...)`,
+    `base.path_map_key(...)`, `base.path_map_key_norito(...)`, and
+    `json.json_get_* (...)`);
+  - semantic analysis no longer accepts or normalizes those legacy method names
+    or the stale `std::map::*` / `json::*` compatibility aliases; and
+  - public lowering still targets the same internal builtins/syscalls, so the
+    runtime behavior of `map.ensure(...)`, `base.path(...)`, and
+    `json.get_* (...)` stays unchanged.
+- Updated the remaining translated Kotodama example docs so the non-English
+  pointer-helper snippets now use `Owners.ensure(...)` instead of the removed
+  free helper spelling.
 - Focused verification completed:
   - `cargo fmt --all`
   - `cargo test -p kotodama_lang`
   - `cargo test -p ivm --test kotodama_state_name_map_runtime -- --nocapture`
   - `cargo test -p ivm --test debug_contains -- --nocapture`
-  - `cargo test -p ivm kotodama_invalid_literals -- --nocapture`
+  - `cargo test -p ivm --test kotodama runtime_durable_ensure_state_map -- --nocapture`
 - Verification note:
   - the current dirty workspace still has unrelated pre-existing red tests in
     `cargo test -p ivm --test kotodama -- --nocapture`
@@ -34,7 +60,7 @@ Last updated: 2026-04-03
     `manifest_includes_isi_access_hints_for_static_targets`,
     `prediction_market_demo_compiles`,
     `seiyaku_meta_controls_header`);
-    the method-helper migration itself is green in the focused slices above.
+    the alias-removal/devex slice itself is green in the focused slices above.
 
 ## 2026-04-03 Follow-up: multisig domain bootstrap now recovers from inconclusive submit timeouts
 - Hardened `integration_tests/tests/multisig.rs` after the remaining
@@ -2203,7 +2229,7 @@ Last updated: 2026-04-03
     `crates/ivm/spec/syscalls.toml` now removes the domain registration /
     transfer syscalls and treats `REGISTER_ACCOUNT` as `&AccountId`;
   - updated the remaining IVM/Torii/mock-host naming to canonical account
-    terminology (`alias_domains_for_account`, `wsv.list_domains_for_account`,
+    terminology (`bound_account_aliases`, `wsv.list_domains_for_account`,
     canonical account registration, no scoped-account parsing path); and
   - renamed the remaining Swift/Java account-label instruction builders to the
     current primary-account-alias surface.
@@ -5058,14 +5084,14 @@ Last updated: 2026-04-03
   - `ScopedAccountId { account, domain }` is only explicit domain context for
     registrations/views that require a linked domain;
   - account aliases are a separate SNS/account-label layer, so both
-    `merchant@hbl.sbp` and dataspace-root aliases like `merchant@sbp` resolve
+    `merchant@banka.sbp` and dataspace-root aliases like `merchant@sbp` resolve
     to the same canonical `AccountId`; and
   - `linked_domains` is derived index state, not part of canonical identity.
 - Tightened the reverse-alias query coverage in
   `crates/iroha_core/src/smartcontracts/isi/account.rs` with a dedicated
   dataspace-root regression so the docs are backed by an executable fixture:
   `FindAliasesByAccountId` now has focused coverage for both
-  `merchant@hbl.sbp` and `merchant@sbp`.
+  `merchant@banka.sbp` and `merchant@sbp`.
 - Validation:
   - `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/.cache/cargo-target-alias-core cargo test -p iroha_core find_aliases_by_account_id --lib --quiet` (pass)
 
@@ -7171,7 +7197,7 @@ Last updated: 2026-04-03
     `HoldRwa`, `ReleaseRwa`, `ForceTransferRwa`, and `SetRwaControls`
     instructions through the real Norito host path;
   - `AccountAddress.fromAccount({ domain })` now accepts dotted domain ids such
-    as `hbl.dataspace` by validating each label separately, which restores the
+    as `banka.dataspace` by validating each label separately, which restores the
     transaction-builder helper path used to mint deterministic i105 authorities
     in the JS native transaction tests; and
   - the account-address vector helper in
@@ -18418,7 +18444,7 @@ Last updated: 2026-04-03
 ## 2026-03-19 JSON Numeric Trigger ABI
 - Added `JSON_GET_NUMERIC` (`0x7F`) to the ABI v1 syscall surface so Kotodama by-call triggers can read decimal `Numeric` values directly from trigger JSON args without routing amount construction through middleware.
 - Implemented the syscall in `CoreHost`, `WsvHost`, and the `iroha_core` codec-host forwarding path.
-- Added Kotodama semantic/IR/compiler support for `json_get_numeric(ev, name("amount"))`, typed as `Amount`, plus ABI/host regression tests and syscall docs updates.
+- Added Kotodama semantic/IR/compiler support for `ev.get_numeric(name("amount"))`, typed as `Amount`, plus ABI/host regression tests and syscall docs updates.
 - Intended use: direct on-chain settlement-style triggers such as SBP issuance swap can now consume `"0.00001"` style amounts from `ExecuteTrigger` args and feed them into `transfer_asset(...)` unchanged.
 
 ## 2026-03-24 Asset Definition ID and Asset API Unification
@@ -18516,16 +18542,16 @@ Last updated: 2026-04-03
 - Added safe map-read ergonomics in `crates/kotodama_lang/src/{semantic.rs,ir.rs}`:
   - new pure builtin `get_or(map, key, default)` with deterministic read-only lowering for both durable and ephemeral maps
   - `std::map::get_or` now canonicalizes to the same builtin
-  - `view fn` now rejects `get_or_insert_default(...)` explicitly because it mutates backing state
+  - `view fn` now rejects `ensure(...)` explicitly because it mutates backing state
 - Added focused regressions:
   - `crates/iroha_cli/src/contracts.rs::debug_view_executes_local_view_and_decodes_result`
-  - `crates/kotodama_lang/src/semantic.rs::view_entrypoints_reject_get_or_insert_default`
+  - `crates/kotodama_lang/src/semantic.rs::view_entrypoints_reject_ensure`
   - `crates/kotodama_lang/src/semantic.rs::view_entrypoints_accept_get_or`
   - `crates/kotodama_lang/src/ir.rs::lower_get_or_on_state_map_reads_without_writing`
 - Validation:
   - `cargo fmt --all`
   - `cargo test -p iroha_cli debug_view_executes_local_view_and_decodes_result`
-  - `cargo test -p kotodama_lang view_entrypoints_reject_get_or_insert_default --lib`
+  - `cargo test -p kotodama_lang view_entrypoints_reject_ensure --lib`
   - `cargo test -p kotodama_lang lower_get_or_on_state_map_reads_without_writing --lib`
   - `cargo test -p kotodama_lang view_entrypoints_accept_get_or --lib`
   - `cargo check -p iroha_cli`

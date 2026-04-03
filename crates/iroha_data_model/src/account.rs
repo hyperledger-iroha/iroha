@@ -854,7 +854,7 @@ mod account_id_parsing_tests {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .expect("parse public key literal");
-        let raw = format!("{public_key}@hbl.dataspace");
+        let raw = format!("{public_key}@banka.dataspace");
 
         let err = AccountId::parse_encoded(&raw)
             .map(crate::account::ParsedAccountId::into_account_id)
@@ -910,7 +910,7 @@ mod account_id_parsing_tests {
 
     #[test]
     fn from_str_rejects_alias_literals() {
-        let err = AccountId::parse_encoded("blue-alias@hbl.dataspace")
+        let err = AccountId::parse_encoded("blue-alias@banka.dataspace")
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("aliases must be rejected");
         assert!(
@@ -927,7 +927,7 @@ mod account_id_parsing_tests {
             .expect_err("alias label should not parse as a valid address");
         assert_eq!(err.code_str(), "ERR_MISSING_I105_SENTINEL");
 
-        let err = AccountId::parse_encoded("primary@hbl.dataspace")
+        let err = AccountId::parse_encoded("primary@banka.dataspace")
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("aliases must be rejected");
         assert!(
@@ -980,7 +980,7 @@ mod account_id_parsing_tests {
     fn parse_rejects_public_key_source() {
         let _guard = guard_chain_discriminant();
         let public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
-        let raw = format!("{public_key}@hbl.dataspace");
+        let raw = format!("{public_key}@banka.dataspace");
 
         let err = AccountId::parse_encoded(&raw).expect_err("public key source must be rejected");
         assert!(
@@ -1031,7 +1031,7 @@ mod account_id_parsing_tests {
 
         let previous_chain_discriminant = address::set_chain_discriminant(42);
         let _reset = Reset(previous_chain_discriminant);
-        let err = AccountId::parse_encoded("blue-alias@hbl.dataspace")
+        let err = AccountId::parse_encoded("blue-alias@banka.dataspace")
             .expect_err("alias must be rejected");
 
         assert!(

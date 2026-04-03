@@ -3807,7 +3807,11 @@ fn authority_owns_any_alias_domain(
     authority: &AccountId,
     subject: &AccountId,
 ) -> Result<bool, ValidationFail> {
-    for domain_id in world.alias_domains_for_account(subject) {
+    for alias in world.bound_account_aliases(subject) {
+        let Some(alias_domain) = alias.domain.as_ref() else {
+            continue;
+        };
+        let domain_id = DomainId::new(alias_domain.name().clone());
         if authority_owns_domain(world, authority, &domain_id)? {
             return Ok(true);
         }
@@ -3885,8 +3889,8 @@ fn can_transfer_asset(
         return Ok(true);
     }
 
-    if !transfer.source().definition().is_opaque_canonical()
-        && authority_owns_domain(world, authority, transfer.source().definition().domain())?
+    if let Some(domain_id) = transfer.source().definition().try_domain()
+        && authority_owns_domain(world, authority, domain_id)?
     {
         return Ok(true);
     }
@@ -4049,13 +4053,13 @@ pub(crate) fn ensure_asset_definition_registration_allowed(
         return Ok(());
     }
 
-    if reg_asset_definition.object().id().is_opaque_canonical() {
+    let Some(domain_id) = reg_asset_definition.object().id().try_domain() else {
         return Ok(());
-    }
+    };
 
     let domain_owner = state_transaction
         .world
-        .domain(reg_asset_definition.object().id().domain())
+        .domain(domain_id)
         .map(|domain| domain.owned_by().clone())
         .map_err(|err| ValidationFail::InstructionFailed(InstructionExecutionError::Find(err)))?;
     if &domain_owner == authority {
@@ -4725,7 +4729,7 @@ mod tests {
         let mut stx = block.transaction();
         executor
             .execute_instruction(&mut stx, &alice_id, instruction)
-            .expect("opaque aid asset definition should not require a domain projection");
+            .expect("opaque asset definition should not require a domain projection");
         assert!(
             stx.world.asset_definition(&asset_definition_id).is_ok(),
             "opaque asset definition must be inserted into world state"

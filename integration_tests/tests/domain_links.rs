@@ -87,11 +87,6 @@ fn ensure_registered_domain(client: &Client, domain: &DomainId) -> Result<()> {
     Ok(())
 }
 
-fn ensure_alias_domain(client: &Client) -> Result<()> {
-    let alias_domain: DomainId = "aid".parse()?;
-    ensure_registered_domain(client, &alias_domain)
-}
-
 #[test]
 fn build_domain_register_request_uses_domain_label_and_owner_controller() -> Result<()> {
     let domain: DomainId = "helperdomain".parse()?;
@@ -117,12 +112,6 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
         return Ok(());
     };
     let client = network.client();
-    if let Err(err) = ensure_alias_domain(&client) {
-        eprintln!(
-            "Skipping receive-path materialization coverage: failed to ensure `aid` domain: {err}"
-        );
-        return Ok(());
-    }
 
     let domain: DomainId = "receive-without-preregister".parse()?;
     ensure_registered_domain(&client, &domain)?;

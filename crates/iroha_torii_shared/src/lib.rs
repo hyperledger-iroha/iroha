@@ -276,7 +276,7 @@ pub struct AccountReadResponse {
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub opaque_ids: Vec<OpaqueAccountId>,
-    /// Domains currently linked to the subject in state indexes.
+    /// Distinct domains implied by the account's currently bound domain-qualified aliases.
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub linked_domains: Vec<DomainId>,

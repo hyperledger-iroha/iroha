@@ -19,9 +19,9 @@ final class OfflineNoritoEncodingTests: XCTestCase {
     }
 
     func testEncodeAssetIdRejectsTextualForms() {
-        assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#alice@hbl.dataspace")
-        assertInvalidAssetId("xor##alice@hbl.dataspace")
-        assertInvalidAssetId("rose##alice@hbl.dataspace")
+        assertInvalidAssetId("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#alice@banka.dataspace")
+        assertInvalidAssetId("xor##alice@banka.dataspace")
+        assertInvalidAssetId("rose##alice@banka.dataspace")
     }
 
     func testEncodeAssetIdRejectsMalformedPublicLiterals() throws {
@@ -38,13 +38,13 @@ final class OfflineNoritoEncodingTests: XCTestCase {
     }
 
     func testEncodeAccountIdRejectsAliasLiteral() {
-        let literal = "alice@hbl.dataspace"
+        let literal = "alice@banka.dataspace"
         assertInvalidAccountId(literal, expected: literal)
     }
 
     func testEncodeAccountIdRejectsI105WithDomainSuffix() throws {
         let i105 = try makeI105(seed: 2)
-        let providedLiteral = "\(i105)@hbl"
+        let providedLiteral = "\(i105)@banka"
         assertInvalidAccountId(providedLiteral, expected: providedLiteral)
     }
 

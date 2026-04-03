@@ -382,7 +382,7 @@ def test_get_explorer_account_qr_accepts_account_alias_path_literal() -> None:
         StubResponse(
             payload={
                 "canonical_id": "sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6",
-                "literal": "operator@hbl.universal",
+                "literal": "operator@banka.universal",
                 "network_prefix": 26,
                 "error_correction": "quartile",
                 "modules": 33,
@@ -393,9 +393,9 @@ def test_get_explorer_account_qr_accepts_account_alias_path_literal() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    qr = client.get_explorer_account_qr("operator@hbl.universal")
+    qr = client.get_explorer_account_qr("operator@banka.universal")
 
-    assert qr.literal == "operator@hbl.universal"
+    assert qr.literal == "operator@banka.universal"
     call = session.calls[0]
     assert call["method"] == "GET"
     assert call["url"].endswith("/v1/explorer/accounts/operator%40hbl.universal/qr")

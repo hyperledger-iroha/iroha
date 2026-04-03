@@ -7,7 +7,7 @@ use std::{
     string::String,
 };
 
-use getset::Getters;
+use getset::{CopyGetters, Getters};
 use iroha_data_model_derive::model;
 use iroha_schema::IntoSchema;
 use norito::{
@@ -18,6 +18,13 @@ use norito::{
 pub use self::model::*;
 use crate::{Name, account::prelude::*, domain::prelude::*, error::ParseError, nexus::DataSpaceId};
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, IntoSchema)]
+#[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+pub(crate) struct AssetDefinitionProjection {
+    domain: DomainId,
+    name: Name,
+}
+
 #[model]
 mod model {
     use super::*;
@@ -27,17 +34,15 @@ mod model {
     /// Textual form is an unprefixed Base58 address over canonical `UUIDv4` bytes
     /// plus a version byte and checksum. On-chain asset aliases resolve to this
     /// identifier only.
-    #[derive(Debug, Clone, Getters, IntoSchema)]
-    #[getset(get = "pub")]
+    #[derive(Debug, Clone, CopyGetters, IntoSchema)]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct AssetDefinitionId {
         /// Canonical `UUIDv4` bytes.
         #[getset(get_copy = "pub")]
         pub aid_bytes: [u8; 16],
-        /// Deterministic domain component derived from canonical bytes.
-        pub domain: DomainId,
-        /// Deterministic name component derived from canonical bytes.
-        pub name: Name,
+        /// Optional domain/name projection carried only for IDs constructed from
+        /// explicit domain-scoped components.
+        pub(crate) projection: Option<AssetDefinitionProjection>,
     }
 
     /// Balance partition used for a concrete asset ownership bucket.
@@ -270,22 +275,18 @@ impl AssetDefinitionId {
                 "Asset Definition ID must encode UUIDv4 bytes",
             ));
         }
-        let (domain, name) = synthetic_components(aid_bytes);
         Ok(Self {
             aid_bytes,
-            domain,
-            name,
+            projection: None,
         })
     }
 
     /// Construct from UUID bytes without validation.
     #[must_use]
     pub fn from_uuid_bytes_unchecked(aid_bytes: [u8; 16]) -> Self {
-        let (domain, name) = synthetic_components(aid_bytes);
         Self {
             aid_bytes,
-            domain,
-            name,
+            projection: None,
         }
     }
 
@@ -304,9 +305,46 @@ impl AssetDefinitionId {
         aid_bytes[8] = (aid_bytes[8] & 0x3f) | 0x80;
         Self {
             aid_bytes,
-            domain,
-            name,
+            projection: Some(AssetDefinitionProjection { domain, name }),
         }
+    }
+
+    /// Domain projection for domain-scoped identifiers constructed via [`Self::new`].
+    #[must_use]
+    pub fn try_domain(&self) -> Option<&DomainId> {
+        self.projection
+            .as_ref()
+            .map(|projection| &projection.domain)
+    }
+
+    /// Name projection for domain-scoped identifiers constructed via [`Self::new`].
+    #[must_use]
+    pub fn try_name(&self) -> Option<&Name> {
+        self.projection.as_ref().map(|projection| &projection.name)
+    }
+
+    /// Domain projection for a domain-scoped identifier.
+    ///
+    /// # Panics
+    /// Panics when called on an opaque canonical ID parsed from raw bytes or
+    /// canonical Base58 without an explicit domain-scoped projection.
+    #[must_use]
+    pub fn domain(&self) -> &DomainId {
+        self.try_domain().expect(
+            "opaque canonical asset definition ids do not carry a domain projection; use an asset alias or the stored asset definition metadata instead",
+        )
+    }
+
+    /// Name projection for a domain-scoped identifier.
+    ///
+    /// # Panics
+    /// Panics when called on an opaque canonical ID parsed from raw bytes or
+    /// canonical Base58 without an explicit domain-scoped projection.
+    #[must_use]
+    pub fn name(&self) -> &Name {
+        self.try_name().expect(
+            "opaque canonical asset definition ids do not carry a synthetic name; use the stored asset definition name or an asset alias instead",
+        )
     }
 
     /// Canonical textual address (unprefixed Base58 with version and checksum).
@@ -316,12 +354,11 @@ impl AssetDefinitionId {
         bs58::encode(payload).into_string()
     }
 
-    /// Returns `true` when this identifier is an opaque synthetic identifier
-    /// literal rather than a domain-scoped asset definition synthesized from
-    /// business domain/name components.
+    /// Returns `true` when this identifier is an opaque canonical ID without an
+    /// explicit domain/name projection.
     #[must_use]
     pub fn is_opaque_canonical(&self) -> bool {
-        self.domain.name.as_ref() == "aid" && self.name.as_ref() == hex::encode(self.aid_bytes)
+        self.projection.is_none()
     }
 
     /// Parse the canonical unprefixed Base58 address.
@@ -422,17 +459,6 @@ fn address_checksum(payload: &[u8]) -> [u8; 4] {
     checksum
 }
 
-fn synthetic_components(aid_bytes: [u8; 16]) -> (DomainId, Name) {
-    let domain: DomainId = "aid"
-        .parse()
-        .expect("static `aid` domain label must remain valid");
-    let name_literal = hex::encode(aid_bytes);
-    let name: Name = name_literal
-        .parse()
-        .expect("lowercase hex must remain a valid name literal");
-    (domain, name)
-}
-
 impl fmt::Display for AssetDefinitionId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str(&self.canonical_address())
@@ -512,12 +538,24 @@ mod tests {
         ])
         .expect("opaque bytes should parse");
         assert!(opaque.is_opaque_canonical());
+        assert!(opaque.try_domain().is_none());
+        assert!(opaque.try_name().is_none());
 
         let domain_scoped = AssetDefinitionId::new(
             "wonderland".parse().expect("domain"),
             "xor".parse().expect("name"),
         );
         assert!(!domain_scoped.is_opaque_canonical());
+        assert_eq!(
+            domain_scoped
+                .try_domain()
+                .expect("domain-scoped projection"),
+            &"wonderland".parse::<DomainId>().expect("domain"),
+        );
+        assert_eq!(
+            domain_scoped.try_name().expect("name projection"),
+            &"xor".parse::<Name>().expect("name"),
+        );
     }
 
     #[test]

@@ -37,6 +37,7 @@ use iroha_primitives::json::Json;
 use norito::json::{self, native::Number as JsonNumber};
 
 use super::ast::*;
+use crate::builtins::Builtin;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct FunctionEffects {
@@ -1755,7 +1756,7 @@ fn analyze_function(func: &Function) -> Result<TypedFunction, SemanticError> {
     })
 }
 
-fn reject_legacy_public_payload_builtin(name: &str) -> Result<(), SemanticError> {
+fn reject_public_payload_helper(name: &str) -> Result<(), SemanticError> {
     let forbidden = CURRENT_FUNCTION_MODIFIERS.with(|mods| {
         mods.borrow().as_ref().is_some_and(|modifiers| {
             modifiers.visibility == FunctionVisibility::Public
@@ -1765,7 +1766,7 @@ fn reject_legacy_public_payload_builtin(name: &str) -> Result<(), SemanticError>
     if forbidden {
         return Err(SemanticError {
             message: format!(
-                "public and view entrypoints cannot use legacy payload builtin `{name}`; declare typed parameters instead"
+                "public and view entrypoints cannot use `{name}` here; declare typed parameters instead"
             ),
         });
     }
@@ -2627,6 +2628,372 @@ fn analyze_statement(
     }
 }
 
+fn analyze_surface_builtin_call(
+    builtin: Builtin,
+    mut arg_typed: Vec<TypedExpr>,
+) -> Result<TypedExpr, SemanticError> {
+    match builtin {
+        Builtin::GetOrDefault => {
+            if arg_typed.len() != 3 {
+                return Err(SemanticError {
+                    message: "get_or_default expects (Map<K,V>, K, V)".into(),
+                });
+            }
+            let (key_ty, value_ty) = match &arg_typed[0].ty {
+                Type::Map(k, v) => (k.as_ref().clone(), v.as_ref().clone()),
+                other => {
+                    return Err(SemanticError {
+                        message: format!(
+                            "get_or_default expects Map<K,V> as first arg, got {}",
+                            type_name(other)
+                        ),
+                    });
+                }
+            };
+            ensure_assignable_and_coerce(&key_ty, &mut arg_typed[1])?;
+            ensure_assignable_and_coerce(&value_ty, &mut arg_typed[2])?;
+            ensure_in_memory_map_word_types(&arg_typed[0])?;
+            let value_ty = match resolve_struct_type(&arg_typed[0].ty) {
+                Type::Map(_, v) => *v,
+                _ => Type::Int,
+            };
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: resolve_struct_type(&value_ty),
+            })
+        }
+        Builtin::Contains => {
+            if arg_typed.len() != 2 {
+                return Err(SemanticError {
+                    message: "contains expects (Map<K,V>, K)".into(),
+                });
+            }
+            match &arg_typed[0].ty {
+                Type::Map(k, _v) => {
+                    ensure_assignable_and_coerce(&k.clone(), &mut arg_typed[1])?;
+                    ensure_in_memory_map_word_types(&arg_typed[0])?;
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: builtin.name().to_string(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Bool,
+                    })
+                }
+                other => Err(SemanticError {
+                    message: format!(
+                        "contains expects Map<K,V> as first arg, got {}",
+                        type_name(other)
+                    ),
+                }),
+            }
+        }
+        Builtin::GetOr => {
+            let original_len = arg_typed.len();
+            if original_len != 2 && original_len != 3 {
+                return Err(SemanticError {
+                    message: "get_or expects (Map<K,V>, K[, V])".into(),
+                });
+            }
+            let mut call_args = arg_typed;
+            let map_ty = resolve_struct_type(&call_args[0].ty);
+            let (map_key_ty, map_value_ty) = match map_ty {
+                Type::Map(k, v) => (*k, *v),
+                other => {
+                    return Err(SemanticError {
+                        message: format!(
+                            "get_or expects Map<K,V> as first arg, got {}",
+                            type_name(&other)
+                        ),
+                    });
+                }
+            };
+            let resolved_key_ty = resolve_struct_type(&map_key_ty);
+            let resolved_value_ty = resolve_struct_type(&map_value_ty);
+            ensure_assignable_and_coerce(&resolved_key_ty, &mut call_args[1])?;
+            ensure_in_memory_map_word_types(&call_args[0])?;
+
+            if original_len == 2 {
+                match resolve_struct_type(&resolved_value_ty) {
+                    Type::Int => {
+                        call_args.push(TypedExpr {
+                            expr: ExprKind::Number(0),
+                            ty: Type::Int,
+                        });
+                    }
+                    other => {
+                        if is_pointer_type(&other) {
+                            return Err(SemanticError {
+                                message: format!(
+                                    "get_or requires an explicit default for pointer-valued maps (value type {})",
+                                    type_name(&other)
+                                ),
+                            });
+                        }
+                        return Err(SemanticError {
+                            message: format!(
+                                "get_or auto-default is only available for Map<*,int>; provide an explicit default for value type {}",
+                                type_name(&other)
+                            ),
+                        });
+                    }
+                }
+            } else {
+                ensure_assignable_and_coerce(&resolved_value_ty, &mut call_args[2])?;
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: call_args,
+                },
+                ty: resolved_value_ty,
+            })
+        }
+        Builtin::Ensure => {
+            let in_view = CURRENT_FUNCTION_MODIFIERS.with(|mods| {
+                mods.borrow()
+                    .as_ref()
+                    .is_some_and(|modifiers| modifiers.kind == FunctionKind::View)
+            });
+            if in_view {
+                return Err(SemanticError {
+                    message: "view entrypoints cannot use mutating map helper `ensure`; use `get_or` instead".into(),
+                });
+            }
+            let original_len = arg_typed.len();
+            if original_len != 2 && original_len != 3 {
+                return Err(SemanticError {
+                    message: "ensure expects (Map<K,V>, K[, V])".into(),
+                });
+            }
+            let mut call_args = arg_typed;
+            let map_ty = resolve_struct_type(&call_args[0].ty);
+            let (map_key_ty, map_value_ty) = match map_ty {
+                Type::Map(k, v) => (*k, *v),
+                other => {
+                    return Err(SemanticError {
+                        message: format!(
+                            "ensure expects Map<K,V> as first arg, got {}",
+                            type_name(&other)
+                        ),
+                    });
+                }
+            };
+            let resolved_key_ty = resolve_struct_type(&map_key_ty);
+            let resolved_value_ty = resolve_struct_type(&map_value_ty);
+            ensure_assignable_and_coerce(&resolved_key_ty, &mut call_args[1])?;
+            ensure_in_memory_map_word_types(&call_args[0])?;
+
+            if original_len == 2 {
+                match resolve_struct_type(&resolved_value_ty) {
+                    Type::Int => {
+                        call_args.push(TypedExpr {
+                            expr: ExprKind::Number(0),
+                            ty: Type::Int,
+                        });
+                    }
+                    other => {
+                        if is_pointer_type(&other) {
+                            return Err(SemanticError {
+                                message: format!(
+                                    "ensure requires an explicit default for pointer-valued maps (value type {})",
+                                    type_name(&other)
+                                ),
+                            });
+                        }
+                        return Err(SemanticError {
+                            message: format!(
+                                "ensure auto-default is only available for Map<*,int>; provide an explicit default for value type {}",
+                                type_name(&other)
+                            ),
+                        });
+                    }
+                }
+            } else {
+                ensure_assignable_and_coerce(&resolved_value_ty, &mut call_args[2])?;
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: call_args,
+                },
+                ty: resolved_value_ty,
+            })
+        }
+        Builtin::KeysTake2 | Builtin::ValuesTake2 => {
+            let name = builtin.name();
+            if arg_typed.len() != 3 {
+                return Err(SemanticError {
+                    message: format!("{name} expects (Map<int,int>, int start, int which)"),
+                });
+            }
+            match &arg_typed[0].ty {
+                Type::Map(k, v)
+                    if matches!(resolve_struct_type(k), Type::Int)
+                        && matches!(resolve_struct_type(v), Type::Int) => {}
+                other => {
+                    return Err(SemanticError {
+                        message: format!(
+                            "{name} expects Map<int,int> as first arg, got {}",
+                            type_name(other)
+                        ),
+                    });
+                }
+            }
+            if !matches!(resolve_struct_type(&arg_typed[1].ty), Type::Int)
+                || !matches!(resolve_struct_type(&arg_typed[2].ty), Type::Int)
+            {
+                return Err(SemanticError {
+                    message: format!("{name} expects (Map<int,int>, int, int)"),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: name.to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Int,
+            })
+        }
+        Builtin::KeysValuesTake2 => {
+            if arg_typed.len() != 3 {
+                return Err(SemanticError {
+                    message: "keys_values_take2 expects (Map<int,int>, int, int)".into(),
+                });
+            }
+            match &arg_typed[0].ty {
+                Type::Map(k, v)
+                    if matches!(resolve_struct_type(k), Type::Int)
+                        && matches!(resolve_struct_type(v), Type::Int) => {}
+                other => {
+                    return Err(SemanticError {
+                        message: format!(
+                            "keys_values_take2 expects Map<int,int> as first arg, got {}",
+                            type_name(other)
+                        ),
+                    });
+                }
+            }
+            if !matches!(resolve_struct_type(&arg_typed[1].ty), Type::Int)
+                || !matches!(resolve_struct_type(&arg_typed[2].ty), Type::Int)
+            {
+                return Err(SemanticError {
+                    message: "keys_values_take2 expects (Map<int,int>, int, int)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Tuple(vec![Type::Int, Type::Int]),
+            })
+        }
+        Builtin::StateGet => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "state_get expects (Name)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Bytes,
+            })
+        }
+        Builtin::StateSet => {
+            if arg_typed.len() != 2
+                || !(arg_typed[0].ty == Type::Name && is_blob_like(&arg_typed[1].ty))
+            {
+                return Err(SemanticError {
+                    message: "state_set expects (Name, Blob|bytes)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::StateDel => {
+            if arg_typed.len() != 1 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "state_del expects (Name)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Unit,
+            })
+        }
+        Builtin::Path => {
+            if arg_typed.len() != 2 || arg_typed[0].ty != Type::Name {
+                return Err(SemanticError {
+                    message: "path expects (Name, int|Blob|bytes)".into(),
+                });
+            }
+            if !(is_int_like(&arg_typed[1].ty) || is_blob_like(&arg_typed[1].ty)) {
+                return Err(SemanticError {
+                    message: "path expects (Name, int|Blob|bytes)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Name,
+            })
+        }
+        Builtin::GetInt
+        | Builtin::GetNumeric
+        | Builtin::GetJson
+        | Builtin::GetName
+        | Builtin::GetAccountId
+        | Builtin::GetAssetDefinitionId
+        | Builtin::GetNftId
+        | Builtin::GetBlobHex => {
+            reject_public_payload_helper(builtin.name())?;
+            if arg_typed.len() != 2
+                || arg_typed[0].ty != Type::Json
+                || arg_typed[1].ty != Type::Name
+            {
+                return Err(SemanticError {
+                    message: format!("{} expects (Json, Name)", builtin.name()),
+                });
+            }
+            let ty = match builtin {
+                Builtin::GetInt => Type::Int,
+                Builtin::GetNumeric => Type::Amount,
+                Builtin::GetJson => Type::Json,
+                Builtin::GetName => Type::Name,
+                Builtin::GetAccountId => Type::AccountId,
+                Builtin::GetAssetDefinitionId => Type::AssetDefinitionId,
+                Builtin::GetNftId => Type::NftId,
+                Builtin::GetBlobHex => Type::Bytes,
+                _ => unreachable!(),
+            };
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty,
+            })
+        }
+    }
+}
+
 fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedExpr, SemanticError> {
     match expr {
         Expr::Conditional {
@@ -3140,6 +3507,9 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
             for a in args {
                 arg_typed.push(analyze_expr(a, vars)?);
             }
+            if let Some(builtin) = Builtin::from_name(&name) {
+                return analyze_surface_builtin_call(builtin, arg_typed);
+            }
             match name.as_str() {
                 // get_or_default(Map<int,int>, int, int) -> int (utility)
                 "get_or_default" => {
@@ -3173,33 +3543,6 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         },
                         ty: resolve_struct_type(&value_ty),
                     })
-                }
-                // has(Map<K,V>, K) -> bool (alias to contains)
-                "has" => {
-                    if arg_typed.len() != 2 {
-                        return Err(SemanticError {
-                            message: "has expects (Map<K,V>, K)".into(),
-                        });
-                    }
-                    match &arg_typed[0].ty {
-                        Type::Map(k, _v) => {
-                            ensure_assignable_and_coerce(&k.clone(), &mut arg_typed[1])?;
-                            ensure_in_memory_map_word_types(&arg_typed[0])?;
-                            Ok(TypedExpr {
-                                expr: ExprKind::Call {
-                                    name: name.clone(),
-                                    args: arg_typed,
-                                },
-                                ty: Type::Bool,
-                            })
-                        }
-                        other => Err(SemanticError {
-                            message: format!(
-                                "has expects Map<K,V> as first arg, got {}",
-                                type_name(other)
-                            ),
-                        }),
-                    }
                 }
                 // Map contains helper: contains(Map<K,V>, K) -> bool
                 "contains" => {
@@ -3291,10 +3634,10 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: resolved_value_ty,
                     })
                 }
-                // get_or_insert_default(Map<int,int>, int) -> int
+                // ensure(Map<int,int>, int) -> int
                 // Deterministic lowering: durable path uses STATE_GET/SET with Norito-encoded 0 when missing;
                 // ephemeral path compares and inserts 0 on mismatch.
-                "get_or_insert_default" | "ensure" => {
+                "ensure" => {
                     let in_view = CURRENT_FUNCTION_MODIFIERS.with(|mods| {
                         mods.borrow()
                             .as_ref()
@@ -3359,7 +3702,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: "get_or_insert_default".to_string(),
+                            name: "ensure".to_string(),
                             args: call_args,
                         },
                         ty: resolved_value_ty,
@@ -3483,24 +3826,20 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Unit,
                     })
                 }
-                "path_map_key" | "path_map_key_norito" | "path" => {
+                "path" => {
                     if arg_typed.len() != 2 || arg_typed[0].ty != Type::Name {
                         return Err(SemanticError {
                             message: "path expects (Name, int|Blob|bytes)".into(),
                         });
                     }
-                    let normalized = if is_int_like(&arg_typed[1].ty) {
-                        "path_map_key"
-                    } else if is_blob_like(&arg_typed[1].ty) {
-                        "path_map_key_norito"
-                    } else {
+                    if !(is_int_like(&arg_typed[1].ty) || is_blob_like(&arg_typed[1].ty)) {
                         return Err(SemanticError {
                             message: "path expects (Name, int|Blob|bytes)".into(),
                         });
-                    };
+                    }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: normalized.to_string(),
+                            name: "path".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::Name,
@@ -3687,7 +4026,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 }
                 // Current trigger event payload as Json (data/by-call triggers).
                 "trigger_event" => {
-                    reject_legacy_public_payload_builtin(name.as_str())?;
+                    reject_public_payload_helper(name.as_str())?;
                     if !arg_typed.is_empty() {
                         return Err(SemanticError {
                             message: "trigger_event expects no arguments".into(),
@@ -4112,8 +4451,8 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         ty: Type::Int,
                     })
                 }
-                "json_get_int" | "get_int" => {
-                    reject_legacy_public_payload_builtin("json_get_int")?;
+                "get_int" => {
+                    reject_public_payload_helper("get_int")?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -4124,14 +4463,14 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: "json_get_int".to_string(),
+                            name: "get_int".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::Int,
                     })
                 }
-                "json_get_numeric" | "get_numeric" => {
-                    reject_legacy_public_payload_builtin("json_get_numeric")?;
+                "get_numeric" => {
+                    reject_public_payload_helper("get_numeric")?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -4142,14 +4481,14 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: "json_get_numeric".to_string(),
+                            name: "get_numeric".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::Amount,
                     })
                 }
-                "json_get_json" | "get_json" => {
-                    reject_legacy_public_payload_builtin("json_get_json")?;
+                "get_json" => {
+                    reject_public_payload_helper("get_json")?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -4160,14 +4499,14 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: "json_get_json".to_string(),
+                            name: "get_json".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::Json,
                     })
                 }
-                "json_get_name" | "get_name" => {
-                    reject_legacy_public_payload_builtin("json_get_name")?;
+                "get_name" => {
+                    reject_public_payload_helper("get_name")?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -4178,14 +4517,14 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: "json_get_name".to_string(),
+                            name: "get_name".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::Name,
                     })
                 }
-                "json_get_account_id" | "get_account_id" => {
-                    reject_legacy_public_payload_builtin("json_get_account_id")?;
+                "get_account_id" => {
+                    reject_public_payload_helper("get_account_id")?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -4196,14 +4535,14 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: "json_get_account_id".to_string(),
+                            name: "get_account_id".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::AccountId,
                     })
                 }
-                "json_get_asset_definition_id" | "get_asset_definition_id" => {
-                    reject_legacy_public_payload_builtin("json_get_asset_definition_id")?;
+                "get_asset_definition_id" => {
+                    reject_public_payload_helper("get_asset_definition_id")?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -4214,14 +4553,14 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: "json_get_asset_definition_id".to_string(),
+                            name: "get_asset_definition_id".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::AssetDefinitionId,
                     })
                 }
-                "json_get_nft_id" | "get_nft_id" => {
-                    reject_legacy_public_payload_builtin("json_get_nft_id")?;
+                "get_nft_id" => {
+                    reject_public_payload_helper("get_nft_id")?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -4232,14 +4571,14 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: "json_get_nft_id".to_string(),
+                            name: "get_nft_id".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::NftId,
                     })
                 }
-                "json_get_blob_hex" | "get_blob_hex" => {
-                    reject_legacy_public_payload_builtin("json_get_blob_hex")?;
+                "get_blob_hex" => {
+                    reject_public_payload_helper("get_blob_hex")?;
                     if arg_typed.len() != 2
                         || arg_typed[0].ty != Type::Json
                         || arg_typed[1].ty != Type::Name
@@ -4250,7 +4589,7 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                     }
                     Ok(TypedExpr {
                         expr: ExprKind::Call {
-                            name: "json_get_blob_hex".to_string(),
+                            name: "get_blob_hex".to_string(),
                             args: arg_typed,
                         },
                         ty: Type::Bytes,
@@ -5063,10 +5402,10 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                         }
                         for (arg, param) in arg_typed.iter_mut().zip(signature.iter()) {
                             if param.is_state {
-                                if !is_state_map_expr(arg) {
+                                if !is_state_handle_expr(arg) {
                                     return Err(SemanticError {
                                         message: format!(
-                                            "state parameter `{}` requires a durable state map argument",
+                                            "state parameter `{}` requires a durable state handle argument",
                                             param.name
                                         ),
                                     });
@@ -5185,10 +5524,10 @@ fn parse_declared_param_type(
                 ),
             });
         }
-        if !matches!(resolve_struct_type(&ty), Type::Map(_, _)) {
+        if !is_supported_state_param_type(&ty) {
             return Err(SemanticError {
                 message: format!(
-                    "state parameter `{}` currently supports Map<K, V> only",
+                    "state parameter `{}` currently supports durable scalar roots and Map<K, V> handles; aggregate state handles are not supported yet",
                     param.name
                 ),
             });
@@ -5199,6 +5538,20 @@ fn parse_declared_param_type(
         ty,
         is_state: param.is_state,
     })
+}
+
+fn is_supported_state_param_type(ty: &Type) -> bool {
+    match resolve_struct_type(ty) {
+        Type::Map(_, _)
+        | Type::Int
+        | Type::Bool
+        | Type::Json
+        | Type::Blob
+        | Type::Bytes
+        | Type::String => true,
+        ty if is_wide_numeric_type(&ty) || is_pointer_type(&ty) => true,
+        _ => false,
+    }
 }
 
 fn convert_type_expr(ty: &TypeExpr) -> Result<Type, SemanticError> {
@@ -5413,21 +5766,6 @@ fn normalize_namespaced(name: &str) -> String {
     if name == "std::map::new" || name == "std::Map::new" {
         return String::from("Map::new");
     }
-    if name == "std::map::contains" {
-        return String::from("contains");
-    }
-    if name == "std::map::has" {
-        return String::from("has");
-    }
-    if name == "std::map::get_or" {
-        return String::from("get_or");
-    }
-    if name == "std::map::get_or_insert_default" {
-        return String::from("get_or_insert_default");
-    }
-    if name == "std::map::ensure" {
-        return String::from("ensure");
-    }
     if name == "std::map::keys_take2" {
         return String::from("keys_take2");
     }
@@ -5479,19 +5817,6 @@ fn normalize_namespaced(name: &str) -> String {
                 "verify_tally" => return String::from("zk_vote_verify_tally"),
                 _ => {}
             }
-        }
-    }
-    if let Some(rest) = name.strip_prefix("json::") {
-        match rest {
-            "get_int" => return String::from("get_int"),
-            "get_numeric" => return String::from("get_numeric"),
-            "get_json" => return String::from("get_json"),
-            "get_name" => return String::from("get_name"),
-            "get_account_id" => return String::from("get_account_id"),
-            "get_asset_definition_id" => return String::from("get_asset_definition_id"),
-            "get_nft_id" => return String::from("get_nft_id"),
-            "get_blob_hex" => return String::from("get_blob_hex"),
-            _ => {}
         }
     }
     String::from(name)
@@ -5972,12 +6297,24 @@ fn is_state_map_expr(expr: &TypedExpr) -> bool {
     matches!(resolve_struct_type(&expr.ty), Type::Map(_, _)) && typed_map_expr_is_state(expr)
 }
 
-fn typed_map_expr_is_state(expr: &TypedExpr) -> bool {
+pub fn typed_state_handle_name(expr: &TypedExpr) -> Option<String> {
     match &expr.expr {
-        ExprKind::Ident(name) => is_state_binding(name),
-        ExprKind::Member { object, .. } => typed_map_expr_is_state(object),
-        _ => false,
+        ExprKind::Ident(name) => is_state_binding(name).then(|| name.clone()),
+        ExprKind::Member { object, field } => {
+            let base = typed_state_handle_name(object)?;
+            let idx = field.parse::<usize>().ok()?;
+            Some(format!("{base}#{idx}"))
+        }
+        _ => None,
     }
+}
+
+fn is_state_handle_expr(expr: &TypedExpr) -> bool {
+    typed_state_handle_name(expr).is_some()
+}
+
+fn typed_map_expr_is_state(expr: &TypedExpr) -> bool {
+    typed_state_handle_name(expr).is_some()
 }
 
 fn map_expr_is_state(expr: &Expr) -> bool {
@@ -6331,9 +6668,11 @@ fn expr_contains_instruction_emission(expr: &TypedExpr) -> bool {
 fn expr_mutates_durable_state(expr: &TypedExpr) -> bool {
     match &expr.expr {
         ExprKind::Call { name, args } => {
-            matches!(name.as_str(), "state_set" | "state_del")
-                || (name == "get_or_insert_default"
-                    && args.first().is_some_and(typed_map_expr_is_state))
+            matches!(
+                Builtin::from_name(name),
+                Some(Builtin::StateSet | Builtin::StateDel)
+            ) || (matches!(Builtin::from_name(name), Some(Builtin::Ensure))
+                && args.first().is_some_and(typed_map_expr_is_state))
                 || args.iter().any(expr_mutates_durable_state)
         }
         ExprKind::Binary { left, right, .. } => {
@@ -6664,6 +7003,52 @@ mod tests {
     }
 
     #[test]
+    fn state_scalar_helper_param_is_accepted() {
+        let program = parse(
+            "state Counter: int; \
+             struct Ledger { counter: int; } \
+             state ledger: Ledger; \
+             fn read(state int value) -> int { return value; } \
+             fn main() -> int { \
+                 ledger = Ledger(7); \
+                 let _a = read(Counter); \
+                 return read(ledger.counter); \
+             }",
+        )
+        .expect("parse state scalar helper");
+        analyze(&program).expect("state scalar helper params should analyze");
+    }
+
+    #[test]
+    fn state_scalar_helper_param_requires_state_handle_argument() {
+        let program = parse(
+            "state Counter: int; \
+             fn read(state int value) -> int { return value; } \
+             fn main() -> int { let snapshot = Counter; return read(snapshot); }",
+        )
+        .expect("parse state scalar helper arg");
+        let err = analyze(&program).expect_err("passing loaded scalar state should error");
+        assert!(
+            err.message
+                .contains("requires a durable state handle argument")
+        );
+    }
+
+    #[test]
+    fn state_struct_helper_param_is_rejected() {
+        let program = parse(
+            "struct Ledger { counter: int; } \
+             fn read(state Ledger ledger) -> int { return ledger.counter; }",
+        )
+        .expect("parse state struct helper");
+        let err = analyze(&program).expect_err("aggregate state params should be rejected");
+        assert!(
+            err.message
+                .contains("aggregate state handles are not supported yet")
+        );
+    }
+
+    #[test]
     fn map_assignment_requires_map_target() {
         let program = parse("fn f() { let x = 1; x[0] = 2; }").expect("parse map assignment");
         let err = analyze(&program).expect_err("non-map assignment should error");
@@ -6957,35 +7342,33 @@ mod tests {
         .expect("parse public trigger_event");
         let err = analyze(&program).expect_err("public trigger_event should fail");
         assert!(
-            err.message
-                .contains("cannot use legacy payload builtin `trigger_event`"),
+            err.message.contains("cannot use `trigger_event` here"),
             "unexpected error message: {}",
             err.message
         );
     }
 
     #[test]
-    fn view_entrypoints_reject_json_get_helpers() {
+    fn view_entrypoints_reject_get_int_helper() {
         let program = parse(
             "seiyaku Demo { #[access(read=\"*\", write=\"*\")] view fn f(ev: Json) -> int { return ev.get_int(name(\"n\")); } }",
         )
-        .expect("parse view json_get");
-        let err = analyze(&program).expect_err("view json_get should fail");
+        .expect("parse view get_int");
+        let err = analyze(&program).expect_err("view get_int should fail");
         assert!(
-            err.message
-                .contains("cannot use legacy payload builtin `json_get_int`"),
+            err.message.contains("cannot use `get_int` here"),
             "unexpected error message: {}",
             err.message
         );
     }
 
     #[test]
-    fn view_entrypoints_reject_get_or_insert_default() {
+    fn view_entrypoints_reject_ensure() {
         let program = parse(
             "seiyaku Demo { view fn f() -> int { let balances: Map<int, int> = Map::new(); return balances.ensure(7, 9); } }",
         )
         .expect("parse ensure");
-        let err = analyze(&program).expect_err("view get_or_insert_default should fail");
+        let err = analyze(&program).expect_err("view ensure should fail");
         assert!(
             err.message
                 .contains("view entrypoints cannot use mutating map helper `ensure`"),
@@ -7008,7 +7391,7 @@ mod tests {
     }
 
     #[test]
-    fn state_param_requires_durable_state_map_argument() {
+    fn state_param_requires_durable_state_handle_argument() {
         let program = parse(
             "fn ensure_balance(state Map<Name, int> balances, key: Name) -> int { return balances.ensure(key, 0); } \
              fn f() -> int { let balances: Map<Name, int> = Map::new(); return ensure_balance(balances, name(\"alice\")); }",
@@ -7017,7 +7400,7 @@ mod tests {
         let err = analyze(&program).expect_err("in-memory map should not satisfy state param");
         assert!(
             err.message
-                .contains("state parameter `balances` requires a durable state map argument"),
+                .contains("state parameter `balances` requires a durable state handle argument"),
             "unexpected error message: {}",
             err.message
         );
@@ -7168,21 +7551,21 @@ mod tests {
     }
 
     #[test]
-    fn json_get_asset_definition_id_accepts_trigger_payloads() {
+    fn get_asset_definition_id_accepts_trigger_payloads() {
         let program = parse(
             "fn f() { let ev = trigger_event(); let _asset = ev.get_asset_definition_id(name(\"asset_definition_id\")); }",
         )
-        .expect("parse json_get_asset_definition_id");
-        analyze(&program).expect("json_get_asset_definition_id should type-check");
+        .expect("parse get_asset_definition_id");
+        analyze(&program).expect("get_asset_definition_id should type-check");
     }
 
     #[test]
-    fn json_get_numeric_accepts_trigger_amounts() {
+    fn get_numeric_accepts_trigger_amounts() {
         let program = parse(
             "fn f() { let ev = trigger_event(); let _amount: Amount = ev.get_numeric(name(\"amount\")); }",
         )
-        .expect("parse json_get_numeric");
-        analyze(&program).expect("json_get_numeric should type-check");
+        .expect("parse get_numeric");
+        analyze(&program).expect("get_numeric should type-check");
     }
 
     #[test]

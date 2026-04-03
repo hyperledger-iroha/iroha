@@ -2176,7 +2176,7 @@ mod tests {
 
     #[test]
     fn parse_encoded_rejects_unknown_format() {
-        let err = AccountAddress::parse_encoded("alice@hbl.dataspace", None)
+        let err = AccountAddress::parse_encoded("alice@banka.dataspace", None)
             .expect_err("alias literal rejected");
         assert!(matches!(err, AccountAddressError::UnsupportedAddressFormat));
     }

@@ -92,7 +92,7 @@ UAID 現在是第二個身分圖層的錨點：- 全域 `IdentifierPolicyId` (`<
 
 通用帳戶的推出不會改變規範的帳戶身分模型：- `AccountId` 仍然是規範的無網域帳戶主題。
 - `AccountAlias` 值是該主題之上的單獨 SNS 綁定。一個
-  域限定別名，例如 `merchant@hbl.sbp` 和資料空間根別名
+  域限定別名，例如 `merchant@banka.sbp` 和資料空間根別名
   例如 `merchant@sbp` 都可以解析為相同的規範 `AccountId`。
 - 規範帳戶註冊始終為 `Account::new(AccountId)` /
   `NewAccount::new(AccountId)`；沒有領域限定或領域具體化

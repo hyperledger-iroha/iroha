@@ -50,7 +50,7 @@ translator: machine-google-reviewed
 - Alias մոդելը:
   - Կանոնական հաշվի ինքնությունը երբեք չի ներառում տիրույթի կամ տվյալների տարածության հատված:
   - `AccountAlias` արժեքները առանձին SNS կապեր են՝ շերտավորված `AccountId`-ի վերևում:
-  - Դոմեյնին համապատասխանող այլանունները, ինչպիսին է `merchant@hbl.sbp`, կրում են և՛ տիրույթ, և՛ տվյալների տարածություն՝ կապի անունի մեջ:
+  - Դոմեյնին համապատասխանող այլանունները, ինչպիսին է `merchant@banka.sbp`, կրում են և՛ տիրույթ, և՛ տվյալների տարածություն՝ կապի անունի մեջ:
   - Տվյալների տարածություն-արմատ կեղծանունները, ինչպիսիք են `merchant@sbp`-ը, կրում են միայն տվյալների տարածությունը և, հետևաբար, բնականաբար զուգակցվում են `Account::new(...)`-ի հետ:
   - Թեստերը և հարմարանքները պետք է նախ տեղադրեն համընդհանուր `AccountId`-ը, այնուհետև առանձին-առանձին ավելացնեն այլ անունների վարձակալություն, այլանունների թույլտվություններ և տիրույթին պատկանող ցանկացած պետություն՝ բուն հաշվի ինքնության մեջ տիրույթի ենթադրությունները կոդավորելու փոխարեն:
   - Հանրային եզակի հաշվի որոնումն այժմ կենտրոնանում է այլանունների վրա (`FindAliasesByAccountId`); հաշվի ինքնությունը ինքնին մնում է առանց տիրույթի:### Ակտիվների սահմանումներ և ակտիվներ
@@ -249,7 +249,7 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl.sbp
+  --alias pkr#bankb.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
@@ -259,14 +259,14 @@ iroha ledger asset definition register \
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl.sbp \
+  --definition-alias pkr#bankb.sbp \
   --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl.sbp"}'
+  -d '{"alias":"pkr#bankb.sbp"}'
 ```Միգրացիոն նշում.
 - Հին `name#domain` ակտիվների սահմանման ID-ները չեն ընդունվում v1-ում:
 - Հանրային ակտիվների ընտրիչներն օգտագործում են ակտիվների սահմանման միայն մեկ ձևաչափ՝ կանոնական Base58 ID-ներ: Փոխանունները մնում են ընտրովի ընտրիչներ, բայց լուծվում են նույն կանոնական ID-ով:

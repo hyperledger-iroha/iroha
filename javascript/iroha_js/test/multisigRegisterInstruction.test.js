@@ -58,13 +58,13 @@ test("multisig register builder rejects legacy @domain account literals", () => 
   const spec = new MultisigSpecBuilder()
     .setQuorum(1)
     .setTransactionTtlMs(10_000)
-    .addSignatory(`${ALICE_ID}@hbl.dataspace`, 1)
+    .addSignatory(`${ALICE_ID}@banka.dataspace`, 1)
     .build();
 
   assert.throws(
     () =>
       buildRegisterMultisigInstruction({
-        accountId: `${CONTROLLER_ID}@hbl.dataspace`,
+        accountId: `${CONTROLLER_ID}@banka.dataspace`,
         spec,
       }),
     (error) =>

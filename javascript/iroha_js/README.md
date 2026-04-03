@@ -277,7 +277,7 @@ import {
 const args = buildMultisigTriggerArgs("lifecycle", {
   action: "create",
   requestId: "mr1",
-  fiId: "hbl",
+  fiId: "banka",
   toAccountId: "sorauロ1PケiコPヨソRhgラ1EコリNソnhレdシユAYGwワテYqケGLニwKヘaQUJKW1",
   amountI64: 10,
   createdAtMs: Date.now(),
@@ -300,7 +300,7 @@ const proposalInstruction = buildProposeMultisigExecuteTriggerInstruction({
 
 // Build the normalized Torii request body for the multisig contract-call flow.
 const request = buildMultisigContractCallProposeRequest({
-  multisigAccountAlias: "mintops@hbl",
+  multisigAccountAlias: "mintops@banka",
   signerAccountId: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
   namespace: "apps",
   contractId: "mint",

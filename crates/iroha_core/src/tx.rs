@@ -4799,7 +4799,7 @@ pub mod tests {
         use iroha_executor_data_model::isi::multisig::MultisigPropose;
 
         let chain: ChainId = "multisig-propose-role-allowed".parse().unwrap();
-        let home_domain: DomainId = "hbl".parse().unwrap();
+        let home_domain: DomainId = "banka".parse().unwrap();
         let target_domain: DomainId = "centralbank".parse().unwrap();
 
         let signer1 = KeyPair::random();
@@ -4836,7 +4836,7 @@ pub mod tests {
             [],
         );
 
-        let role_id: RoleId = "MULTISIG_SIGNATORY/hbl/test-envelope"
+        let role_id: RoleId = "MULTISIG_SIGNATORY/banka/test-envelope"
             .parse()
             .expect("static multisig role must parse");
         let role = Role {
@@ -4885,7 +4885,7 @@ pub mod tests {
         use iroha_executor_data_model::isi::multisig::MultisigPropose;
 
         let chain: ChainId = "multisig-propose-lane-validator-bypass".parse().unwrap();
-        let home_domain: DomainId = "hbl".parse().unwrap();
+        let home_domain: DomainId = "banka".parse().unwrap();
         let target_domain: DomainId = "centralbank".parse().unwrap();
 
         let signer1 = KeyPair::random();
@@ -4931,7 +4931,7 @@ pub mod tests {
             [],
         );
 
-        let role_id: RoleId = "MULTISIG_SIGNATORY/hbl/lane-bypass"
+        let role_id: RoleId = "MULTISIG_SIGNATORY/banka/lane-bypass"
             .parse()
             .expect("static multisig role must parse");
         let role = Role {
@@ -8428,8 +8428,12 @@ pub mod tests {
             || format!("{}@{}", account.signatory(), DOMAIN_STR),
             |alias| format!("{alias}@{DOMAIN_STR}"),
         );
-        if asset_id.definition().domain() == &*DOMAIN {
-            format!("{}##{}", asset_id.definition().name(), account_str)
+        if asset_id.definition().try_domain() == Some(&*DOMAIN) {
+            let name = asset_id
+                .definition()
+                .try_name()
+                .expect("matching domain projection must include a name");
+            format!("{name}##{account_str}")
         } else {
             format!("{}#{}", asset_id.definition(), account_str)
         }

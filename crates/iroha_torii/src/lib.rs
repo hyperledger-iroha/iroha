@@ -27069,7 +27069,7 @@ mod gateway_denylist_loader_tests {
     fn account_id_entries_reject_encoded_literals_with_domain_suffix() {
         let (_, i105, _) = sample_account_literals();
         let mut entry = base_account_entry();
-        entry.account_id = Some(format!("{i105}@hbl.dataspace"));
+        entry.account_id = Some(format!("{i105}@banka.dataspace"));
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
 
         let policy = sample_policy();
@@ -36703,8 +36703,8 @@ mod tests {
     #[cfg(feature = "app_api")]
     fn sample_tx_history_jwt(secret: &str) -> String {
         let claims = TxHistoryJwtClaimsFixture {
-            sub: "operator1@hbl".to_string(),
-            dataspace_id: "hbl".to_string(),
+            sub: "operator1@banka".to_string(),
+            dataspace_id: "banka".to_string(),
             roles: vec!["FI_OPERATOR".to_string()],
             iat: 1_700_000_000,
             nbf: 1_700_000_000,
@@ -36735,8 +36735,8 @@ mod tests {
         let claims = decode_tx_history_jwt_claims(&format!("Bearer {token}"), &jwt)
             .expect("valid tx-history token should decode");
 
-        assert_eq!(claims.sub.as_deref(), Some("operator1@hbl"));
-        assert_eq!(claims.dataspace_id.as_deref(), Some("hbl"));
+        assert_eq!(claims.sub.as_deref(), Some("operator1@banka"));
+        assert_eq!(claims.dataspace_id.as_deref(), Some("banka"));
     }
 
     #[cfg(feature = "app_api")]
@@ -36761,7 +36761,7 @@ mod tests {
         let response = tx_history_alias_resolution_reject(Error::AppConflict {
             code: "account_alias_conflict",
             message:
-                "account alias `operator1@hbl` is bound to multiple accounts: account-a and account-b"
+                "account alias `operator1@banka` is bound to multiple accounts: account-a and account-b"
                     .to_string(),
         });
 
@@ -36785,15 +36785,21 @@ mod tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn normalize_tx_history_alias_preserves_on_chain_literals() {
-        assert_eq!(normalize_tx_history_alias("operator1@hbl"), "operator1@hbl");
-        assert_eq!(normalize_tx_history_alias("operator2@ubl"), "operator2@ubl");
+        assert_eq!(
+            normalize_tx_history_alias("operator1@banka"),
+            "operator1@banka"
+        );
+        assert_eq!(
+            normalize_tx_history_alias("operator2@bankb"),
+            "operator2@bankb"
+        );
         assert_eq!(
             normalize_tx_history_alias("banking@universal"),
             "banking@universal"
         );
         assert_eq!(
-            normalize_tx_history_alias("operator1@hbl.dataspace"),
-            "operator1@hbl.dataspace"
+            normalize_tx_history_alias("operator1@banka.dataspace"),
+            "operator1@banka.dataspace"
         );
     }
 
@@ -36801,12 +36807,12 @@ mod tests {
     #[test]
     fn tx_history_subject_alias_candidates_preserve_short_alias_literals() {
         assert_eq!(
-            tx_history_subject_alias_candidates("operator1@hbl", "hbl"),
-            vec!["operator1@hbl".to_string()]
+            tx_history_subject_alias_candidates("operator1@banka", "banka"),
+            vec!["operator1@banka".to_string()]
         );
         assert_eq!(
-            tx_history_subject_alias_candidates("operator2", "ubl"),
-            vec!["operator2@ubl".to_string()]
+            tx_history_subject_alias_candidates("operator2", "bankb"),
+            vec!["operator2@bankb".to_string()]
         );
         assert_eq!(
             tx_history_subject_alias_candidates("banking", "universal"),
@@ -38884,7 +38890,7 @@ mod tests {
             &app,
             &authority,
             &long_id,
-            &"cbdc#ubl.dataspace".parse().expect("alias"),
+            &"cbdc#bankb.dataspace".parse().expect("alias"),
             None,
             1,
             0,
@@ -38900,7 +38906,7 @@ mod tests {
         );
 
         assert_eq!(
-            parse_asset_definition_id(app.as_ref(), "cbdc#ubl.dataspace")
+            parse_asset_definition_id(app.as_ref(), "cbdc#bankb.dataspace")
                 .expect("long alias should resolve"),
             long_id
         );

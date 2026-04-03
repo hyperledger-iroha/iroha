@@ -50,7 +50,7 @@ translator: machine-google-reviewed
 - Бүркеншік ат үлгісі:
   - Канондық тіркелгі сәйкестігі ешқашан доменді немесе деректер кеңістігі сегментін қамтымайды.
   - `AccountAlias` мәндері `AccountId` үстіне қабатталған бөлек SNS байланыстары.
-  - `merchant@hbl.sbp` сияқты доменге жарамды бүркеншік аттар бүркеншік атпен байланыстыруда доменді де, деректер кеңістігін де тасымалдайды.
+  - `merchant@banka.sbp` сияқты доменге жарамды бүркеншік аттар бүркеншік атпен байланыстыруда доменді де, деректер кеңістігін де тасымалдайды.
   - `merchant@sbp` сияқты деректер кеңістігінің түбір бүркеншік аттары тек деректер кеңістігін тасымалдайды, сондықтан `Account::new(...)` арқылы табиғи түрде жұптасады.
   - Сынақтар мен қондырғылар алдымен әмбебап `AccountId` септігін тигізуі керек, содан кейін есептік жазбаның өзіне домен жорамалдарын кодтаудың орнына бүркеншік атын, бүркеншік ат рұқсаттарын және кез келген доменге тиесілі күйді бөлек қосу керек.
   - Жалпыға ортақ сингулярлық тіркелгіні іздеу енді бүркеншік аттарға бағытталған (`FindAliasesByAccountId`); тіркелгі идентификаторының өзі доменсіз қалады.### Актив анықтамалары және активтер
@@ -249,7 +249,7 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl.sbp
+  --alias pkr#bankb.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
@@ -259,14 +259,14 @@ iroha ledger asset definition register \
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl.sbp \
+  --definition-alias pkr#bankb.sbp \
   --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl.sbp"}'
+  -d '{"alias":"pkr#bankb.sbp"}'
 ```Көшіру жазбасы:
 - Ескі `name#domain` актив анықтамасының идентификаторлары v1 нұсқасында қабылданбайды.
 - Қоғамдық актив таңдаушылары бір ғана актив анықтамасының пішімін пайдаланады: канондық Base58 идентификаторлары. Бүркеншік аттар қосымша селекторлар болып қалады, бірақ бірдей канондық идентификаторға шешіледі.

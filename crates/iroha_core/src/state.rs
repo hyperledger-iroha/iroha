@@ -2877,37 +2877,31 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
     /// Record that the given asset definition belongs to its domain.
     pub(crate) fn track_asset_definition_domain(&mut self, definition_id: &AssetDefinitionId) {
-        if definition_id.is_opaque_canonical() {
+        let Some(domain_id) = definition_id.try_domain() else {
             return;
-        }
-        if let Some(definitions) = self
-            .domain_asset_definitions
-            .get_mut(definition_id.domain())
-        {
+        };
+        if let Some(definitions) = self.domain_asset_definitions.get_mut(domain_id) {
             definitions.insert(definition_id.clone());
         } else {
-            self.domain_asset_definitions.insert(
-                definition_id.domain().clone(),
-                BTreeSet::from([definition_id.clone()]),
-            );
+            self.domain_asset_definitions
+                .insert(domain_id.clone(), BTreeSet::from([definition_id.clone()]));
         }
     }
 
     /// Drop the domain linkage when the asset definition no longer exists.
     pub(crate) fn untrack_asset_definition_domain(&mut self, definition_id: &AssetDefinitionId) {
-        if definition_id.is_opaque_canonical() {
+        let Some(domain_id) = definition_id.try_domain() else {
             return;
-        }
+        };
         let remove_domain_index_entry = self
             .domain_asset_definitions
-            .get_mut(definition_id.domain())
+            .get_mut(domain_id)
             .is_some_and(|definitions| {
                 definitions.remove(definition_id);
                 definitions.is_empty()
             });
         if remove_domain_index_entry {
-            self.domain_asset_definitions
-                .remove(definition_id.domain().clone());
+            self.domain_asset_definitions.remove(domain_id.clone());
         }
     }
 
@@ -9556,7 +9550,11 @@ impl DetachedStateTransactionDelta {
             return Ok(true);
         }
 
-        for domain_id in world.alias_domains_for_account(account_id) {
+        for alias in world.bound_account_aliases(account_id) {
+            let Some(alias_domain) = alias.domain.as_ref() else {
+                continue;
+            };
+            let domain_id = DomainId::new(alias_domain.name().clone());
             let domain_owner = match self.domain_owner_transfer.get(&domain_id) {
                 Some((_, to)) => to.clone(),
                 None => world
@@ -9643,7 +9641,11 @@ impl DetachedStateTransactionDelta {
             return Ok(true);
         }
 
-        for domain_id in world.alias_domains_for_account(transfer.source()) {
+        for alias in world.bound_account_aliases(transfer.source()) {
+            let Some(alias_domain) = alias.domain.as_ref() else {
+                continue;
+            };
+            let domain_id = DomainId::new(alias_domain.name().clone());
             let source_domain_owner = match self.domain_owner_transfer.get(&domain_id) {
                 Some((_, to)) => to.clone(),
                 None => world
@@ -11216,11 +11218,11 @@ impl World {
     fn rebuild_asset_definition_indexes(&mut self) {
         let mut domain_definitions = BTreeMap::<DomainId, BTreeSet<AssetDefinitionId>>::new();
         for definition_id in self.asset_definitions.view().iter().map(|(id, _)| id) {
-            if definition_id.is_opaque_canonical() {
+            let Some(domain_id) = definition_id.try_domain() else {
                 continue;
-            }
+            };
             domain_definitions
-                .entry(definition_id.domain().clone())
+                .entry(domain_id.clone())
                 .or_default()
                 .insert(definition_id.clone());
         }
@@ -12189,32 +12191,21 @@ pub trait WorldReadOnly {
             .map(move |value| AccountEntry::new(subject, value))
     }
 
-    /// List domain entities referenced by the account's bound aliases.
-    fn alias_domains_for_account(&self, account_id: &AccountId) -> Vec<DomainId> {
-        let mut domains = BTreeSet::new();
-        let mut maybe_collect = |alias: &AccountAlias| {
-            let Some(alias_domain) = alias.domain.as_ref() else {
-                return;
-            };
-            domains.extend(self.domains().iter().filter_map(|(domain_id, _)| {
-                (domain_id.name() == alias_domain.name()).then_some(domain_id.clone())
-            }));
-        };
-
-        if let Some(aliases) = self.account_aliases_by_account().get(account_id) {
-            for alias in aliases {
-                maybe_collect(alias);
-            }
-        }
+    /// Collect all aliases currently bound to the account, including the primary label.
+    fn bound_account_aliases(&self, account_id: &AccountId) -> Vec<AccountAlias> {
+        let mut aliases = self
+            .account_aliases_by_account()
+            .get(account_id)
+            .map_or_else(Vec::new, |aliases| aliases.iter().cloned().collect());
         if let Some(alias) = self
             .accounts()
             .get(account_id)
             .and_then(|value| value.as_ref().label())
+            && !aliases.iter().any(|bound| bound == alias)
         {
-            maybe_collect(alias);
+            aliases.push(alias.clone());
         }
-
-        domains.into_iter().collect()
+        aliases
     }
 
     /// List account subjects linked to a specific domain.
@@ -26257,7 +26248,12 @@ impl StateTransaction<'_, '_> {
             let asset_id = changed.asset();
             let amount_str = changed.amount().to_string();
             let asset_definition_id = asset_id.definition().to_string();
-            let alias_domains = self.world.alias_domains_for_account(asset_id.account());
+            let alias_domains: Vec<String> = self
+                .world
+                .bound_account_aliases(asset_id.account())
+                .into_iter()
+                .filter_map(|alias| alias.domain.map(|domain| domain.to_string()))
+                .collect();
             let account_domain = self
                 .world
                 .accounts
@@ -26271,15 +26267,17 @@ impl StateTransaction<'_, '_> {
                 .or_else(|| {
                     alias_domains
                         .iter()
-                        .map(ToString::to_string)
-                        .find(|domain| matches!(domain.as_str(), "hbl" | "ubl" | "sbp"))
+                        .find(|domain| matches!(domain.as_str(), "banka" | "bankb" | "sbp"))
+                        .cloned()
                 })
-                .or_else(|| alias_domains.first().map(ToString::to_string))
+                .or_else(|| alias_domains.first().cloned())
                 .unwrap_or_else(|| account_event.origin_domain().to_string());
-            let asset_definition_name = (!asset_id.definition().is_opaque_canonical())
-                .then(|| asset_id.definition().name().as_ref().to_owned());
-            let asset_definition_domain = (!asset_id.definition().is_opaque_canonical())
-                .then(|| asset_id.definition().domain().to_string());
+            let asset_definition_name = asset_id
+                .definition()
+                .try_name()
+                .map(|name| name.as_ref().to_owned());
+            let asset_definition_domain =
+                asset_id.definition().try_domain().map(ToString::to_string);
             let account_id = asset_id.account().to_string();
             if let Ok(amount_i64) = amount_str.parse::<i64>() {
                 let mut details = norito::json::Map::new();
@@ -26469,20 +26467,7 @@ impl StateTransaction<'_, '_> {
                         vm.set_max_cycles(eff_cycles);
                     }
                     vm.set_gas_limit(gas_limit);
-                    iroha_logger::info!(
-                        trigger_id = %id,
-                        authority = %authority,
-                        gas_limit,
-                        eff_cycles,
-                        "execute_trigger starting vm.run_with_host"
-                    );
                     let run_result = vm.run_with_host(&mut host);
-                    iroha_logger::info!(
-                        trigger_id = %id,
-                        authority = %authority,
-                        run_ok = run_result.is_ok(),
-                        "execute_trigger finished vm.run_with_host"
-                    );
                     cached_runtime.vm = vm;
                     {
                         let mut cache = self.ivm_cache.lock();
@@ -26500,18 +26485,7 @@ impl StateTransaction<'_, '_> {
                     // Collect queued ISIs from the host, execute them via the executor,
                     // and return them as the step.
                     let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
-                    iroha_logger::info!(
-                        trigger_id = %id,
-                        authority = %authority,
-                        "execute_trigger applying queued ISIs from host"
-                    );
                     let queued = artifacts.apply_to_transaction(self, authority)?;
-                    iroha_logger::info!(
-                        trigger_id = %id,
-                        authority = %authority,
-                        queued_isi_count = queued.len(),
-                        "execute_trigger finished applying queued ISIs from host"
-                    );
                     let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
                     (Ok(cvs.into()), None)
                 } else {
@@ -38063,20 +38037,16 @@ mod tests {
             BTreeSet::from([cactus_id.clone()]),
             "denoland should only expose its own definitions"
         );
-        let synthetic_aid_domain: DomainId = "aid".parse().expect("synthetic label");
         assert!(
-            stx.world
-                .asset_definitions_in_domain_iter(&synthetic_aid_domain)
-                .next()
-                .is_none(),
-            "opaque aid asset definitions must not be exposed through any domain index"
+            opaque_id.try_domain().is_none(),
+            "opaque asset definitions must not expose a synthetic domain projection"
         );
         assert!(
             stx.world
                 .domain_asset_definitions
-                .get(&synthetic_aid_domain)
-                .is_none(),
-            "opaque aid asset definitions must not create internal aid-domain index entries"
+                .values()
+                .all(|definitions| !definitions.contains(&opaque_id)),
+            "opaque asset definitions must not create internal domain index entries"
         );
 
         Unregister::asset_definition(cactus_id.clone())
@@ -39348,7 +39318,7 @@ mod tests {
             ])
             .expect("opaque asset definition id");
             let args_json = format!(
-                r#"{{"action":"create","request_id":"cd38ea58-bc66-4844-921f-22af49b6cf3d","asset_id":"{}","asset_definition_blob_hex":"4e5254300000035dc38f291ebaa4035dc38f291ebaa4000900000000000000003666540b910988cf0001000000000000002e01000000000000003d0100000000000000340100000000000000be0100000000000000b80100000000000000a80100000000000000420100000000000000390100000000000000b30100000000000000d90100000000000000590100000000000000070100000000000000700100000000000000f101000000000000001801000000000000009e","fi_id":"hbl","to_account_id":"{}","amount_i64":53378,"requested_by_actor_id":"operator1@hbl","created_at_ms":1773904751245,"expires_at_ms":1773905351245}}"#,
+                r#"{{"action":"create","request_id":"cd38ea58-bc66-4844-921f-22af49b6cf3d","asset_id":"{}","asset_definition_blob_hex":"4e5254300000035dc38f291ebaa4035dc38f291ebaa4000900000000000000003666540b910988cf0001000000000000002e01000000000000003d0100000000000000340100000000000000be0100000000000000b80100000000000000a80100000000000000420100000000000000390100000000000000b30100000000000000d90100000000000000590100000000000000070100000000000000700100000000000000f101000000000000001801000000000000009e","fi_id":"banka","to_account_id":"{}","amount_i64":53378,"requested_by_actor_id":"operator1@banka","created_at_ms":1773904751245,"expires_at_ms":1773905351245}}"#,
                 opaque_asset_id,
                 (*BOB_ID).to_string()
             );

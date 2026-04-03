@@ -1605,7 +1605,7 @@ final class ToriiClientTests: XCTestCase {
             note: nil
         )
         let seedHex = "00112233445566778899AABBCCDDEEFF00112233445566778899AABBCCDDEEFF"
-        let actual = try policy.encryptInput("ios.ubl.live@example.com", seedHex: seedHex)
+        let actual = try policy.encryptInput("ios.bankb.live@example.com", seedHex: seedHex)
 
         if actual != expected {
             let mismatchIndex = {
@@ -2572,7 +2572,7 @@ final class ToriiClientTests: XCTestCase {
 
     @available(iOS 15.0, macOS 12.0, *)
     func testGetExplorerAccountQrAcceptsAccountAliasPathLiteral() async throws {
-        let alias = "operator@hbl.universal"
+        let alias = "operator@banka.universal"
         StubURLProtocol.handler = { request in
             XCTAssertTrue(
                 request.url!.absoluteString.contains(
@@ -2586,7 +2586,7 @@ final class ToriiClientTests: XCTestCase {
             let body = """
             {
                 "canonical_id":"i105example",
-                "literal":"operator@hbl.universal",
+                "literal":"operator@banka.universal",
                 "network_prefix":0,
                 "error_correction":"M",
                 "modules":192,
@@ -8358,7 +8358,7 @@ id: 88
                 XCTFail("missing JSON body")
                 throw NSError(domain: "stub", code: -1)
             }
-            XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@hbl")
+            XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@banka")
             XCTAssertNil(json["private_key"])
             XCTAssertEqual(json["signer_account_id"] as? String, "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
             XCTAssertEqual(json["namespace"] as? String, "apps")
@@ -8376,7 +8376,7 @@ id: 88
         }
 
         let request = ToriiMultisigContractCallProposeRequest(
-            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@hbl"),
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             signerAccountId: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             namespace: "apps",
             contractId: "mint",
@@ -8459,7 +8459,7 @@ id: 88
                 XCTFail("missing JSON body")
                 throw NSError(domain: "stub", code: -1)
             }
-            XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@ubl")
+            XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@bankb")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -8471,7 +8471,7 @@ id: 88
         }
 
         let request = ToriiMultisigSpecRequest(
-            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@ubl")
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@bankb")
         )
         makeClient().getMultisigSpec(request) { result in
             switch result {
@@ -8495,7 +8495,7 @@ id: 88
                 XCTFail("missing JSON body")
                 throw NSError(domain: "stub", code: -1)
             }
-            XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@hbl.universal")
+            XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@banka.universal")
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -8507,7 +8507,7 @@ id: 88
         }
 
         let request = ToriiMultisigSpecRequest(
-            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@hbl.universal")
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka.universal")
         )
         makeClient().getMultisigSpec(request) { result in
             switch result {
@@ -8523,7 +8523,7 @@ id: 88
 
     func testGetMultisigSpecRejectsUnsupportedAliasShape() {
         let request = ToriiMultisigSpecRequest(
-            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@hbl.universal.extra")
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka.universal.extra")
         )
 
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
@@ -8554,7 +8554,7 @@ id: 88
         }
 
         let request = ToriiMultisigProposalsListRequest(
-            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@hbl")
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka")
         )
         makeClient().listMultisigProposals(request) { result in
             switch result {
@@ -8593,7 +8593,7 @@ id: 88
         }
 
         let request = ToriiMultisigProposalGetRequest(
-            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@hbl"),
+            selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             instructionsHash: proposalId
         )
         makeClient().getMultisigProposal(request) { result in
@@ -8612,7 +8612,7 @@ id: 88
     func testMultisigSelectorRejectsBothAccountIdAndAlias() throws {
         let selector = ToriiMultisigAccountSelector(
             multisigAccountId: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
-            multisigAccountAlias: "cbdc@hbl"
+            multisigAccountAlias: "cbdc@banka"
         )
         XCTAssertThrowsError(try JSONEncoder().encode(selector)) { error in
             guard case let ToriiClientError.invalidPayload(message) = error else {

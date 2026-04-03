@@ -97,12 +97,12 @@ seiyaku PointerDemo {
 
   fn hajimari() {
     let alice = account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB");
-    let first = get_or_insert_default(Owners, 7, alice);
+    let first = Owners.ensure(7, alice);
     assert(first == alice);
 
     // The second call decodes the stored pointer and re-encodes the input.
     let bob = account_id("sorauロ1NfキgノモノBヲKフリメoヌツロrG81ヒjWホユVncwフSア3pリヒノhUS9Q76");
-    let again = get_or_insert_default(Owners, 7, bob);
+    let again = Owners.ensure(7, bob);
     assert(again == alice);
   }
 }

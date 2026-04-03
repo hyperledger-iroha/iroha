@@ -198,13 +198,13 @@ IDs میں `Display`/`FromStr` راؤنڈ ٹرپ کے ساتھ مستحکم سٹ
 - پیرامیٹر اپ ڈیٹ:
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` اپ ڈیٹ کرتا ہے اور `ConfigurationEvent::Changed` کو خارج کرتا ہے۔CLI / Torii اثاثہ کی تعریف id + عرف مثالیں:
 - کیننیکل Base58 id + واضح نام + طویل عرف کے ساتھ رجسٹر کریں:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
 - کیننیکل Base58 id + واضح نام + مختصر عرف کے ساتھ رجسٹر کریں:
   - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - عرف + اکاؤنٹ کے اجزاء کے لحاظ سے ٹکسال:
-  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
 - عرف کو کیننیکل بیس 58 آئی ڈی میں حل کریں:
-  - JSON `{ "alias": "pkr#ubl.sbp" }` کے ساتھ `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#bankb.sbp" }` کے ساتھ `POST /v1/assets/aliases/resolve`
 
 نقل مکانی نوٹ:
 - `name#domain` ٹیکسٹول اثاثہ کی تعریف کے IDs پہلی ریلیز میں جان بوجھ کر غیر تعاون یافتہ رہتے ہیں۔ کینونیکل Base58 IDs استعمال کریں یا نقطے والے عرف کو حل کریں۔

@@ -50,7 +50,7 @@ final class TransactionEncoderValidationTests: XCTestCase {
         let keypair = try Keypair(privateKeyBytes: Data(repeating: 9, count: 32))
         let address = try AccountAddress.fromAccount(publicKey: keypair.publicKey)
         let i105 = try address.toI105(networkPrefix: AccountId.defaultNetworkPrefix)
-        let authority = "\(i105)@hbl.dataspace"
+        let authority = "\(i105)@banka.dataspace"
         let targetAccount = try canonicalOwnerLiteral()
         let value = try NoritoJSON(["profile": "demo"])
         let request = SetMetadataRequest(chainId: "chain",

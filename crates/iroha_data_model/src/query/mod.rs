@@ -2731,11 +2731,11 @@ pub mod account {
     pub struct AccountAliasBindingRecord {
         /// Canonical account identifier that owns the binding.
         pub account_id: crate::account::AccountId,
-        /// Canonical alias literal such as `merchant@hbl.centralbank`.
+        /// Canonical alias literal such as `merchant@banka.centralbank`.
         pub alias: String,
         /// Dataspace alias such as `centralbank`.
         pub dataspace: String,
-        /// Optional domain qualifier such as `hbl`.
+        /// Optional domain qualifier such as `banka`.
         #[norito(default)]
         pub domain: Option<String>,
         /// Whether this alias is the account's primary label.
@@ -2799,7 +2799,7 @@ pub mod account {
                 /// Optional dataspace alias filter such as `centralbank`.
                 #[norito(default)]
                 pub dataspace: Option<String>,
-                /// Optional exact domain filter such as `hbl`.
+                /// Optional exact domain filter such as `banka`.
                 #[norito(default)]
                 pub domain: Option<String>,
             }

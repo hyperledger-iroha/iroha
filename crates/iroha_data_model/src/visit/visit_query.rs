@@ -330,7 +330,7 @@ mod tests {
                 crate::query::account::prelude::FindAliasesByAccountId::new(
                     account_id.clone(),
                     Some("centralbank".to_owned()),
-                    Some("hbl".to_owned()),
+                    Some("banka".to_owned()),
                 ),
             ),
             SingularQueryBox::FindProofRecordById(

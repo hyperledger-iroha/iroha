@@ -1293,8 +1293,8 @@ fn add_asset_rw(set: &mut AccessSet, id: &AssetId) {
     set.add_write(k);
     // Asset operations rely on the owning account/domain and definition state.
     add_account_r(set, id.account());
-    if !id.definition().is_opaque_canonical() {
-        add_domain_r(set, id.definition().domain());
+    if let Some(domain) = id.definition().try_domain() {
+        add_domain_r(set, domain);
     }
     add_asset_def_r(set, id.definition());
 }

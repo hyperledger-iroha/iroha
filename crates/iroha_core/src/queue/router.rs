@@ -10,7 +10,7 @@ use std::sync::Arc;
 
 use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingPolicy, LaneRoutingRule};
 use iroha_data_model::{
-    account::AccountId,
+    account::{AccountAlias, AccountId},
     isi::{
         BurnBox, GrantBox, Instruction, MintBox, RegisterBox, RemoveKeyValueBox, RevokeBox,
         SetKeyValueBox, TransferBox, UnregisterBox,
@@ -562,25 +562,50 @@ fn account_matches(
         return true;
     }
 
-    let wildcard_domain = pattern
-        .strip_prefix("*@")
-        .or_else(|| pattern.strip_prefix("domain:"))
-        .or_else(|| pattern.strip_prefix("authority_domain:"));
+    let Some(state_view) = state_view else {
+        return false;
+    };
 
-    wildcard_domain.is_some_and(|domain| {
-        let domain = domain.trim();
-        if domain.is_empty() {
-            return false;
-        }
-        let Some(state_view) = state_view else {
-            return false;
-        };
-        state_view
-            .world()
-            .alias_domains_for_account(authority)
-            .into_iter()
-            .any(|linked| linked.name().as_ref().eq_ignore_ascii_case(domain))
-    })
+    if let Some(scope) = pattern.strip_prefix("*@") {
+        return account_matches_alias_scope(scope, authority, state_view);
+    }
+
+    AccountAlias::from_literal(pattern, &state_view.nexus().dataspace_catalog)
+        .ok()
+        .is_some_and(|alias| {
+            state_view
+                .world()
+                .bound_account_aliases(authority)
+                .into_iter()
+                .any(|bound| bound == alias)
+        })
+}
+
+fn account_matches_alias_scope(
+    scope: &str,
+    account_id: &AccountId,
+    state_view: &StateView<'_>,
+) -> bool {
+    let scope = scope.trim().to_ascii_lowercase();
+    if scope.is_empty() {
+        return false;
+    }
+
+    state_view
+        .world()
+        .bound_account_aliases(account_id)
+        .into_iter()
+        .any(|alias| {
+            alias
+                .to_literal(&state_view.nexus().dataspace_catalog)
+                .ok()
+                .and_then(|literal| {
+                    literal
+                        .rsplit_once('@')
+                        .map(|(_, alias_scope)| alias_scope == scope.as_str())
+                })
+                .unwrap_or(false)
+        })
 }
 
 fn instructions_match(
@@ -592,7 +617,7 @@ fn instructions_match(
     if matcher_norm.is_empty() {
         return false;
     }
-    let (matcher_label, destination_domain) = split_instruction_matcher(&matcher_norm);
+    let (matcher_label, destination_scope) = split_instruction_matcher(&matcher_norm);
     if matcher_label.is_empty() {
         return false;
     }
@@ -605,23 +630,13 @@ fn instructions_match(
             };
 
             batch.iter().any(|instruction| {
-                instruction_matches(
-                    matcher_label,
-                    destination_domain,
-                    &**instruction,
-                    state_view,
-                )
+                instruction_matches(matcher_label, destination_scope, &**instruction, state_view)
             })
         }
         iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
             crate::smartcontracts::isi::kaigi::private_instruction_box(private)
                 .map(|instruction| {
-                    instruction_matches(
-                        matcher_label,
-                        destination_domain,
-                        &*instruction,
-                        state_view,
-                    )
+                    instruction_matches(matcher_label, destination_scope, &*instruction, state_view)
                 })
                 .unwrap_or(false)
         }
@@ -645,13 +660,13 @@ fn split_instruction_matcher(matcher: &str) -> (&str, Option<&str>) {
 
 fn instruction_matches(
     matcher: &str,
-    destination_domain: Option<&str>,
+    destination_scope: Option<&str>,
     instruction: &dyn Instruction,
     state_view: Option<&StateView<'_>>,
 ) -> bool {
-    if destination_domain
-        .is_some_and(|domain| !transfer_destination_matches_domain(instruction, domain, state_view))
-    {
+    if destination_scope.is_some_and(|scope| {
+        !transfer_destination_matches_alias_scope(instruction, scope, state_view)
+    }) {
         return false;
     }
 
@@ -672,13 +687,13 @@ fn instruction_matches(
     })
 }
 
-fn transfer_destination_matches_domain(
+fn transfer_destination_matches_alias_scope(
     instruction: &dyn Instruction,
-    domain: &str,
+    scope: &str,
     state_view: Option<&StateView<'_>>,
 ) -> bool {
-    let domain = domain.trim();
-    if domain.is_empty() {
+    let scope = scope.trim();
+    if scope.is_empty() {
         return false;
     }
 
@@ -696,11 +711,7 @@ fn transfer_destination_matches_domain(
     let Some(state_view) = state_view else {
         return false;
     };
-    state_view
-        .world()
-        .alias_domains_for_account(destination)
-        .into_iter()
-        .any(|linked| linked.name().as_ref().eq_ignore_ascii_case(domain))
+    account_matches_alias_scope(scope, destination, state_view)
 }
 
 fn instruction_label_matches(matcher: &str, instruction: &dyn Instruction) -> bool {
@@ -1024,9 +1035,7 @@ fn policy_needs_state(policy: &LaneRoutingPolicy) -> bool {
 fn matcher_needs_state(matcher: &LaneRoutingMatcher) -> bool {
     let account_needs_state = matcher.account.as_deref().is_some_and(|account| {
         let account = account.trim();
-        account.starts_with("*@")
-            || account.starts_with("domain:")
-            || account.starts_with("authority_domain:")
+        account.contains('@')
     });
 
     let instruction_needs_state = matcher.instruction.as_deref().is_some_and(|instruction| {
@@ -1039,11 +1048,12 @@ fn matcher_needs_state(matcher: &LaneRoutingMatcher) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
+    use std::collections::BTreeSet;
 
     use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
     use iroha_crypto::Hash;
     use iroha_data_model::{
+        IntoKeyValue,
         isi::{
             prelude::{Mint, Register, Transfer},
             smart_contract_code::RegisterSmartContractBytes,
@@ -1130,30 +1140,51 @@ mod tests {
         crate::state::State::new(world, kura, query)
     }
 
-    fn state_with_accounts(accounts: &[(AccountId, DomainId)]) -> crate::state::State {
-        let mut domain_owners = BTreeMap::<DomainId, AccountId>::new();
-        let mut account_models = Vec::new();
+    fn dataspace_catalog(entries: &[(DataSpaceId, &str)]) -> DataSpaceCatalog {
+        let mut metadata = vec![iroha_data_model::nexus::DataSpaceMetadata::default()];
+        metadata.extend(entries.iter().map(|(id, alias)| {
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: *id,
+                alias: (*alias).to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }
+        }));
+        DataSpaceCatalog::new(metadata).expect("valid dataspace catalog")
+    }
 
-        for (account_id, domain_id) in accounts {
-            domain_owners
-                .entry(domain_id.clone())
-                .or_insert_with(|| account_id.clone());
-            account_models.push(Account::new(account_id.clone()).build(account_id));
+    fn account_alias(literal: &str, catalog: &DataSpaceCatalog) -> AccountAlias {
+        AccountAlias::from_literal(literal, catalog).expect("valid account alias")
+    }
+
+    fn state_with_account_aliases(
+        accounts: &[(AccountId, AccountAlias)],
+        dataspace_catalog: DataSpaceCatalog,
+    ) -> crate::state::State {
+        let mut world = crate::state::World::default();
+        for (account_id, alias) in accounts {
+            let account = Account::new(account_id.clone())
+                .with_label(Some(alias.clone()))
+                .build(account_id);
+            let (account_id, account_value) = account.into_key_value();
+            world.accounts.insert(account_id.clone(), account_value);
+            world
+                .account_aliases
+                .insert(alias.clone(), account_id.clone());
+            world
+                .account_aliases_by_account
+                .insert(account_id, BTreeSet::from([alias.clone()]));
         }
-        let domain_models = domain_owners
-            .into_iter()
-            .map(|(domain_id, owner)| Domain::new(domain_id).build(&owner))
-            .collect::<Vec<_>>();
-
-        let world = crate::state::World::with(domain_models, account_models, []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
         let query = crate::query::store::LiveQueryStore::start_test();
         #[cfg(feature = "telemetry")]
         let telemetry = crate::telemetry::StateTelemetry::default();
         #[cfg(feature = "telemetry")]
-        return crate::state::State::with_telemetry(world, kura, query, telemetry);
+        let state = crate::state::State::with_telemetry(world, kura, query, telemetry);
         #[cfg(not(feature = "telemetry"))]
-        crate::state::State::new(world, kura, query)
+        let state = crate::state::State::new(world, kura, query);
+        state.nexus.write().dataspace_catalog = dataspace_catalog;
+        state
     }
 
     #[test]
@@ -1507,7 +1538,7 @@ mod tests {
         );
 
         let decision = router.route_with_view(&tx, &blank_state().view());
-        assert_eq!(decision.lane_id, LaneId::new(9));
+        assert_eq!(decision.lane_id, LaneId::new(11));
         assert_eq!(decision.dataspace_id, DataSpaceId::GLOBAL);
 
         let helper_err =
@@ -1670,9 +1701,10 @@ mod tests {
     }
 
     #[test]
-    fn matches_account_domain_wildcard_rule() {
+    fn matches_account_alias_scope_rule() {
         let (uae_id, uae_keypair) = gen_account_in("uae");
-        let (bank_id, bank_keypair) = gen_account_in("hbl");
+        let (bank_id, bank_keypair) = gen_account_in("banka");
+        let catalog = DataSpaceCatalog::default();
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
@@ -1681,7 +1713,7 @@ mod tests {
                 lane: LaneId::new(1),
                 dataspace: None,
                 matcher: LaneRoutingMatcher {
-                    account: Some("*@uae".to_string()),
+                    account: Some("*@uae.universal".to_string()),
                     instruction: None,
                     description: None,
                 },
@@ -1706,10 +1738,19 @@ mod tests {
             )))],
         );
 
-        let state = state_with_accounts(&[
-            (uae_id.clone(), "uae".parse().expect("uae domain")),
-            (bank_id.clone(), "hbl".parse().expect("hbl domain")),
-        ]);
+        let state = state_with_account_aliases(
+            &[
+                (
+                    uae_id.clone(),
+                    account_alias("central@uae.universal", &catalog),
+                ),
+                (
+                    bank_id.clone(),
+                    account_alias("settler@banka.universal", &catalog),
+                ),
+            ],
+            catalog,
+        );
         let uae_decision = router.route_with_view(&uae_tx, &state.view());
         let bank_decision = router.route_with_view(&bank_tx, &state.view());
 
@@ -1718,9 +1759,10 @@ mod tests {
     }
 
     #[test]
-    fn matches_transfer_destination_domain_rule() {
-        let (sender_id, sender_keypair) = gen_account_in("hbl");
+    fn matches_transfer_destination_alias_scope_rule() {
+        let (sender_id, sender_keypair) = gen_account_in("banka");
         let (receiver_id, _) = gen_account_in("acme");
+        let catalog = DataSpaceCatalog::default();
 
         let policy = LaneRoutingPolicy {
             default_lane: LaneId::SINGLE,
@@ -1730,7 +1772,7 @@ mod tests {
                 dataspace: None,
                 matcher: LaneRoutingMatcher {
                     account: None,
-                    instruction: Some("transfer@acme".to_string()),
+                    instruction: Some("transfer::asset@acme.universal".to_string()),
                     description: None,
                 },
             }],
@@ -1751,10 +1793,19 @@ mod tests {
             vec![InstructionBox::from(transfer)],
         );
 
-        let state = state_with_accounts(&[
-            (sender_id.clone(), "hbl".parse().expect("hbl domain")),
-            (receiver_id.clone(), "acme".parse().expect("acme domain")),
-        ]);
+        let state = state_with_account_aliases(
+            &[
+                (
+                    sender_id.clone(),
+                    account_alias("settler@banka.universal", &catalog),
+                ),
+                (
+                    receiver_id.clone(),
+                    account_alias("merchant@acme.universal", &catalog),
+                ),
+            ],
+            catalog,
+        );
         let decision = router.route_with_view(&tx, &state.view());
         assert_eq!(decision.lane_id, LaneId::new(1));
     }
@@ -1762,7 +1813,7 @@ mod tests {
     #[test]
     fn account_rule_takes_precedence_over_transfer_destination_rule() {
         let (uae_sender_id, uae_sender_keypair) = gen_account_in("uae");
-        let (bank_sender_id, bank_sender_keypair) = gen_account_in("hbl");
+        let (bank_sender_id, bank_sender_keypair) = gen_account_in("banka");
         let (acme_receiver_id, _) = gen_account_in("acme");
 
         let policy = LaneRoutingPolicy {
@@ -1773,7 +1824,7 @@ mod tests {
                     lane: LaneId::new(2),
                     dataspace: None,
                     matcher: LaneRoutingMatcher {
-                        account: Some("*@uae".to_string()),
+                        account: Some("*@uae.universal".to_string()),
                         instruction: Some("transfer".to_string()),
                         description: None,
                     },
@@ -1783,7 +1834,7 @@ mod tests {
                     dataspace: None,
                     matcher: LaneRoutingMatcher {
                         account: None,
-                        instruction: Some("transfer@acme".to_string()),
+                        instruction: Some("transfer::asset@acme.universal".to_string()),
                         description: None,
                     },
                 },
@@ -1819,18 +1870,136 @@ mod tests {
             vec![InstructionBox::from(bank_transfer)],
         );
 
-        let state = state_with_accounts(&[
-            (uae_sender_id.clone(), "uae".parse().expect("uae domain")),
-            (bank_sender_id.clone(), "hbl".parse().expect("hbl domain")),
-            (
-                acme_receiver_id.clone(),
-                "acme".parse().expect("acme domain"),
-            ),
-        ]);
+        let catalog = DataSpaceCatalog::default();
+        let state = state_with_account_aliases(
+            &[
+                (
+                    uae_sender_id.clone(),
+                    account_alias("central@uae.universal", &catalog),
+                ),
+                (
+                    bank_sender_id.clone(),
+                    account_alias("settler@banka.universal", &catalog),
+                ),
+                (
+                    acme_receiver_id.clone(),
+                    account_alias("merchant@acme.universal", &catalog),
+                ),
+            ],
+            catalog,
+        );
         let uae_decision = router.route_with_view(&uae_tx, &state.view());
         let bank_decision = router.route_with_view(&bank_tx, &state.view());
         assert_eq!(uae_decision.lane_id, LaneId::new(2));
         assert_eq!(bank_decision.lane_id, LaneId::new(1));
+    }
+
+    #[test]
+    fn matches_dataspace_root_account_alias_scope_rule() {
+        let (dataspace_id, dataspace_keypair) = gen_account_in("wonderland");
+        let (domain_id, domain_keypair) = gen_account_in("wonderland");
+        let catalog = dataspace_catalog(&[(DataSpaceId::new(10), "sbp")]);
+
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(1),
+                dataspace: Some(DataSpaceId::new(10)),
+                matcher: LaneRoutingMatcher {
+                    account: Some("*@sbp".to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::new(1), DataSpaceId::new(10)),
+        ]);
+        let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog);
+
+        let dataspace_tx = sample_transaction(
+            &dataspace_id,
+            dataspace_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                "sbp-match".parse().expect("domain id"),
+            )))],
+        );
+        let domain_tx = sample_transaction(
+            &domain_id,
+            domain_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                "banka-no-match".parse().expect("domain id"),
+            )))],
+        );
+
+        let state = state_with_account_aliases(
+            &[
+                (dataspace_id.clone(), account_alias("issuer@sbp", &catalog)),
+                (
+                    domain_id.clone(),
+                    account_alias("operator@banka.sbp", &catalog),
+                ),
+            ],
+            catalog,
+        );
+
+        assert_eq!(
+            router.route_with_view(&dataspace_tx, &state.view()),
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::new(10))
+        );
+        assert_eq!(
+            router.route_with_view(&domain_tx, &state.view()),
+            RoutingDecision::default()
+        );
+    }
+
+    #[test]
+    fn legacy_bare_domain_account_scope_does_not_match() {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let catalog = dataspace_catalog(&[(DataSpaceId::new(10), "sbp")]);
+
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(1),
+                dataspace: Some(DataSpaceId::new(10)),
+                matcher: LaneRoutingMatcher {
+                    account: Some("*@banka".to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::new(1), DataSpaceId::new(10)),
+        ]);
+        let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog);
+
+        let tx = sample_transaction(
+            &authority_id,
+            authority_keypair.private_key(),
+            vec![InstructionBox::from(Register::domain(Domain::new(
+                "legacy-no-match".parse().expect("domain id"),
+            )))],
+        );
+        let state = state_with_account_aliases(
+            &[(
+                authority_id.clone(),
+                account_alias("operator@banka.sbp", &catalog),
+            )],
+            catalog,
+        );
+
+        assert_eq!(
+            router.route_with_view(&tx, &state.view()),
+            RoutingDecision::default()
+        );
     }
 
     #[test]

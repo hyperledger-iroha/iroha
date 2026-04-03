@@ -50,7 +50,7 @@ Ushbu hujjat `iroha_data_model` kassasida tatbiq etilgan va ish maydoni bo'ylab 
 - Taxallus modeli:
   - Kanonik hisob identifikatori hech qachon domen yoki ma'lumotlar maydoni segmentini o'z ichiga olmaydi.
   - `AccountAlias` qiymatlari `AccountId` tepasida joylashgan alohida SNS ulanishlaridir.
-  - `merchant@hbl.sbp` kabi domenga mos taxalluslar taxallusni bog'lashda ham domenni, ham ma'lumotlar maydonini olib yuradi.
+  - `merchant@banka.sbp` kabi domenga mos taxalluslar taxallusni bog'lashda ham domenni, ham ma'lumotlar maydonini olib yuradi.
   - `merchant@sbp` kabi maʼlumotlar maydoni-root taxalluslari faqat maʼlumotlar maydonini olib yuradi va shuning uchun tabiiy ravishda `Account::new(...)` bilan bogʻlanadi.
   - Sinovlar va moslamalar avval universal `AccountId` ni ekishi kerak, soʻngra domen taxminlarini hisob identifikatoriga kodlash oʻrniga taxallus ijarasi, taxallus ruxsatlari va har qanday domenga tegishli holatni alohida qoʻshishi kerak.
   - Umumiy yagona hisobni qidirish endi taxalluslarga qaratilgan (`FindAliasesByAccountId`); hisob identifikatorining o'zi domensiz qoladi.### Aktiv ta'riflari va aktivlar
@@ -249,7 +249,7 @@ Obyektni aniqlash identifikatori / taxallusning tezkor ma'lumotnomasi (CLI + Tor
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl.sbp
+  --alias pkr#bankb.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
@@ -259,14 +259,14 @@ iroha ledger asset definition register \
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl.sbp \
+  --definition-alias pkr#bankb.sbp \
   --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl.sbp"}'
+  -d '{"alias":"pkr#bankb.sbp"}'
 ```Migratsiya eslatmasi:
 - Eski `name#domain` aktivlarni aniqlash identifikatorlari v1 da qabul qilinmaydi.
 - Davlat aktivlari tanlovchilari faqat bitta aktiv taʼrifi formatidan foydalanadi: kanonik Base58 identifikatorlari. Taxalluslar ixtiyoriy tanlovchilar bo'lib qoladi, lekin bir xil kanonik identifikatorga hal qilinadi.

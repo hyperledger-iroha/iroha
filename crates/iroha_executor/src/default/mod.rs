@@ -884,6 +884,10 @@ pub mod domain {
         let Ok(permission) = AnyPermission::try_from(permission) else {
             return false;
         };
+        let asset_definition_matches_domain =
+            |definition: &iroha_data_model::asset::AssetDefinitionId| {
+                definition.try_domain() == Some(domain_id)
+            };
         match permission {
             AnyPermission::CanUnregisterDomain(permission) => &permission.domain == domain_id,
             AnyPermission::CanModifyDomainMetadata(permission) => &permission.domain == domain_id,
@@ -903,34 +907,34 @@ pub mod domain {
                 )
             }
             AnyPermission::CanUnregisterAssetDefinition(permission) => {
-                permission.asset_definition.domain() == domain_id
+                asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanModifyAssetDefinitionMetadata(permission) => {
-                permission.asset_definition.domain() == domain_id
+                asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanMintAssetWithDefinition(permission) => {
-                permission.asset_definition.domain() == domain_id
+                asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanBurnAssetWithDefinition(permission) => {
-                permission.asset_definition.domain() == domain_id
+                asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanTransferAssetWithDefinition(permission) => {
-                permission.asset_definition.domain() == domain_id
+                asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanModifyAssetMetadataWithDefinition(permission) => {
-                permission.asset_definition.domain() == domain_id
+                asset_definition_matches_domain(&permission.asset_definition)
             }
             AnyPermission::CanMintAsset(permission) => {
-                permission.asset.definition().domain() == domain_id
+                asset_definition_matches_domain(permission.asset.definition())
             }
             AnyPermission::CanBurnAsset(permission) => {
-                permission.asset.definition().domain() == domain_id
+                asset_definition_matches_domain(permission.asset.definition())
             }
             AnyPermission::CanTransferAsset(permission) => {
-                permission.asset.definition().domain() == domain_id
+                asset_definition_matches_domain(permission.asset.definition())
             }
             AnyPermission::CanModifyAssetMetadata(permission) => {
-                permission.asset.definition().domain() == domain_id
+                asset_definition_matches_domain(permission.asset.definition())
             }
             AnyPermission::CanRegisterNft(permission) => &permission.domain == domain_id,
             AnyPermission::CanUnregisterNft(permission) => permission.nft.domain() == domain_id,

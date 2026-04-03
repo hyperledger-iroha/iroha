@@ -656,7 +656,7 @@ mod tests {
     fn public_inputs_reject_noncanonical_owner() {
         let owner = ALICE_ID.clone();
         let address_hex = owner.to_canonical_hex().expect("canonical hex");
-        let noncanonical = format!("{address_hex}@hbl.dataspace");
+        let noncanonical = format!("{address_hex}@banka.dataspace");
         let mut map = json::Map::new();
         map.insert("owner".to_string(), json::Value::String(noncanonical));
         let err = normalize_public_input_owner(&mut map).expect_err("noncanonical owner");

@@ -49,7 +49,7 @@ mod tests {
 
     #[test]
     fn display_from_literal_omits_invalid_input() {
-        let invalid_literal = "not-an-account@hbl.dataspace";
+        let invalid_literal = "not-an-account@banka.dataspace";
         assert_eq!(display_from_literal(invalid_literal), None);
     }
 

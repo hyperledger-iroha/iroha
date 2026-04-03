@@ -2899,8 +2899,8 @@ mod measured_bytes_impls {
     impl MeasuredBytes for AssetDefinitionId {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AssetDefinitionId>();
-            total = total.saturating_add(self.domain.measured_bytes_extra());
-            total = total.saturating_add(self.name.measured_bytes_extra());
+            total = total.saturating_add(self.domain().measured_bytes_extra());
+            total = total.saturating_add(self.name().measured_bytes_extra());
             total
         }
     }

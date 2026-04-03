@@ -199,7 +199,7 @@ pub enum SingularQueryJson {
         account_id: String,
         /// Optional dataspace alias filter such as `centralbank`.
         dataspace: Option<String>,
-        /// Optional exact domain filter such as `hbl`.
+        /// Optional exact domain filter such as `banka`.
         domain: Option<String>,
     },
     /// Looks up an account recovery policy by stable alias.
@@ -1179,7 +1179,7 @@ mod tests {
         let singular = SingularQueryJson::FindAliasesByAccountId {
             account_id: account_id.to_string(),
             dataspace: Some("centralbank".to_owned()),
-            domain: Some("hbl".to_owned()),
+            domain: Some("banka".to_owned()),
         };
         let envelope = QueryEnvelopeJson::Singular(singular.clone());
         let json = norito::json::to_json(&envelope).expect("serialize");
@@ -1193,7 +1193,7 @@ mod tests {
             SingularQueryBox::FindAliasesByAccountId(q) => {
                 assert_eq!(q.account_id(), &account_id);
                 assert_eq!(q.dataspace(), Some("centralbank"));
-                assert_eq!(q.domain(), Some("hbl"));
+                assert_eq!(q.domain(), Some("banka"));
             }
             other => panic!("unexpected query variant: {other:?}"),
         }

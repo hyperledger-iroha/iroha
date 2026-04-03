@@ -276,9 +276,14 @@ pub mod isi {
     ) -> DomainId {
         state_transaction
             .world
-            .alias_domains_for_account(account_id)
+            .bound_account_aliases(account_id)
             .into_iter()
-            .next()
+            .find_map(|alias| {
+                alias
+                    .domain
+                    .as_ref()
+                    .map(|domain| DomainId::new(domain.name().clone()))
+            })
             .unwrap_or_else(|| {
                 crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS
                     .parse()

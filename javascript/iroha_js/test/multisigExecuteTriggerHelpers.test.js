@@ -77,7 +77,7 @@ test("buildMultisigTriggerArgs normalizes lifecycle and lookup presets", () => {
     buildMultisigTriggerArgs("lifecycle", {
       action: "create",
       requestId: "req-1",
-      fiId: "hbl",
+      fiId: "banka",
       toAccountId: ALICE_ID,
       amountI64: "42",
       requestedByActorId: { account: BOB_ID },
@@ -87,7 +87,7 @@ test("buildMultisigTriggerArgs normalizes lifecycle and lookup presets", () => {
     {
       action: "create",
       request_id: "req-1",
-      fi_id: "hbl",
+      fi_id: "banka",
       to_account_id: ALICE_ID,
       amount_i64: 42,
       requested_by_actor_id: { account: BOB_ID },
@@ -190,7 +190,7 @@ test("buildProposeMultisigExecuteTriggerInstruction wraps a single ExecuteTrigge
 test("buildMultisigContractCallProposeRequest builds normalized Torii payloads", () => {
   const spec = sampleSpec();
   const payload = buildMultisigContractCallProposeRequest({
-    multisigAccountAlias: "mintops@hbl",
+    multisigAccountAlias: "mintops@banka",
     signerAccountId: ALICE_ID,
     namespace: "apps",
     contractId: "mint",
@@ -210,7 +210,7 @@ test("buildMultisigContractCallProposeRequest builds normalized Torii payloads",
   });
 
   assert.deepEqual(payload, {
-    multisig_account_alias: "mintops@hbl",
+    multisig_account_alias: "mintops@banka",
     signer_account_id: ALICE_ID,
     namespace: "apps",
     contract_id: "mint",
@@ -260,7 +260,7 @@ test("buildMultisigContractCallProposeRequest accepts detached private key varia
   assert.equal(fromHex.private_key, `ml-dsa:${"aa".repeat(32)}`);
 
   const fromBytes = buildMultisigContractCallProposeRequest({
-    multisigAccountAlias: "mintops@hbl",
+    multisigAccountAlias: "mintops@banka",
     signerAccountId: ALICE_ID,
     namespace: "apps",
     contractId: "mint",
@@ -272,7 +272,7 @@ test("buildMultisigContractCallProposeRequest accepts detached private key varia
   assert.equal(fromBytes.private_key, `ed25519:${"11".repeat(32)}`);
 
   const multihash = buildMultisigContractCallProposeRequest({
-    multisigAccountAlias: "mintops@hbl",
+    multisigAccountAlias: "mintops@banka",
     signerAccountId: ALICE_ID,
     namespace: "apps",
     contractId: "mint",

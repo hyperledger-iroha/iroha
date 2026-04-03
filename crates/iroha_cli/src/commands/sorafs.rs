@@ -10753,7 +10753,7 @@ mod gateway_tests {
             },
             {
                 "kind": "account_alias",
-                "account_alias": "hotline@hbl",
+                "account_alias": "hotline@banka",
                 "policy_tier": "emergency",
                 "issued_at": "2026-01-15T00:00:00Z",
                 "expires_at": "2026-01-20T00:00:00Z",
@@ -10780,7 +10780,7 @@ mod gateway_tests {
         assert_eq!(report.emergency_reviews.len(), 1);
         assert_eq!(
             report.emergency_reviews[0].descriptor.as_deref(),
-            Some("hotline@hbl")
+            Some("hotline@banka")
         );
     }
 

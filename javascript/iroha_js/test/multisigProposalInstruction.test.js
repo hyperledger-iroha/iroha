@@ -90,13 +90,13 @@ test("multisig propose builder propagates domain drift", () => {
   const spec = new MultisigSpecBuilder()
     .setQuorum(2)
     .setTransactionTtlMs(60_000)
-    .addSignatory(`${ALICE_ID}@hbl.dataspace`, 1)
-    .addSignatory(`${BOB_ID}@hbl.dataspace`, 1)
+    .addSignatory(`${ALICE_ID}@banka.dataspace`, 1)
+    .addSignatory(`${BOB_ID}@banka.dataspace`, 1)
     .build();
   assert.throws(
     () =>
       buildProposeMultisigInstruction({
-        accountId: `${CONTROLLER_ID}@hbl.dataspace`,
+        accountId: `${CONTROLLER_ID}@banka.dataspace`,
         instructions: [{ Log: { Level: "INFO", message: "hello" } }],
         spec,
       }),

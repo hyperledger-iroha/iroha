@@ -420,7 +420,7 @@ mod tests {
         args.insert("action".into(), "TransferAsset".into());
         args.insert(
             "asset".into(),
-            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#alice@hbl.dataspace".into(),
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM#alice@banka.dataspace".into(),
         );
         args.insert("quantity".into(), "1.2500".into());
         args.insert("destination".into(), account_literal(&destination));

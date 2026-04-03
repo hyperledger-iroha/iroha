@@ -50,7 +50,7 @@ translator: machine-google-reviewed
 - 別名模型：
   - 規範帳戶身分從不包含網域或資料空間段。
   - `AccountAlias` 值是位於 `AccountId` 之上的單獨 SNS 綁定。
-  - 域限定別名（例如 `merchant@hbl.sbp`）在別名綁定中同時攜帶域和資料空間。
+  - 域限定別名（例如 `merchant@banka.sbp`）在別名綁定中同時攜帶域和資料空間。
   - 資料空間根別名（例如 `merchant@sbp`）僅包含資料空間，因此與 `Account::new(...)` 自然配對。
   - 測試和固定裝置應先播種通用 `AccountId`，然後分別新增別名租約、別名權限和任何網域擁有的狀態，而不是將網域假設編碼到帳戶身分本身。
   - 公共單一帳戶查找現在專注於別名（`FindAliasesByAccountId`）；帳戶身分本身保持無網域狀態。### 資產定義與資產
@@ -249,7 +249,7 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl.sbp
+  --alias pkr#bankb.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
@@ -259,14 +259,14 @@ iroha ledger asset definition register \
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl.sbp \
+  --definition-alias pkr#bankb.sbp \
   --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl.sbp"}'
+  -d '{"alias":"pkr#bankb.sbp"}'
 ```遷移注意事項：
 - v1 中不接受舊的 `name#domain` 資產定義 ID。
 - 公共資產選擇器僅使用一種資產定義格式：規範的 Base58 id。別名仍然是可選選擇器，但解析為相同的規範 ID。
