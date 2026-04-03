@@ -2,6 +2,81 @@
 
 Last updated: 2026-04-03
 
+Latest sync (2026-04-03 `address_canonicalisation` runtime execution):
+the client-config/runtime fallout from the `DomainId` cleanup is fixed for the
+main account-address path. `Root::parse()` now reports invalid
+`account.domain` literals without panicking, `iroha_test_network` emits a
+fully qualified default account domain for peer clients, and the full
+`integration_tests` `address_canonicalisation` binary now passes.
+
+- shipped in this follow-up:
+  - removed the `Emitter dropped without calling into_result()` panic path
+    from `crates/iroha/src/config/user.rs` when `account.domain` is invalid;
+  - updated `crates/iroha_test_network/src/lib.rs` to serialize the default
+    client account domain as `domain.universal`; and
+  - aligned the end-to-end account-query alias test with the current model:
+    alias filters are accepted and resolve to canonical ids, while dotted
+    non-canonical I105 literals are still rejected.
+- focused verification is green:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha --lib config::user::tests::parse_rejects_bare_account_domain_without_panicking -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test address_canonicalisation offline_allowances_ -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test address_canonicalisation accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test address_canonicalisation -- --nocapture`
+- remaining open work:
+  - widen runtime verification beyond `address_canonicalisation` into broader
+    `integration_tests` coverage and then the full workspace runtime suite.
+
+Latest sync (2026-04-03 full `iroha_data_model --tests` execution):
+the full `iroha_data_model` test suite is now green under
+`CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_data_model --tests`.
+The post-`DomainId` cleanup fallout in that crate turned out to be stale
+fixtures and golden expectations, not remaining runtime-model bugs.
+
+- shipped in this follow-up:
+  - refreshed confidential wallet, offline allowance, oracle reference,
+    Soracloud manifest, AXT, and Norito golden fixtures;
+  - corrected `NewAccount` JSON decoding behavior for omitted metadata and
+    unknown fields; and
+  - replaced the last stale legacy account literal that blocked offline
+    allowance fixture regeneration, including matching sample-config updates.
+- focused verification is green:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_data_model --test confidential_wallet_fixtures -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_data_model --test offline_fixtures -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_data_model --test oracle_reference_fixtures -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_data_model --test soracloud_manifest_fixtures -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_data_model --tests`
+- remaining open work:
+  - if we want to widen verification further, the next meaningful step is
+    broader runtime execution outside `iroha_data_model` rather than more
+    `DomainId`-specific cleanup.
+
+Latest sync (2026-04-03 focused runtime verification after workspace `--no-run`):
+the post-migration follow-up moved beyond compile-only checks. The translated
+Norito walkthrough docs were updated to serialize canonical
+`domain.dataspace` payloads, and focused runtime tests for the new
+dataspace/domain hierarchy now pass.
+
+- shipped in this follow-up:
+  - `docs/portal` and portal i18n walkthrough examples now use
+    `{"domain":"wonderland.universal"}` instead of bare-domain JSON;
+  - executable-Rust grep remains clean for removed `DomainId` parser patterns;
+    the only remaining bare `"domain": "wonderland"` hit is a generic JSON
+    fixture, not a `DomainId` example; and
+  - targeted runtime checks passed for account scope hierarchy, qualified alias
+    domain cleanup, multisig home-domain inference, and executor permission
+    JSON serialization.
+- focused verification is green:
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_core account_scope_hierarchy_tracks_dataspaces_and_domains -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_core unregister_domain_keeps_aliases_in_same_named_foreign_dataspace -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_core multisig_home_domain_inference_resolves_qualified_alias_domains -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_executor_data_model can_register_account_serializes_as_json_string_field -- --nocapture`
+- remaining open work:
+  - if we want to push verification further, the next step is selective
+    full-runtime crate test execution or the full `cargo test --workspace`
+    run, which is substantially longer.
+
 Latest sync (2026-04-03 workspace-wide test compilation `--no-run`):
 the full workspace test-compilation pass is now green under
 `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test --workspace --no-run`.

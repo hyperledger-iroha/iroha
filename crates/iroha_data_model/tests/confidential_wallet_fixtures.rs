@@ -7,7 +7,7 @@ use iroha_data_model::{
     instruction_registry, isi::set_instruction_registry, transaction::SignedTransaction,
 };
 use norito::{
-    core::{DecodeFlagsGuard, NoritoDeserialize, from_bytes_view},
+    core::{DecodeFlagsGuard, DecodeFromSlice, NoritoDeserialize, from_bytes_view},
     json::{self, Value},
 };
 
@@ -96,6 +96,16 @@ fn print_confidential_wallet_fixture_hashes() {
 }
 
 fn decode_signed_transaction(case_id: &str, bytes: &[u8]) -> Result<SignedTransaction, String> {
+    if let Ok((tx, used)) = SignedTransaction::decode_from_slice(bytes) {
+        if used == bytes.len() {
+            return Ok(tx);
+        }
+        eprintln!(
+            "{case_id}: raw decode left trailing bytes: used {used} of {}",
+            bytes.len()
+        );
+    }
+
     // Primary path: framed decode with strict deserialization.
     let strict = std::panic::catch_unwind(|| {
         norito::from_bytes::<SignedTransaction>(bytes).and_then(SignedTransaction::try_deserialize)

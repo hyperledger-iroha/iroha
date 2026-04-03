@@ -30,7 +30,7 @@
       "max_per_day_nanos": 20000000
     },
     {
-      "asset_definition": "4cuvDVPuLBKJyN6dPbRQhmLh68sU",
+      "asset_definition": "7t5kWEj537rDAL7AQNp9cZPUGPr5",
       "max_per_tx_nanos": 2000000,
       "max_per_day_nanos": 10000000
     }

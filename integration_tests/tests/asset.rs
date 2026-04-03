@@ -75,13 +75,14 @@ impl ClientPool {
     }
 }
 
-fn unique_asset_definition_id(domain: &str, prefix: &str) -> AssetDefinitionId {
+fn unique_asset_definition_id(domain_id_literal: &str, prefix: &str) -> AssetDefinitionId {
     let seq = ASSET_NAME_COUNTER.fetch_add(1, Ordering::Relaxed);
     let name: Name = format!("{prefix}{seq}")
         .parse()
         .expect("generated asset definition name should parse");
     AssetDefinitionId::new(
-        DomainId::parse_fully_qualified(domain).expect("domain should parse"),
+        DomainId::parse_fully_qualified(domain_id_literal)
+            .expect("domain literal should be fully qualified"),
         name,
     )
 }
@@ -479,9 +480,9 @@ fn start_test_network_with_builder(
 fn client_add_asset_quantities_should_increase_asset_amounts() -> Result<()> {
     // Given
     let account_id = ALICE_ID.clone();
-    let asset_definition_id = unique_asset_definition_id("wonderland", "xor");
-    let big_asset_definition_id = unique_asset_definition_id("wonderland", "xorbig");
-    let decimal_definition_id = unique_asset_definition_id("wonderland", "xorfrac");
+    let asset_definition_id = unique_asset_definition_id("wonderland.universal", "xor");
+    let big_asset_definition_id = unique_asset_definition_id("wonderland.universal", "xorbig");
+    let decimal_definition_id = unique_asset_definition_id("wonderland.universal", "xorfrac");
     let asset_definition = named_numeric_asset_definition(asset_definition_id.clone());
     let big_asset_definition = named_numeric_asset_definition(big_asset_definition_id.clone());
     let decimal_definition =
@@ -645,18 +646,19 @@ fn find_rate_and_make_exchange_isi_should_succeed() -> Result<()> {
             DomainId::try_new("exchange", "universal").expect("domain should be valid");
         let company_domain: DomainId =
             DomainId::try_new("company", "universal").expect("domain should be valid");
-        let rate_def: AssetDefinitionId = unique_asset_definition_id("exchange", "btceth");
-        let btc_def: AssetDefinitionId = unique_asset_definition_id("crypto", "btc");
-        let eth_def: AssetDefinitionId = unique_asset_definition_id("crypto", "eth");
+        let rate_def: AssetDefinitionId =
+            unique_asset_definition_id("exchange.universal", "btceth");
+        let btc_def: AssetDefinitionId = unique_asset_definition_id("crypto.universal", "btc");
+        let eth_def: AssetDefinitionId = unique_asset_definition_id("crypto.universal", "eth");
         let rate = AssetId::new(rate_def.clone(), dex_id.clone());
         let seller_btc = AssetId::new(btc_def.clone(), seller_id.clone());
         let buyer_eth = AssetId::new(eth_def.clone(), buyer_id.clone());
 
         let mut builder = quiet_network_builder();
         builder = builder
-            .with_genesis_instruction(register::domain("exchange"))
-            .with_genesis_instruction(register::domain("company"))
-            .with_genesis_instruction(register::domain("crypto"))
+            .with_genesis_instruction(register::domain("exchange.universal"))
+            .with_genesis_instruction(register::domain("company.universal"))
+            .with_genesis_instruction(register::domain("crypto.universal"))
             .with_genesis_instruction(register::account(dex_id.clone(), exchange_domain.clone()))
             .with_genesis_instruction(register::account(seller_id.clone(), company_domain.clone()))
             .with_genesis_instruction(register::account(buyer_id.clone(), company_domain.clone()));
@@ -817,13 +819,14 @@ fn transfer_asset_definition() -> Result<()> {
     let alice_id = ALICE_ID.clone();
     // Create a destination account we can register (in a domain Alice can manage)
     let (new_owner_id, _kp) = gen_account_in("domain");
-    let asset_definition_id: AssetDefinitionId = unique_asset_definition_id("wonderland", "asset");
+    let asset_definition_id: AssetDefinitionId =
+        unique_asset_definition_id("wonderland.universal", "asset");
 
     let mut builder = quiet_network_builder();
     let domain_id: DomainId =
         DomainId::try_new("domain", "universal").expect("domain should be valid");
     builder = builder
-        .with_genesis_instruction(register::domain("domain"))
+        .with_genesis_instruction(register::domain("domain.universal"))
         .with_genesis_instruction(register::account(new_owner_id.clone(), domain_id.clone()));
 
     let Some((network, _rt)) = start_test_network_with_builder(builder) else {
@@ -894,7 +897,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         let (dest_id, _kp) = gen_account_in("domain");
 
         let asset_definition_id: AssetDefinitionId =
-            unique_asset_definition_id("wonderland", "asset");
+            unique_asset_definition_id("wonderland.universal", "asset");
         let asset_id: AssetId = AssetId::new(asset_definition_id.clone(), alice_id.clone());
         // Create asset definition which accepts only integers
         let asset_definition =
@@ -904,7 +907,7 @@ fn fail_if_dont_satisfy_spec() -> Result<()> {
         let domain_id: DomainId =
             DomainId::try_new("domain", "universal").expect("domain should be valid");
         builder = builder
-            .with_genesis_instruction(register::domain("domain"))
+            .with_genesis_instruction(register::domain("domain.universal"))
             .with_genesis_instruction(register::account(dest_id.clone(), domain_id.clone()));
 
         let Some((network, _rt)) = start_test_network_with_builder(builder) else {
@@ -1093,9 +1096,10 @@ fn status_or_skip(res: Result<Status>, context: &str) -> Result<Option<Status>> 
 mod register {
     use super::*;
 
-    pub fn domain(id: &str) -> Register<Domain> {
+    pub fn domain(id_literal: &str) -> Register<Domain> {
         Register::domain(Domain::new(
-            DomainId::parse_fully_qualified(id).expect("should parse to DomainId"),
+            DomainId::parse_fully_qualified(id_literal)
+                .expect("domain literal should be fully qualified"),
         ))
     }
 
@@ -1152,11 +1156,11 @@ mod helper_tests {
 
     #[test]
     fn named_asset_definition_uses_id_name() {
-        let numeric_id = unique_asset_definition_id("wonderland", "named");
+        let numeric_id = unique_asset_definition_id("wonderland.universal", "named");
         let numeric = named_numeric_asset_definition(numeric_id.clone()).build(&ALICE_ID);
         assert_eq!(numeric.name(), &numeric_id.name().to_string());
 
-        let fractional_id = unique_asset_definition_id("wonderland", "fractional");
+        let fractional_id = unique_asset_definition_id("wonderland.universal", "fractional");
         let fractional = named_asset_definition(fractional_id.clone(), NumericSpec::fractional(3))
             .build(&ALICE_ID);
         assert_eq!(fractional.name(), &fractional_id.name().to_string());

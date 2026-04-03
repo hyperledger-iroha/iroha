@@ -6658,14 +6658,17 @@ impl NetworkPeer {
         let status_timeout = client_status_timeout_env();
         let request_timeout = client_request_timeout_env();
         let ttl = client_ttl_env(status_timeout);
+        let default_account_domain = iroha_data_model::domain::DomainId::try_new(
+            iroha::account_address::default_domain_name().as_ref(),
+            "universal",
+        )
+        .expect("default account domain should be fully qualified")
+        .to_string();
         let config = ConfigReader::new()
             .with_toml_source(TomlSource::inline(
                 Table::new()
                     .write("chain", config::chain_id().to_string())
-                    .write(
-                        ["account", "domain"],
-                        iroha::account_address::default_domain_name().to_string(),
-                    )
+                    .write(["account", "domain"], default_account_domain)
                     .write(
                         ["account", "public_key"],
                         account_id.signatory().to_string(),

@@ -17,9 +17,15 @@
       "APP_ENV": "production",
       "LOG_LEVEL": "info"
     },
-    "required_config_names": [],
-    "required_secret_names": [],
-    "config_exports": [],
+    "required_config_names": [
+      
+    ],
+    "required_secret_names": [
+      
+    ],
+    "config_exports": [
+      
+    ],
     "capabilities": {
       "network": {
         "mode": "Allowlist",
@@ -30,6 +36,7 @@
       },
       "allow_wallet_signing": true,
       "allow_state_writes": true,
+      "allow_model_inference": true,
       "allow_model_training": false
     },
     "resources": {
@@ -50,7 +57,7 @@
     "service_name": "web_portal",
     "service_version": "2026.02.0",
     "container": {
-      "manifest_hash": "hash:3B21E9929F3F74465345FFE97514D86F0E2969CC43724B2B8CFC2AFBDD8FE041#2D14",
+      "manifest_hash": "hash:782BA03A4FA3424DE2E4F8FEB29FA212614DAE7B06691CD99DC5E8391ED8E059#DFD6",
       "expected_schema_version": 1
     },
     "replicas": 3,
