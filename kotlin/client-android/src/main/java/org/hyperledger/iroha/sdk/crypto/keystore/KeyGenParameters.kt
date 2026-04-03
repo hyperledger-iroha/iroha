@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.sdk.crypto.keystore
 
 import java.time.Duration
+import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 
 /**
  * Specification for key generation requests made through `KeystoreBackend`.
@@ -21,6 +22,8 @@ class KeyGenParameters(
     private val _attestationChallenge: ByteArray? = attestationChallenge?.copyOf()
 
     fun attestationChallenge(): ByteArray? = _attestationChallenge?.copyOf()
+
+    fun signingAlgorithm(): SigningAlgorithm = SigningAlgorithm.fromAlgorithmName(algorithm)
 
     companion object {
         @JvmStatic
@@ -73,7 +76,13 @@ class KeyGenParameters(
 
         fun setAlgorithm(algorithm: String?): Builder = apply {
             if (!algorithm.isNullOrBlank()) {
-                this.algorithm = algorithm
+                this.algorithm = SigningAlgorithm.fromAlgorithmName(algorithm).providerName
+            }
+        }
+
+        fun setSigningAlgorithm(signingAlgorithm: SigningAlgorithm?): Builder = apply {
+            if (signingAlgorithm != null) {
+                this.algorithm = signingAlgorithm.providerName
             }
         }
 
@@ -100,6 +109,6 @@ class KeyGenParameters(
         .setAllowStrongBoxFallback(allowStrongBoxFallback)
         .setUserAuthenticationRequired(userAuthenticationRequired)
         .setUserAuthenticationTimeout(userAuthenticationTimeout)
-        .setAlgorithm(algorithm)
+        .setSigningAlgorithm(signingAlgorithm())
         .setAttestationChallenge(_attestationChallenge)
 }

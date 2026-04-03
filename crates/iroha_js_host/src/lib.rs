@@ -8605,8 +8605,7 @@ mod tests {
 
     fn noncanonical_owner_literal(domain: &str) -> String {
         let account = sample_account(domain);
-        let domain_id: DomainId = domain.parse().expect("valid domain id");
-        account.to_account_id(domain_id).to_string()
+        format!("{}@{domain}", account_json_literal(&account))
     }
 
     fn sample_rwa_id(domain: &str, byte: u8) -> RwaId {

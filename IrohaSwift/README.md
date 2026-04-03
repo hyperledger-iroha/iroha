@@ -10,7 +10,7 @@ Features:
 - Native NoritoBridge integration (auto-enabled when `dist/NoritoBridge.xcframework` is present, otherwise Swift-only fallback) powering transfer/mint/burn builders and JSON inspection helpers
 - Norito RPC HTTP helper (`NoritoRpcClient`) with binary header/query/timeout handling
 - Pipeline submission helpers (POST `/v1/pipeline/transactions` with configurable retries + status polling)
-- Ed25519 key management & signing via CryptoKit (iOS 15+)
+- Ed25519 and ML-DSA signing, with Ed25519 CryptoKit helpers plus native-bridge ML-DSA support
 - Confidential key derivation (`ConfidentialKeyset.derive`) mirroring the Rust HKDF so wallets can obtain `sk_spend`, `nk`, `ivk`, `ovk`, and `fvk` locally
 - Runtime capability helpers (`ToriiClient.getNodeCapabilities`, `getRuntimeMetrics`, `getRuntimeAbiActive`) mirroring the Torii `/v1/node/capabilities` and `/v1/runtime/*` surfaces
 - Verifying key registry read/event helpers (`ToriiClient.getVerifyingKey`, `listVerifyingKeys`, `streamVerifyingKeyEvents`) covering `/v1/zk/vk` operations
@@ -71,11 +71,15 @@ import IrohaSwift
 
 let torii = ToriiClient(baseURL: URL(string: "http://127.0.0.1:8080")!)
 let sdk = IrohaSDK(baseURL: torii.baseURL)
+let pqSDK = IrohaSDK(baseURL: torii.baseURL, defaultSigningAlgorithm: .mlDsa)
 
-// Generate Ed25519 keypair (CryptoKit)
-let kp = try Keypair.generate()
-let accountId = AccountId.make(publicKey: kp.publicKey)
+// Generate a signing key using the SDK default (Ed25519 unless overridden)
+let signingKey = try sdk.generateSigningKey()
+let accountId = AccountId.make(publicKey: try signingKey.publicKey())
 let asset = "66owaQmAQMuHxPzxUN3bqZ6FJfDa"
+
+// Or opt into ML-DSA explicitly for post-quantum transaction/offline signing.
+let pqSigningKey = try pqSDK.generateSigningKey()
 
 // Fetch balances
 sdk.getAssets(accountId: accountId, asset: asset, scope: "global") { result in
@@ -97,7 +101,7 @@ let transfer = TransferRequest(
     description: "demo",
     ttlMs: 60_000
 )
-let envelope = try sdk.buildSignedTransfer(transfer: transfer, keypair: kp)
+let envelope = try sdk.buildSignedTransfer(transfer: transfer, signingKey: signingKey)
 sdk.submit(envelope: envelope) { err in
     print(err as Any)
 }
@@ -117,7 +121,7 @@ sdk.submitAndWait(envelope: envelope) { result in
 `TransferRequest`, `MintRequest`, `BurnRequest`, `ShieldRequest`, and `UnshieldRequest` expect
 canonical unprefixed Base58 asset-definition IDs on the Swift surface.
 
-`IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows.
+`IrohaSDK` trims and validates chain/account/asset identifiers before signing and fails fast on malformed inputs. Override `creationTimeProvider` when you need deterministic timestamps for fixture generation or offline signing flows. `defaultSigningAlgorithm` controls the SDK helpers used by `generateSigningKey()` / `signingKey(fromSeed:)`; `Keypair` convenience APIs remain available as Ed25519-only compatibility helpers.
 
 ### Subscriptions
 
@@ -427,8 +431,10 @@ If you need the immediate submission receipt without waiting for a terminal stat
 call `torii.submitTransaction(data: envelope.norito)` directly. The returned
 `ToriiSubmitTransactionResponse` includes the receipt payload and signature; use
 `receipt.hash` (or `receipt.payload.txHash`) to poll with `torii.getTransactionStatus(hashHex:)`.
-`submitTransaction` validates `data_model_version` from `/v1/node/capabilities` and throws
-`ToriiClientError.incompatibleDataModel` if the node was built from a different release.
+`submitTransaction` validates transaction submit compatibility from `/v1/node/capabilities`
+(`data_model_version` + `signed_transaction_schema_hash_hex`) and throws
+`ToriiClientError.incompatibleDataModel` or
+`ToriiClientError.incompatibleTransactionSchema` if the node was built from an incompatible release.
 
 `ToriiClient.getMetrics()` automatically decodes JSON payloads even when Torii forgets to
 set `Content-Type: application/json`, falling back to the Prometheus/text response only
@@ -787,6 +793,7 @@ if #available(iOS 15, macOS 12, *) {
     let metrics = try await torii.getRuntimeMetrics()
     let abiActive = try await torii.getRuntimeAbiActive()
     print("abi:", capabilities.abiVersion,
+          "signed_tx_schema:", capabilities.signedTransactionSchemaHashHex ?? "missing",
           "active:", abiActive.abiVersion,
           "upgrades:", metrics.upgradeEventsTotal)
 }

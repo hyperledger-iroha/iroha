@@ -35,9 +35,19 @@ use norito::json::{self, Value};
 use reqwest::Url;
 
 fn program() -> PathBuf {
-    enable_reentrant_builds_for_tests();
-    configure_cli_program_override_from_existing_binary();
+    prepare_iroha_cli_test_environment();
     iroha_test_network::Program::Iroha.resolve().unwrap()
+}
+
+fn prepare_iroha_cli_test_environment() {
+    enable_reentrant_builds_for_tests();
+    configure_program_overrides_from_existing_binaries();
+}
+
+fn iroha_cli_test_build_profile_override(current: Option<&str>) -> Option<&'static str> {
+    current
+        .is_none_or(|value| value.trim().is_empty())
+        .then_some("debug")
 }
 
 fn enable_reentrant_builds_for_tests() {
@@ -46,45 +56,68 @@ fn enable_reentrant_builds_for_tests() {
         // Cargo sets `CARGO` for test binaries, which disables reentrant builds by default.
         // Allow nested builds so the CLI binary can be compiled on-demand in fresh workspaces.
         set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1");
-        if std::env::var_os("IROHA_TEST_BUILD_PROFILE").is_none() {
-            set_env_var("IROHA_TEST_BUILD_PROFILE", "debug");
+        if let Some(profile) = iroha_cli_test_build_profile_override(
+            std::env::var("IROHA_TEST_BUILD_PROFILE").ok().as_deref(),
+        ) {
+            set_env_var("IROHA_TEST_BUILD_PROFILE", profile);
         }
     });
 }
 
-fn configure_cli_program_override_from_existing_binary() {
+fn configure_program_overrides_from_existing_binaries() {
     static INIT: Once = Once::new();
     INIT.call_once(|| {
         const TEST_NETWORK_BIN_IROHA: &str = "TEST_NETWORK_BIN_IROHA";
-        if std::env::var_os(TEST_NETWORK_BIN_IROHA).is_some() {
-            return;
-        }
+        const TEST_NETWORK_BIN_IROHAD: &str = "TEST_NETWORK_BIN_IROHAD";
         if !should_reuse_existing_cli_binary_for_tests() {
             return;
         }
-        if let Some(path) = find_existing_cli_binary_path() {
+
+        let cli_path =
+            if let Some(path) = std::env::var_os(TEST_NETWORK_BIN_IROHA).map(PathBuf::from) {
+                Some(path)
+            } else {
+                find_existing_cli_binary_path()
+            };
+
+        if std::env::var_os(TEST_NETWORK_BIN_IROHA).is_none()
+            && let Some(path) = cli_path.as_ref()
+        {
             let value = path.to_string_lossy().into_owned();
             set_env_var(TEST_NETWORK_BIN_IROHA, &value);
+        }
+
+        if std::env::var_os(TEST_NETWORK_BIN_IROHAD).is_none()
+            && let Some(path) = cli_path
+                .as_deref()
+                .and_then(matching_irohad_binary_path_from_cli_path)
+                .or_else(find_existing_irohad_binary_path)
+        {
+            let value = path.to_string_lossy().into_owned();
+            set_env_var(TEST_NETWORK_BIN_IROHAD, &value);
         }
     });
 }
 
 fn should_reuse_existing_cli_binary_for_tests() -> bool {
-    std::env::var("IROHA_TEST_SKIP_BUILD")
-        .ok()
-        .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+    should_reuse_existing_cli_binary_for_tests_from_value(
+        std::env::var("IROHA_TEST_SKIP_BUILD").ok().as_deref(),
+    )
+}
+
+fn should_reuse_existing_cli_binary_for_tests_from_value(value: Option<&str>) -> bool {
+    value.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
 }
 
 fn find_existing_cli_binary_path() -> Option<PathBuf> {
-    const IROHA_TEST_TARGET_SUBDIR: &str = "iroha-test-network";
     let mut target_roots = Vec::new();
     if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
         let target_dir = PathBuf::from(target_dir);
-        target_roots.push(target_dir.join(IROHA_TEST_TARGET_SUBDIR));
+        target_roots.push(target_dir.join("iroha-test-network"));
         target_roots.push(target_dir);
     }
     let workspace_target = workspace_root().join("target");
-    target_roots.push(workspace_target.join(IROHA_TEST_TARGET_SUBDIR));
+    target_roots.push(workspace_target.join("iroha-test-network"));
     target_roots.push(workspace_target);
 
     let mut profiles = Vec::new();
@@ -108,7 +141,46 @@ fn find_existing_cli_binary_path_from_roots(
     target_roots: &[PathBuf],
     profiles: &[String],
 ) -> Option<PathBuf> {
-    let binary_name = if cfg!(windows) { "iroha.exe" } else { "iroha" };
+    find_existing_binary_path_from_roots(target_roots, profiles, cli_binary_name())
+}
+
+fn find_existing_irohad_binary_path() -> Option<PathBuf> {
+    let mut target_roots = Vec::new();
+    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
+        let target_dir = PathBuf::from(target_dir);
+        target_roots.push(target_dir.join("iroha-test-network"));
+        target_roots.push(target_dir);
+    }
+    let workspace_target = workspace_root().join("target");
+    target_roots.push(workspace_target.join("iroha-test-network"));
+    target_roots.push(workspace_target);
+
+    let mut profiles = Vec::new();
+    if let Ok(profile) = std::env::var("PROFILE")
+        && !profile.trim().is_empty()
+    {
+        profiles.push(profile);
+    }
+    if !profiles.iter().any(|value| value == "debug") {
+        profiles.push("debug".to_owned());
+    }
+    if !profiles.iter().any(|value| value == "release") {
+        profiles.push("release".to_owned());
+    }
+
+    find_existing_binary_path_from_roots(&target_roots, &profiles, irohad_binary_name())
+}
+
+fn matching_irohad_binary_path_from_cli_path(path: &Path) -> Option<PathBuf> {
+    let candidate = path.parent()?.join(irohad_binary_name());
+    candidate.is_file().then_some(candidate)
+}
+
+fn find_existing_binary_path_from_roots(
+    target_roots: &[PathBuf],
+    profiles: &[String],
+    binary_name: &str,
+) -> Option<PathBuf> {
     for target_root in target_roots {
         for profile in profiles {
             let candidate = target_root.join(profile).join(binary_name);
@@ -118,6 +190,18 @@ fn find_existing_cli_binary_path_from_roots(
         }
     }
     None
+}
+
+const fn cli_binary_name() -> &'static str {
+    if cfg!(windows) { "iroha.exe" } else { "iroha" }
+}
+
+const fn irohad_binary_name() -> &'static str {
+    if cfg!(windows) {
+        "iroha3d.exe"
+    } else {
+        "iroha3d"
+    }
 }
 
 fn binary_supports_training_job_commands(path: &std::path::Path) -> bool {
@@ -140,13 +224,6 @@ fn binary_supports_training_job_commands(path: &std::path::Path) -> bool {
 fn set_env_var(key: &str, value: &str) {
     unsafe {
         std::env::set_var(key, value);
-    }
-}
-
-#[allow(unsafe_code)]
-fn remove_env_var(key: &str) {
-    unsafe {
-        std::env::remove_var(key);
     }
 }
 
@@ -265,6 +342,37 @@ fn find_existing_cli_binary_path_from_roots_returns_none_when_missing() {
 }
 
 #[test]
+fn find_existing_binary_path_from_roots_returns_daemon_match() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root = temp.path().join("target");
+    let expected = root.join("debug").join(irohad_binary_name());
+    std::fs::create_dir_all(expected.parent().expect("parent dir")).expect("create dirs");
+    std::fs::write(&expected, b"binary").expect("create fake binary");
+
+    let profiles = vec!["debug".to_owned(), "release".to_owned()];
+    let found = find_existing_binary_path_from_roots(
+        std::slice::from_ref(&root),
+        &profiles,
+        irohad_binary_name(),
+    );
+    assert_eq!(found, Some(expected));
+}
+
+#[test]
+fn matching_irohad_binary_path_from_cli_path_uses_sibling_binary() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let profile_dir = temp.path().join("debug");
+    std::fs::create_dir_all(&profile_dir).expect("create dirs");
+    let cli = profile_dir.join(cli_binary_name());
+    let daemon = profile_dir.join(irohad_binary_name());
+    std::fs::write(&cli, b"cli").expect("write cli");
+    std::fs::write(&daemon, b"daemon").expect("write daemon");
+
+    let found = matching_irohad_binary_path_from_cli_path(&cli);
+    assert_eq!(found, Some(daemon));
+}
+
+#[test]
 fn binary_supports_training_job_commands_rejects_missing_binary() {
     let missing = PathBuf::from("/definitely/missing/iroha");
     assert!(!binary_supports_training_job_commands(&missing));
@@ -304,26 +412,45 @@ fn binary_supports_training_job_commands_accepts_help_with_subcommand() {
 
 #[test]
 fn should_reuse_existing_cli_binary_for_tests_defaults_to_false() {
-    let previous = std::env::var("IROHA_TEST_SKIP_BUILD").ok();
-    remove_env_var("IROHA_TEST_SKIP_BUILD");
-    assert!(!should_reuse_existing_cli_binary_for_tests());
-    if let Some(value) = previous {
-        set_env_var("IROHA_TEST_SKIP_BUILD", &value);
-    }
+    assert!(!should_reuse_existing_cli_binary_for_tests_from_value(None));
+    assert!(!should_reuse_existing_cli_binary_for_tests_from_value(
+        Some("0")
+    ));
+    assert!(!should_reuse_existing_cli_binary_for_tests_from_value(
+        Some("false")
+    ));
 }
 
 #[test]
 fn should_reuse_existing_cli_binary_for_tests_accepts_truthy_values() {
-    let previous = std::env::var("IROHA_TEST_SKIP_BUILD").ok();
-    set_env_var("IROHA_TEST_SKIP_BUILD", "true");
-    assert!(should_reuse_existing_cli_binary_for_tests());
-    set_env_var("IROHA_TEST_SKIP_BUILD", "1");
-    assert!(should_reuse_existing_cli_binary_for_tests());
-    if let Some(value) = previous {
-        set_env_var("IROHA_TEST_SKIP_BUILD", &value);
-    } else {
-        remove_env_var("IROHA_TEST_SKIP_BUILD");
-    }
+    assert!(should_reuse_existing_cli_binary_for_tests_from_value(Some(
+        "true"
+    )));
+    assert!(should_reuse_existing_cli_binary_for_tests_from_value(Some(
+        "TRUE"
+    )));
+    assert!(should_reuse_existing_cli_binary_for_tests_from_value(Some(
+        "1"
+    )));
+}
+
+#[test]
+fn iroha_cli_test_build_profile_override_defaults_to_debug_when_unset_or_blank() {
+    assert_eq!(iroha_cli_test_build_profile_override(None), Some("debug"));
+    assert_eq!(
+        iroha_cli_test_build_profile_override(Some("")),
+        Some("debug")
+    );
+    assert_eq!(
+        iroha_cli_test_build_profile_override(Some("   ")),
+        Some("debug")
+    );
+}
+
+#[test]
+fn iroha_cli_test_build_profile_override_preserves_existing_profile() {
+    assert_eq!(iroha_cli_test_build_profile_override(Some("release")), None);
+    assert_eq!(iroha_cli_test_build_profile_override(Some("debug")), None);
 }
 
 fn local_program_config() -> ProgramConfig {
@@ -567,6 +694,7 @@ fn tagged_enum_label<'a>(value: &'a Value, tag: &str) -> Option<&'a str> {
 
 #[tokio::test]
 async fn can_upgrade_executor() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     if !ivm_build_profile_exists() {
         eprintln!("Skipping test: missing IVM build profile");
         return Ok(());
@@ -623,6 +751,7 @@ async fn can_upgrade_executor() -> eyre::Result<()> {
 
 #[tokio::test]
 async fn reads_client_toml_by_default() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let Some(network) = sandbox::start_network_async_or_skip(
         NetworkBuilder::new(),
         stringify!(reads_client_toml_by_default),
@@ -658,6 +787,7 @@ async fn reads_client_toml_by_default() -> eyre::Result<()> {
 
 #[tokio::test]
 async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -727,6 +857,7 @@ async fn soracloud_status_uses_live_torii_control_plane() -> eyre::Result<()> {
 
 #[tokio::test]
 async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -986,6 +1117,7 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
 #[tokio::test]
 async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_control_plane()
 -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -1144,6 +1276,7 @@ async fn soracloud_scr_host_admission_rejects_invalid_manifests_live_torii_contr
 #[tokio::test]
 async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane()
 -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -1738,6 +1871,7 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 
 #[tokio::test]
 async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
@@ -2167,6 +2301,7 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
 
 #[tokio::test]
 async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
@@ -2480,6 +2615,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
 
 #[tokio::test]
 async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
@@ -2971,6 +3107,7 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
 #[tokio::test]
 async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() -> eyre::Result<()>
 {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -3339,6 +3476,7 @@ async fn soracloud_templates_deploy_site_and_webapp_with_rollout_and_rollback() 
 
 #[tokio::test]
 async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -3601,6 +3739,7 @@ async fn soracloud_agent_autonomy_runtime_uses_live_torii_control_plane() -> eyr
 #[tokio::test]
 async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_control_plane()
 -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {
@@ -4022,6 +4161,7 @@ async fn soracloud_agent_wallet_mailbox_and_lease_recovery_use_live_torii_contro
 #[tokio::test]
 async fn soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_control_plane()
 -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
         .with_config_layer(|layer| {

@@ -14,12 +14,17 @@ use norito::codec::{Decode, Encode};
 
 pub use self::{
     model::*,
+    recovery::{
+        AccountRecoveryPolicy, AccountRecoveryPolicyError, AccountRecoveryRequest,
+        AccountRecoveryStatus, RecoveryGuardian,
+    },
     rekey::{AccountAlias, AccountAliasDomain, AccountRekeyRecord},
 };
 pub mod address;
 pub mod admission;
 pub mod controller;
 pub mod curve;
+pub mod recovery;
 pub mod rekey;
 pub use address::{
     AccountAddress, AccountAddressError, AccountAddressErrorCode, AccountDomainSelector,
@@ -834,6 +839,7 @@ mod account_id_parsing_tests {
     use norito::{core::decode_from_bytes, to_bytes};
 
     use super::*;
+    use crate::DomainId;
 
     fn guard_chain_discriminant() -> MutexGuard<'static, ()> {
         static CHAIN_DISCRIMINANT_GUARD: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
@@ -1155,8 +1161,10 @@ pub mod prelude {
     pub use super::{
         ACCOUNT_ADMISSION_POLICY_METADATA_KEY, Account, AccountAddress, AccountAddressSource,
         AccountAdmissionMode, AccountAdmissionPolicy, AccountAlias, AccountAliasDomain,
-        AccountController, AccountDomainSelector, AccountEntry, AccountId, AccountRekeyRecord,
-        AccountValue, MultisigMember, MultisigPolicy, NewAccount, OpaqueAccountId, ParsedAccountId,
+        AccountController, AccountDomainSelector, AccountEntry, AccountId, AccountRecoveryPolicy,
+        AccountRecoveryPolicyError, AccountRecoveryRequest, AccountRecoveryStatus,
+        AccountRekeyRecord, AccountValue, MultisigMember, MultisigPolicy, NewAccount,
+        OpaqueAccountId, ParsedAccountId, RecoveryGuardian,
     };
 }
 

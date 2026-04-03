@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 import java.util.Base64;
 import java.util.Objects;
+import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
 
 /**
  * Encapsulates the deterministic representation of an exported key.
@@ -17,7 +18,8 @@ import java.util.Objects;
  *
  * <pre>
  * magic[5] = "IRKEY"
- * version[1] = 0x03
+ * version[1] = 0x04
+ * algorithm_code[1] (v4+)
  * alias_len[2] (big-endian)
  * alias_bytes
  * public_key_len[2]
@@ -35,10 +37,12 @@ import java.util.Objects;
 public final class KeyExportBundle {
   private static final byte[] MAGIC = "IRKEY".getBytes(StandardCharsets.UTF_8);
   public static final byte VERSION_V3 = 3;
+  public static final byte VERSION_V4 = 4;
   public static final int EXPECTED_NONCE_LENGTH_BYTES = 12;
   public static final int EXPECTED_SALT_LENGTH_BYTES = 16;
 
   private final String alias;
+  private final int algorithmCode;
   private final byte[] publicKey;
   private final byte[] nonce;
   private final byte[] ciphertext;
@@ -56,7 +60,30 @@ public final class KeyExportBundle {
       final int kdfKind,
       final int kdfWorkFactor,
       final byte version) {
+    this(
+        alias,
+        SigningAlgorithm.ED25519.bridgeCode(),
+        publicKey,
+        nonce,
+        ciphertext,
+        salt,
+        kdfKind,
+        kdfWorkFactor,
+        version);
+  }
+
+  KeyExportBundle(
+      final String alias,
+      final int algorithmCode,
+      final byte[] publicKey,
+      final byte[] nonce,
+      final byte[] ciphertext,
+      final byte[] salt,
+      final int kdfKind,
+      final int kdfWorkFactor,
+      final byte version) {
     this.alias = Objects.requireNonNull(alias, "alias");
+    this.algorithmCode = algorithmCode;
     this.publicKey = publicKey.clone();
     this.nonce = nonce.clone();
     this.ciphertext = ciphertext.clone();
@@ -72,6 +99,14 @@ public final class KeyExportBundle {
 
   public byte[] publicKey() {
     return publicKey.clone();
+  }
+
+  public int algorithmCode() {
+    return algorithmCode;
+  }
+
+  public SigningAlgorithm signingAlgorithm() {
+    return SigningAlgorithm.fromBridgeCode(algorithmCode);
   }
 
   public byte[] nonce() {
@@ -110,7 +145,7 @@ public final class KeyExportBundle {
     if (aliasBytes.length > 0xFFFF) {
       throw new IllegalArgumentException("alias is too long");
     }
-    if (version != VERSION_V3) {
+    if (version != VERSION_V3 && version != VERSION_V4) {
       throw new IllegalArgumentException("unsupported key export version: " + version);
     }
     if (publicKey.length > 0xFFFF) {
@@ -141,6 +176,9 @@ public final class KeyExportBundle {
     try {
       output.write(MAGIC);
       output.write(version);
+      if (version >= VERSION_V4) {
+        output.write(algorithmCode & 0xFF);
+      }
       output.write(shortBytes(aliasBytes.length));
       output.write(aliasBytes);
       output.write(shortBytes(publicKey.length));
@@ -179,9 +217,18 @@ public final class KeyExportBundle {
         throw new KeyExportException("Key export bundle magic mismatch");
       }
       final int version = input.read();
-      if (version != VERSION_V3) {
+      if (version != VERSION_V3 && version != VERSION_V4) {
         throw new KeyExportException(
             "Unsupported key export version: " + (version < 0 ? "EOF" : version));
+      }
+      final int algorithmCode;
+      if (version >= VERSION_V4) {
+        algorithmCode = input.read();
+        if (algorithmCode < 0) {
+          throw new KeyExportException("Unexpected end of stream while reading algorithm code");
+        }
+      } else {
+        algorithmCode = SigningAlgorithm.ED25519.bridgeCode();
       }
       final int aliasLength = readShort(input);
       final byte[] aliasBytes = input.readNBytes(aliasLength);
@@ -242,6 +289,7 @@ public final class KeyExportBundle {
       }
       return new KeyExportBundle(
           new String(aliasBytes, StandardCharsets.UTF_8),
+          algorithmCode,
           pubKey,
           nonce,
           cipher,

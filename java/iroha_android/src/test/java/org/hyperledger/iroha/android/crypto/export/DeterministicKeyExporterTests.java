@@ -8,6 +8,8 @@ import java.security.NoSuchProviderException;
 import java.security.Provider;
 import java.security.Security;
 import java.util.Arrays;
+import org.hyperledger.iroha.android.crypto.NativeSignerBridge;
+import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
 
 public final class DeterministicKeyExporterTests {
@@ -25,6 +27,8 @@ public final class DeterministicKeyExporterTests {
     rejectsNonEd25519Keys();
     tamperedSaltFails();
     tamperedNonceFails();
+    mlDsaExportRoundTrips();
+    mixedAlgorithmRestoreRejected();
     saltLengthTamperFails();
     nonceLengthTamperFails();
     rejectsUnsupportedVersion();
@@ -194,6 +198,50 @@ public final class DeterministicKeyExporterTests {
     Arrays.fill(passphrase, '\0');
   }
 
+  private static void mlDsaExportRoundTrips() throws Exception {
+    if (!NativeSignerBridge.isNativeAvailable()) {
+      System.out.println(
+          "[IrohaAndroid] Skipping ML-DSA export test (native bridge unavailable).");
+      return;
+    }
+    final SoftwareKeyProvider provider = new SoftwareKeyProvider(SigningAlgorithm.ML_DSA);
+    final KeyPair original = provider.generate("ml-dsa-alias");
+    final char[] passphrase = "ml-dsa-export-passphrase".toCharArray();
+
+    final KeyExportBundle bundle = provider.exportDeterministic("ml-dsa-alias", passphrase);
+    final KeyPair recovered = provider.importDeterministic(bundle, passphrase);
+
+    assert bundle.signingAlgorithm() == SigningAlgorithm.ML_DSA
+        : "Bundle should retain ML-DSA metadata";
+    assert Arrays.equals(original.getPrivate().getEncoded(), recovered.getPrivate().getEncoded())
+        : "ML-DSA private key should round-trip";
+    assert Arrays.equals(original.getPublic().getEncoded(), recovered.getPublic().getEncoded())
+        : "ML-DSA public key should round-trip";
+    Arrays.fill(passphrase, '\0');
+  }
+
+  private static void mixedAlgorithmRestoreRejected() throws Exception {
+    if (!NativeSignerBridge.isNativeAvailable()) {
+      System.out.println(
+          "[IrohaAndroid] Skipping mixed-algorithm export test (native bridge unavailable).");
+      return;
+    }
+    final SoftwareKeyProvider mlDsaProvider = new SoftwareKeyProvider(SigningAlgorithm.ML_DSA);
+    mlDsaProvider.generate("ml-dsa-cross-alias");
+    final char[] passphrase = "ml-dsa-export-passphrase".toCharArray();
+    final KeyExportBundle bundle = mlDsaProvider.exportDeterministic("ml-dsa-cross-alias", passphrase);
+
+    final SoftwareKeyProvider ed25519Provider = new SoftwareKeyProvider(SigningAlgorithm.ED25519);
+    boolean threw = false;
+    try {
+      ed25519Provider.importDeterministic(bundle, passphrase);
+    } catch (final KeyExportException expected) {
+      threw = true;
+    }
+    assert threw : "Provider must reject deterministic exports with a mismatched algorithm";
+    Arrays.fill(passphrase, '\0');
+  }
+
   private static void saltLengthTamperFails() throws Exception {
     final SoftwareKeyProvider provider = new SoftwareKeyProvider();
     final KeyPair keyPair = provider.generate("alias-salt-length");
@@ -236,7 +284,11 @@ public final class DeterministicKeyExporterTests {
 
   private static int offsetToNonceLength(final byte[] raw) {
     int offset = MAGIC_LENGTH;
+    final int version = raw[offset] & 0xFF;
     offset += 1; // version
+    if (version >= KeyExportBundle.VERSION_V4) {
+      offset += 1; // algorithm code
+    }
     final int aliasLength = readU16(raw, offset);
     offset += 2 + aliasLength;
     final int publicKeyLength = readU16(raw, offset);
@@ -310,7 +362,7 @@ public final class DeterministicKeyExporterTests {
     } catch (final KeyExportException expected) {
       threw = true;
     }
-    assert threw : "Exporter must enforce minimum passphrase length for v3 bundles";
+    assert threw : "Exporter must enforce minimum passphrase length";
     Arrays.fill(weak, '\0');
   }
 

@@ -1,6 +1,210 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-02
+Last updated: 2026-04-03
+
+Latest sync (2026-04-03 maintained mobile SDK signing selection):
+the Kotlin, Java Android, and Swift SDKs now let apps choose `ED25519` or
+`ML_DSA` for transaction/offline-wallet signing while keeping existing wire
+formats and BLS consensus untouched.
+
+- landed across the maintained mobile SDK stacks:
+  shared signing-algorithm selectors, ML-DSA bridge-backed signers/key
+  wrappers, algorithm-tagged deterministic export/import support, and shared
+  JNI bridge packaging under Kotlin `client-android`;
+- focused verification is green for the Rust bridge tests/build, Kotlin
+  compile/core tests, the targeted Swift signing-selection tests, and the
+  targeted Java harness classes covering `IrohaKeyManager`,
+  deterministic export/import, and software-provider storage; and
+- broad `swift test` / Java `./gradlew test` remain branch-red in unrelated
+  pre-existing suites outside this signing-selector slice.
+
+Open work for this slice now remains:
+- document node/operator requirements for enabling `ml-dsa` on the server side
+  so client opt-in is paired with the correct `allowed_signing` /
+  `allowed_curve_ids` policy;
+- decide whether canonical-request signing and identifier-receipt verification
+  should stay Ed25519-only or gain the same app-level selector in a follow-up;
+- add similar SDK-level selection to any remaining maintained client surfaces
+  outside Kotlin/Java Android/Swift if those apps also need post-quantum
+  signing; and
+- clean up the unrelated red suites in `java/iroha_android` and `IrohaSwift`
+  so future SDK verification can use the full test targets again.
+
+Latest sync (2026-04-03 correction for the mixed rerun):
+the permissioned-red / NPoS-green pair started at `2026-04-03T02:59:27Z`
+should not be treated as a new product regression because both full `3600s`
+shared-host stable soaks were run concurrently on the same machine.
+
+- the permissioned failure on
+  `/tmp/izanami_permissioned_full_20260403T025927_rerun.log`
+  is best explained by local host oversubscription during a methodologically
+  invalid rerun, not by a new permissioned-only consensus bug;
+- evidence: Izanami’s stable envelope is explicitly a shared-host 4-peer soak
+  profile in `crates/izanami/src/chaos.rs`, while that rerun doubled the local
+  peer/process load by launching permissioned and NPoS simultaneously;
+- the permissioned top-level log shows exactly the kind of submit/backpressure
+  collapse expected under oversubscription
+  (`transaction queued for too long`, tx-confirmation timeouts,
+  `izanami_ingress_failover_total=174`,
+  `izanami_ingress_endpoint_unhealthy_total=160`) before the strict watchdog
+  trips; and
+- the last valid comparable evidence on this patch set remains the earlier
+  sequential reruns where both modes were green:
+  `/tmp/izanami_permissioned_full_20260403T045225_reschedulefix.log` and
+  `/tmp/izanami_npos_full_20260403T055403_reschedulefix.log`.
+
+Open work for this slice now remains:
+- if a fresh validation is needed, rerun permissioned and NPoS sequentially,
+  not concurrently, under the same shared-host envelope;
+- avoid drawing any new permissioned-vs-NPoS product conclusion from the
+  concurrent `20260403T025927` pair; and
+- keep the remaining functional follow-up focused on the small residual
+  workload-level failure counts rather than on the invalid concurrent
+  permissioned stall.
+
+Latest sync (2026-04-03 fresh full stable reruns on the current release binaries):
+the latest full rerun pair is split again: NPoS stays green, permissioned is
+red.
+
+- permissioned full stable rerun on
+  `/tmp/izanami_permissioned_full_20260403T025927_rerun.log`
+  stalled at aligned `strict/quorum=574` versus `strict_reference_height=580`,
+  then failed on `no strict block height progress for 600s`;
+- that permissioned rerun finished with
+  `successes=4201 failures=53 izanami_ingress_failover_total=174 izanami_ingress_endpoint_unhealthy_total=160`,
+  and the top-level retained log is dominated by repeated
+  `transaction queued for too long` plus tx-confirmation timeout backpressure;
+- NPoS full stable rerun on
+  `/tmp/izanami_npos_full_20260403T025927_rerun.log`
+  reached the `2000`-block KPI at `strict/quorum=2004`, completed the full
+  window at `strict/quorum=2224`, and finished with
+  `successes=17990 failures=3 izanami_ingress_failover_total=0 izanami_ingress_endpoint_unhealthy_total=0`; and
+- the fresh permissioned failure still lacks the earlier top-level routing and
+  same-height consensus markers (`route_unavailable`, top-level `missing_qc`,
+  `no proposal observed for view before changing view`, same-height vote
+  conflicts), so the remaining permissioned blocker is still best framed as a
+  workload/ingress collapse under load rather than a regression of the already
+  fixed NPoS lane/bootstrap issue.
+
+Open work for this slice now remains:
+- isolate why permissioned can still fall into aligned `574/580` no-progress
+  with severe ingress backpressure even while NPoS clears the same stable
+  envelope on the same binaries;
+- decide whether the small residual NPoS workload failure count (`3`) needs its
+  own attribution pass despite the otherwise healthy full-soak outcome; and
+- rerun the full permissioned stable envelope after the next permissioned-path
+  fix and require completion to the `2000`-block target without ingress
+  failover/unhealthy counter growth.
+
+Latest sync (2026-04-03 stable full soak reruns on patched tree):
+both full stable reruns are green after tightening quorum-reschedule recovery
+to require actual commit-vote backing before triggering known-block commit-QC
+recovery.
+
+- permissioned full stable rerun on
+  `/tmp/izanami_permissioned_full_20260403T045225_reschedulefix.log`
+  reached the `2000`-block KPI at `strict/quorum=2006` in `2627.467801708s`
+  with `interval_p95_ms=2040`, then completed the full window at
+  `strict/quorum=2632`;
+- NPoS full stable rerun on
+  `/tmp/izanami_npos_full_20260403T055403_reschedulefix.log`
+  reached the `2000`-block KPI at `strict/quorum=2004` in `2897.508955959s`
+  with `interval_p95_ms=2501`, then completed the full window at
+  `strict/quorum=2396`;
+- both retained soak logs stayed free of the previous blocker signatures:
+  `route_unavailable`, strict-height stalls, top-level `missing_qc`,
+  same-height vote-history conflicts, connection-refused ingress collapse, and
+  unhealthy/failover counter growth; and
+- the remaining visible blemish is small nonzero workload failure counts in the
+  final summaries (`1` permissioned, `3` NPoS), with no matching top-level
+  consensus or routing failures in the retained soak logs.
+
+Open work for this slice now remains:
+- if needed, inspect the retained peer dirs for the `1` permissioned and `3`
+  NPoS workload-level failures to attribute them precisely; and
+- otherwise, no current blocker remains for the stable permissioned / NPoS soak
+  slice that prompted this debugging pass.
+
+Latest sync (2026-04-02 time-trigger retry policy v1):
+scheduled time triggers now support opt-in fixed-delay retry with persisted
+runtime state, failure-event emission, and unregister-on-exhaustion semantics.
+
+- landed in `iroha_data_model` and `iroha_core`:
+  public `TimeTriggerRetryPolicy` on trigger actions, internal time-trigger
+  retry state persistence, scheduled-trigger registration validation, and the
+  core execution changes for retry scheduling / retry clearing / exhaustion
+  removal;
+- focused validation is green for:
+  `cargo test -p iroha_data_model --lib action_with_retry_policy_ -- --nocapture`,
+  `cargo test -p iroha_core --lib trigger_retry_policy_rejects_non_scheduled_time_trigger_on_registration -- --nocapture`,
+  `cargo test -p iroha_core --lib scheduled_time_trigger_retry_ -- --nocapture`,
+  and
+  `cargo test -p iroha_core --lib periodic_time_trigger_drops_missed_ticks_while_retry_pending -- --nocapture`;
+
+Open work for this slice now remains:
+- add end-to-end integration coverage that registers retry-configured time
+  triggers through client / Torii flows instead of only unit/state tests;
+- decide whether terminal failure paths that currently bypass normal execution
+  (for example missing trigger bytecode) should explicitly ignore retry policy
+  or become retry-aware in a follow-up; and
+- decide whether any public query/event surface should expose runtime retry
+  state beyond the configured policy, which v1 intentionally keeps internal.
+
+Latest sync (2026-04-02 native account recovery / controller replacement):
+the controller-native recovery slice is implemented locally, and the remaining
+open work is now around broader committed-path coverage and external API
+follow-through rather than core execution plumbing.
+
+- landed in `iroha_data_model`, `iroha_executor`, and `iroha_core`:
+  first-class controller replacement, alias-keyed recovery policy / request
+  types, recovery queries / events, the `CanReplaceAccountController`
+  permission, and shared controller-replacement plumbing for both direct
+  rotation and guardian-driven recovery;
+- focused validation is green for:
+  `cargo fmt --all`,
+  `cargo check -p iroha_data_model -p iroha_executor_data_model -p iroha_executor -p iroha_core`,
+  `cargo test -p iroha_core --lib account_recovery_ -- --nocapture`,
+  and
+  `cargo test -p iroha_core --lib replace_account_controller_ -- --nocapture`;
+
+Open work for this slice now remains:
+- add multi-peer / committed-state integration coverage that exercises the new
+  recovery flow through Torii/executor boundaries and asserts query / event
+  behavior after block commit;
+- extend operator / developer documentation and SDK-facing examples so the new
+  account-recovery API surface is discoverable without reading Rust internals;
+- broaden preservation regression coverage for trigger authority rewrites and
+  the reused governance / offline / public-lane account-reference migration
+  paths if future refactors touch the shared controller-replacement helper.
+
+Latest sync (2026-04-02 relay-child restart + harness shutdown-race fix):
+the two concrete process-exit root causes behind the remaining soak failures
+are now patched locally, but the long envelope verification still needs to be
+rerun.
+
+- landed in `irohad`:
+  `NetworkRelay::run` now restarts subscriber registrations / worker queues
+  when a relay channel closes instead of returning from the supervised child
+  and shutting the validator down;
+- landed in `iroha_test_network`:
+  peer shutdown now treats already-exited children as a graceful completion and
+  logs peer-exit monitor failures instead of panicking during cleanup;
+- focused validation is green for:
+  `cargo fmt --all`,
+  `CARGO_TARGET_DIR=/tmp/iroha_target_relayfix cargo test -p irohad relay_fairness -- --nocapture`,
+  and
+  `CARGO_TARGET_DIR=/tmp/iroha_target_peerexitfix cargo test -p iroha_test_network shutdown_ -- --nocapture`;
+
+Open work for this slice now remains:
+- rerun the full stable permissioned and NPoS soaks on this patched tree and
+  verify that validators no longer die because the relay child exits, and that
+  green runs no longer leave the old peer-shutdown panic artifact in retained
+  logs;
+- if NPoS still loses a validator, capture the exact supervised child name from
+  the retained peer dir before applying another fix so the next patch is based
+  on the first concrete failure, not inference; and
+- prune any remaining stale teardown panic path in `iroha_test_network` if the
+  full rerun shows another cleanup-only failure after peers already exited `0`.
 
 Latest sync (2026-04-02 latest full stable envelope reruns):
 the NPoS stable soak is now green on the patched tree, while permissioned
@@ -278,6 +482,191 @@ Open work for this slice now remains:
 - keep treating the green NPoS matrix as regression coverage only: it clears
   the NPoS stress surfaces for this tranche, but it does not clear the still
   red permissioned sustained-load envelope.
+Latest sync (2026-04-02 multisig SNS-lease repair):
+the reported multisig integration failures now use SNS-valid runtime-domain
+setup and the cancel-route coverage matches the current Torii public contract.
+
+- `integration_tests/tests/multisig.rs` now provisions runtime domains through
+  the lease-aware `iroha_test_network` helper and uses hyphenated SNS-valid
+  test domain labels instead of underscore labels that can never acquire a
+  domain-name lease;
+- `crates/iroha_test_network/src/lib.rs` now leaves
+  `pricing_class_hint` unset for synthetic SNS lease registration so the helper
+  follows the registrar's real pricing-tier selection instead of assuming tier
+  `0`; and
+- the cancel-route regression now waits on `/v1/multisig/cancel` to expose
+  `APPROVE` mode rather than querying hidden cancel-wrapper proposals through
+  `/v1/multisig/proposals/get`, while still asserting the target proposal lands
+  in terminal `CANCELED` state and remains visible in canceled listings.
+
+Open work for this slice now remains:
+- rerun `cargo test -p integration_tests --test multisig -- --nocapture --test-threads=1`
+  in a clean, non-overlapped slot using the warmed binary reuse path
+  (`IROHA_TEST_SKIP_BUILD=1`, `TEST_NETWORK_BIN_IROHAD`, `TEST_NETWORK_BIN_IROHA`)
+  so the executor-upgrade variants can finish without the extra local parallel
+  network load introduced during this repair session.
+
+Latest sync (2026-04-02 `iroha_cli` live-test profile alignment follow-up):
+the reported Soracloud HF `iroha_cli` failure slice is green again after
+pinning the test daemon and CLI to the same debug profile before network
+startup.
+
+- `integration_tests/tests/iroha_cli.rs` now initializes the CLI test
+  environment ahead of every live network-backed test, so `Program::Irohad`
+  no longer resolves from the default `release` profile before `program()`
+  later forces the CLI onto `debug`;
+- added a small value-level regression for the default build-profile helper;
+  and
+- fresh reruns are green for the helper unit tests, the parallel
+  `soracloud_hf_` slice, the full `iroha_cli` test target under the default
+  runner, and the same target when serialized with `--test-threads=1`.
+
+Open work for this slice now remains:
+- none for this `iroha_cli` profile-alignment slice; broader repo-wide gates
+  remain tracked in the older roadmap entries below.
+
+Latest sync (2026-04-02 targeted integration-test repair follow-up):
+the reported `connected_peers`, runtime Nexus registration benchmark, and
+account-created trigger regressions are green again on targeted reruns.
+
+- restored `AccountEvent::Created` emission for account registration so the
+  non-intersecting data-trigger path fires again;
+- hardened the connected-peers integration helper to sample roster visibility
+  across the cluster instead of failing on a single lagging probe peer; and
+- gave the runtime registration benchmark its own routed dataspace lane plus a
+  deterministic admin-managed manifest binding, then waited for authoritative
+  binding and permission visibility before running the report-only benchmark.
+
+Open work for this slice now remains:
+- replay the broader `integration_tests --test mod` shard, or the next larger
+  workspace gate that covers these paths, on a fresh binary; this fix set was
+  verified with targeted reruns only.
+
+Latest sync (2026-04-01 Nexus routing / cross-dataspace localnet recovery):
+the reported Nexus and DA/RBC regression set is green again on a fresh rebuilt
+`iroha3d`.
+
+- `crates/iroha_core/src/queue/router.rs` now keeps asset-definition
+  permission grants on authority routing instead of accidentally classifying
+  them as destination-account-local;
+- `crates/iroha_core/src/smartcontracts/isi/settlement.rs` now resolves
+  cross-dataspace settlement legs from the actual source bucket, which restores
+  scoped DvP/PvP execution semantics; and
+- `integration_tests/tests/nexus/cross_dataspace_localnet.rs` now enforces
+  pre/post authoritative lane commit-QC convergence around the forward and
+  reverse swap barriers, eliminating the earlier localnet swap stall.
+- fresh-binary reruns are green for:
+  - `cross_dataspace_atomic_swap_is_all_or_nothing`
+  - `wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models`
+  - `sumeragi_rbc_background_queue_synchronous`
+  - `sumeragi_da_commit_certificate_history_four_peers`
+  - `sumeragi_rbc_da_large_payload_{four_peers,four_peers_rs16,six_peers,six_peers_rs16}`
+- the earlier RBC `payload=0` failures did not reproduce once the tests were
+  pointed at the rebuilt `target/debug/iroha3d`; current reruns report
+  non-zero `PayloadBytes` on the participating peers.
+
+Open work for this slice now remains:
+- none; keep using a freshly rebuilt `TEST_NETWORK_BIN_IROHAD` when replaying
+  DA/RBC localnet failures so stale test binaries do not contaminate results.
+
+Latest sync (2026-04-01 broad workspace verification / rollout gate):
+the narrow Torii/client/CLI verification for the current first-release
+convergence work is green on an isolated target, but the broader workspace
+gate is still blocked by unrelated domainless-account migration cleanup
+outside this slice.
+
+- green isolated checks so far:
+  - `cargo test -p iroha_data_model --lib --no-run`
+  - `cargo test -p iroha_cli --test cli_smoke -- --nocapture`
+- the broad `cargo clippy --workspace --all-targets -- -D warnings` replay is
+  still uncovering stale canonical-account assumptions across untouched
+  examples, benches, and tests; the current representative blockers are:
+  - `crates/ivm/examples/koto_domain_demo.rs`
+  - `crates/iroha_core/src/block.rs`
+  - `crates/iroha_core/src/executor.rs`
+  - `crates/iroha_core/src/query/snapshot/mod.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/account_admission.rs`
+  - `crates/iroha_core/src/smartcontracts/isi/asset.rs`
+- until the broad workspace gate is green or explicitly waived, do not treat
+  the maintained live SBP/AED topology rollout from this tree as cleared.
+
+Open work for this slice now remains:
+- finish the repo-wide domainless-account cleanup exposed by
+  `cargo clippy --workspace --all-targets -- -D warnings`, starting with the
+  remaining `ivm` examples and the untouched `iroha_core` helper/test paths
+  listed above;
+- rerun `cargo clippy --workspace --all-targets -- -D warnings` until green;
+- only after the broad workspace gate is green, rebuild a fresh local
+  artifact bundle from the current tree and run the maintained
+  `scripts/pk topology preflight`, `deploy --mode reset`,
+  `settlement-smoke`, and `verify` sequence.
+
+Latest sync (2026-04-01 Nexus per-filesystem auto-budget persistence):
+when the operator leaves the Nexus aggregate disk cap unset, `irohad` now
+derives and persists per-filesystem defaults across the effective Nexus storage
+roots instead of treating the storage budget as absent or keying only off
+`kura.store_dir`.
+
+- `nexus.storage.local_budget_bytes` remains the canonical aggregate knob and
+  the legacy `nexus.storage.max_disk_usage_bytes` alias still works, but if
+  neither is set the daemon now requires a writable config path, derives
+  `80%` defaults per filesystem, and persists both the aggregate budget and a
+  human-readable internal `nexus.storage.auto_default` subtable into the active
+  config file;
+- `iroha_config` now tracks Nexus storage budget provenance as
+  `Unset` / `OperatorExplicit` / `AutoDerived`, reuses matching persisted
+  auto-derived metadata on later starts, and treats edited
+  `local_budget_bytes` values as operator overrides whenever they no longer
+  match the stored auto-derived aggregate;
+- auto-derived budgets now fan out per filesystem by normalizing the existing
+  component weights inside each filesystem group, while operator-explicit
+  budgets keep the existing global split behavior; and
+- startup still warns without failing when free space is below budget, but the
+  warning is now emitted once per filesystem: auto-derived configs compare the
+  stored per-filesystem budget against current free space, and operator-explicit
+  configs compare the effective assigned component caps on that filesystem.
+- filesystem grouping now uses real platform filesystem identities on both Unix
+  and Windows (device ids on Unix, volume GUID paths on Windows); only
+  unsupported non-Unix/non-Windows targets remain conservative probe failures.
+
+Open work for this slice now remains:
+- rerun the broader `iroha_config` fixture/workspace gates after the unrelated
+  existing fixture breakage around governance account defaults is resolved, so
+  the new first-run materialization path is covered by the heavier config
+  suites as well.
+
+Latest sync (2026-04-01 Nexus account-read routing / storage-budget doc sync):
+the ingress-independent account-read semantics and the
+`nexus.storage.local_budget_bytes` knob are already wired in the tree, and the
+public OpenAPI/docs now describe those semantics accurately.
+
+- `GET /v1/accounts/{account_id}` now behaves as a global account read across
+  configured dataspaces, while `/assets` and `/assets/query` merge only the
+  caller-visible dataspaces and preserve per-scope balances;
+- `/permissions`, `/transactions`, and `/transactions/query` now merge only the
+  caller-visible dataspaces and silently omit inaccessible private-dataspace
+  state; and
+- the stale dead manifest-poll helpers in the Nexus wrong-ingress regression
+  harness are removed, and the aggregate Nexus integration target still
+  compiles cleanly via `cargo test -p integration_tests --test mod
+  tx_query_cross_dataspace_routing_localnet --no-run`.
+
+Open work for this slice now remains:
+- build the actual DA-backed global account-state substrate instead of
+  fanning out every read:
+  canonical account shards, dataspace-presence metadata, and an
+  `AccountAssetPresenceIndex`/locator keyed by canonical account identity;
+- thread that account-state substrate through the existing DA eviction /
+  hydration machinery so account pages are committed, evicted, and rehydrated
+  under `nexus.storage.local_budget_bytes` with node-local cache policy only;
+- add bounded visible-dataspace fallback + asynchronous locator repair for
+  stale/missing account asset presence metadata;
+- extend the Nexus localnet regressions beyond routing semantics into the
+  storage lifecycle:
+  forced account-shard eviction, DA rehydration, and stale-locator repair; and
+- tighten the temporary compatibility path that still accepts
+  `X-Iroha-Account` as an unsigned visibility hint once all read clients send
+  canonical signed headers consistently.
 
 Latest sync (2026-04-01 permissioned DA soak actor-thread fix tranche):
 the permissioned DA root causes are patched in `iroha_core`: near-tip
@@ -356,27 +745,34 @@ Open work for this slice now remains:
   no framed Norito decode failures, and a green aggregate post-reset report
 - rerun broader workspace verification (`cargo test --workspace`,
   `cargo clippy --workspace --all-targets -- -D warnings`) when the time
-  budget allows; this tranche only received targeted crate/script coverage
+  budget allows; this tranche now has targeted crate/script coverage plus
+  dedicated `iroha tx status` / `iroha account get` smoke coverage and a broad
+  `tests.test_pk_cli -q` pass, and the full `iroha_cli --test cli_smoke`
+  target is green again; the exhaustive workspace gates are still pending
 
-Latest sync (2026-04-01 restart-recovery rerun + integration_tests strict-lint fix):
-the previously open `sumeragi_rbc_recovers_after_peer_restart` rerun is green
-on the current tree, and the concrete `integration_tests` strict-lint break
-observed during that verification is fixed.
+Latest sync (2026-04-01 exact-frontier known-block commit-QC repair + targeted recovery matrix):
+the remaining committed+1 lagging-peer gap is fixed in the exact-frontier
+repair lane, and the targeted RBC recovery matrix around that path is now
+green on the current tree.
 
-- `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod
-  sumeragi_rbc_recovers_after_peer_restart -- --nocapture` now completes
-  successfully on this checkout; and
-- `cargo clippy -p integration_tests --test mod -- -D warnings` is green again
-  after removing the dead `HashOf` import from the cross-dataspace routing
-  localnet test.
+- committed+1 known-block commit-QC recovery now promotes into exact-frontier
+  `FetchBlockBody` repair instead of staying on generic `FetchPendingBlock`
+  retries, and the exact-body lane now keeps retrying while the missing
+  dependency is still the frontier commit proof even if the block body is
+  already local;
+- same-height delayed `BlockBodyResponse` repair now accepts actionable
+  `missing_commit_qc_requests`, so older frontier-owner proof responses still
+  apply after local frontier ownership advances to a newer same-height view;
+- accepted known-block block-sync QCs now retire the matching
+  `missing_commit_qc_requests` entry immediately; and
+- the following targeted integration reruns are green on this checkout:
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_unverified_roster_stash_requests_missing_block -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_recovers_after_peer_restart -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_recovers_after_restart_with_roster_change -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_rbc_session_recovers_after_cold_restart -- --nocapture`
+  - `NORITO_SKIP_BINDINGS_SYNC=1 cargo test -p integration_tests --test mod sumeragi_da_eviction_rehydrates_block_bodies -- --nocapture`
 
 Open work for this slice now remains:
-- rerun the adjacent heavy restart/cold-start recovery scenarios
-  (`sumeragi_rbc_recovers_after_restart_with_roster_change`,
-  `sumeragi_rbc_session_recovers_after_cold_restart`,
-  `sumeragi_rbc_unverified_roster_stash_requests_missing_block`,
-  `sumeragi_da_eviction_rehydrates_block_bodies`) to make sure the now-green
-  restart rerun was not masking a neighboring integration-only regression
 - broader workspace verification (`cargo test --workspace`,
   `cargo clippy --workspace --all-targets -- -D warnings`) still has not been
   rerun after the latest RBC restart-path and exact-frontier fix tranche
@@ -2581,9 +2977,11 @@ Validation:
 - `CARGO_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/.cache/cargo-target-alias-core cargo test -p iroha_core find_aliases_by_account_id --lib --quiet`
 
 Open work for this clarification slice now remains:
-- propagate the same explicit universal-account / alias-model wording into the
-  translated `docs/source/data_model.*.md` set so non-English references do not
-  drift back toward domain-scoped identity language; and
+- replace the remaining generated `needs-translation` stubs in the translated
+  `docs/source/{data_model,universal_accounts_guide}.*.md` set with reviewed
+  localized text; the parity metadata/source hashes are now current, but the
+  unfinished locales still need completed translations so non-English
+  references do not drift back toward domain-scoped identity language; and
 - audit older examples and helper docs that still imply “account in a domain”
   as identity rather than materialized link state, and rewrite them to use the
   universal-account-first wording.
@@ -12699,6 +13097,8 @@ Unless stated otherwise, roadmap items call out which release line they affect.
  - [x] Replace `docs/source/sdk/swift/connect_risk_tracker.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/crypto/attachments/sm_openssl_provenance.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/governance_pipeline.*` stubs (he/ja) with translations.
+ - [x] Replace the last managed `needs-translation` backlog batch (`ivm.*`, `docs/formal/sumeragi/README.*`, portal `torii-mcp` + Norito example docs/mirrors, `docs/source` data-model + Soracloud runbooks, and the repo-root threat/security docs) while keeping `2026-annual-hyperledger-iroha.md` excluded from managed translations.
+ - [ ] Refresh the remaining `6837` already-`complete` Markdown translations whose `source_hash` no longer matches the current English source so multilingual docs are source-current, not only stub-free.
  - [x] Replace `docs/source/kagami_profiles.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/sdk/android/telemetry_override_log.*` stubs (he/ja) with translations.
  - [x] Replace `docs/source/release_dual_track_schedule.*` stubs (he/ja) with translations.
@@ -13872,3 +14272,15 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 3. Completed: stale test expectations were aligned with the current policy that vote-backed reschedule may resend `BlockCreated` while still skipping `BlockSyncUpdate` hydration replay.
 4. Remaining open: rerun `cargo test -p iroha_core --lib quorum_reschedule_rebroadcasts_block_created_while_skipping_block_sync_without_roster_proof -- --nocapture` in a fresh cargo process; the immediate follow-up shell left `cargo` sleeping without an active child after the assertion update, so that one test does not yet have a fresh passing result recorded.
 5. Remaining open: rebuild fresh binaries and rerun the full permissioned stable soak to confirm the height-`533` zero-local-vote `missing_qc` loop is gone on the patched tree.
+
+## 2026-04-02 Full Stable Soak Follow-up
+1. Completed: the fresh-binary permissioned full stable soak is green on the patched tree. `/tmp/izanami_permissioned_full_20260402T203112.log` reached `strict/quorum=2002` in `2710.582807208s`, completed the full `3600s` window at `strict/quorum=2267`, and kept the old routing / same-height / `missing_qc` failure signatures at zero.
+2. Remaining open: explain and fix the NPoS full-soak collapse captured in `/tmp/izanami_npos_full_20260402T213527.log`, where the run stalled at aligned `strict/quorum=471`, then degraded into divergence with one peer at height `0` and heavy ingress endpoint failures (`izanami_ingress_failover_total=202`, `izanami_ingress_endpoint_unhealthy_total=175`).
+3. Remaining open: inspect the failing NPoS peer lifecycle around the first `Connection refused (os error 61)` and `Transaction submitter thread exited with error` reports to determine whether the next blocker is a node crash, an ingress/health-check regression, or a test-network harness teardown/retention bug under NPoS load.
+4. Remaining open: clean up the residual `iroha_test_network` teardown panics seen after the otherwise successful permissioned full soak so the stable harness finishes without misleading crash noise once the run has already satisfied the KPI.
+
+## 2026-04-02 Stable Soak Root-Cause Follow-up
+1. Completed: traced the permissioned tail panic to the test-network harness, not consensus. `crates/iroha_test_network/src/lib.rs:5755-5757` still panics if `PeerExit::monitor(...)` returns an error, and the best-supported trigger is the shutdown race in `PeerExit::monitor` / `shutdown_or_kill` at `crates/iroha_test_network/src/lib.rs:7695-7749`.
+2. Completed: traced the direct NPoS validator death path to `irohad` supervisor shutdown-on-unexpected-exit. In the fresh full soak the failing peer exits with `Some of the supervisor children exited unexpectedly`, and `crates/iroha_futures/src/supervisor.rs:302-312` plus `crates/irohad/src/main.rs:8631-8635` explain the status-`1` process exit.
+3. Remaining open: identify the exact supervised child inside `irohad` that exits first on the fresh failing NPoS binary. The current surviving evidence localizes it to the validator-internal NPoS Sumeragi/RBC/proposal path, but the original peer dirs were not retained and the present dirty tree cannot be rebuilt cleanly because of unrelated `iroha_data_model` errors.
+4. Remaining open: once a buildable repro tree is available again, rerun the NPoS soak with preserved peer dirs and `iroha_futures::supervisor=debug` so the fatal `Supervisor observed child exit` log includes the child `caller_location`, closing the last remaining attribution gap.

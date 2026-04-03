@@ -26,6 +26,7 @@ class SoftwareKeyProvider(
     providerPolicy: ProviderPolicy? = ProviderPolicy.DEFAULT,
     private val exportStore: KeyExportStore? = null,
     private val passphraseProvider: KeyPassphraseProvider? = null,
+    private val signingAlgorithm: SigningAlgorithm = SigningAlgorithm.ED25519,
 ) : KeyProvider {
 
     /** Controls which JCA provider is used for Ed25519 key generation. */
@@ -48,14 +49,27 @@ class SoftwareKeyProvider(
         }
     }
 
-    constructor() : this(ProviderPolicy.DEFAULT, null, null)
+    constructor() : this(ProviderPolicy.DEFAULT, null, null, SigningAlgorithm.ED25519)
 
-    constructor(providerPolicy: ProviderPolicy) : this(providerPolicy, null, null)
+    constructor(providerPolicy: ProviderPolicy) : this(
+        providerPolicy,
+        null,
+        null,
+        SigningAlgorithm.ED25519,
+    )
+
+    constructor(signingAlgorithm: SigningAlgorithm) : this(
+        ProviderPolicy.DEFAULT,
+        null,
+        null,
+        signingAlgorithm,
+    )
 
     constructor(
         exportStore: KeyExportStore,
         passphraseProvider: KeyPassphraseProvider,
-    ) : this(ProviderPolicy.BOUNCY_CASTLE_PREFERRED, exportStore, passphraseProvider)
+        signingAlgorithm: SigningAlgorithm = SigningAlgorithm.ED25519,
+    ) : this(ProviderPolicy.BOUNCY_CASTLE_PREFERRED, exportStore, passphraseProvider, signingAlgorithm)
 
     @Throws(KeyManagementException::class)
     override fun load(alias: String): KeyPair? {
@@ -96,6 +110,7 @@ class SoftwareKeyProvider(
     fun exportDeterministic(alias: String, passphrase: CharArray): KeyExportBundle {
         val keyPair = load(alias)
             ?: throw KeyManagementException("Unknown alias: $alias")
+        ensureExpectedSigningAlgorithm(keyPair)
         return DeterministicKeyExporter.exportKeyPair(
             keyPair.private, keyPair.public, alias, passphrase
         )
@@ -107,14 +122,27 @@ class SoftwareKeyProvider(
      */
     @Throws(KeyExportException::class)
     fun importDeterministic(bundle: KeyExportBundle, passphrase: CharArray): KeyPair {
+        if (bundle.signingAlgorithm != signingAlgorithm) {
+            throw KeyExportException(
+                "Key export algorithm ${bundle.signingAlgorithm.providerName} does not match provider ${signingAlgorithm.providerName}"
+            )
+        }
         val data = DeterministicKeyExporter.importKeyPair(bundle, passphrase)
         val keyPair = KeyPair(data.publicKey, data.privateKey)
+        ensureExpectedSigningAlgorithm(keyPair)
         aliasCache[bundle.alias] = keyPair
         exportStore?.store(bundle.alias, bundle.encodeBase64())
         return keyPair
     }
 
     private fun generateKeyPair(): KeyPair {
+        if (signingAlgorithm == SigningAlgorithm.ML_DSA) {
+            return try {
+                MlDsaKeyMaterial.generate(secureRandom)
+            } catch (ex: RuntimeException) {
+                throw KeyManagementException("ML-DSA key generation is not supported on this runtime", ex)
+            }
+        }
         val generator = newKeyPairGenerator()
         val usedBouncyCastle =
             generator.provider != null && "BC" == generator.provider.name
@@ -174,10 +202,17 @@ class SoftwareKeyProvider(
         try {
             val encoded = exportStore!!.load(alias) ?: return null
             val bundle = KeyExportBundle.decodeBase64(encoded)
+            if (bundle.signingAlgorithm != signingAlgorithm) {
+                throw KeyManagementException(
+                    "Stored key for alias=$alias uses ${bundle.signingAlgorithm.providerName}, expected ${signingAlgorithm.providerName}"
+                )
+            }
             val passphrase = requirePassphrase()
             try {
                 val data = DeterministicKeyExporter.importKeyPair(bundle, passphrase)
-                return KeyPair(data.publicKey, data.privateKey)
+                val keyPair = KeyPair(data.publicKey, data.privateKey)
+                ensureExpectedSigningAlgorithm(keyPair)
+                return keyPair
             } finally {
                 passphrase.fill('\u0000')
             }
@@ -210,6 +245,18 @@ class SoftwareKeyProvider(
             throw KeyManagementException("Passphrase must not be empty")
         }
         return passphrase
+    }
+
+    private fun ensureExpectedSigningAlgorithm(keyPair: KeyPair) {
+        val matches = when (signingAlgorithm) {
+            SigningAlgorithm.ED25519 -> keyPair.private !is MlDsaPrivateKey && keyPair.public !is MlDsaPublicKey
+            SigningAlgorithm.ML_DSA -> keyPair.private is MlDsaPrivateKey && keyPair.public is MlDsaPublicKey
+        }
+        if (!matches) {
+            throw KeyManagementException(
+                "Provider expected ${signingAlgorithm.providerName} key material"
+            )
+        }
     }
 
     companion object {

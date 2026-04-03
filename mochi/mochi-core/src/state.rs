@@ -862,7 +862,6 @@ mod tests {
         let Some(server) = try_start_mock_server() else {
             return;
         };
-        let wonderland: DomainId = "wonderland".parse().expect("domain id");
         let account = AccountBuilder::new(ALICE_ID.clone()).build(&ALICE_ID);
         let output = QueryOutput::new(
             QueryOutputBatchBoxTuple::new(vec![QueryOutputBatchBox::Account(vec![account])]),
@@ -945,7 +944,6 @@ mod tests {
 
     #[test]
     fn state_entry_account_exposes_norito_payload() {
-        let wonderland: DomainId = "wonderland".parse().expect("domain id");
         let account = AccountBuilder::new(ALICE_ID.clone()).build(&ALICE_ID);
         let entry = StateEntry::from_account(account);
         let json = entry.json.expect("account json");

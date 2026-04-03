@@ -48,10 +48,10 @@ final class TransactionInputValidatorTests: XCTestCase {
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",
                                                    authorityId: authority,
-                                                   assetDefinitionId: "pkr#hbl")
+                                                   assetDefinitionId: "cbdc#hbl")
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAssetDefinitionId("pkr#hbl"))
+                           .malformedAssetDefinitionId("cbdc#hbl"))
         }
     }
 

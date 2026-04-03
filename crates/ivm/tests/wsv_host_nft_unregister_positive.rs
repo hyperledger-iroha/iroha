@@ -25,7 +25,7 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     out
 }
 
-fn test_account(domain: DomainId, public_key: PublicKey) -> AccountId {
+fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
     AccountId::new(public_key)
 }
 

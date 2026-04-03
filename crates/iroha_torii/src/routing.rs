@@ -8209,7 +8209,7 @@ mod contract_state_tests {
         );
         storage.insert(
             "Requests_approval_alias_fqn/mr123".to_owned(),
-            make_tlv(PointerType::Blob, b"banking@sbp"),
+            make_tlv(PointerType::Blob, b"banking@centralbank"),
         );
 
         let schema = ivm::EmbeddedStateType::Struct {
@@ -8235,7 +8235,7 @@ mod contract_state_tests {
         expected.insert("status".into(), Value::from("1"));
         expected.insert(
             "approval_alias_fqn".into(),
-            Value::from(base64::engine::general_purpose::STANDARD.encode("banking@sbp")),
+            Value::from(base64::engine::general_purpose::STANDARD.encode("banking@centralbank")),
         );
         assert_eq!(decoded, Value::Object(expected));
     }
@@ -10523,7 +10523,12 @@ fn multisig_execute_trigger_is_issuance_swap(
     let kind_matches = multisig_json_scalar_literal(args.get("kind"))
         .map(|kind| kind.eq_ignore_ascii_case("ISSUANCE_SWAP"))
         .unwrap_or(false);
-    if !kind_matches && !trigger_id.trim().eq_ignore_ascii_case("issuance_swap_sbp") {
+    if !kind_matches
+        && !trigger_id
+            .trim()
+            .eq_ignore_ascii_case("issuance_swap_centralbank")
+        && !trigger_id.trim().eq_ignore_ascii_case("issuance_swap_sbp")
+    {
         return false;
     }
     [
@@ -11229,7 +11234,7 @@ mod contract_payload_normalization_tests {
     fn normalize_contract_payload_canonicalizes_utf8_blob_strings_to_hex() {
         let descriptor = blob_descriptor();
         let payload = IrohaJson::new(norito::json!({
-            "alias_literal": "banking@sbp"
+            "alias_literal": "banking@centralbank"
         }));
 
         let normalized = normalize_contract_payload(&descriptor, Some(&payload))
@@ -11239,7 +11244,7 @@ mod contract_payload_normalization_tests {
         let mut expected = Map::new();
         expected.insert(
             "alias_literal".into(),
-            Value::from(hex::encode("banking@sbp".as_bytes())),
+            Value::from(hex::encode("banking@centralbank".as_bytes())),
         );
         assert_eq!(value, Value::Object(expected));
     }
@@ -12282,19 +12287,19 @@ mod multisig_selector_tests {
             norito::json::parse_value(&format!(
                 r#"{{
                     "proposal_id":"mr_type_filter_contract",
-                    "approval_alias":"banking@sbp",
+                    "approval_alias":"banking@centralbank",
                     "requesting_fi_dataspace":"hbl",
                     "asset_definition":"{asset_definition}",
-                    "to_account_alias":"cbdc@hbl.sbp",
+                    "to_account_alias":"cbdc@hbl.centralbank",
                     "amount":"77",
                     "requested_by_actor":{{
                         "proposal_id":"mr_type_filter_contract",
                         "requesting_fi_id":"hbl",
-                        "approval_alias_fqn":"banking@sbp",
-                        "creation_multisig_alias_fqn":"cbdc@hbl.sbp",
+                        "approval_alias_fqn":"banking@centralbank",
+                        "creation_multisig_alias_fqn":"cbdc@hbl.centralbank",
                         "asset_id":"{asset_definition}",
                         "amount":"77",
-                        "to_account_id":"cbdc@hbl.sbp"
+                        "to_account_id":"cbdc@hbl.centralbank"
                     }}
                 }}"#,
             ))
@@ -12327,7 +12332,7 @@ mod multisig_selector_tests {
             &mut world,
             &multisig_account_id,
             vec![execute_trigger_instruction(
-                "issuance_swap_sbp",
+                "issuance_swap_centralbank",
                 norito::json::parse_value(&format!(
                     r#"{{"vault_account_id":"{}","issuance_account_id":"{}","pkr_asset_id":"{}","pkr_amount":"1000","treasury_asset_id":"{}","treasury_amount":"1000"}}"#,
                     multisig_account_id,
@@ -29438,7 +29443,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23sbp/holders/query")
+            .uri("/v1/assets/rose%23centralbank/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -29733,7 +29738,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23sbp/holders/query")
+            .uri("/v1/assets/rose%23centralbank/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -29785,7 +29790,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23sbp/holders/query")
+            .uri("/v1/assets/rose%23centralbank/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -29841,7 +29846,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23sbp/holders/query")
+            .uri("/v1/assets/rose%23centralbank/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -30067,7 +30072,7 @@ mod app_api_integration_tests {
 
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/assets/rose%23sbp/holders?limit=1")
+            .uri("/v1/assets/rose%23centralbank/holders?limit=1")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -30112,7 +30117,7 @@ mod app_api_integration_tests {
         let req = http::Request::builder()
             .method("GET")
             .uri(format!(
-                "/v1/assets/rose%23sbp/holders?account_id={}",
+                "/v1/assets/rose%23centralbank/holders?account_id={}",
                 urlencoding::encode(&expected_account)
             ))
             .body(axum::body::Body::empty())
@@ -30167,7 +30172,7 @@ mod app_api_integration_tests {
 
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/assets/rose%23sbp/holders?account_id=treasury%40universal")
+            .uri("/v1/assets/rose%23centralbank/holders?account_id=treasury%40universal")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -30204,7 +30209,7 @@ mod app_api_integration_tests {
 
         let err = handle_v1_asset_holders(
             state,
-            axum::extract::Path("rose#sbp".to_string()),
+            axum::extract::Path("rose#centralbank".to_string()),
             crate::NoritoQuery(params),
             MaybeTelemetry::for_tests(),
         )
@@ -30274,7 +30279,7 @@ mod app_api_integration_tests {
 
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/assets/rose%23sbp/holders?limit=4")
+            .uri("/v1/assets/rose%23centralbank/holders?limit=4")
             .body(axum::body::Body::empty())
             .unwrap();
         let resp = app.oneshot(req).await.unwrap();
@@ -30351,7 +30356,7 @@ mod app_api_integration_tests {
             &state,
             &alice_id,
             &test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd"),
-            "rose#sbp",
+            "rose#centralbank",
         );
 
         let app = Router::new().route(
@@ -30367,7 +30372,7 @@ mod app_api_integration_tests {
 
         let req = http::Request::builder()
             .method("GET")
-            .uri("/v1/confidential/assets/rose%23sbp/transitions")
+            .uri("/v1/confidential/assets/rose%23centralbank/transitions")
             .body(axum::body::Body::empty())
             .unwrap();
 
@@ -30495,7 +30500,7 @@ mod app_api_integration_tests {
         )]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23sbp/holders/query")
+            .uri("/v1/assets/rose%23centralbank/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -30574,7 +30579,7 @@ mod app_api_integration_tests {
         ]));
         let req = http::Request::builder()
             .method("POST")
-            .uri("/v1/assets/rose%23sbp/holders/query")
+            .uri("/v1/assets/rose%23centralbank/holders/query")
             .header(http::header::CONTENT_TYPE, "application/json")
             .body(axum::body::Body::from(body))
             .unwrap();
@@ -30632,7 +30637,7 @@ mod app_api_integration_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        bind_permanent_asset_alias_for_test(&state, &alice_id, &rose_def, "rose#sbp");
+        bind_permanent_asset_alias_for_test(&state, &alice_id, &rose_def, "rose#centralbank");
         bind_account_alias_for_test(&state, &alice_id, "treasury@universal");
 
         (state, alice_id, bob_id)
@@ -39700,21 +39705,26 @@ pub async fn handle_v1_account_permissions_with_policy(
         }
     }
 
+    let mut canonical_permissions = Vec::with_capacity(permissions.len());
+    for permission in permissions {
+        let payload = norito::json::from_str::<norito::json::Value>(permission.payload().get())
+            .map_err(|error| {
+                Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
+                    "failed to decode permission payload for `{}`: {error}",
+                    permission.name()
+                )))
+            })?;
+        canonical_permissions.push((
+            (),
+            AccountPermissionListItem {
+                name: permission.name().to_string(),
+                payload,
+            },
+        ));
+    }
+
     let (items, total) = collect_page_streaming(
-        permissions.into_iter().map(|permission| {
-            let payload = permission
-                .payload()
-                .clone()
-                .try_into_any_norito::<norito::json::Value>()
-                .unwrap_or(norito::json::Value::Null);
-            (
-                (),
-                AccountPermissionListItem {
-                    name: permission.name().to_string(),
-                    payload,
-                },
-            )
-        }),
+        canonical_permissions.into_iter(),
         pagination.offset,
         pagination.limit,
         None,
@@ -41198,6 +41208,101 @@ fn collect_subject_accounts(world: &impl WorldReadOnly) -> Vec<iroha_data_model:
     }
 
     by_subject.into_values().collect()
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod account_permissions_json_tests {
+    use std::sync::Arc;
+
+    use http_body_util::BodyExt as _;
+    use iroha_core::{
+        kura::Kura,
+        query::store::LiveQueryStore,
+        state::{State, World},
+    };
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::{
+        account::Account, nexus::DataSpaceId, permission::Permissions, prelude::AccountId,
+    };
+    use iroha_executor_data_model::permission::{
+        account::CanModifyAccountMetadata, nexus::CanPublishSpaceDirectoryManifest,
+    };
+
+    use super::*;
+
+    fn test_state_with_permissions(account_id: &AccountId) -> Arc<CoreState> {
+        let account = Account::new(account_id.clone()).build(account_id);
+        let mut world = World::with([], [account], []);
+        let mut permissions = Permissions::new();
+        permissions.insert(
+            CanModifyAccountMetadata {
+                account: account_id.clone(),
+            }
+            .into(),
+        );
+        permissions.insert(
+            CanPublishSpaceDirectoryManifest {
+                dataspace: DataSpaceId::new(7),
+            }
+            .into(),
+        );
+        world
+            .account_permissions_mut_for_testing()
+            .insert(account_id.clone(), permissions);
+        Arc::new(State::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ))
+    }
+
+    #[tokio::test]
+    async fn account_permissions_handler_preserves_structured_payloads() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let state = test_state_with_permissions(&authority);
+        let authority_literal = authority.to_string();
+
+        let response = handle_v1_account_permissions_with_policy(
+            state,
+            axum::extract::Path(authority_literal.clone()),
+            crate::NoritoQuery(crate::filter::Pagination {
+                limit: Some(8),
+                offset: 0,
+            }),
+            MaybeTelemetry::disabled(),
+        )
+        .await
+        .expect("permissions handler should succeed")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("collect body")
+            .to_bytes();
+        let doc: norito::json::Value = norito::json::from_slice(&body).expect("valid JSON");
+        let items = doc["items"].as_array().expect("items array");
+
+        let metadata_permission = items
+            .iter()
+            .find(|item| item["name"].as_str() == Some("CanModifyAccountMetadata"))
+            .expect("metadata permission item");
+        assert_eq!(
+            metadata_permission["payload"]["account"].as_str(),
+            Some(authority_literal.as_str())
+        );
+
+        let manifest_permission = items
+            .iter()
+            .find(|item| item["name"].as_str() == Some("CanPublishSpaceDirectoryManifest"))
+            .expect("manifest permission item");
+        assert_eq!(
+            manifest_permission["payload"]["dataspace"].as_u64(),
+            Some(7)
+        );
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -43128,7 +43233,13 @@ pub struct SpaceDirectoryManifestRevokeDto {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Default, Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+    Default,
+    Debug,
+    Clone,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
 )]
 pub struct SpaceDirectoryManifestQuery {
     #[norito(default)]
@@ -43143,7 +43254,13 @@ pub struct SpaceDirectoryManifestQuery {
 
 #[cfg(feature = "app_api")]
 #[derive(
-    Default, Debug, Clone, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize,
+    Default,
+    Debug,
+    Clone,
+    crate::json_macros::JsonDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
 )]
 pub struct SpaceDirectoryBindingsQuery {
     #[norito(default)]
@@ -43926,12 +44043,12 @@ mod asset_definitions_query_tests {
         let domain = dm::Domain::new(domain_id.clone()).build(&authority);
         let account = dm::Account::new(authority.clone()).build(&authority);
 
-        let mut pkr_metadata = dm::Metadata::default();
-        pkr_metadata.insert("rank".parse().expect("metadata key"), 2_u32);
-        let pkr_id = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
-        let pkr = dm::AssetDefinition::numeric(pkr_id.clone())
-            .with_name("PKR".to_owned())
-            .with_metadata(pkr_metadata)
+        let mut cbdc_metadata = dm::Metadata::default();
+        cbdc_metadata.insert("rank".parse().expect("metadata key"), 2_u32);
+        let cbdc_id = test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd");
+        let cbdc = dm::AssetDefinition::numeric(cbdc_id.clone())
+            .with_name("CBDC".to_owned())
+            .with_metadata(cbdc_metadata)
             .build(&authority);
 
         let mut usd_metadata = dm::Metadata::default();
@@ -43944,11 +44061,11 @@ mod asset_definitions_query_tests {
         .build(&authority);
 
         let state = Arc::new(State::new_for_testing(
-            World::with([domain], [account], [pkr, usd]),
+            World::with([domain], [account], [cbdc, usd]),
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        bind_permanent_asset_alias_for_test(&state, &authority, &pkr_id, "pkr#sbp");
+        bind_permanent_asset_alias_for_test(&state, &authority, &cbdc_id, "cbdc#centralbank");
         state
     }
 
@@ -43984,8 +44101,8 @@ mod asset_definitions_query_tests {
         let items = doc["items"].as_array().expect("items");
         assert_eq!(items.len(), 2);
 
-        assert_eq!(items[0]["name"].as_str(), Some("PKR"));
-        assert_eq!(items[0]["alias"].as_str(), Some("pkr#sbp"));
+        assert_eq!(items[0]["name"].as_str(), Some("CBDC"));
+        assert_eq!(items[0]["alias"].as_str(), Some("cbdc#centralbank"));
         assert_eq!(items[1]["name"].as_str(), Some("USD"));
         assert!(items[1]["alias"].is_null());
     }
@@ -44026,7 +44143,7 @@ mod asset_definitions_query_tests {
             query: None,
             filter: Some(crate::filter::FilterExpr::Eq(
                 crate::filter::FieldPath("alias".into()),
-                norito::json::Value::from("pkr#sbp"),
+                norito::json::Value::from("cbdc#centralbank"),
             )),
             select: None,
             sort: Vec::new(),
@@ -44047,8 +44164,8 @@ mod asset_definitions_query_tests {
         .await;
         let items = doc["items"].as_array().expect("items");
         assert_eq!(items.len(), 1);
-        assert_eq!(items[0]["name"].as_str(), Some("PKR"));
-        assert_eq!(items[0]["alias"].as_str(), Some("pkr#sbp"));
+        assert_eq!(items[0]["name"].as_str(), Some("CBDC"));
+        assert_eq!(items[0]["alias"].as_str(), Some("cbdc#centralbank"));
 
         let null_alias = crate::filter::QueryEnvelope {
             query: None,
@@ -44107,7 +44224,7 @@ mod asset_definitions_query_tests {
         .await;
         let items = doc["items"].as_array().expect("items");
         assert_eq!(items[0]["name"].as_str(), Some("USD"));
-        assert_eq!(items[1]["name"].as_str(), Some("PKR"));
+        assert_eq!(items[1]["name"].as_str(), Some("CBDC"));
 
         let alias_sort = crate::filter::QueryEnvelope {
             query: None,
@@ -44134,7 +44251,7 @@ mod asset_definitions_query_tests {
         .await;
         let items = doc["items"].as_array().expect("items");
         assert_eq!(items[0]["name"].as_str(), Some("USD"));
-        assert_eq!(items[1]["name"].as_str(), Some("PKR"));
+        assert_eq!(items[1]["name"].as_str(), Some("CBDC"));
 
         let metadata_sort = crate::filter::QueryEnvelope {
             query: None,
@@ -56668,7 +56785,7 @@ mod adapter_filter_tests {
     #[cfg(feature = "app_api")]
     #[test]
     fn defs_filter_adapter_accepts_name_alias_and_metadata_nullability() {
-        let name_eq = FilterExpr::Eq(FieldPath("name".into()), Value::from("PKR"));
+        let name_eq = FilterExpr::Eq(FieldPath("name".into()), Value::from("CBDC"));
         validate_defs_filter_adapter(&name_eq).unwrap();
 
         let alias_null = FilterExpr::IsNull(FieldPath("alias".into()));
@@ -56705,17 +56822,17 @@ mod adapter_filter_tests {
         let authority = AccountId::new(iroha_crypto::KeyPair::random().public_key().clone());
         let definition = AssetDefinition::numeric(AssetDefinitionId::new(
             "issuer".parse().expect("domain"),
-            "pkr".parse().expect("name"),
+            "cbdc".parse().expect("name"),
         ))
-        .with_name("PKR".to_owned())
+        .with_name("CBDC".to_owned())
         .build(&authority);
         let item = AssetDefinitionListItem {
             definition,
             id: "66owaQmAQMuHxPzxUN3bqZ6FJfDa".to_owned(),
-            name: "PKR".to_owned(),
-            alias: Some("pkr#sbp".to_owned()),
+            name: "CBDC".to_owned(),
+            alias: Some("cbdc#centralbank".to_owned()),
             alias_binding: Some(AssetAliasBindingDto {
-                alias: "pkr#sbp".to_owned(),
+                alias: "cbdc#centralbank".to_owned(),
                 status: "leased_grace".to_owned(),
                 lease_expiry_ms: Some(100),
                 grace_until_ms: Some(200),
@@ -56724,11 +56841,11 @@ mod adapter_filter_tests {
         };
 
         assert!(asset_definition_filter_projection(
-            &FilterExpr::Eq(FieldPath("name".into()), Value::from("PKR")),
+            &FilterExpr::Eq(FieldPath("name".into()), Value::from("CBDC")),
             &item,
         ));
         assert!(asset_definition_filter_projection(
-            &FilterExpr::Eq(FieldPath("alias".into()), Value::from("pkr#sbp")),
+            &FilterExpr::Eq(FieldPath("alias".into()), Value::from("cbdc#centralbank"),),
             &item,
         ));
         assert!(asset_definition_filter_projection(
@@ -56800,7 +56917,7 @@ mod adapter_filter_tests {
 
         let asset_def = AssetDefinitionId::new(
             "issuer".parse().expect("domain"),
-            "pkr".parse().expect("name"),
+            "cbdc".parse().expect("name"),
         );
         let expr = FilterExpr::Eq(
             FieldPath("asset".into()),
@@ -56821,13 +56938,13 @@ mod adapter_filter_tests {
 
         let asset_def = AssetDefinitionId::new(
             "issuer".parse().expect("domain"),
-            "pkr".parse().expect("name"),
+            "cbdc".parse().expect("name"),
         );
         let item = AssetHolderListItem {
             account_id: ALICE_ID.clone(),
             canonical_id: ALICE_ID.to_string(),
             asset: asset_def.to_string(),
-            asset_alias: Some("pkr#issuer.main".to_owned()),
+            asset_alias: Some("cbdc#issuer.main".to_owned()),
             scope: "global".to_owned(),
             quantity: Numeric::from(10_u32),
         };

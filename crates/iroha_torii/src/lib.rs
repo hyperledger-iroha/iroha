@@ -3149,6 +3149,8 @@ async fn handler_gov_unlock_stats(
 #[cfg(feature = "app_api")]
 async fn handler_account_get(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     accept: Option<crate::utils::extractors::ExtractAccept>,
@@ -3172,25 +3174,25 @@ async fn handler_account_get(
         &telemetry,
         routing::ENDPOINT_ACCOUNTS_GET,
     )?;
-    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
-        return Ok(execute_torii_single_route_account_read(
-            &app,
-            route,
-            canonical_account_id,
-            format,
-        )
-        .await);
-    }
-    Ok(execute_torii_fanout_account_read(&app, canonical_account_id, format).await)
+    let _ = (&method, &uri, parsed_account_id);
+    Ok(execute_torii_account_read_for_routes(
+        &app,
+        torii_all_dataspace_routes(app.as_ref()),
+        canonical_account_id,
+        format,
+    )
+    .await)
 }
 
 #[cfg(feature = "app_api")]
 async fn handler_account_transactions_query(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
+    crate::utils::extractors::NoritoJsonWithBytes { value: env, raw }: crate::utils::extractors::NoritoJsonWithBytes<
         crate::filter::QueryEnvelope,
     >,
 ) -> Result<Response, Error> {
@@ -3224,19 +3226,22 @@ async fn handler_account_transactions_query(
             "failed to encode routed account transactions query: {error}"
         )))
     })?;
-    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
-        return Ok(execute_torii_single_route_read(
-            &app,
-            route,
-            ToriiReadEndpointV1::AccountTransactionsQuery,
-            vec![canonical_account_id.to_string()],
-            None,
-            body,
-        )
-        .await);
-    }
-    Ok(execute_torii_fanout_list_read(
+    let _ = parsed_account_id;
+    let caller = torii_visibility_account_from_headers(
         &app,
+        &headers,
+        &method,
+        &uri,
+        raw.as_ref(),
+        routing::ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
+    )?;
+    let routes = torii_visible_account_read_routes(app.as_ref(), caller.as_ref());
+    if routes.is_empty() {
+        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
+    }
+    Ok(execute_torii_list_read_for_routes(
+        &app,
+        routes,
         ToriiReadEndpointV1::AccountTransactionsQuery,
         vec![canonical_account_id.to_string()],
         None,
@@ -3248,6 +3253,8 @@ async fn handler_account_transactions_query(
 #[cfg(feature = "app_api")]
 async fn handler_account_assets(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
@@ -3273,20 +3280,23 @@ async fn handler_account_assets(
         &tel,
         routing::ENDPOINT_ACCOUNTS_ASSETS,
     )?;
-    let query_string = encode_torii_proxy_query(&p)?;
-    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
-        return Ok(execute_torii_single_route_read(
-            &app,
-            route,
-            ToriiReadEndpointV1::AccountAssetsGet,
-            vec![canonical_account_id.to_string()],
-            query_string,
-            Vec::new(),
-        )
-        .await);
-    }
-    Ok(execute_torii_fanout_list_read(
+    let _ = parsed_account_id;
+    let caller = torii_visibility_account_from_headers(
         &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        routing::ENDPOINT_ACCOUNTS_ASSETS,
+    )?;
+    let routes = torii_visible_account_read_routes(app.as_ref(), caller.as_ref());
+    if routes.is_empty() {
+        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
+    }
+    let query_string = encode_torii_proxy_query(&p)?;
+    Ok(execute_torii_list_read_for_routes(
+        &app,
+        routes,
         ToriiReadEndpointV1::AccountAssetsGet,
         vec![canonical_account_id.to_string()],
         query_string,
@@ -3298,6 +3308,8 @@ async fn handler_account_assets(
 #[cfg(feature = "app_api")]
 async fn handler_account_permissions(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
@@ -3317,20 +3329,23 @@ async fn handler_account_permissions(
         &tel,
         "/v1/accounts/{account_id}/permissions",
     )?;
-    let query_string = encode_torii_proxy_query(&p)?;
-    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
-        return Ok(execute_torii_single_route_read(
-            &app,
-            route,
-            ToriiReadEndpointV1::AccountPermissionsGet,
-            vec![canonical_account_id.to_string()],
-            query_string,
-            Vec::new(),
-        )
-        .await);
-    }
-    Ok(execute_torii_fanout_list_read(
+    let _ = parsed_account_id;
+    let caller = torii_visibility_account_from_headers(
         &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        "/v1/accounts/{account_id}/permissions",
+    )?;
+    let routes = torii_visible_account_read_routes(app.as_ref(), caller.as_ref());
+    if routes.is_empty() {
+        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
+    }
+    let query_string = encode_torii_proxy_query(&p)?;
+    Ok(execute_torii_list_read_for_routes(
+        &app,
+        routes,
         ToriiReadEndpointV1::AccountPermissionsGet,
         vec![canonical_account_id.to_string()],
         query_string,
@@ -3342,10 +3357,12 @@ async fn handler_account_permissions(
 #[cfg(feature = "app_api")]
 async fn handler_account_assets_query(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
-    crate::utils::extractors::NoritoJson(env): crate::utils::extractors::NoritoJson<
+    crate::utils::extractors::NoritoJsonWithBytes { value: env, raw }: crate::utils::extractors::NoritoJsonWithBytes<
         crate::filter::QueryEnvelope,
     >,
 ) -> Result<impl IntoResponse, Error> {
@@ -3371,24 +3388,27 @@ async fn handler_account_assets_query(
         &tel,
         routing::ENDPOINT_ACCOUNTS_ASSETS_QUERY,
     )?;
+    let _ = parsed_account_id;
+    let caller = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        raw.as_ref(),
+        routing::ENDPOINT_ACCOUNTS_ASSETS_QUERY,
+    )?;
+    let routes = torii_visible_account_read_routes(app.as_ref(), caller.as_ref());
+    if routes.is_empty() {
+        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
+    }
     let body = norito::json::to_vec(&payload.0).map_err(|error| {
         Error::Query(iroha_data_model::ValidationFail::InternalError(format!(
             "failed to encode routed account assets query: {error}"
         )))
     })?;
-    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
-        return Ok(execute_torii_single_route_read(
-            &app,
-            route,
-            ToriiReadEndpointV1::AccountAssetsQuery,
-            vec![canonical_account_id.to_string()],
-            None,
-            body,
-        )
-        .await);
-    }
-    Ok(execute_torii_fanout_list_read(
+    Ok(execute_torii_list_read_for_routes(
         &app,
+        routes,
         ToriiReadEndpointV1::AccountAssetsQuery,
         vec![canonical_account_id.to_string()],
         None,
@@ -3400,6 +3420,8 @@ async fn handler_account_assets_query(
 #[cfg(feature = "app_api")]
 async fn handler_account_transactions_get(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_id): AxPath<String>,
@@ -3426,21 +3448,24 @@ async fn handler_account_transactions_get(
         &telemetry,
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )?;
+    let _ = parsed_account_id;
+    let caller = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
+    )?;
+    let routes = torii_visible_account_read_routes(app.as_ref(), caller.as_ref());
+    if routes.is_empty() {
+        return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
+    }
     let query_string = encode_torii_proxy_query(&params)?;
     let _ = allowed_asset_definition_id;
-    if let Some(route) = torii_preferred_account_route(app.as_ref(), &parsed_account_id)? {
-        return Ok(execute_torii_single_route_read(
-            &app,
-            route,
-            ToriiReadEndpointV1::AccountTransactionsGet,
-            vec![canonical_account_id.to_string()],
-            query_string,
-            Vec::new(),
-        )
-        .await);
-    }
-    Ok(execute_torii_fanout_list_read(
+    Ok(execute_torii_list_read_for_routes(
         &app,
+        routes,
         ToriiReadEndpointV1::AccountTransactionsGet,
         vec![canonical_account_id.to_string()],
         query_string,
@@ -4058,34 +4083,21 @@ async fn handler_space_directory_bindings(
     AxQuery(query): AxQuery<crate::routing::SpaceDirectoryBindingsQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        return routing::handle_v1_space_directory_bindings(
-            app.state.clone(),
-            AxPath(uaid_literal),
-            AxQuery(query.clone()),
-            app.telemetry.clone(),
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            routing::ENDPOINT_SPACE_DIRECTORY_BINDINGS.trim_start_matches('/'),
+            enforce,
         )
-        .await;
+        .await?;
     }
 
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        Some(remote_ip),
-        routing::ENDPOINT_SPACE_DIRECTORY_BINDINGS.trim_start_matches('/'),
-        enforce,
-    )
-    .await?;
-
-    routing::handle_v1_space_directory_bindings(
-        app.state.clone(),
-        AxPath(uaid_literal),
-        AxQuery(query),
-        app.telemetry.clone(),
-    )
-    .await
+    let query_string = encode_torii_proxy_query(&query)?;
+    Ok(execute_torii_fanout_space_directory_bindings_read(&app, uaid_literal, query_string).await)
 }
 
 #[cfg(feature = "app_api")]
@@ -4098,34 +4110,50 @@ async fn handler_space_directory_manifests(
     AxQuery(query): AxQuery<crate::routing::SpaceDirectoryManifestQuery>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
-    if limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
-        return routing::handle_v1_space_directory_manifests(
-            app.state.clone(),
-            AxPath(uaid_literal),
-            AxQuery(query),
-            app.telemetry.clone(),
+    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+        let enforce =
+            app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
+        check_access_enforced(
+            &app,
+            &headers,
+            Some(remote_ip),
+            routing::ENDPOINT_SPACE_DIRECTORY_MANIFESTS.trim_start_matches('/'),
+            enforce,
         )
-        .await;
+        .await?;
     }
 
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    check_access_enforced(
-        &app,
-        &headers,
-        Some(remote_ip),
-        routing::ENDPOINT_SPACE_DIRECTORY_MANIFESTS.trim_start_matches('/'),
-        enforce,
-    )
-    .await?;
+    if let Some(dataspace_id) = query.dataspace.map(DataSpaceId::new) {
+        let route = torii_route_for_dataspace_id(app.as_ref(), dataspace_id)?;
+        let query_string = encode_torii_proxy_query(&query)?;
+        return Ok(execute_torii_single_route_read(
+            &app,
+            route,
+            ToriiReadEndpointV1::SpaceDirectoryManifestsGet,
+            vec![uaid_literal],
+            query_string,
+            Vec::new(),
+        )
+        .await);
+    }
 
-    routing::handle_v1_space_directory_manifests(
-        app.state.clone(),
-        AxPath(uaid_literal),
-        AxQuery(query),
-        app.telemetry.clone(),
+    let client_offset = query.offset.unwrap_or(0);
+    let client_limit = query.limit.filter(|&value| value > 0);
+    let fanout_query = crate::routing::SpaceDirectoryManifestQuery {
+        dataspace: None,
+        status: query.status.clone(),
+        limit: None,
+        offset: None,
+    };
+    let query_string = encode_torii_proxy_query(&fanout_query)?;
+    Ok(execute_torii_fanout_space_directory_manifests_read(
+        &app,
+        uaid_literal,
+        query_string,
+        client_offset,
+        client_limit,
     )
-    .await
+    .await)
 }
 
 #[cfg(feature = "app_api")]
@@ -10725,21 +10753,78 @@ fn torii_preferred_private_ingress_routes(app: &AppState) -> Vec<RoutingDecision
 }
 
 #[cfg(feature = "app_api")]
-fn torii_preferred_account_route(
+fn torii_signed_visibility_headers_present(headers: &HeaderMap) -> bool {
+    headers.get(HEADER_SIGNATURE).is_some()
+        || headers.get(HEADER_TIMESTAMP_MS).is_some()
+        || headers.get(HEADER_NONCE).is_some()
+        || headers.get(HEADER_WITNESS).is_some()
+}
+
+#[cfg(feature = "app_api")]
+fn torii_visibility_account_from_headers(
+    app: &SharedAppState,
+    headers: &HeaderMap,
+    method: &Method,
+    uri: &Uri,
+    body: &[u8],
+    endpoint: &'static str,
+) -> Result<Option<AccountId>, Error> {
+    if torii_signed_visibility_headers_present(headers) {
+        return crate::app_auth::verify_canonical_request(
+            &app.state, headers, method, uri, body, None,
+        )
+        .map(|verified| verified.map(|request| request.account));
+    }
+
+    let Some(account_header) = headers.get(HEADER_ACCOUNT) else {
+        return Ok(None);
+    };
+
+    let account_literal = account_header.to_str().map_err(|_| {
+        Error::Query(iroha_data_model::ValidationFail::NotPermitted(
+            "invalid X-Iroha-Account value".to_owned(),
+        ))
+    })?;
+
+    // TODO: Require canonical request signatures for all caller-scoped reads once the
+    // remaining app-api clients consistently attach signed read headers.
+    routing::parse_account_path_segment_with_state(
+        app.state.as_ref(),
+        account_literal,
+        &app.telemetry_handle(),
+        endpoint,
+    )
+    .map(|(account_id, _)| Some(account_id))
+}
+
+#[cfg(feature = "app_api")]
+fn torii_visible_account_read_routes(
     app: &AppState,
-    account_id: &AccountId,
-) -> Result<Option<RoutingDecision>, Error> {
+    caller: Option<&AccountId>,
+) -> Vec<RoutingDecision> {
     let state_view = app.state.view();
-    if let Some(dataspace_id) = state_view.world().dataspace_for_account(account_id) {
-        return torii_route_for_dataspace_id(app, dataspace_id).map(Some);
+    let world = state_view.world();
+    let nexus = state_view.nexus();
+    let mut visible_dataspaces = BTreeSet::new();
+
+    for lane in nexus.lane_catalog.lanes() {
+        if lane.visibility == iroha_data_model::nexus::LaneVisibility::Public {
+            visible_dataspaces.insert(lane.dataspace_id);
+        }
     }
 
-    let preferred_private_ingress_routes = torii_preferred_private_ingress_routes(app);
-    if preferred_private_ingress_routes.len() == 1 {
-        return Ok(preferred_private_ingress_routes.into_iter().next());
+    if let Some(caller) = caller
+        && let Ok(account) = world.account(caller)
+        && let Some(uaid) = account.value().uaid().copied()
+        && let Some(bindings) = world.uaid_dataspaces().get(&uaid)
+    {
+        visible_dataspaces.extend(bindings.iter().map(|(dataspace_id, _)| *dataspace_id));
     }
 
-    Ok(None)
+    torii_all_dataspace_routes(app)
+        .into_iter()
+        .filter(|route| visible_dataspaces.contains(&route.dataspace_id))
+        .collect()
 }
 
 fn torii_all_dataspace_routes(app: &AppState) -> Vec<RoutingDecision> {
@@ -11743,6 +11828,17 @@ fn merged_list_response(
 }
 
 #[cfg(feature = "app_api")]
+fn torii_empty_list_response(routed_by: &'static str) -> Response {
+    let mut root = norito::json::Map::new();
+    root.insert("items".into(), Value::Array(Vec::new()));
+    root.insert("total".into(), Value::from(0_u64));
+    let mut response =
+        crate::utils::respond_value_with_format(Value::Object(root), ResponseFormat::Json);
+    insert_routed_by_header(&mut response, routed_by);
+    response
+}
+
+#[cfg(feature = "app_api")]
 fn merged_account_read_response(
     payloads: Vec<AccountReadResponse>,
     format: ResponseFormat,
@@ -11812,6 +11908,189 @@ fn merged_singleton_response(
             "multiple dataspaces returned conflicting singleton results",
         )),
     }
+}
+
+#[cfg(feature = "app_api")]
+fn merged_space_directory_bindings_response(
+    payloads: Vec<Value>,
+    routed_by: &'static str,
+) -> Result<Response, Response> {
+    let mut uaid: Option<String> = None;
+    let mut dataspaces = BTreeMap::<u64, (Option<String>, BTreeSet<String>)>::new();
+
+    for payload in payloads {
+        let Some(obj) = payload.as_object() else {
+            return Err(torii_internal_json_error(
+                "expected JSON object payload while merging space-directory bindings",
+            ));
+        };
+        if let Some(value) = obj.get("uaid").and_then(Value::as_str) {
+            match &uaid {
+                Some(existing) if existing != value => {
+                    return Err(torii_proxy_error_response(
+                        StatusCode::CONFLICT,
+                        "route_conflict",
+                        "multiple dataspaces returned conflicting UAID bindings roots",
+                    ));
+                }
+                None => uaid = Some(value.to_owned()),
+                Some(_) => {}
+            }
+        }
+        let Some(rows) = obj.get("dataspaces").and_then(Value::as_array) else {
+            return Err(torii_internal_json_error(
+                "expected `dataspaces` array while merging space-directory bindings",
+            ));
+        };
+        for row in rows {
+            let Some(dataspace_id) = row.get("dataspace_id").and_then(Value::as_u64) else {
+                return Err(torii_internal_json_error(
+                    "space-directory binding rows must include `dataspace_id`",
+                ));
+            };
+            let alias = row
+                .get("dataspace_alias")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned);
+            let Some(accounts) = row.get("accounts").and_then(Value::as_array) else {
+                return Err(torii_internal_json_error(
+                    "space-directory binding rows must include `accounts`",
+                ));
+            };
+            let entry = dataspaces
+                .entry(dataspace_id)
+                .or_insert_with(|| (alias.clone(), BTreeSet::new()));
+            if entry.0.is_none() {
+                entry.0 = alias;
+            }
+            for account in accounts {
+                let Some(account_literal) = account.as_str() else {
+                    return Err(torii_internal_json_error(
+                        "space-directory binding accounts must be strings",
+                    ));
+                };
+                entry.1.insert(account_literal.to_owned());
+            }
+        }
+    }
+
+    let rows = dataspaces
+        .into_iter()
+        .map(|(dataspace_id, (alias, accounts))| {
+            let mut row = norito::json::Map::new();
+            row.insert("dataspace_id".into(), Value::from(dataspace_id));
+            row.insert(
+                "dataspace_alias".into(),
+                alias.map(Value::from).unwrap_or(Value::Null),
+            );
+            row.insert(
+                "accounts".into(),
+                Value::Array(accounts.into_iter().map(Value::from).collect()),
+            );
+            Value::Object(row)
+        })
+        .collect::<Vec<_>>();
+
+    let mut root = norito::json::Map::new();
+    root.insert(
+        "uaid".into(),
+        uaid.map(Value::from)
+            .unwrap_or(Value::String(String::new())),
+    );
+    root.insert("dataspaces".into(), Value::Array(rows));
+    let mut response =
+        crate::utils::respond_value_with_format(Value::Object(root), ResponseFormat::Json);
+    insert_routed_by_header(&mut response, routed_by);
+    Ok(response)
+}
+
+#[cfg(feature = "app_api")]
+fn merged_space_directory_manifests_response(
+    payloads: Vec<Value>,
+    offset: u64,
+    limit: Option<u64>,
+    routed_by: &'static str,
+) -> Result<Response, Response> {
+    let mut uaid: Option<String> = None;
+    let mut manifests = BTreeMap::<(u64, String), Value>::new();
+
+    for payload in payloads {
+        let Some(obj) = payload.as_object() else {
+            return Err(torii_internal_json_error(
+                "expected JSON object payload while merging space-directory manifests",
+            ));
+        };
+        if let Some(value) = obj.get("uaid").and_then(Value::as_str) {
+            match &uaid {
+                Some(existing) if existing != value => {
+                    return Err(torii_proxy_error_response(
+                        StatusCode::CONFLICT,
+                        "route_conflict",
+                        "multiple dataspaces returned conflicting UAID manifest roots",
+                    ));
+                }
+                None => uaid = Some(value.to_owned()),
+                Some(_) => {}
+            }
+        }
+        let Some(rows) = obj.get("manifests").and_then(Value::as_array) else {
+            return Err(torii_internal_json_error(
+                "expected `manifests` array while merging space-directory manifests",
+            ));
+        };
+        for row in rows {
+            let Some(dataspace_id) = row.get("dataspace_id").and_then(Value::as_u64) else {
+                return Err(torii_internal_json_error(
+                    "space-directory manifests must include `dataspace_id`",
+                ));
+            };
+            let Some(manifest_hash) = row.get("manifest_hash").and_then(Value::as_str) else {
+                return Err(torii_internal_json_error(
+                    "space-directory manifests must include `manifest_hash`",
+                ));
+            };
+            let key = (dataspace_id, manifest_hash.to_owned());
+            if let Some(existing) = manifests.get(&key) {
+                if canonical_json_bytes(existing)? != canonical_json_bytes(row)? {
+                    return Err(torii_proxy_error_response(
+                        StatusCode::CONFLICT,
+                        "route_conflict",
+                        "multiple dataspaces returned conflicting manifest records",
+                    ));
+                }
+                continue;
+            }
+            manifests.insert(key, row.clone());
+        }
+    }
+
+    let total = manifests.len() as u64;
+    let mut merged = manifests.into_values().collect::<Vec<_>>();
+    let offset = usize::try_from(offset).unwrap_or(usize::MAX);
+    if offset >= merged.len() {
+        merged.clear();
+    } else if offset > 0 {
+        merged.drain(0..offset);
+    }
+    if let Some(limit) = limit {
+        let limit = usize::try_from(limit).unwrap_or(usize::MAX);
+        if merged.len() > limit {
+            merged.truncate(limit);
+        }
+    }
+
+    let mut root = norito::json::Map::new();
+    root.insert(
+        "uaid".into(),
+        uaid.map(Value::from)
+            .unwrap_or(Value::String(String::new())),
+    );
+    root.insert("total".into(), Value::from(total));
+    root.insert("manifests".into(), Value::Array(merged));
+    let mut response =
+        crate::utils::respond_value_with_format(Value::Object(root), ResponseFormat::Json);
+    insert_routed_by_header(&mut response, routed_by);
+    Ok(response)
 }
 
 #[cfg(feature = "app_api")]
@@ -12259,6 +12538,140 @@ mod torii_routed_read_tests {
         .expect_err("conflicting singleton payloads should fail");
 
         assert_eq!(response.status(), StatusCode::CONFLICT);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn merged_space_directory_bindings_response_unions_accounts_and_omits_singular_route() {
+        let response = merged_space_directory_bindings_response(
+            vec![
+                norito::json!({
+                    "uaid": "uaid:alice",
+                    "dataspaces": [{
+                        "dataspace_id": 2,
+                        "dataspace_alias": "centralbank",
+                        "accounts": ["alice@centralbank", "bob@centralbank"]
+                    }]
+                }),
+                norito::json!({
+                    "uaid": "uaid:alice",
+                    "dataspaces": [{
+                        "dataspace_id": 2,
+                        "dataspace_alias": "centralbank",
+                        "accounts": ["alice@centralbank"]
+                    }, {
+                        "dataspace_id": 7,
+                        "dataspace_alias": "ops",
+                        "accounts": ["carol@ops"]
+                    }]
+                }),
+            ],
+            "proxy",
+        )
+        .expect("bindings merge should succeed");
+
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-routed-by")
+                .and_then(|value| value.to_str().ok()),
+            Some("proxy")
+        );
+        assert!(
+            response.headers().get("x-iroha-route-lane-id").is_none(),
+            "fanout merge must not report a singular lane"
+        );
+        assert!(
+            response
+                .headers()
+                .get("x-iroha-route-dataspace-id")
+                .is_none(),
+            "fanout merge must not report a singular dataspace"
+        );
+
+        let json = response_json(response).await;
+        assert_eq!(json["uaid"].as_str(), Some("uaid:alice"));
+        let dataspaces = json["dataspaces"]
+            .as_array()
+            .expect("bindings merge should expose dataspaces");
+        assert_eq!(dataspaces.len(), 2);
+        assert_eq!(dataspaces[0]["dataspace_id"].as_u64(), Some(2));
+        assert_eq!(
+            dataspaces[0]["dataspace_alias"].as_str(),
+            Some("centralbank")
+        );
+        assert_eq!(
+            dataspaces[0]["accounts"].as_array().expect("accounts"),
+            &vec![
+                Value::from("alice@centralbank"),
+                Value::from("bob@centralbank"),
+            ]
+        );
+        assert_eq!(dataspaces[1]["dataspace_id"].as_u64(), Some(7));
+        assert_eq!(dataspaces[1]["dataspace_alias"].as_str(), Some("ops"));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn merged_space_directory_manifests_response_applies_post_merge_pagination() {
+        let response = merged_space_directory_manifests_response(
+            vec![
+                norito::json!({
+                    "uaid": "uaid:alice",
+                    "manifests": [{
+                        "dataspace_id": 2,
+                        "manifest_hash": "aaaa",
+                        "status": "Active"
+                    }]
+                }),
+                norito::json!({
+                    "uaid": "uaid:alice",
+                    "manifests": [{
+                        "dataspace_id": 7,
+                        "manifest_hash": "bbbb",
+                        "status": "Revoked"
+                    }, {
+                        "dataspace_id": 2,
+                        "manifest_hash": "aaaa",
+                        "status": "Active"
+                    }]
+                }),
+            ],
+            1,
+            Some(1),
+            "proxy",
+        )
+        .expect("manifest merge should succeed");
+
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-routed-by")
+                .and_then(|value| value.to_str().ok()),
+            Some("proxy")
+        );
+        assert!(
+            response.headers().get("x-iroha-route-lane-id").is_none(),
+            "fanout merge must not report a singular lane"
+        );
+        assert!(
+            response
+                .headers()
+                .get("x-iroha-route-dataspace-id")
+                .is_none(),
+            "fanout merge must not report a singular dataspace"
+        );
+
+        let json = response_json(response).await;
+        assert_eq!(json["uaid"].as_str(), Some("uaid:alice"));
+        assert_eq!(json["total"].as_u64(), Some(2));
+        let manifests = json["manifests"]
+            .as_array()
+            .expect("manifest merge should expose manifests");
+        assert_eq!(manifests.len(), 1);
+        assert_eq!(manifests[0]["dataspace_id"].as_u64(), Some(7));
+        assert_eq!(manifests[0]["manifest_hash"].as_str(), Some("bbbb"));
+        assert_eq!(manifests[0]["status"].as_str(), Some("Revoked"));
     }
 
     #[tokio::test]
@@ -12947,6 +13360,27 @@ async fn execute_torii_read_request_locally(
                 routed_by,
             )
         }
+        ToriiReadEndpointV1::PipelineTransactionStatusGet => {
+            let query = match decode_torii_proxy_query::<PipelineStatusQuery>(
+                request.query_string.as_deref(),
+            ) {
+                Ok(query) => query,
+                Err(response) => return response,
+            };
+            let format = match request.response_format {
+                ToriiProxyResponseFormatV1::Norito => ResponseFormat::Norito,
+                ToriiProxyResponseFormatV1::Json => ResponseFormat::Json,
+            };
+            match execute_pipeline_status_local_read(
+                app,
+                &query,
+                format,
+                Some((routing_decision, routed_by)),
+            ) {
+                Ok(response) => response,
+                Err(error) => error.into_response(),
+            }
+        }
         ToriiReadEndpointV1::AccountsList => {
             let params = match decode_torii_proxy_query::<routing::ListFilterParams>(
                 request.query_string.as_deref(),
@@ -13271,6 +13705,50 @@ async fn execute_torii_read_request_locally(
                 routed_by,
             )
         }
+        ToriiReadEndpointV1::SpaceDirectoryBindingsGet => {
+            let Ok(uaid_literal) = torii_proxy_path_arg(&request, 0, "uaid") else {
+                return torii_proxy_path_arg(&request, 0, "uaid").unwrap_err();
+            };
+            let params = match decode_torii_proxy_query::<routing::SpaceDirectoryBindingsQuery>(
+                request.query_string.as_deref(),
+            ) {
+                Ok(params) => params,
+                Err(response) => return response,
+            };
+            finish_torii_read_result(
+                routing::handle_v1_space_directory_bindings(
+                    app.state.clone(),
+                    AxPath(uaid_literal),
+                    crate::NoritoQuery(params),
+                    app.telemetry.clone(),
+                )
+                .await,
+                routing_decision,
+                routed_by,
+            )
+        }
+        ToriiReadEndpointV1::SpaceDirectoryManifestsGet => {
+            let Ok(uaid_literal) = torii_proxy_path_arg(&request, 0, "uaid") else {
+                return torii_proxy_path_arg(&request, 0, "uaid").unwrap_err();
+            };
+            let params = match decode_torii_proxy_query::<routing::SpaceDirectoryManifestQuery>(
+                request.query_string.as_deref(),
+            ) {
+                Ok(params) => params,
+                Err(response) => return response,
+            };
+            finish_torii_read_result(
+                routing::handle_v1_space_directory_manifests(
+                    app.state.clone(),
+                    AxPath(uaid_literal),
+                    crate::NoritoQuery(params),
+                    app.telemetry.clone(),
+                )
+                .await,
+                routing_decision,
+                routed_by,
+            )
+        }
         ToriiReadEndpointV1::RwasList => {
             let params = match decode_torii_proxy_query::<routing::ListFilterParams>(
                 request.query_string.as_deref(),
@@ -13513,46 +13991,12 @@ async fn execute_torii_fanout_singleton_read(
 }
 
 #[cfg(feature = "app_api")]
-async fn execute_torii_single_route_account_read(
+async fn execute_torii_account_read_for_routes(
     app: &SharedAppState,
-    route: RoutingDecision,
+    routes: Vec<RoutingDecision>,
     canonical_account_id: String,
     format: ResponseFormat,
 ) -> Response {
-    match torii_json_body::<AccountReadResponse>(
-        execute_torii_single_route_read(
-            app,
-            route,
-            ToriiReadEndpointV1::AccountGet,
-            vec![canonical_account_id],
-            None,
-            Vec::new(),
-        )
-        .await,
-        "account get response",
-    )
-    .await
-    {
-        Ok(payload) => {
-            let mut response = crate::utils::respond_with_format(payload, format);
-            insert_routing_headers(
-                &mut response,
-                route,
-                routed_by_for_routes(app, std::slice::from_ref(&route)),
-            );
-            response
-        }
-        Err(response) => response,
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn execute_torii_fanout_account_read(
-    app: &SharedAppState,
-    canonical_account_id: String,
-    format: ResponseFormat,
-) -> Response {
-    let routes = torii_all_dataspace_routes(app.as_ref());
     if routes.is_empty() {
         return torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -13639,6 +14083,57 @@ async fn execute_torii_fanout_dataspace_summary_read(
             merged_dataspace_summary_response(payloads, routed_by_for_routes(app, &routes))
                 .unwrap_or_else(|response| response)
         }
+        Err(response) => response,
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_fanout_space_directory_bindings_read(
+    app: &SharedAppState,
+    uaid_literal: String,
+    query_string: Option<String>,
+) -> Response {
+    match execute_torii_fanout_json_payloads_all_routes(
+        app,
+        ToriiReadEndpointV1::SpaceDirectoryBindingsGet,
+        vec![uaid_literal],
+        query_string,
+        Vec::new(),
+    )
+    .await
+    {
+        Ok((routes, payloads)) => {
+            merged_space_directory_bindings_response(payloads, routed_by_for_routes(app, &routes))
+                .unwrap_or_else(|response| response)
+        }
+        Err(response) => response,
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_fanout_space_directory_manifests_read(
+    app: &SharedAppState,
+    uaid_literal: String,
+    query_string: Option<String>,
+    offset: u64,
+    limit: Option<u64>,
+) -> Response {
+    match execute_torii_fanout_json_payloads_all_routes(
+        app,
+        ToriiReadEndpointV1::SpaceDirectoryManifestsGet,
+        vec![uaid_literal],
+        query_string,
+        Vec::new(),
+    )
+    .await
+    {
+        Ok((routes, payloads)) => merged_space_directory_manifests_response(
+            payloads,
+            offset,
+            limit,
+            routed_by_for_routes(app, &routes),
+        )
+        .unwrap_or_else(|response| response),
         Err(response) => response,
     }
 }
@@ -19994,7 +20489,7 @@ async fn handler_pipeline_recovery(
     )
 }
 
-#[derive(JsonDeserialize)]
+#[derive(JsonDeserialize, crate::json_macros::JsonSerialize, Clone, Debug)]
 struct PipelineStatusQuery {
     #[norito(default)]
     hash: Option<String>,
@@ -20085,6 +20580,95 @@ fn pipeline_status_from_state(
     None
 }
 
+fn pipeline_status_local_entry(
+    app: &SharedAppState,
+    hash: &HashOf<SignedTransaction>,
+) -> Option<(PipelineStatusEntry, &'static str)> {
+    app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
+
+    if let Some(entry) = app.pipeline_status_cache.lookup(hash) {
+        return Some((entry, "cache"));
+    }
+
+    if app.queue.contains_pending_hash(hash.clone(), &app.state) {
+        let entry = PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None);
+        app.pipeline_status_cache
+            .record_entry(hash.clone(), entry.clone());
+        return Some((entry, "queue"));
+    }
+
+    if let Some(entry) = pipeline_status_from_state(app.as_ref(), hash) {
+        app.pipeline_status_cache
+            .record_entry(hash.clone(), entry.clone());
+        return Some((entry, "state"));
+    }
+
+    None
+}
+
+fn pipeline_status_response_with_route(
+    hash: &HashOf<SignedTransaction>,
+    entry: &PipelineStatusEntry,
+    scope: PipelineStatusReadScope,
+    resolved_from: &'static str,
+    format: ResponseFormat,
+    route: Option<(RoutingDecision, &'static str)>,
+) -> Response {
+    let mut response = crate::utils::respond_with_format(
+        pipeline_status_response(hash, entry, scope, resolved_from),
+        format,
+    );
+    if let Some((routing_decision, routed_by)) = route {
+        insert_routing_headers(&mut response, routing_decision, routed_by);
+    }
+    response
+}
+
+fn pipeline_status_not_found_error() -> Error {
+    Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+        iroha_data_model::query::error::QueryExecutionFail::NotFound,
+    ))
+}
+
+fn pipeline_status_proxy_query(
+    hash: &HashOf<SignedTransaction>,
+    scope: PipelineStatusReadScope,
+) -> Result<Option<String>, Error> {
+    encode_torii_proxy_query(&PipelineStatusQuery {
+        hash: Some(hash.to_string()),
+        scope: Some(scope.as_str().to_owned()),
+    })
+}
+
+fn execute_pipeline_status_local_read(
+    app: &SharedAppState,
+    query: &PipelineStatusQuery,
+    format: ResponseFormat,
+    route: Option<(RoutingDecision, &'static str)>,
+) -> Result<Response, Error> {
+    let hash_raw = query
+        .hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
+    let read_scope = parse_pipeline_status_scope(query.scope.as_deref())?;
+    let hash = parse_signed_transaction_hash(hash_raw)?;
+
+    if let Some((entry, resolved_from)) = pipeline_status_local_entry(app, &hash) {
+        return Ok(pipeline_status_response_with_route(
+            &hash,
+            &entry,
+            read_scope,
+            resolved_from,
+            format,
+            route,
+        ));
+    }
+
+    Err(pipeline_status_not_found_error())
+}
+
 async fn handler_pipeline_transaction_status(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -20104,50 +20688,47 @@ async fn handler_pipeline_transaction_status(
         Ok(format) => format,
         Err(resp) => return Ok(resp),
     };
+    let read_scope = parse_pipeline_status_scope(query.scope.as_deref())?;
     let hash_raw = query
         .hash
         .as_deref()
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .ok_or_else(|| conversion_error("missing hash query parameter".to_owned()))?;
-    let read_scope = parse_pipeline_status_scope(query.scope.as_deref())?;
     let hash = parse_signed_transaction_hash(hash_raw)?;
-    app.pipeline_status_cache.refresh_pending_blocks(&app.kura);
 
-    if let Some(entry) = app.pipeline_status_cache.lookup(&hash) {
-        return Ok(crate::utils::respond_with_format(
-            pipeline_status_response(&hash, &entry, read_scope, "cache"),
-            format,
-        ));
-    }
-
-    let queued = app.queue.contains_pending_hash(hash.clone(), &app.state);
-    if queued {
-        let entry = PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None);
-        app.pipeline_status_cache.record_entry(hash, entry.clone());
-        return Ok(crate::utils::respond_with_format(
-            pipeline_status_response(&hash, &entry, read_scope, "queue"),
-            format,
-        ));
-    }
-
-    if let Some(entry) = pipeline_status_from_state(&app, &hash) {
-        app.pipeline_status_cache.record_entry(hash, entry.clone());
-        return Ok(crate::utils::respond_with_format(
-            pipeline_status_response(&hash, &entry, read_scope, "state"),
-            format,
-        ));
+    if let Ok(response) = execute_pipeline_status_local_read(&app, &query, format, None) {
+        return Ok(response);
     }
 
     if matches!(read_scope, PipelineStatusReadScope::Local) {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound,
-        )));
+        return Err(pipeline_status_not_found_error());
     }
 
-    Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-        iroha_data_model::query::error::QueryExecutionFail::NotFound,
-    )))
+    let query_string = pipeline_status_proxy_query(&hash, read_scope)?;
+    if let Some(route) = queue::routing_hint(&hash) {
+        let hinted = execute_torii_single_route_read(
+            &app,
+            route,
+            ToriiReadEndpointV1::PipelineTransactionStatusGet,
+            Vec::new(),
+            query_string.clone(),
+            Vec::new(),
+        )
+        .await;
+        if hinted.status() != StatusCode::NOT_FOUND {
+            return Ok(hinted);
+        }
+    }
+
+    Ok(execute_torii_fanout_singleton_read(
+        &app,
+        ToriiReadEndpointV1::PipelineTransactionStatusGet,
+        Vec::new(),
+        query_string,
+        Vec::new(),
+    )
+    .await)
 }
 
 async fn handler_policy(
@@ -27311,6 +27892,7 @@ pub(crate) mod tests_runtime_handlers {
     fn configure_private_ingress_routes_for_test(
         app: &mut SharedAppState,
     ) -> (LaneId, DataSpaceId) {
+        let nexus_lane = LaneId::new(0);
         let local_validator_keypair = KeyPair::random();
         let local_peer_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let local_validator = AccountId::new(local_validator_keypair.public_key().clone());
@@ -27386,7 +27968,17 @@ pub(crate) mod tests_runtime_handlers {
         }
         install_lane_manifest_registry_for_test(
             state,
-            &[(restricted_lane, vec![(local_validator, local_peer_id)])],
+            &[
+                (
+                    nexus_lane,
+                    vec![(local_validator.clone(), local_peer_id.clone())],
+                ),
+                (
+                    governance_lane,
+                    vec![(local_validator.clone(), local_peer_id.clone())],
+                ),
+                (restricted_lane, vec![(local_validator, local_peer_id)]),
+            ],
         );
         let state_view = app_mut.state.view();
         app_mut.queue.reconfigure_nexus(&nexus, &state_view, None);
@@ -28689,21 +29281,18 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn handler_account_assets_prefers_single_local_restricted_route_for_local_accounts() {
+    async fn handler_account_assets_fan_outs_across_visible_dataspaces() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
-        let (restricted_lane, restricted_dataspace) =
-            configure_private_ingress_routes_for_test(&mut app);
-        let preferred_route = super::torii_preferred_account_route(app.as_ref(), &authority)
-            .expect("account route resolution should succeed");
-        assert_eq!(
-            preferred_route,
-            Some(RoutingDecision::new(restricted_lane, restricted_dataspace)),
-            "local account assets should resolve to the single local restricted route",
-        );
+        configure_multiple_dataspace_routes_for_test(&mut app);
 
+        let uri: axum::http::Uri = format!("/v1/accounts/{authority}/assets")
+            .parse()
+            .expect("valid account assets uri");
         let response = super::handler_account_assets(
             State(app),
+            axum::http::Method::GET,
+            uri,
             HeaderMap::new(),
             crate::loopback_connect_info(),
             AxPath(authority.to_string()),
@@ -28720,21 +29309,61 @@ pub(crate) mod tests_runtime_handlers {
                 .get("x-iroha-routed-by")
                 .and_then(|value| value.to_str().ok()),
             Some("local"),
-            "private ingress account assets should not fan out through public lanes",
+            "account asset reads should still execute locally in unit tests",
         );
-        assert_eq!(
-            response
-                .headers()
-                .get("x-iroha-route-lane-id")
-                .and_then(|value| value.to_str().ok()),
-            Some(restricted_lane.as_u32().to_string().as_str()),
+        assert!(
+            response.headers().get("x-iroha-route-lane-id").is_none(),
+            "visible dataspace fanout should not expose a singular route lane",
         );
-        assert_eq!(
+        assert!(
             response
                 .headers()
                 .get("x-iroha-route-dataspace-id")
+                .is_none(),
+            "visible dataspace fanout should not expose a singular dataspace",
+        );
+    }
+
+    #[tokio::test]
+    async fn handler_account_get_fan_outs_across_global_dataspaces() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        configure_multiple_dataspace_routes_for_test(&mut app);
+
+        let uri: axum::http::Uri = format!("/v1/accounts/{authority}")
+            .parse()
+            .expect("valid account uri");
+        let response = super::handler_account_get(
+            State(app),
+            axum::http::Method::GET,
+            uri,
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            AxPath(authority.to_string()),
+        )
+        .await
+        .expect("account get should execute");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-routed-by")
                 .and_then(|value| value.to_str().ok()),
-            Some(restricted_dataspace.as_u64().to_string().as_str()),
+            Some("local"),
+            "global account reads should still execute locally in unit tests",
+        );
+        assert!(
+            response.headers().get("x-iroha-route-lane-id").is_none(),
+            "global account fanout should not expose a singular route lane",
+        );
+        assert!(
+            response
+                .headers()
+                .get("x-iroha-route-dataspace-id")
+                .is_none(),
+            "global account fanout should not expose a singular dataspace",
         );
     }
 
@@ -29371,6 +30000,11 @@ pub(crate) mod tests_runtime_handlers {
             caps.data_model_version,
             iroha_data_model::DATA_MODEL_VERSION
         );
+        assert_eq!(caps.signed_transaction_schema_hash_hex.len(), 32);
+        assert_eq!(
+            caps.signed_transaction_schema_hash_hex,
+            hex::encode(<iroha_data_model::transaction::SignedTransaction as norito::core::NoritoSerialize>::schema_hash())
+        );
         assert!(caps.crypto.sm.acceleration.scalar);
         assert!(
             !caps.crypto.sm.allowed_signing.is_empty(),
@@ -29915,6 +30549,10 @@ pub(crate) mod tests_runtime_handlers {
 
         let json_resp = super::handler_account_get(
             State(app.clone()),
+            axum::http::Method::GET,
+            format!("/v1/accounts/{account_id}")
+                .parse()
+                .expect("valid account get uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
@@ -29939,6 +30577,10 @@ pub(crate) mod tests_runtime_handlers {
 
         let norito_resp = super::handler_account_get(
             State(app),
+            axum::http::Method::GET,
+            format!("/v1/accounts/{account_id}")
+                .parse()
+                .expect("valid account get uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             Some(crate::utils::extractors::ExtractAccept(
@@ -29972,6 +30614,10 @@ pub(crate) mod tests_runtime_handlers {
 
         let resp = super::handler_account_get(
             State(app),
+            axum::http::Method::GET,
+            format!("/v1/accounts/{missing}")
+                .parse()
+                .expect("valid missing account uri"),
             HeaderMap::new(),
             crate::loopback_connect_info(),
             None,
@@ -36447,12 +37093,13 @@ mod tests {
         let alias_label = AccountAlias::new(
             "banking".parse().expect("label"),
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                "sbp".parse::<Name>().expect("domain id"),
+                "centralbank".parse::<Name>().expect("domain id"),
             )),
             DataSpaceId::GLOBAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
+        let domain =
+            Domain::new("centralbank".parse::<DomainId>().expect("domain id")).build(&authority);
         let account = Account::new(authority.clone())
             .with_label(Some(alias_label))
             .build(&authority);
@@ -36462,7 +37109,7 @@ mod tests {
             [],
         ));
         let request = routing::AliasResolveRequestDto {
-            alias: "banking@sbp.universal".to_string(),
+            alias: "banking@centralbank.universal".to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
         let response = handler_alias_resolve(State(app), axum::body::Bytes::from(body))
@@ -36681,13 +37328,13 @@ mod tests {
     async fn alias_resolve_allows_unsigned_request_without_permission() {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let domain_id: DomainId = "sbp".parse().expect("domain id");
+        let domain_id: DomainId = "centralbank".parse().expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone())
             .with_label(Some(AccountAlias::new(
                 "banking".parse().expect("label"),
                 Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                    "sbp".parse::<Name>().expect("domain"),
+                    "centralbank".parse::<Name>().expect("domain"),
                 )),
                 DataSpaceId::GLOBAL,
             )))
@@ -36698,7 +37345,7 @@ mod tests {
             [],
         ));
         let request = routing::AliasResolveRequestDto {
-            alias: "banking@sbp.universal".to_string(),
+            alias: "banking@centralbank.universal".to_string(),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
         let response = handler_alias_resolve(State(app), axum::body::Bytes::from(body))
@@ -36715,12 +37362,13 @@ mod tests {
         let primary_label = AccountAlias::new(
             "banking".parse().expect("label"),
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                "sbp".parse::<Name>().expect("domain id"),
+                "centralbank".parse::<Name>().expect("domain id"),
             )),
             DataSpaceId::GLOBAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
+        let domain =
+            Domain::new("centralbank".parse::<DomainId>().expect("domain id")).build(&authority);
         let account = Account::new(authority.clone())
             .with_label(Some(primary_label))
             .build(&authority);
@@ -36780,7 +37428,7 @@ mod tests {
         assert!(
             dto.items
                 .iter()
-                .any(|item| item.alias == "banking@sbp.universal"),
+                .any(|item| item.alias == "banking@centralbank.universal"),
             "primary alias should be present"
         );
         assert!(
@@ -36797,12 +37445,13 @@ mod tests {
         let primary_label = AccountAlias::new(
             "banking".parse().expect("label"),
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                "sbp".parse::<Name>().expect("domain id"),
+                "centralbank".parse::<Name>().expect("domain id"),
             )),
             DataSpaceId::GLOBAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
+        let domain =
+            Domain::new("centralbank".parse::<DomainId>().expect("domain id")).build(&authority);
         let account = Account::new(authority.clone())
             .with_label(Some(primary_label))
             .build(&authority);
@@ -36814,7 +37463,7 @@ mod tests {
         let request = routing::AliasLookupByAccountRequestDto {
             account_id: authority.to_string(),
             dataspace: Some("universal".to_string()),
-            domain: Some("sbp".to_string()),
+            domain: Some("centralbank".to_string()),
         };
         let body = norito::json::to_vec(&request).expect("encode request");
         let response = handler_alias_lookup_by_account(State(app), axum::body::Bytes::from(body))
@@ -36830,7 +37479,7 @@ mod tests {
         let dto: routing::AliasLookupByAccountResponseDto =
             norito::json::from_slice(&body).expect("json decode");
         assert_eq!(dto.total, 1);
-        assert_eq!(dto.items[0].alias, "banking@sbp.universal");
+        assert_eq!(dto.items[0].alias, "banking@centralbank.universal");
         assert!(dto.items[0].is_primary);
     }
 
@@ -36856,15 +37505,15 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_scans_account_labels_when_alias_index_is_missing() {
-        let alias = "banking@sbp.universal";
+        let alias = "banking@centralbank.universal";
         let alias_label = iroha_data_model::account::rekey::AccountAlias::new(
             "banking".parse::<Name>().expect("label"),
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                "sbp".parse::<Name>().expect("domain id"),
+                "centralbank".parse::<Name>().expect("domain id"),
             )),
             iroha_data_model::nexus::DataSpaceId::GLOBAL,
         );
-        let domain_id: DomainId = "sbp".parse().expect("domain id");
+        let domain_id: DomainId = "centralbank".parse().expect("domain id");
         let authority = AccountId::new(KeyPair::random().public_key().clone());
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let authority_account = Account::new(authority.clone()).build(&authority);
@@ -36922,11 +37571,11 @@ mod tests {
 
     #[tokio::test]
     async fn alias_resolve_uses_rekey_record_when_alias_index_is_missing() {
-        let alias = "banking@sbp.universal";
+        let alias = "banking@centralbank.universal";
         let alias_label = iroha_data_model::account::rekey::AccountAlias::new(
             "banking".parse::<Name>().expect("label"),
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                "sbp".parse::<Name>().expect("domain id"),
+                "centralbank".parse::<Name>().expect("domain id"),
             )),
             iroha_data_model::nexus::DataSpaceId::GLOBAL,
         );
@@ -38215,14 +38864,14 @@ mod tests {
         let domain_id: DomainId = "issuer".parse().expect("domain id");
         let long_id = AssetDefinitionId::new(
             domain_id.clone(),
-            Name::from_str("pkr").expect("asset name token"),
+            Name::from_str("cbdc").expect("asset name token"),
         );
         let short_id = AssetDefinitionId::new(
             domain_id.clone(),
             Name::from_str("usd").expect("asset name token"),
         );
         let long_definition = iroha_data_model::asset::AssetDefinition::numeric(long_id.clone())
-            .with_name("pkr".to_owned())
+            .with_name("cbdc".to_owned())
             .build(&authority);
         let short_definition = iroha_data_model::asset::AssetDefinition::numeric(short_id.clone())
             .with_name("usd".to_owned())
@@ -38235,7 +38884,7 @@ mod tests {
             &app,
             &authority,
             &long_id,
-            &"pkr#ubl.dataspace".parse().expect("alias"),
+            &"cbdc#ubl.dataspace".parse().expect("alias"),
             None,
             1,
             0,
@@ -38244,19 +38893,20 @@ mod tests {
             &app,
             &authority,
             &short_id,
-            &"usd#sbp".parse().expect("alias"),
+            &"usd#centralbank".parse().expect("alias"),
             None,
             2,
             0,
         );
 
         assert_eq!(
-            parse_asset_definition_id(app.as_ref(), "pkr#ubl.dataspace")
+            parse_asset_definition_id(app.as_ref(), "cbdc#ubl.dataspace")
                 .expect("long alias should resolve"),
             long_id
         );
         assert_eq!(
-            parse_asset_definition_id(app.as_ref(), "usd#sbp").expect("short alias should resolve"),
+            parse_asset_definition_id(app.as_ref(), "usd#centralbank")
+                .expect("short alias should resolve"),
             short_id
         );
         assert_eq!(
@@ -38272,7 +38922,7 @@ mod tests {
             Error::Query(ValidationFail::TooComplex)
         ));
 
-        let missing_error = parse_asset_definition_id(app.as_ref(), "pkr#missing")
+        let missing_error = parse_asset_definition_id(app.as_ref(), "cbdc#missing")
             .expect_err("unknown alias should be rejected");
         assert!(
             matches!(
@@ -38292,7 +38942,7 @@ mod tests {
         let domain_id: DomainId = "issuer".parse().expect("domain id");
         let expected = AssetDefinitionId::new(
             domain_id.clone(),
-            Name::from_str("pkr").expect("asset name token"),
+            Name::from_str("cbdc").expect("asset name token"),
         );
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
@@ -38319,7 +38969,7 @@ mod tests {
         let mut app = mk_app_state_for_tests_with_world(World::with([domain], [account], []));
         let app_state = Arc::get_mut(&mut app).expect("unique app state");
         app_state.tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {
-            allowed_asset_definition_id: Some("pkr#missing".to_owned()),
+            allowed_asset_definition_id: Some("cbdc#missing".to_owned()),
             ..TxHistoryAccessPolicy::default()
         });
 
@@ -39812,12 +40462,13 @@ mod tests {
         let alias_label = AccountAlias::new(
             "banking".parse().expect("label"),
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                "sbp".parse::<Name>().expect("domain id"),
+                "centralbank".parse::<Name>().expect("domain id"),
             )),
             DataSpaceId::GLOBAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
+        let domain =
+            Domain::new("centralbank".parse::<DomainId>().expect("domain id")).build(&authority);
         let account = Account::new(authority.clone())
             .with_label(Some(alias_label))
             .build(&authority);
@@ -39843,7 +40494,7 @@ mod tests {
         let request = routing::MultisigSpecRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
-                multisig_account_alias: Some("banking@sbp.universal".to_owned()),
+                multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
             },
         };
         let body = norito::json::to_vec(&request).expect("encode request");
@@ -39865,7 +40516,7 @@ mod tests {
         let request = routing::MultisigProposalsListRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
-                multisig_account_alias: Some("banking@sbp.universal".to_owned()),
+                multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
             },
             status: Vec::new(),
         };
@@ -39888,7 +40539,7 @@ mod tests {
         let request = routing::MultisigProposalsGetRequestDto {
             selector: routing::MultisigAccountSelectorDto {
                 multisig_account_id: None,
-                multisig_account_alias: Some("banking@sbp.universal".to_owned()),
+                multisig_account_alias: Some("banking@centralbank.universal".to_owned()),
             },
             proposal_id: Some("deadbeef".to_owned()),
             instructions_hash: None,
@@ -39913,12 +40564,13 @@ mod tests {
         let alias_label = AccountAlias::new(
             "banking".parse().expect("label"),
             Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                "sbp".parse::<Name>().expect("domain id"),
+                "centralbank".parse::<Name>().expect("domain id"),
             )),
             DataSpaceId::GLOBAL,
         );
         let authority_account = Account::new(authority.clone()).build(&authority);
-        let domain = Domain::new("sbp".parse::<DomainId>().expect("domain id")).build(&authority);
+        let domain =
+            Domain::new("centralbank".parse::<DomainId>().expect("domain id")).build(&authority);
         let account = Account::new(authority.clone())
             .with_label(Some(alias_label.clone()))
             .build(&authority);
@@ -39943,7 +40595,7 @@ mod tests {
         let dto: routing::AliasResolveIndexResponseDto =
             norito::json::from_slice(&body).expect("json decode");
         assert_eq!(dto.index, 0);
-        assert_eq!(dto.alias, "banking@sbp.universal");
+        assert_eq!(dto.alias, "banking@centralbank.universal");
         assert_eq!(dto.account_id, authority.to_string());
         assert_eq!(dto.source.as_deref(), Some("on_chain"));
     }

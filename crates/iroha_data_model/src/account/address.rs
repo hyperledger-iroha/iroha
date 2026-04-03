@@ -504,7 +504,16 @@ impl AccountAddress {
             return Err(AccountAddressError::UnsupportedAddressFormat);
         }
         let expected = expected_discriminant.unwrap_or_else(chain_discriminant);
-        let address = Self::from_i105_for_discriminant(trimmed, Some(expected))?;
+        let address =
+            Self::from_i105_for_discriminant(trimmed, Some(expected)).map_err(|err| match err {
+                AccountAddressError::MissingI105Sentinel
+                | AccountAddressError::I105TooShort
+                | AccountAddressError::InvalidI105Char(_)
+                | AccountAddressError::InvalidI105Digit(_) => {
+                    AccountAddressError::UnsupportedAddressFormat
+                }
+                other => other,
+            })?;
         address.ensure_canonical_i105_literal(trimmed, expected)?;
         Ok(address)
     }
@@ -2169,6 +2178,13 @@ mod tests {
     fn parse_encoded_rejects_unknown_format() {
         let err = AccountAddress::parse_encoded("alice@hbl.dataspace", None)
             .expect_err("alias literal rejected");
+        assert!(matches!(err, AccountAddressError::UnsupportedAddressFormat));
+    }
+
+    #[test]
+    fn parse_encoded_rejects_garbage_literal_as_unsupported_format() {
+        let err = AccountAddress::parse_encoded("invalid-address", None)
+            .expect_err("garbage literal rejected");
         assert!(matches!(err, AccountAddressError::UnsupportedAddressFormat));
     }
 

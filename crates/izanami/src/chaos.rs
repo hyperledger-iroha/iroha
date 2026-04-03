@@ -28,6 +28,7 @@ use iroha_data_model::{
     query::trigger::prelude::FindTriggers,
     trigger::action::Repeats,
 };
+use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;
 use iroha_genesis::GenesisBlock;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, Signatory};
 use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
@@ -1781,6 +1782,13 @@ fn log_effective_consensus_soak_overrides(config: &ChaosConfig) {
 
 fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>) -> NetworkBuilder {
     let mut genesis = genesis;
+    let nexus_bootstrap_post_topology = config
+        .nexus
+        .as_ref()
+        .map(|profile| {
+            extract_nexus_bootstrap_post_topology(&mut genesis, config.peer_count, profile)
+        })
+        .unwrap_or_default();
     let recovery_profile = recovery_profile_for(config);
     let phase_operator_keypair = sumeragi_phase_operator_keypair();
     let torii_receipt_public_key = phase_operator_keypair.public_key().to_string();
@@ -1846,6 +1854,9 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
     }
     if config.nexus.is_some() {
         builder = builder.without_npos_genesis_bootstrap();
+        for transaction in nexus_bootstrap_post_topology {
+            builder = builder.with_genesis_post_topology_isi(transaction);
+        }
         builder =
             builder.with_genesis_post_topology_isi(instructions::npos_post_topology_instructions(
                 config.peer_count,
@@ -2223,6 +2234,156 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
     }
 
     builder
+}
+
+fn extract_nexus_bootstrap_post_topology(
+    genesis: &mut Vec<Vec<InstructionBox>>,
+    peer_count: usize,
+    profile: &crate::config::NexusProfile,
+) -> Vec<Vec<InstructionBox>> {
+    let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
+    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
+    let universal_domain: DomainId = "universal".parse().expect("universal domain");
+    let gas_account = instructions::nexus_gas_account_id();
+    let validator_accounts: BTreeSet<_> = (0..peer_count.max(1))
+        .map(|index| AccountId::new(instructions::peer_keypair(index).public_key().clone()))
+        .collect();
+    let stake_asset = profile.stake_asset_id.clone();
+    let fee_asset = profile.fee_asset_id.clone();
+    let mut neutral_tx = Vec::new();
+    let mut stake_tx = Vec::new();
+    let mut fee_tx = Vec::new();
+    let mut stake_grant_tx = Vec::new();
+    let mut fee_grant_tx = Vec::new();
+
+    for tx in genesis.iter_mut() {
+        let mut retained = Vec::with_capacity(tx.len());
+        for instruction in tx.drain(..) {
+            match classify_nexus_bootstrap_instruction(
+                &instruction,
+                &nexus_domain,
+                &ivm_domain,
+                &universal_domain,
+                &gas_account,
+                &validator_accounts,
+                &stake_asset,
+                &fee_asset,
+            ) {
+                Some(NexusBootstrapTxKind::Neutral) => neutral_tx.push(instruction),
+                Some(NexusBootstrapTxKind::Stake) => stake_tx.push(instruction),
+                Some(NexusBootstrapTxKind::Fee) => fee_tx.push(instruction),
+                Some(NexusBootstrapTxKind::StakeGrant) => stake_grant_tx.push(instruction),
+                Some(NexusBootstrapTxKind::FeeGrant) => fee_grant_tx.push(instruction),
+                None => retained.push(instruction),
+            }
+        }
+        *tx = retained;
+    }
+    genesis.retain(|tx| !tx.is_empty());
+    let mut bootstrap = Vec::new();
+    if !neutral_tx.is_empty() {
+        bootstrap.push(neutral_tx);
+    }
+    if !stake_tx.is_empty() {
+        bootstrap.push(stake_tx);
+    }
+    if !fee_tx.is_empty() {
+        bootstrap.push(fee_tx);
+    }
+    if !stake_grant_tx.is_empty() {
+        bootstrap.push(stake_grant_tx);
+    }
+    if !fee_grant_tx.is_empty() {
+        bootstrap.push(fee_grant_tx);
+    }
+    bootstrap
+}
+
+#[allow(clippy::too_many_arguments)]
+fn classify_nexus_bootstrap_instruction(
+    instruction: &InstructionBox,
+    nexus_domain: &DomainId,
+    ivm_domain: &DomainId,
+    universal_domain: &DomainId,
+    gas_account: &AccountId,
+    validator_accounts: &BTreeSet<AccountId>,
+    stake_asset: &AssetDefinitionId,
+    fee_asset: &AssetDefinitionId,
+) -> Option<NexusBootstrapTxKind> {
+    if let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() {
+        return match register {
+            RegisterBox::Domain(domain) => {
+                let domain_id = &domain.object.id;
+                (domain_id == nexus_domain
+                    || domain_id == ivm_domain
+                    || domain_id == universal_domain)
+                    .then_some(NexusBootstrapTxKind::Neutral)
+            }
+            RegisterBox::Account(account) => {
+                let account_id = &account.object.id;
+                (account_id == gas_account || validator_accounts.contains(account_id))
+                    .then_some(NexusBootstrapTxKind::Neutral)
+            }
+            RegisterBox::AssetDefinition(definition) => {
+                let definition_id = &definition.object.id;
+                if definition_id == stake_asset {
+                    Some(NexusBootstrapTxKind::Stake)
+                } else if definition_id == fee_asset {
+                    Some(NexusBootstrapTxKind::Fee)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+    }
+
+    if let Some(mint) = instruction.as_any().downcast_ref::<MintBox>() {
+        return match mint {
+            MintBox::Asset(asset) if asset.destination.definition() == stake_asset => {
+                Some(NexusBootstrapTxKind::Stake)
+            }
+            MintBox::Asset(asset) if asset.destination.definition() == fee_asset => {
+                Some(NexusBootstrapTxKind::Fee)
+            }
+            _ => None,
+        };
+    }
+
+    if let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() {
+        return match grant {
+            GrantBox::Permission(permission)
+                if permission.object
+                    == CanMintAssetWithDefinition {
+                        asset_definition: stake_asset.clone(),
+                    }
+                    .into() =>
+            {
+                Some(NexusBootstrapTxKind::StakeGrant)
+            }
+            GrantBox::Permission(permission)
+                if permission.object
+                    == CanMintAssetWithDefinition {
+                        asset_definition: fee_asset.clone(),
+                    }
+                    .into() =>
+            {
+                Some(NexusBootstrapTxKind::FeeGrant)
+            }
+            _ => None,
+        };
+    }
+
+    None
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NexusBootstrapTxKind {
+    Neutral,
+    Stake,
+    Fee,
+    StakeGrant,
+    FeeGrant,
 }
 
 /// Deterministically select which peers should receive fault injection tasks.
@@ -4657,6 +4818,177 @@ mod tests {
             1,
             "generated NPoS genesis should have a uniform validator self-bond distribution"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn generated_npos_genesis_bootstraps_stake_assets_before_validator_activation() -> Result<()> {
+        init_instruction_registry();
+        let profile = crate::config::NexusProfile::sora_defaults()?;
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
+            seed: Some(31),
+            tps: 2.0,
+            max_inflight: 4,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([false, false, false, false]),
+            nexus: Some(profile.clone()),
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            config.nexus.as_ref(),
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
+        let network = make_network_builder(&config, genesis).build();
+
+        let mut bootstrap_tx_index = None;
+        let mut validator_tx_index = None;
+        let mut tx_index = 0usize;
+        for tx in network.genesis().0.transactions_vec() {
+            let Executable::Instructions(instructions) = tx.instructions() else {
+                tx_index = tx_index.saturating_add(1);
+                continue;
+            };
+            let has_bootstrap_assets = instructions.iter().any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterBox>()
+                    .is_some_and(|register| match register {
+                        RegisterBox::AssetDefinition(definition) => {
+                            definition.object.id == profile.stake_asset_id
+                                || definition.object.id == profile.fee_asset_id
+                        }
+                        _ => false,
+                    })
+            });
+            if has_bootstrap_assets && bootstrap_tx_index.is_none() {
+                bootstrap_tx_index = Some(tx_index);
+            }
+            let has_validator_activation = instructions.iter().any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+                    .is_some()
+            });
+            if has_validator_activation && validator_tx_index.is_none() {
+                validator_tx_index = Some(tx_index);
+            }
+            tx_index = tx_index.saturating_add(1);
+        }
+
+        let bootstrap_tx_index = bootstrap_tx_index.expect("bootstrap asset tx should exist");
+        let validator_tx_index = validator_tx_index.expect("validator bootstrap tx should exist");
+        assert!(
+            bootstrap_tx_index < validator_tx_index,
+            "stake/fee asset bootstrap must execute before validator registration"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn generated_npos_genesis_registers_each_bootstrap_asset_definition_once() -> Result<()> {
+        init_instruction_registry();
+        let profile = crate::config::NexusProfile::sora_defaults()?;
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
+            seed: Some(41),
+            tps: 2.0,
+            max_inflight: 4,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([false, false, false, false]),
+            nexus: Some(profile.clone()),
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            config.nexus.as_ref(),
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
+        let network = make_network_builder(&config, genesis).build();
+
+        let mut registrations = BTreeMap::<AssetDefinitionId, Vec<usize>>::new();
+        let mut tx_asset_registrations = BTreeMap::<usize, Vec<AssetDefinitionId>>::new();
+        for (tx_index, tx) in network
+            .genesis()
+            .0
+            .transactions_vec()
+            .into_iter()
+            .enumerate()
+        {
+            let Executable::Instructions(instructions) = tx.instructions() else {
+                continue;
+            };
+            for instruction in instructions {
+                let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
+                    continue;
+                };
+                let RegisterBox::AssetDefinition(definition) = register else {
+                    continue;
+                };
+                registrations
+                    .entry(definition.object.id.clone())
+                    .or_default()
+                    .push(tx_index);
+                tx_asset_registrations
+                    .entry(tx_index)
+                    .or_default()
+                    .push(definition.object.id.clone());
+            }
+        }
+
+        for asset_id in [&profile.stake_asset_id, &profile.fee_asset_id] {
+            let txs = registrations.get(asset_id).cloned().unwrap_or_default();
+            let tx_details: Vec<_> = txs
+                .iter()
+                .map(|tx_index| {
+                    let asset_ids: Vec<_> = tx_asset_registrations
+                        .get(tx_index)
+                        .cloned()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|id| id.to_string())
+                        .collect();
+                    (*tx_index, asset_ids)
+                })
+                .collect();
+            assert_eq!(
+                txs,
+                vec![
+                    *txs.first()
+                        .expect("bootstrap asset definition should exist")
+                ],
+                "bootstrap asset definition {asset_id} must be registered exactly once; found txs {txs:?} with asset registrations {tx_details:?}"
+            );
+        }
         Ok(())
     }
 

@@ -63,6 +63,8 @@ pub enum ToriiReadEndpointV1 {
     AccountTransactionsGet,
     /// `POST /v1/accounts/{account_id}/transactions/query`
     AccountTransactionsQuery,
+    /// `GET /v1/pipeline/transactions/status`
+    PipelineTransactionStatusGet,
     /// `GET /v1/accounts`
     AccountsList,
     /// `POST /v1/accounts/query`
@@ -95,6 +97,10 @@ pub enum ToriiReadEndpointV1 {
     NexusPublicLaneRewards,
     /// `GET /v1/nexus/dataspaces/accounts/{literal}/summary`
     NexusDataspacesAccountSummary,
+    /// `GET /v1/space-directory/uaids/{uaid}`
+    SpaceDirectoryBindingsGet,
+    /// `GET /v1/space-directory/uaids/{uaid}/manifests`
+    SpaceDirectoryManifestsGet,
     /// `GET /v1/rwas`
     RwasList,
     /// `POST /v1/rwas/query`

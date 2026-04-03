@@ -45,11 +45,8 @@ impl VisitExecute for MultisigRegister {
         metadata.insert(spec_key(), Json::new(spec.clone()));
         metadata.insert(home_domain_key(), Json::new(home_domain.clone()));
 
-        let register_account = if let Some(home_domain) = home_domain.clone() {
-            Register::account(Account::new(multisig_account_id.clone()).with_metadata(metadata))
-        } else {
-            Register::account(Account::new(multisig_account_id.clone()).with_metadata(metadata))
-        };
+        let register_account =
+            Register::account(Account::new(multisig_account_id.clone()).with_metadata(metadata));
         let original_authority = executor.context().authority.clone();
         let register_result = {
             executor.context_mut().authority = domain_owner
@@ -153,7 +150,7 @@ fn materialize_missing_signatory_accounts<V: Execute + Visit + ?Sized>(
 fn ensure_signatory_account_exists<V: Execute + Visit + ?Sized>(
     executor: &mut V,
     signatory: &AccountId,
-    home_domain: Option<&DomainId>,
+    _home_domain: Option<&DomainId>,
 ) -> Result<(), ValidationFail> {
     if account_exists(signatory, executor)? {
         return Ok(());
@@ -161,11 +158,8 @@ fn ensure_signatory_account_exists<V: Execute + Visit + ?Sized>(
 
     let mut metadata = Metadata::default();
     metadata.insert(multisig_created_via_key(), Json::new("multisig"));
-    let register_account = if let Some(home_domain) = home_domain.cloned() {
-        Register::account(Account::new(signatory.clone()).with_metadata(metadata))
-    } else {
-        Register::account(Account::new(signatory.clone()).with_metadata(metadata))
-    };
+    let register_account =
+        Register::account(Account::new(signatory.clone()).with_metadata(metadata));
     executor.visit_register_account(&register_account);
     if executor.verdict().is_err() {
         return executor.verdict().clone();

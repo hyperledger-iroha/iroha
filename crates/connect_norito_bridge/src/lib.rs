@@ -7536,6 +7536,42 @@ mod accel_tests {
     }
 
     #[test]
+    fn keypair_from_seed_mldsa_roundtrip() {
+        let _guard = chain_guard();
+        let seed = b"bridge-mldsa-seed-vector".to_vec();
+        let expected = KeyPair::from_seed(seed.clone(), Algorithm::MlDsa);
+        let (expected_public, expected_private) = expected.into_parts();
+        let (_alg, expected_private_bytes) = expected_private.to_bytes();
+        let (_alg, expected_public_bytes) = expected_public.to_bytes();
+        let mut out_private_ptr: *mut u8 = ptr::null_mut();
+        let mut out_private_len: c_ulong = 0;
+        let mut out_public_ptr: *mut u8 = ptr::null_mut();
+        let mut out_public_len: c_ulong = 0;
+        let result = unsafe {
+            connect_norito_keypair_from_seed(
+                Algorithm::MlDsa as u8,
+                seed.as_ptr(),
+                seed.len() as c_ulong,
+                &mut out_private_ptr,
+                &mut out_private_len,
+                &mut out_public_ptr,
+                &mut out_public_len,
+            )
+        };
+        assert_eq!(result, 0, "expected success");
+        let private_bytes =
+            unsafe { slice::from_raw_parts(out_private_ptr, out_private_len as usize) };
+        let public_bytes =
+            unsafe { slice::from_raw_parts(out_public_ptr, out_public_len as usize) };
+        assert_eq!(private_bytes, expected_private_bytes.as_slice());
+        assert_eq!(public_bytes, expected_public_bytes);
+        unsafe {
+            free(out_private_ptr as *mut _);
+            free(out_public_ptr as *mut _);
+        }
+    }
+
+    #[test]
     fn connect_open_app_metadata_roundtrip() {
         let _guard = chain_guard();
         let sid = [0x11u8; 32];
@@ -8242,9 +8278,6 @@ mod accel_tests {
         let _guard = chain_guard();
         let chain = cstring("test-chain");
         let (authority, private) = sample_account("default", 0);
-        let authority_id = AccountId::parse_encoded(authority.to_str().unwrap())
-            .expect("authority account id")
-            .into_account_id();
         let scoped_account = cstring(authority.to_str().unwrap());
         let member_a_str = sample_destination("default", 2);
         let member_b_str = sample_destination("default", 3);
@@ -9765,6 +9798,400 @@ where
             None
         }
     }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn read_java_byte_array(
+    env: &mut jni::JNIEnv<'_>,
+    array: &jni::objects::JByteArray<'_>,
+    context: &str,
+) -> Option<Vec<u8>> {
+    let len = match env.get_array_length(array) {
+        Ok(value) => value,
+        Err(err) => {
+            throw_java_illegal_argument(
+                env,
+                format!("{context} failed to read array length: {err}"),
+            );
+            return None;
+        }
+    } as usize;
+    let mut buf = vec![0i8; len];
+    if let Err(err) = env.get_byte_array_region(array, 0, &mut buf) {
+        throw_java_illegal_state(
+            env,
+            format!("{context} failed to read array contents: {err}"),
+        );
+        return None;
+    }
+    Some(buf.into_iter().map(|byte| byte as u8).collect())
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_public_key_from_private_bytes(
+    algorithm_code: jni::sys::jint,
+    private_key: &[u8],
+) -> Result<Vec<u8>, String> {
+    let algorithm = parse_algorithm_code(algorithm_code as u8)
+        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    let private_key = parse_private_key_with_algorithm(private_key, algorithm)
+        .map_err(|_| "invalid private key bytes".to_string())?;
+    let key_pair = KeyPair::from_private_key(private_key)
+        .map_err(|_| "failed to derive public key".to_string())?;
+    Ok(key_pair.public_key().to_bytes().1.to_vec())
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_keypair_from_seed_bytes(
+    algorithm_code: jni::sys::jint,
+    seed: &[u8],
+) -> Result<(Vec<u8>, Vec<u8>), String> {
+    let algorithm = parse_algorithm_code(algorithm_code as u8)
+        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    let key_pair = KeyPair::from_seed(seed.to_vec(), algorithm);
+    let (public_key, private_key) = key_pair.into_parts();
+    Ok((
+        private_key.to_bytes().1.to_vec(),
+        public_key.to_bytes().1.to_vec(),
+    ))
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_sign_detached_bytes(
+    algorithm_code: jni::sys::jint,
+    private_key: &[u8],
+    message: &[u8],
+) -> Result<Vec<u8>, String> {
+    let algorithm = parse_algorithm_code(algorithm_code as u8)
+        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    let private_key = parse_private_key_with_algorithm(private_key, algorithm)
+        .map_err(|_| "invalid private key bytes".to_string())?;
+    Ok(Signature::new(&private_key, message).payload().to_vec())
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_verify_detached_bytes(
+    algorithm_code: jni::sys::jint,
+    public_key: &[u8],
+    message: &[u8],
+    signature: &[u8],
+) -> Result<bool, String> {
+    let algorithm = parse_algorithm_code(algorithm_code as u8)
+        .map_err(|_| format!("unsupported signing algorithm code: {algorithm_code}"))?;
+    let public_key = PublicKey::from_bytes(algorithm, public_key)
+        .map_err(|_| "invalid public key bytes".to_string())?;
+    let signature = Signature::from_bytes(signature);
+    match signature.verify(&public_key, message) {
+        Ok(()) => Ok(true),
+        Err(CryptoError::BadSignature) => Ok(false),
+        Err(_) => Err("signature verification failed".to_string()),
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_public_key_from_private(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_code: jni::sys::jint,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let private_bytes = read_java_byte_array(env, &private_key, "privateKey")
+            .ok_or_else(|| "invalid private key bytes".to_string())?;
+        let public_bytes = java_public_key_from_private_bytes(algorithm_code, &private_bytes)?;
+        let array = env
+            .byte_array_from_slice(&public_bytes)
+            .map_err(|err| err.to_string())?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_keypair_from_seed(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_code: jni::sys::jint,
+    seed: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    let result = (|| -> Result<jni::sys::jobjectArray, String> {
+        let seed_bytes = read_java_byte_array(env, &seed, "seed")
+            .ok_or_else(|| "invalid seed bytes".to_string())?;
+        let (private_bytes, public_bytes) =
+            java_keypair_from_seed_bytes(algorithm_code, &seed_bytes)?;
+        let private_array = env
+            .byte_array_from_slice(&private_bytes)
+            .map_err(|err| err.to_string())?;
+        let public_array = env
+            .byte_array_from_slice(&public_bytes)
+            .map_err(|err| err.to_string())?;
+        let byte_array_class = env.find_class("[B").map_err(|err| err.to_string())?;
+        let array = env
+            .new_object_array(2, byte_array_class, jni::objects::JObject::null())
+            .map_err(|err| err.to_string())?;
+        env.set_object_array_element(&array, 0, &private_array)
+            .map_err(|err| err.to_string())?;
+        env.set_object_array_element(&array, 1, &public_array)
+            .map_err(|err| err.to_string())?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_sign_detached(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_code: jni::sys::jint,
+    private_key: jni::objects::JByteArray<'_>,
+    message: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    let result = (|| -> Result<jni::sys::jbyteArray, String> {
+        let private_bytes = read_java_byte_array(env, &private_key, "privateKey")
+            .ok_or_else(|| "invalid private key bytes".to_string())?;
+        let message_bytes = read_java_byte_array(env, &message, "message")
+            .ok_or_else(|| "invalid message bytes".to_string())?;
+        let signature = java_sign_detached_bytes(algorithm_code, &private_bytes, &message_bytes)?;
+        let array = env
+            .byte_array_from_slice(&signature)
+            .map_err(|err| err.to_string())?;
+        Ok(array.into_raw())
+    })();
+    match result {
+        Ok(array) => array,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            std::ptr::null_mut()
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+fn java_native_verify_detached(
+    env: &mut jni::JNIEnv<'_>,
+    algorithm_code: jni::sys::jint,
+    public_key: jni::objects::JByteArray<'_>,
+    message: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    let result = (|| -> Result<jni::sys::jboolean, String> {
+        let public_bytes = read_java_byte_array(env, &public_key, "publicKey")
+            .ok_or_else(|| "invalid public key bytes".to_string())?;
+        let message_bytes = read_java_byte_array(env, &message, "message")
+            .ok_or_else(|| "invalid message bytes".to_string())?;
+        let signature_bytes = read_java_byte_array(env, &signature, "signature")
+            .ok_or_else(|| "invalid signature bytes".to_string())?;
+        let valid = java_verify_detached_bytes(
+            algorithm_code,
+            &public_bytes,
+            &message_bytes,
+            &signature_bytes,
+        )?;
+        Ok(if valid { 1 } else { 0 })
+    })();
+    match result {
+        Ok(valid) => valid,
+        Err(message) => {
+            throw_java_illegal_argument(env, message);
+            0
+        }
+    }
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativePublicKeyFromPrivate(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_public_key_from_private(&mut env, algorithm_code, private_key)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeKeypairFromSeed(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    seed: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_keypair_from_seed(&mut env, algorithm_code, seed)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeSignDetached(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    private_key: jni::objects::JByteArray<'_>,
+    message: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_sign_detached(&mut env, algorithm_code, private_key, message)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_sdk_crypto_NativeSignerBridge_nativeVerifyDetached(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    public_key: jni::objects::JByteArray<'_>,
+    message: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    java_native_verify_detached(&mut env, algorithm_code, public_key, message, signature)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativePublicKeyFromPrivate(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    private_key: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_public_key_from_private(&mut env, algorithm_code, private_key)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeKeypairFromSeed(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    seed: jni::objects::JByteArray<'_>,
+) -> jni::sys::jobjectArray {
+    java_native_keypair_from_seed(&mut env, algorithm_code, seed)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeSignDetached(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    private_key: jni::objects::JByteArray<'_>,
+    message: jni::objects::JByteArray<'_>,
+) -> jni::sys::jbyteArray {
+    java_native_sign_detached(&mut env, algorithm_code, private_key, message)
+}
+
+#[cfg(any(
+    target_os = "android",
+    target_os = "linux",
+    target_os = "macos",
+    target_os = "windows"
+))]
+#[allow(clippy::missing_safety_doc)]
+#[unsafe(no_mangle)]
+pub unsafe extern "system" fn Java_org_hyperledger_iroha_android_crypto_NativeSignerBridge_nativeVerifyDetached(
+    mut env: jni::JNIEnv<'_>,
+    _class: jni::objects::JClass<'_>,
+    algorithm_code: jni::sys::jint,
+    public_key: jni::objects::JByteArray<'_>,
+    message: jni::objects::JByteArray<'_>,
+    signature: jni::objects::JByteArray<'_>,
+) -> jni::sys::jboolean {
+    java_native_verify_detached(&mut env, algorithm_code, public_key, message, signature)
 }
 
 #[cfg(any(
@@ -12423,6 +12850,18 @@ mod tests {
             public.len()
         );
         assert_eq!(signature.len(), 64);
+    }
+
+    #[test]
+    fn ffi_sign_verify_mldsa() {
+        let keypair = KeyPair::from_seed(b"ffi-mldsa-signing".to_vec(), Algorithm::MlDsa);
+        let (_public_key, private_key) = keypair.into_parts();
+        let (_alg, private_bytes) = private_key.to_bytes();
+        let message = b"ffi-mldsa-signing";
+        let (signature, public) =
+            sign_and_verify_roundtrip(Algorithm::MlDsa, &private_bytes, message);
+        assert!(!public.is_empty(), "ML-DSA public key must not be empty");
+        assert!(!signature.is_empty(), "ML-DSA signature must not be empty");
     }
 
     #[test]

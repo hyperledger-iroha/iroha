@@ -4711,7 +4711,7 @@ mod tests {
         ])
         .expect("opaque asset definition id");
         let instruction = InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone()).with_name("pkr".to_owned()),
+            AssetDefinition::numeric(asset_definition_id.clone()).with_name("cbdc".to_owned()),
         ));
 
         let mut stx = block.transaction();
@@ -5361,7 +5361,6 @@ mod tests {
     #[test]
     fn bench_profile_runs_without_logger() {
         let authority = ALICE_ID.clone();
-        let authority_domain_id: DomainId = "wonderland".parse().expect("domain id");
         let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([], [account], []);
         let kura = Kura::blank_kura_for_testing();

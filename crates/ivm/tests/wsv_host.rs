@@ -31,7 +31,7 @@ fn make_numeric_tlv(amount: impl Into<Numeric>) -> Vec<u8> {
     make_tlv(PointerType::NoritoBytes as u16, &buf)
 }
 
-fn test_account(domain: DomainId, public_key: PublicKey) -> AccountId {
+fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
     AccountId::new(public_key)
 }
 

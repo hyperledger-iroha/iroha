@@ -656,12 +656,12 @@ mod contract_address_tests {
 
     #[test]
     fn contract_alias_resolves_alias_domain_segment() {
-        let alias: ContractAlias = "router::dex.sbp".parse().expect("valid alias");
+        let alias: ContractAlias = "router::dex.centralbank".parse().expect("valid alias");
         let catalog = DataSpaceCatalog::new(vec![
             crate::nexus::DataSpaceMetadata::default(),
             crate::nexus::DataSpaceMetadata {
                 id: DataSpaceId::new(9),
-                alias: "sbp".to_owned(),
+                alias: "centralbank".to_owned(),
                 description: None,
                 fault_tolerance: 1,
             },

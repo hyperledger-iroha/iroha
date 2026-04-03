@@ -175,6 +175,7 @@ impl Actor {
         self.subsystems.validation.inflight.clear();
         self.subsystems.validation.superseded_results.clear();
         self.pending.pending_fetch_requests.clear();
+        self.pending.pending_block_body_requests.clear();
         self.subsystems.da_rbc.rbc.pending.clear();
         self.subsystems.da_rbc.rbc.sessions.clear();
         self.subsystems.da_rbc.rbc.deliver_deferral.clear();
@@ -217,6 +218,7 @@ impl Actor {
         let (_, redundant_r) = self.collector_plan_params_for_mode(effective_mode);
         self.subsystems.propose.collector_redundant_limit = redundant_r.max(1);
         self.pending.missing_block_requests.clear();
+        self.pending.missing_commit_qc_requests.clear();
         self.subsystems.da_rbc.da.da_bundles.clear();
         self.subsystems.da_rbc.da.da_pin_bundles.clear();
         self.subsystems.da_rbc.da.sealed_commitments.clear();

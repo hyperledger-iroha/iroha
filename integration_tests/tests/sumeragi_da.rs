@@ -285,6 +285,99 @@ fn parse_pending_rbc_stash_counters(root: &Value) -> PendingRbcStashCounters {
     }
 }
 
+fn truncate_for_error(input: &str, max_chars: usize) -> String {
+    let trimmed = input.trim();
+    if trimmed.chars().count() <= max_chars {
+        return trimmed.to_owned();
+    }
+    let mut truncated = String::new();
+    for ch in trimmed.chars().take(max_chars) {
+        truncated.push(ch);
+    }
+    truncated.push('…');
+    truncated
+}
+
+async fn collect_json_endpoint_snapshot(http: &reqwest::Client, url: &reqwest::Url) -> String {
+    match http
+        .get(url.clone())
+        .header("Accept", "application/json")
+        .send()
+        .await
+    {
+        Ok(response) => {
+            let status = response.status();
+            match response.text().await {
+                Ok(body) => format!("http={status} body={}", truncate_for_error(&body, 800)),
+                Err(err) => format!("http={status} read_err={err}"),
+            }
+        }
+        Err(err) => format!("request_err={err}"),
+    }
+}
+
+async fn collect_metrics_endpoint_snapshot(http: &reqwest::Client, url: &reqwest::Url) -> String {
+    match http.get(url.clone()).send().await {
+        Ok(response) => {
+            let status = response.status();
+            match response.text().await {
+                Ok(body) => {
+                    let reader = MetricsReader::new(&body);
+                    let missing_block_fetch_total = reader
+                        .max_with_prefix("sumeragi_missing_block_fetch_target_total")
+                        .unwrap_or(0.0);
+                    let missing_block_retry_total = reader
+                        .max_with_prefix("sumeragi_missing_block_fetch_retry_total")
+                        .unwrap_or(0.0);
+                    let drop_total = reader
+                        .max_with_prefix("sumeragi_consensus_message_total{kind=\"BlockSyncUpdate\",outcome=\"Dropped\"")
+                        .unwrap_or(0.0);
+                    format!(
+                        "http={status} missing_block_fetch_target_total={missing_block_fetch_total} missing_block_fetch_retry_total={missing_block_retry_total} block_sync_drop_total={drop_total} sample={}",
+                        truncate_for_error(&body, 800)
+                    )
+                }
+                Err(err) => format!("http={status} read_err={err}"),
+            }
+        }
+        Err(err) => format!("request_err={err}"),
+    }
+}
+
+async fn collect_peer_recovery_context(
+    http: &reqwest::Client,
+    peers: &[NetworkPeer],
+    peer_sumeragi_urls: &[reqwest::Url],
+    peer_metrics_urls: &[reqwest::Url],
+) -> String {
+    let mut out = String::new();
+    for (idx, peer) in peers.iter().enumerate() {
+        let _ = writeln!(out, "peer[{idx}] torii={}", peer.torii_url());
+        match reqwest::Url::parse(&format!("{}/status", peer.torii_url())) {
+            Ok(status_url) => {
+                let snapshot = collect_json_endpoint_snapshot(http, &status_url).await;
+                let _ = writeln!(out, "  /status {snapshot}");
+            }
+            Err(err) => {
+                let _ = writeln!(out, "  /status url_err={err}");
+            }
+        }
+        if let Some(url) = peer_sumeragi_urls.get(idx) {
+            let snapshot = collect_json_endpoint_snapshot(http, url).await;
+            let _ = writeln!(out, "  /v1/sumeragi/status {snapshot}");
+        } else {
+            let _ = writeln!(out, "  /v1/sumeragi/status missing_url");
+        }
+        if let Some(url) = peer_metrics_urls.get(idx) {
+            let snapshot = collect_metrics_endpoint_snapshot(http, url).await;
+            let _ = writeln!(out, "  /metrics {snapshot}");
+        } else {
+            let _ = writeln!(out, "  /metrics missing_url");
+        }
+    }
+    out
+}
+
 // Keep the payload light to avoid overwhelming Torii/queue on constrained hosts.
 const LARGE_PAYLOAD_BYTES: usize = 1024; // keep payload light to ensure timely DA/RBC
 // Use a multi-chunk payload to ensure the recovery test observes an in-flight session.
@@ -1753,7 +1846,16 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
                 break;
             }
             if Instant::now() > baseline_deadline {
-                return Err(eyre!("timed out collecting baseline Sumeragi/metrics snapshots"));
+                let diagnostics = collect_peer_recovery_context(
+                    &http,
+                    &peers,
+                    &peer_sumeragi_urls,
+                    &peer_metrics_urls,
+                )
+                .await;
+                return Err(eyre!(
+                    "timed out collecting baseline Sumeragi/metrics snapshots\n{diagnostics}"
+                ));
             }
             sleep(Duration::from_millis(200)).await;
         }
@@ -1776,8 +1878,15 @@ async fn sumeragi_rbc_unverified_roster_stash_requests_missing_block() -> Result
         let pending_deadline = Instant::now() + Duration::from_secs(30);
         loop {
             if Instant::now() > pending_deadline {
+                let diagnostics = collect_peer_recovery_context(
+                    &http,
+                    &peers,
+                    &peer_sumeragi_urls,
+                    &peer_metrics_urls,
+                )
+                .await;
                 return Err(eyre!(
-                    "timed out waiting for missing-block fetch or lagging catch-up; unverified_baseline={baseline_unverified_total}, unverified_last={last_unverified_total}, fetch_baseline={baseline_fetch_total}, fetch_last={last_fetch_total}, lagging_height={last_lagging_height:?}, expected_height={expected_height}"
+                    "timed out waiting for missing-block fetch or lagging catch-up; unverified_baseline={baseline_unverified_total}, unverified_last={last_unverified_total}, fetch_baseline={baseline_fetch_total}, fetch_last={last_fetch_total}, lagging_height={last_lagging_height:?}, expected_height={expected_height}\n{diagnostics}"
                 ));
             }
             let mut fetch_observed = fetch_already_active;
@@ -2813,13 +2922,25 @@ where
             })
             .collect::<Vec<_>>()
             .join("; ");
+        let metrics_context =
+            if peers_with_payload < min_metric_peers || peers_with_deliver < min_metric_peers {
+                collect_rbc_metric_context(
+                    &http,
+                    network.peers(),
+                    expected_height,
+                    &rbc_observation.block_hash,
+                )
+                .await?
+            } else {
+                String::new()
+            };
         assert!(
             peers_with_payload >= min_metric_peers,
-            "expected RBC payload-bytes metrics on at least {min_metric_peers}/{peer_count} peers; got {peers_with_payload}. {metrics_summary}"
+            "expected RBC payload-bytes metrics on at least {min_metric_peers}/{peer_count} peers; got {peers_with_payload}. {metrics_summary}\n{metrics_context}"
         );
         assert!(
             peers_with_deliver >= min_metric_peers,
-            "expected RBC DELIVER metrics on at least {min_metric_peers}/{peer_count} peers; got {peers_with_deliver}. {metrics_summary}"
+            "expected RBC DELIVER metrics on at least {min_metric_peers}/{peer_count} peers; got {peers_with_deliver}. {metrics_summary}\n{metrics_context}"
         );
     }
 
@@ -3161,6 +3282,12 @@ fn metrics_reader_max_with_prefix_handles_labels() {
     let reader = MetricsReader::new(raw);
     assert_eq!(reader.max_with_prefix("bar"), Some(5.0));
     assert!(reader.max_with_prefix("missing").is_none());
+}
+
+#[test]
+fn truncate_for_error_shortens_long_snapshots() {
+    assert_eq!(truncate_for_error("short", 16), "short");
+    assert_eq!(truncate_for_error("abcdef", 4), "abcd…");
 }
 
 #[test]
@@ -4336,6 +4463,35 @@ async fn collect_rbc_failure_context(
         let _ = writeln!(
             details,
             "peer[{idx}] torii={torii_url} status={status_body} sessions={sessions_body} persisted={persisted}"
+        );
+    }
+    Ok(details)
+}
+
+async fn collect_rbc_metric_context(
+    http: &reqwest::Client,
+    peers: &[NetworkPeer],
+    expected_height: u64,
+    block_hash_hex: &str,
+) -> Result<String> {
+    let mut details = String::new();
+    for (idx, peer) in peers.iter().enumerate() {
+        let torii_url = peer.client().torii_url.clone();
+        let rbc_url = torii_url
+            .join("v1/sumeragi/rbc")
+            .wrap_err("compose RBC status URL")?;
+        let sessions_url = torii_url
+            .join("v1/sumeragi/rbc/sessions")
+            .wrap_err("compose RBC sessions URL")?;
+        let rbc_body = fetch_failure_endpoint_body(http, &rbc_url).await;
+        let sessions_body = fetch_failure_endpoint_body(http, &sessions_url).await;
+        let persisted =
+            rbc_status::read_persisted_snapshot(peer.kura_store_dir().join("rbc_sessions"));
+        let persisted =
+            format_persisted_summaries_for_context(&persisted, expected_height, block_hash_hex);
+        let _ = writeln!(
+            details,
+            "peer[{idx}] torii={torii_url} rbc={rbc_body} sessions={sessions_body} persisted={persisted}"
         );
     }
     Ok(details)

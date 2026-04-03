@@ -71,5 +71,20 @@ export const SNIPPETS = [
       'Inspect the NFT ledger state with `iroha_cli ledger nft list --account <id>` or the SDK equivalents to verify the transfer, then confirm the asset is removed once the burn instruction runs.'
     ],
     sdkGuides: SDK_GUIDES
+  },
+  {
+    slug: 'threshold-escrow',
+    title: 'Threshold escrow',
+    description:
+      'Single-payer escrow that accepts top-ups to an exact target amount, then releases or refunds the funds.',
+    source: 'crates/kotodama_lang/src/samples/threshold_escrow.ko',
+    ledgerWalkthrough: [
+      'Pre-create the escrow account and the numeric asset definition, then fund the payer account that will submit the contract calls. The sample binds that payer automatically with `authority()` during `open_escrow`.',
+      'Call `open_escrow(recipient, escrow_account, asset_definition, target_amount)` once to record the payer, recipient, escrow account, asset definition, exact target, and open/released/refunded flags in durable contract state.',
+      'Call `deposit(amount)` from the same payer until `funded_amount_value == target_amount_value`; deposits must stay positive and any top-up that would overfund the escrow is rejected.',
+      'Call `release_if_ready()` to move the escrowed funds to the recipient once the target is met, or call `refund()` while the escrow is still open to return the funded amount to the payer.',
+      'Inspect balances with `FindAssetById` / `iroha_cli ledger asset list` and inspect contract state with `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.'
+    ],
+    sdkGuides: SDK_GUIDES
   }
 ];

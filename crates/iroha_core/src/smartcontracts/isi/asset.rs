@@ -1949,7 +1949,7 @@ pub mod query {
             state::{State, World},
         };
 
-        fn build_account_in_domain(account_id: &AccountId, domain_id: &DomainId) -> Account {
+        fn build_account_in_domain(account_id: &AccountId, _domain_id: &DomainId) -> Account {
             Account::new(account_id.clone()).build(account_id)
         }
 

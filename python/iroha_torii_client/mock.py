@@ -1,4 +1,4 @@
-"""Lightweight Torii mock server for attachments and prover endpoints."""
+"""Lightweight Torii mock server for typed Torii API smoke tests."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Iterable, List, Mapping, Optional
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 __all__ = ["ToriiMockServer", "main"]
 
@@ -92,6 +92,7 @@ class _MockState:
         self.pipeline_next_plan: Optional[Dict[str, Any]] = None
         self.pipeline_scenario = "success"
         self._pipeline_submit_seq = 0
+        self.accounts: Dict[str, Dict[str, Any]] = {}
         self.gov_referenda: Dict[str, Dict[str, Any]] = {}
         self.gov_council_current: Dict[str, Any] = {}
         self.gov_council_audit: Dict[str, Any] = {}
@@ -147,6 +148,9 @@ class _MockState:
             return self._pipeline_submit(body)
         if method == "GET" and path in {"/v1/pipeline/transactions/status", "/v1/transactions/status"}:
             return self._pipeline_status(params)
+        if method == "GET" and path.startswith("/v1/accounts/"):
+            account_id = unquote(path.rsplit("/", 1)[-1])
+            return self._account_get(account_id)
         if method == "POST" and path == "/v1/gov/proposals/deploy-contract":
             return self._gov_propose_deploy(body)
         if method == "POST" and path == "/v1/gov/finalize":
@@ -207,6 +211,8 @@ class _MockState:
             return _json_response(HTTPStatus.OK, self.node_capabilities)
         if method == "POST" and path == "/__mock__/pipeline/config":
             return self._pipeline_config(body)
+        if method == "POST" and path == "/__mock__/accounts/config":
+            return self._account_config(body)
         if method == "POST" and path == "/__mock__/gov/config":
             return self._gov_config(body)
         if method == "POST" and path == "/__mock__/reset":
@@ -224,6 +230,7 @@ class _MockState:
             self.pipeline_next_plan = None
             self.pipeline_scenario = "success"
             self._pipeline_submit_seq = 0
+            self.accounts.clear()
             self.gov_referenda.clear()
             self.gov_council_current = {"epoch": 0, "members": []}
             self.gov_council_audit = {
@@ -795,8 +802,51 @@ class _MockState:
 
         with self._lock:
             self.pipeline_next_plan = overrides
+            if (
+                isinstance(overrides.get("hash"), str)
+                and overrides["hash"]
+                and statuses_override is not None
+            ):
+                self.pipeline_sequences[overrides["hash"]] = {
+                    "remaining": [dict(entry) for entry in statuses_override],
+                    "repeat_last": bool(payload.get("repeat_last", True)),
+                    "last": None,
+                }
 
         return _json_response(HTTPStatus.OK, {"configured": True, "scenario": self.pipeline_scenario})
+
+    def _account_config(self, body: bytes) -> _Response:
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except json.JSONDecodeError as err:
+            raise ValueError(f"invalid account config: {err}") from err
+        if not isinstance(payload, dict):
+            raise ValueError("account config must be a JSON object")
+        entries = payload.get("accounts", [])
+        if not isinstance(entries, list):
+            raise ValueError("accounts must be a list")
+
+        configured: Dict[str, Dict[str, Any]] = {}
+        for entry in entries:
+            if not isinstance(entry, dict):
+                raise ValueError("account entry must be an object")
+            account_id = entry.get("account_id")
+            if not isinstance(account_id, str) or not account_id:
+                raise ValueError("account entry missing account_id")
+            configured[account_id] = json.loads(json.dumps(entry))
+
+        with self._lock:
+            self.accounts = configured
+
+        return _json_response(HTTPStatus.OK, {"configured": len(configured)})
+
+    def _account_get(self, account_id: str) -> _Response:
+        with self._lock:
+            payload = self.accounts.get(account_id)
+            if payload is None:
+                raise KeyError("account read")
+            response = json.loads(json.dumps(payload))
+        return _json_response(HTTPStatus.OK, response)
 
     def _make_pipeline_plan(self) -> Dict[str, Any]:
         with self._lock:
@@ -870,28 +920,51 @@ class _MockState:
                 content_value = content
             else:
                 content_value = str(content)
-            return {"kind": kind, "content": content_value}
+            block_height = entry.get("block_height")
+            if not isinstance(block_height, int):
+                block_height = None
+            rejection_reason = entry.get("rejection_reason")
+            if not isinstance(rejection_reason, Mapping):
+                rejection_reason = None
+            scope = entry.get("scope")
+            if scope is not None:
+                scope = str(scope)
+            resolved_from = entry.get("resolved_from")
+            if resolved_from is not None:
+                resolved_from = str(resolved_from)
+            return {
+                "kind": kind,
+                "content": content_value,
+                "block_height": block_height,
+                "rejection_reason": rejection_reason,
+                "scope": scope,
+                "resolved_from": resolved_from,
+            }
         raise ValueError("invalid status entry")
 
     @staticmethod
     def _make_status_payload(hash_value: str, entry: Mapping[str, Any]) -> Dict[str, Any]:
         kind = str(entry.get("kind", "Queued"))
-        content = entry.get("content")
-        if isinstance(content, (bytes, bytearray)):
-            content_value: object = content.decode("utf-8", errors="ignore")
-        elif content is None or isinstance(content, (str, int, float, bool)):
-            content_value = content
-        else:
-            content_value = str(content)
+        block_height = entry.get("block_height")
+        if block_height is None:
+            content = entry.get("content")
+            if isinstance(content, int) and kind in {"Committed", "Applied"}:
+                block_height = content
+        if not isinstance(block_height, int):
+            block_height = None
+
+        rejection_reason = entry.get("rejection_reason")
+        if not isinstance(rejection_reason, dict):
+            rejection_reason = None
         return {
-            "kind": "Transaction",
-            "content": {
-                "hash": hash_value,
-                "status": {
-                    "kind": kind,
-                    "content": content_value,
-                },
+            "hash": hash_value,
+            "status": {
+                "kind": kind,
+                "block_height": block_height,
+                "rejection_reason": rejection_reason,
             },
+            "scope": str(entry.get("scope", "auto")),
+            "resolved_from": str(entry.get("resolved_from", "state")),
         }
 
     def _next_pipeline_hash_locked(self) -> str:

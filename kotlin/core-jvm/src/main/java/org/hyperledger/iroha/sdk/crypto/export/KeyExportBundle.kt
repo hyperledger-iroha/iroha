@@ -5,9 +5,11 @@ package org.hyperledger.iroha.sdk.crypto.export
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.nio.ByteBuffer
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 
 private val MAGIC = "IRKEY".toByteArray(Charsets.UTF_8)
 
@@ -19,7 +21,8 @@ private val MAGIC = "IRKEY".toByteArray(Charsets.UTF_8)
  *
  * ```
  * magic[5] = "IRKEY"
- * version[1] = 0x03
+ * version[1] = 0x04
+ * algorithm_code[1] (v4+)
  * alias_len[2] (big-endian)
  * alias_bytes
  * public_key_len[2]
@@ -36,6 +39,7 @@ private val MAGIC = "IRKEY".toByteArray(Charsets.UTF_8)
  */
 class KeyExportBundle internal constructor(
     val alias: String,
+    val algorithmCode: Int = SigningAlgorithm.ED25519.bridgeCode,
     publicKey: ByteArray,
     nonce: ByteArray,
     ciphertext: ByteArray,
@@ -53,6 +57,7 @@ class KeyExportBundle internal constructor(
     val nonce: ByteArray get() = _nonce.copyOf()
     val ciphertext: ByteArray get() = _ciphertext.copyOf()
     val salt: ByteArray get() = _salt.copyOf()
+    val signingAlgorithm: SigningAlgorithm get() = SigningAlgorithm.fromBridgeCode(algorithmCode)
 
     /** Serializes the bundle to a base64 string with the canonical layout. */
     fun encodeBase64(): String = Base64.encode(encode())
@@ -61,7 +66,7 @@ class KeyExportBundle internal constructor(
     fun encode(): ByteArray {
         val aliasBytes = alias.toByteArray(Charsets.UTF_8)
         require(aliasBytes.size <= 0xFFFF) { "alias is too long" }
-        require(version == VERSION_V3) { "unsupported key export version: $version" }
+        require(version == VERSION_V3 || version == VERSION_V4) { "unsupported key export version: $version" }
         require(_publicKey.size <= 0xFFFF) { "publicKey is too long" }
         require(_ciphertext.size <= 0xFFFF) { "ciphertext is too long" }
         require(_nonce.size == EXPECTED_NONCE_LENGTH_BYTES) {
@@ -76,6 +81,9 @@ class KeyExportBundle internal constructor(
         try {
             output.write(MAGIC)
             output.write(version.toInt())
+            if (version >= VERSION_V4) {
+                output.write(algorithmCode and 0xFF)
+            }
             output.write(shortBytes(aliasBytes.size))
             output.write(aliasBytes)
             output.write(shortBytes(_publicKey.size))
@@ -96,6 +104,7 @@ class KeyExportBundle internal constructor(
 
     companion object {
         const val VERSION_V3: Byte = 3
+        const val VERSION_V4: Byte = 4
         const val EXPECTED_NONCE_LENGTH_BYTES: Int = 12
         const val EXPECTED_SALT_LENGTH_BYTES: Int = 16
 
@@ -117,23 +126,32 @@ class KeyExportBundle internal constructor(
         fun decode(encoded: ByteArray): KeyExportBundle {
             try {
                 ByteArrayInputStream(encoded).use { input ->
-                    val magic = input.readNBytes(MAGIC.size)
+                    val magic = readExactly(input,MAGIC.size)
                     if (!MAGIC.contentEquals(magic)) {
                         throw KeyExportException("Key export bundle magic mismatch")
                     }
                     val version = input.read()
-                    if (version != VERSION_V3.toInt()) {
+                    if (version != VERSION_V3.toInt() && version != VERSION_V4.toInt()) {
                         throw KeyExportException(
                             "Unsupported key export version: ${if (version < 0) "EOF" else version}"
                         )
                     }
+                    val algorithmCode = if (version >= VERSION_V4.toInt()) {
+                        val code = input.read()
+                        if (code < 0) {
+                            throw KeyExportException("Unexpected end of stream while reading algorithm code")
+                        }
+                        code
+                    } else {
+                        SigningAlgorithm.ED25519.bridgeCode
+                    }
                     val aliasLength = readShort(input)
-                    val aliasBytes = input.readNBytes(aliasLength)
+                    val aliasBytes = readExactly(input,aliasLength)
                     if (aliasBytes.size != aliasLength) {
                         throw KeyExportException("Unexpected end of stream while reading alias")
                     }
                     val pubKeyLength = readShort(input)
-                    val pubKey = input.readNBytes(pubKeyLength)
+                    val pubKey = readExactly(input,pubKeyLength)
                     if (pubKey.size != pubKeyLength) {
                         throw KeyExportException("Unexpected end of stream while reading public key")
                     }
@@ -146,12 +164,12 @@ class KeyExportBundle internal constructor(
                             "Nonce length mismatch: expected $EXPECTED_NONCE_LENGTH_BYTES bytes, found $nonceLength"
                         )
                     }
-                    val nonce = input.readNBytes(nonceLength)
+                    val nonce = readExactly(input,nonceLength)
                     if (nonce.size != nonceLength) {
                         throw KeyExportException("Unexpected end of stream while reading nonce")
                     }
                     val cipherLength = readShort(input)
-                    val cipher = input.readNBytes(cipherLength)
+                    val cipher = readExactly(input,cipherLength)
                     if (cipher.size != cipherLength) {
                         throw KeyExportException("Unexpected end of stream while reading ciphertext")
                     }
@@ -159,7 +177,7 @@ class KeyExportBundle internal constructor(
                     if (saltLength < 0) {
                         throw KeyExportException("Unexpected end of stream while reading salt length")
                     }
-                    val salt = input.readNBytes(saltLength)
+                    val salt = readExactly(input,saltLength)
                     if (salt.size != saltLength) {
                         throw KeyExportException("Unexpected end of stream while reading salt")
                     }
@@ -172,7 +190,7 @@ class KeyExportBundle internal constructor(
                     if (kdfKind < 0) {
                         throw KeyExportException("Unexpected end of stream while reading kdf kind")
                     }
-                    val workFactorBytes = input.readNBytes(4)
+                    val workFactorBytes = readExactly(input,4)
                     if (workFactorBytes.size != 4) {
                         throw KeyExportException("Unexpected end of stream while reading kdf work factor")
                     }
@@ -182,6 +200,7 @@ class KeyExportBundle internal constructor(
                     }
                     return KeyExportBundle(
                         String(aliasBytes, Charsets.UTF_8),
+                        algorithmCode,
                         pubKey,
                         nonce,
                         cipher,
@@ -202,8 +221,19 @@ class KeyExportBundle internal constructor(
         private fun intBytes(value: Int): ByteArray =
             ByteBuffer.allocate(4).putInt(value).array()
 
+        private fun readExactly(input: InputStream, length: Int): ByteArray {
+            val buffer = ByteArray(length)
+            var offset = 0
+            while (offset < length) {
+                val read = input.read(buffer, offset, length - offset)
+                if (read < 0) break
+                offset += read
+            }
+            return if (offset == length) buffer else buffer.copyOf(offset)
+        }
+
         private fun readShort(input: ByteArrayInputStream): Int {
-            val buffer = input.readNBytes(2)
+            val buffer = readExactly(input,2)
             if (buffer.size != 2) {
                 throw IOException("Unexpected end of stream while reading length")
             }

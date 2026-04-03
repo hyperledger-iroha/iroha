@@ -858,6 +858,10 @@ mod model {
         FindAccountById(account::prelude::FindAccountById),
         /// Fetch aliases bound to an account subject.
         FindAliasesByAccountId(account::prelude::FindAliasesByAccountId),
+        /// Fetch the recovery policy keyed by a stable account alias.
+        FindAccountRecoveryPolicyByAlias(account::prelude::FindAccountRecoveryPolicyByAlias),
+        /// Fetch the recovery request keyed by a stable account alias.
+        FindAccountRecoveryRequestByAlias(account::prelude::FindAccountRecoveryRequestByAlias),
         /// Fetch a proof record by its identifier.
         FindProofRecordById(proof::prelude::FindProofRecordById),
         /// Fetch a contract manifest by its code hash.
@@ -916,6 +920,10 @@ mod model {
         Account(Account),
         /// Bound account alias records.
         AccountAliasBindingRecords(Vec<account::AccountAliasBindingRecord>),
+        /// Account recovery policy payload.
+        AccountRecoveryPolicy(crate::account::AccountRecoveryPolicy),
+        /// Account recovery request payload.
+        AccountRecoveryRequest(crate::account::AccountRecoveryRequest),
         /// Linked account identifier list.
         AccountIds(Vec<AccountId>),
         /// Proof record payload.
@@ -2446,6 +2454,8 @@ impl_singular_queries! {
     FindExecutorDataModel => crate::executor::ExecutorDataModel,
     account::prelude::FindAccountById => crate::account::Account,
     account::prelude::FindAliasesByAccountId => Vec<account::AccountAliasBindingRecord>,
+    account::prelude::FindAccountRecoveryPolicyByAlias => crate::account::AccountRecoveryPolicy,
+    account::prelude::FindAccountRecoveryRequestByAlias => crate::account::AccountRecoveryRequest,
     proof::prelude::FindProofRecordById => crate::proof::ProofRecord,
     smart_contract::prelude::FindContractManifestByCodeHash => crate::smart_contract::manifest::ContractManifest,
     runtime::prelude::FindAbiVersion => crate::query::runtime::AbiVersion,
@@ -2721,9 +2731,9 @@ pub mod account {
     pub struct AccountAliasBindingRecord {
         /// Canonical account identifier that owns the binding.
         pub account_id: crate::account::AccountId,
-        /// Canonical alias literal such as `merchant@hbl.sbp`.
+        /// Canonical alias literal such as `merchant@hbl.centralbank`.
         pub alias: String,
-        /// Dataspace alias such as `sbp`.
+        /// Dataspace alias such as `centralbank`.
         pub dataspace: String,
         /// Optional domain qualifier such as `hbl`.
         #[norito(default)]
@@ -2786,12 +2796,32 @@ pub mod account {
             pub struct FindAliasesByAccountId {
                 /// Domainless account identifier whose alias bindings should be resolved.
                 pub id: crate::account::AccountId,
-                /// Optional dataspace alias filter such as `sbp`.
+                /// Optional dataspace alias filter such as `centralbank`.
                 #[norito(default)]
                 pub dataspace: Option<String>,
                 /// Optional exact domain filter such as `hbl`.
                 #[norito(default)]
                 pub domain: Option<String>,
+            }
+
+            /// [`FindAccountRecoveryPolicyByAlias`] query resolves the alias-keyed recovery policy.
+            #[derive(Display)]
+            #[display("Find recovery policy for alias `{alias:?}`")]
+            #[repr(transparent)]
+            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+            pub struct FindAccountRecoveryPolicyByAlias {
+                /// Stable account alias whose recovery policy should be loaded.
+                pub alias: crate::account::AccountAlias,
+            }
+
+            /// [`FindAccountRecoveryRequestByAlias`] query resolves the alias-keyed recovery request.
+            #[derive(Display)]
+            #[display("Find recovery request for alias `{alias:?}`")]
+            #[repr(transparent)]
+            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+            pub struct FindAccountRecoveryRequestByAlias {
+                /// Stable account alias whose recovery request should be loaded.
+                pub alias: crate::account::AccountAlias,
             }
         }
 
@@ -2826,10 +2856,25 @@ pub mod account {
         }
     }
 
+    impl FindAccountRecoveryPolicyByAlias {
+        /// Return the queried stable alias.
+        pub fn alias(&self) -> &crate::account::AccountAlias {
+            &self.alias
+        }
+    }
+
+    impl FindAccountRecoveryRequestByAlias {
+        /// Return the queried stable alias.
+        pub fn alias(&self) -> &crate::account::AccountAlias {
+            &self.alias
+        }
+    }
+
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
         pub use super::{
-            AccountAliasBindingRecord, FindAccountById, FindAccountIds, FindAccounts,
+            AccountAliasBindingRecord, FindAccountById, FindAccountIds,
+            FindAccountRecoveryPolicyByAlias, FindAccountRecoveryRequestByAlias, FindAccounts,
             FindAccountsWithAsset, FindAliasesByAccountId,
         };
     }

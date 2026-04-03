@@ -88,7 +88,7 @@ use sorafs_manifest::{
 pub const IZANAMI_BASE_SEED: &str = "izanami-chaos";
 use tokio::sync::Mutex;
 
-use crate::config::WorkloadProfile;
+use crate::config::{NexusProfile, WorkloadProfile};
 use crate::smart_contracts;
 
 /// Record describing an account and its signing material.
@@ -221,6 +221,16 @@ fn nexus_fee_seed_amount() -> Numeric {
     1_000_000_u64.into()
 }
 
+fn nexus_fee_asset_is_preseeded(fee_asset: &AssetDefinitionId) -> bool {
+    static SEEDED_FEE_ASSET: std::sync::OnceLock<AssetDefinitionId> = std::sync::OnceLock::new();
+    let seeded_fee_asset = SEEDED_FEE_ASSET.get_or_init(|| {
+        NexusProfile::sora_defaults()
+            .expect("embedded nexus profile should load")
+            .fee_asset_id
+    });
+    fee_asset == seeded_fee_asset
+}
+
 fn account_from_record(record: &AccountRecord, _domain: &DomainId) -> NewAccount {
     let builder = Account::new(record.id.clone());
     if let Some(uaid) = record.uaid {
@@ -230,7 +240,7 @@ fn account_from_record(record: &AccountRecord, _domain: &DomainId) -> NewAccount
     }
 }
 
-fn peer_keypair(index: usize) -> KeyPair {
+pub(crate) fn peer_keypair(index: usize) -> KeyPair {
     let seed = format!("{IZANAMI_BASE_SEED}-peer-{index}");
     let mut seed_bytes = seed.into_bytes();
     seed_bytes.extend_from_slice(b":bls");
@@ -406,12 +416,21 @@ pub fn prepare_state(
             DataSpaceId::GLOBAL,
         )));
 
-        let stake_asset: AssetDefinitionId = config_defaults::nexus::staking::stake_asset_id()
-            .parse()
-            .map_err(|_| eyre!("failed to parse nexus stake asset id"))?;
-        let fee_asset: AssetDefinitionId = config_defaults::nexus::fees::fee_asset_id()
-            .parse()
-            .map_err(|_| eyre!("failed to parse nexus fee asset id"))?;
+        let stake_asset = nexus
+            .map(|profile| profile.stake_asset_id.clone())
+            .unwrap_or_else(|| {
+                config_defaults::nexus::staking::stake_asset_id()
+                    .parse()
+                    .expect("default nexus stake asset id should parse")
+            });
+        let fee_asset = nexus
+            .map(|profile| profile.fee_asset_id.clone())
+            .unwrap_or_else(|| {
+                config_defaults::nexus::fees::fee_asset_id()
+                    .parse()
+                    .expect("default nexus fee asset id should parse")
+            });
+        let fee_asset_preseeded = nexus_fee_asset_is_preseeded(&fee_asset);
         let stake_amount_value = SumeragiNposParameters::default().min_self_bond();
         let bootstrap_lane_count = u64::try_from(bootstrap_public_lanes.len()).unwrap_or(u64::MAX);
         let total_bootstrap_stake_value = stake_amount_value.saturating_mul(bootstrap_lane_count);
@@ -433,7 +452,7 @@ pub fn prepare_state(
         nexus_genesis.push(InstructionBox::from(Register::asset_definition(
             AssetDefinition::numeric(stake_asset.clone()).with_name("Nexus Stake".to_owned()),
         )));
-        if fee_asset != stake_asset {
+        if fee_asset != stake_asset && !fee_asset_preseeded {
             nexus_genesis.push(InstructionBox::from(Register::asset_definition(
                 AssetDefinition::numeric(fee_asset.clone()).with_name("Nexus Fee".to_owned()),
             )));
@@ -584,14 +603,17 @@ pub fn prepare_state(
         },
         treasury.id.clone(),
     )));
-    for dataspace in &dataspaces {
-        genesis_tx.push(InstructionBox::from(Grant::account_permission(
-            CanPublishSpaceDirectoryManifest {
-                dataspace: *dataspace,
-            },
-            treasury.id.clone(),
-        )));
-    }
+    let dataspace_grant_txs: Vec<Vec<InstructionBox>> = dataspaces
+        .iter()
+        .map(|dataspace| {
+            vec![InstructionBox::from(Grant::account_permission(
+                CanPublishSpaceDirectoryManifest {
+                    dataspace: *dataspace,
+                },
+                treasury.id.clone(),
+            ))]
+        })
+        .collect();
     if sorafs_replication.is_some() {
         genesis_tx.push(InstructionBox::from(Grant::account_permission(
             CanRegisterSorafsPin,
@@ -675,9 +697,12 @@ pub fn prepare_state(
         };
         recipes.extend_from_slice(extra);
     }
+    let mut genesis = vec![genesis_tx];
+    genesis.extend(dataspace_grant_txs);
+
     Ok(PreparedChaos {
         state,
-        genesis: vec![genesis_tx],
+        genesis,
         recipes,
     })
 }
@@ -4667,6 +4692,42 @@ mod tests {
                 "every validator signer should start with fee asset balance"
             );
         }
+    }
+
+    #[test]
+    fn default_nexus_fee_asset_is_marked_preseeded() {
+        let profile = NexusProfile::sora_defaults().expect("profile");
+        assert!(
+            nexus_fee_asset_is_preseeded(&profile.fee_asset_id),
+            "embedded Nexus fee asset should reuse the test-network preseeded fee asset"
+        );
+    }
+
+    #[test]
+    fn nexus_prepare_state_reuses_preseeded_fee_asset_definition() {
+        let profile = NexusProfile::sora_defaults().expect("profile");
+        let PreparedChaos { genesis, .. } =
+            prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
+                .expect("state prepared");
+        let fee_registration_count = genesis
+            .iter()
+            .flatten()
+            .filter(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterBox>()
+                    .is_some_and(|register| match register {
+                        RegisterBox::AssetDefinition(definition) => {
+                            definition.object.id == profile.fee_asset_id
+                        }
+                        _ => false,
+                    })
+            })
+            .count();
+        assert_eq!(
+            fee_registration_count, 0,
+            "prepare_state should not re-register the canonical test-network fee asset"
+        );
     }
 
     #[test]

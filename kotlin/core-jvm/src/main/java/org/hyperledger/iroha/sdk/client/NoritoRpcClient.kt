@@ -6,7 +6,6 @@ import java.net.URLEncoder
 import java.nio.charset.StandardCharsets
 import java.time.Duration
 import java.util.LinkedHashMap
-import java.util.Optional
 import java.util.concurrent.CancellationException
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ExecutionException
@@ -124,16 +123,14 @@ class NoritoRpcClient private constructor(builder: Builder) {
         if (!telemetryOptions.enabled) return
         if (!deviceProfileEmitted.compareAndSet(false, true)) return
         if (telemetrySink == null) return
-        val profile: Optional<DeviceProfile> = deviceProfileProvider.snapshot()
-        if (profile.isEmpty) return
-        telemetrySink.emitSignal("android.telemetry.device_profile", mapOf("profile_bucket" to profile.get().bucket))
+        val profile = deviceProfileProvider.snapshot().orElse(null) ?: return
+        telemetrySink.emitSignal("android.telemetry.device_profile", mapOf("profile_bucket" to profile.bucket))
     }
 
     private fun emitNetworkContextTelemetry() {
         if (!telemetryOptions.enabled || telemetrySink == null) return
-        val context: Optional<NetworkContext> = networkContextProvider.snapshot()
-        if (context.isEmpty) return
-        telemetrySink.emitSignal("android.telemetry.network_context", context.get().toTelemetryFields())
+        val context = networkContextProvider.snapshot().orElse(null) ?: return
+        telemetrySink.emitSignal("android.telemetry.network_context", context.toTelemetryFields())
     }
 
     private fun emitRpcCallTelemetry(request: TransportRequest, statusCode: Int?, outcome: String?, errorKind: String?, latencyMillis: Long) {
@@ -154,10 +151,12 @@ class NoritoRpcClient private constructor(builder: Builder) {
         if (!redaction.enabled) return
         val authority = resolveAuthority(request)
         if (authority.isBlank()) { emitRedactionFailure("blank_authority"); return }
-        redaction.hashAuthority(authority).ifPresentOrElse(
-            { hashed -> fields["authority_hash"] = hashed },
-            { emitRedactionFailure("hash_failed") }
-        )
+        val authorityHash = redaction.hashAuthority(authority)
+        if (authorityHash.isPresent) {
+            fields["authority_hash"] = authorityHash.get()
+        } else {
+            emitRedactionFailure("hash_failed")
+        }
     }
 
     private fun emitRedactionFailure(reason: String) {
@@ -275,6 +274,6 @@ class NoritoRpcClient private constructor(builder: Builder) {
         }
 
         private fun encodeQuery(params: Map<String, String>): String =
-            params.entries.joinToString("&") { (k, v) -> "${URLEncoder.encode(k, StandardCharsets.UTF_8)}=${URLEncoder.encode(v, StandardCharsets.UTF_8)}" }
+            params.entries.joinToString("&") { (k, v) -> "${URLEncoder.encode(k, "UTF-8")}=${URLEncoder.encode(v, "UTF-8")}" }
     }
 }

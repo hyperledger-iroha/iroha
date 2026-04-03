@@ -57,7 +57,7 @@ internal object IdentifierBfvEnvelopeBuilder {
         }
         val plaintextModulus = toUnsignedBigInteger(params.plaintextModulus)
         val ciphertextModulus = toUnsignedBigInteger(params.ciphertextModulus)
-        require(plaintextModulus >= BigInteger.TWO) { "BFV plaintextModulus must be at least 2" }
+        require(plaintextModulus >= BigInteger.valueOf(2L)) { "BFV plaintextModulus must be at least 2" }
         require(ciphertextModulus > plaintextModulus) { "BFV ciphertextModulus must be greater than plaintextModulus" }
         require(ciphertextModulus.mod(plaintextModulus) == BigInteger.ZERO) { "BFV ciphertextModulus must be divisible by plaintextModulus" }
         val maxInputBytes = publicParameters.maxInputBytes

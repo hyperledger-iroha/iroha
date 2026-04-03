@@ -19,7 +19,7 @@ internal object NoritoAoS {
             writeLong(out, row.id)
             val data = row.name.toByteArray(StandardCharsets.UTF_8)
             writeVarint(out, data.size)
-            out.writeBytes(data)
+            out.write(data, 0, data.size)
             out.write(if (row.flag) 1 else 0)
         }
         return out.toByteArray()
@@ -57,7 +57,7 @@ internal object NoritoAoS {
             writeLong(out, row.id)
             val data = row.data
             writeVarint(out, data.size)
-            out.writeBytes(data)
+            out.write(data, 0, data.size)
         }
         return out.toByteArray()
     }
@@ -99,7 +99,7 @@ internal object NoritoAoS {
             } else {
                 out.write(1)
                 writeVarint(out, data.size)
-                out.writeBytes(data)
+                out.write(data, 0, data.size)
             }
         }
         return out.toByteArray()
@@ -152,7 +152,7 @@ internal object NoritoAoS {
                     out.write(0)
                     val data = value.name.toByteArray(StandardCharsets.UTF_8)
                     writeVarint(out, data.size)
-                    out.writeBytes(data)
+                    out.write(data, 0, data.size)
                 }
                 is NoritoColumnar.EnumCode -> {
                     out.write(1)
@@ -208,7 +208,8 @@ internal object NoritoAoS {
     }
 
     private fun writeVarint(out: ByteArrayOutputStream, value: Int) {
-        out.writeBytes(Varint.encode(value.toLong()))
+        val encoded = Varint.encode(value.toLong())
+        out.write(encoded, 0, encoded.size)
     }
 
     private fun writeLong(out: ByteArrayOutputStream, value: Long) {

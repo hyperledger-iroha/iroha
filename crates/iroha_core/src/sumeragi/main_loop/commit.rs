@@ -786,14 +786,38 @@ impl Actor {
             height,
             fallback_consensus_mode,
         );
-        update.commit_qc = cached_qc_for(
-            qc_cache,
-            crate::sumeragi::consensus::Phase::Commit,
-            block_hash,
-            height,
-            view,
-            epoch,
-        );
+        if update.commit_qc.is_none() {
+            let mode_tag = match consensus_mode {
+                ConsensusMode::Permissioned => super::PERMISSIONED_TAG,
+                ConsensusMode::Npos => super::NPOS_TAG,
+            };
+            let commit_topology = update
+                .validator_checkpoint
+                .as_ref()
+                .map(|checkpoint| checkpoint.validator_set.clone())
+                .or_else(|| {
+                    state
+                        .commit_roster_snapshot_for_block(height, block_hash)
+                        .map(|snapshot| snapshot.commit_qc.validator_set)
+                });
+            update.commit_qc = commit_topology
+                .as_ref()
+                .and_then(|topology| {
+                    commit_qc_from_cache_or_history(
+                        qc_cache, block_hash, height, view, epoch, mode_tag, topology,
+                    )
+                })
+                .or_else(|| {
+                    cached_qc_for(
+                        qc_cache,
+                        crate::sumeragi::consensus::Phase::Commit,
+                        block_hash,
+                        height,
+                        view,
+                        epoch,
+                    )
+                });
+        }
         if update.commit_qc.is_none() {
             if let Some(record) = crate::sumeragi::status::precommit_signers_for_round(
                 block_hash, height, view, epoch,
@@ -2023,6 +2047,8 @@ impl Actor {
                     }
                 }
                 self.persist_roster_sidecar_for_commit(committed_block.as_ref(), &commit_topology);
+                self.flush_pending_fetch_requests_if_ready(committed_block.as_ref());
+                self.flush_pending_block_body_requests_if_ready(committed_block.as_ref());
                 if pending_height == 1 {
                     // Seed the genesis roster after the block is durably persisted.
                     self.ensure_genesis_commit_roster();
@@ -3518,14 +3544,8 @@ impl Actor {
             return false;
         }
 
-        let mut targets = topology_peers.to_vec();
-        if targets.is_empty() {
-            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
-            targets = self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
-            if targets.is_empty() {
-                targets = self.effective_commit_topology();
-            }
-        }
+        let targets =
+            self.known_block_commit_qc_recovery_targets(block_hash, height, view, topology_peers);
         if targets.is_empty() {
             return false;
         }
@@ -3555,6 +3575,253 @@ impl Actor {
             "replaying known-block commit evidence"
         );
         true
+    }
+
+    pub(super) fn known_block_commit_qc_recovery_targets(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        topology_peers: &[PeerId],
+    ) -> Vec<PeerId> {
+        let mut targets = topology_peers.to_vec();
+        if targets.is_empty() {
+            let (consensus_mode, _, _) = self.consensus_context_for_height(height);
+            targets = self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode);
+            if targets.is_empty() {
+                targets = self.effective_commit_topology();
+            }
+        }
+        targets
+    }
+
+    pub(super) fn maybe_request_known_block_commit_qc_recovery(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        targets: &[PeerId],
+        pending_override: Option<&PendingBlock>,
+        trigger: &'static str,
+    ) -> bool {
+        let local_round_known = pending_override
+            .map(|pending| pending.height == height && pending.view == view)
+            .unwrap_or_else(|| {
+                self.local_signed_block_for_hash(block_hash)
+                    .is_some_and(|block| {
+                        let header = block.header();
+                        header.height().get() == height && header.view_change_index() == view
+                    })
+            });
+        if !local_round_known {
+            debug!(
+                height,
+                view,
+                block = %block_hash,
+                trigger,
+                "skipping known-block commit-QC recovery because the local block for this round is unavailable"
+            );
+            return false;
+        }
+        if self
+            .cached_commit_qc_for_block(block_hash, height, view)
+            .is_some()
+        {
+            trace!(
+                height,
+                view,
+                block = %block_hash,
+                trigger,
+                "skipping known-block commit-QC recovery because cached commit QC is available"
+            );
+            return false;
+        }
+
+        let filtered_targets = super::missing_block_request_targets_without_local(
+            self.common_config.peer.id(),
+            targets,
+        );
+        if filtered_targets.is_empty() {
+            return false;
+        }
+
+        let now = Instant::now();
+        let retry_window = self.missing_block_retry_window_with_rbc_progress(
+            block_hash,
+            height,
+            view,
+            self.rebroadcast_cooldown(),
+        );
+        let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
+        let topology = super::network_topology::Topology::new(filtered_targets.clone());
+        let signer_fallback_attempts = self.recovery_signer_fallback_attempts();
+        let decision = super::plan_missing_block_fetch_with_mode(
+            &mut self.pending.missing_commit_qc_requests,
+            block_hash,
+            height,
+            view,
+            crate::sumeragi::consensus::Phase::Commit,
+            super::MissingBlockPriority::Consensus,
+            &BTreeSet::new(),
+            &topology,
+            now,
+            retry_window,
+            view_change_window,
+            signer_fallback_attempts,
+            super::MissingBlockFetchMode::AggressiveTopology,
+            false,
+        );
+        let dwell = self
+            .pending
+            .missing_commit_qc_requests
+            .get(&block_hash)
+            .map(|stats| now.saturating_duration_since(stats.first_seen))
+            .unwrap_or_default();
+        let dwell_ms = dwell.as_millis().try_into().unwrap_or(u64::MAX);
+        let targets_len = match &decision {
+            super::MissingBlockFetchDecision::Requested { targets, .. } => targets.len(),
+            _ => 0,
+        };
+        self.note_missing_block_fetch_metrics(&decision, retry_window, targets_len, dwell);
+        super::status::record_missing_block_fetch(targets_len, dwell_ms);
+
+        let requester_roster_proof_known =
+            self.requester_has_local_roster_proof(block_hash, height, view);
+        match decision {
+            super::MissingBlockFetchDecision::Requested {
+                targets,
+                target_kind,
+            } => {
+                if height == self.committed_height_snapshot().saturating_add(1)
+                    && self.try_route_missing_block_through_exact_frontier_slot(
+                        block_hash, height, view, &targets,
+                    )
+                {
+                    info!(
+                        height,
+                        view,
+                        block = %block_hash,
+                        targets = ?targets,
+                        target_kind = target_kind.label(),
+                        trigger,
+                        retry_window_ms = retry_window.as_millis(),
+                        dwell_ms,
+                        "routing known-block commit-QC recovery through exact frontier body repair"
+                    );
+                    return true;
+                }
+                super::send_missing_block_request(
+                    &self.network,
+                    &self.common_config.peer.id,
+                    block_hash,
+                    height,
+                    view,
+                    super::MissingBlockPriority::Consensus,
+                    requester_roster_proof_known,
+                    &targets,
+                );
+                info!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    targets = ?targets,
+                    target_kind = target_kind.label(),
+                    trigger,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms,
+                    "requesting known-block pending update to recover missing commit QC"
+                );
+                true
+            }
+            super::MissingBlockFetchDecision::NoTargets => {
+                warn!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    trigger,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms,
+                    "unable to request known-block pending update: no peers available"
+                );
+                false
+            }
+            super::MissingBlockFetchDecision::Backoff => {
+                trace!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    trigger,
+                    retry_window_ms = retry_window.as_millis(),
+                    dwell_ms,
+                    "skipping known-block commit-QC recovery during retry backoff"
+                );
+                false
+            }
+        }
+    }
+
+    pub(super) fn retry_known_block_commit_qc_requests(
+        &mut self,
+        now: Instant,
+        tick_deadline: Option<Instant>,
+    ) -> bool {
+        if self.pending.missing_commit_qc_requests.is_empty() {
+            return false;
+        }
+
+        let mut progress = false;
+        let pending_keys: Vec<_> = self
+            .pending
+            .missing_commit_qc_requests
+            .keys()
+            .copied()
+            .collect();
+        for block_hash in pending_keys {
+            if Self::tick_budget_exhausted(tick_deadline, Instant::now()) {
+                break;
+            }
+            let Some(stats_snapshot) = self
+                .pending
+                .missing_commit_qc_requests
+                .get(&block_hash)
+                .cloned()
+            else {
+                continue;
+            };
+            let committed_height = self.committed_height_snapshot();
+            if !self.missing_commit_qc_request_has_actionable_dependency(
+                block_hash,
+                &stats_snapshot,
+                committed_height,
+                now,
+            ) {
+                self.clear_missing_commit_qc_request(
+                    &block_hash,
+                    MissingBlockClearReason::Obsolete,
+                );
+                progress = true;
+                continue;
+            }
+
+            let targets = self.known_block_commit_qc_recovery_targets(
+                block_hash,
+                stats_snapshot.height,
+                stats_snapshot.view,
+                &[],
+            );
+            if self.maybe_request_known_block_commit_qc_recovery(
+                block_hash,
+                stats_snapshot.height,
+                stats_snapshot.view,
+                &targets,
+                None,
+                "retry_known_block_commit_qc",
+            ) {
+                progress = true;
+            }
+        }
+
+        progress
     }
 
     pub(super) fn maybe_emit_local_commit_vote_for_pending_event(
@@ -5592,6 +5859,7 @@ impl Actor {
                     .status_handle
                     .update(summary, SystemTime::now());
             }
+            self.maybe_record_rbc_payload_bytes_metric_for_retained_summary(key);
             self.clear_rbc_runtime_state(key, false);
         }
 
@@ -5615,6 +5883,41 @@ impl Actor {
         }
 
         self.publish_rbc_backlog_snapshot();
+    }
+
+    fn maybe_record_rbc_payload_bytes_metric_for_retained_summary(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+    ) {
+        let Some(summary) = self.subsystems.da_rbc.rbc.status_handle.get(&key) else {
+            return;
+        };
+        if summary.invalid || !summary.delivered {
+            return;
+        }
+        if self
+            .subsystems
+            .da_rbc
+            .rbc
+            .payload_metric_recorded_sessions
+            .contains(&key)
+        {
+            return;
+        }
+        let expected_payload_hash = summary.payload_hash;
+        let bytes = self
+            .with_local_payload_for_progress(
+                key.0,
+                |_height, _view, payload_bytes, local_payload_hash| {
+                    expected_payload_hash
+                        .is_none_or(|expected| local_payload_hash == expected)
+                        .then(|| u64::try_from(payload_bytes.len()).unwrap_or(u64::MAX))
+                },
+            )
+            .flatten();
+        if let Some(bytes) = bytes {
+            self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
+        }
     }
 
     pub(super) fn clean_rbc_sessions_for_block(
@@ -6287,7 +6590,9 @@ impl Actor {
         self.subsystems.validation.inflight.clear();
         self.subsystems.validation.superseded_results.clear();
         self.pending.pending_fetch_requests.clear();
+        self.pending.pending_block_body_requests.clear();
         self.pending.missing_block_requests.clear();
+        self.pending.missing_commit_qc_requests.clear();
         self.pending.pending_processing.set(None);
         self.pending.pending_processing_parent.set(None);
         self.vote_log.clear();
@@ -7974,6 +8279,113 @@ mod tests {
         );
 
         assert_eq!(fetched, Some(qc));
+        crate::sumeragi::status::reset_commit_certs_for_tests();
+    }
+
+    #[test]
+    fn apply_cached_qcs_to_block_sync_update_uses_checkpoint_roster_to_recover_history_qc() {
+        let _guard = crate::sumeragi::status::commit_history_test_guard();
+        crate::sumeragi::status::reset_commit_certs_for_tests();
+
+        let chain: ChainId = "apply-cached-qc-history-via-checkpoint"
+            .parse()
+            .expect("chain id parses");
+        let block = sample_block(11, 2);
+        let block_hash = block.hash();
+        let height = block.header().height().get();
+        let view = block.header().view_change_index();
+        let epoch = 0;
+        let signers_bitmap = vec![0b0000_0111];
+        let keypairs = vec![
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+            KeyPair::random_with_algorithm(Algorithm::BlsNormal),
+        ];
+        let validator_set: Vec<_> = keypairs
+            .iter()
+            .map(|kp| PeerId::new(kp.public_key().clone()))
+            .collect();
+        let aggregate_signature = aggregate_signature_for_bitmap(
+            &chain,
+            super::super::PERMISSIONED_TAG,
+            crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            &signers_bitmap,
+            &keypairs,
+        );
+        let qc = crate::sumeragi::consensus::Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: block_hash,
+            parent_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0u8; Hash::LENGTH]),
+            height,
+            view,
+            epoch,
+            mode_tag: super::super::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&validator_set),
+            validator_set_hash_version: iroha_data_model::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: validator_set.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: aggregate_signature.clone(),
+            },
+        };
+        crate::sumeragi::status::record_commit_qc(qc.clone());
+
+        let kura = Kura::blank_kura_for_testing();
+        let state = State::new_for_testing(
+            World::new(),
+            Arc::clone(&kura),
+            LiveQueryStore::start_test(),
+        );
+        let (trusted, me_id) = trusted_self();
+        let roster_cache = {
+            let view = state.view();
+            super::RosterValidationCache::from_world(view.world(), super::EPOCH_LENGTH_BLOCKS, None)
+        };
+        let mut update = block_sync_update_with_roster(
+            &block,
+            &state,
+            kura.as_ref(),
+            ConsensusMode::Permissioned,
+            &trusted,
+            &me_id,
+            &roster_cache,
+        );
+        update.commit_qc = None;
+        update.validator_checkpoint = Some(ValidatorSetCheckpoint::new(
+            height,
+            view,
+            block_hash,
+            qc.parent_state_root,
+            qc.post_state_root,
+            validator_set,
+            signers_bitmap,
+            aggregate_signature,
+            VALIDATOR_SET_HASH_VERSION_V1,
+            None,
+        ));
+
+        let qc_cache = BTreeMap::new();
+        let vote_log = BTreeMap::new();
+        Actor::apply_cached_qcs_to_block_sync_update(
+            &mut update,
+            &qc_cache,
+            &vote_log,
+            block_hash,
+            height,
+            view,
+            epoch,
+            &state,
+            ConsensusMode::Permissioned,
+        );
+
+        assert_eq!(update.commit_qc, Some(qc));
         crate::sumeragi::status::reset_commit_certs_for_tests();
     }
 

@@ -138,6 +138,13 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::space_directory::RevokeSpaceDirectoryManifest>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::SetAccountAliasBinding>,
     dispatch_instruction::<iroha_data_model::isi::domain_link::SetPrimaryAccountAlias>,
+    dispatch_instruction::<iroha_data_model::isi::account_recovery::ReplaceAccountController>,
+    dispatch_instruction::<iroha_data_model::isi::account_recovery::SetAccountRecoveryPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::account_recovery::ClearAccountRecoveryPolicy>,
+    dispatch_instruction::<iroha_data_model::isi::account_recovery::ProposeAccountRecovery>,
+    dispatch_instruction::<iroha_data_model::isi::account_recovery::ApproveAccountRecovery>,
+    dispatch_instruction::<iroha_data_model::isi::account_recovery::CancelAccountRecovery>,
+    dispatch_instruction::<iroha_data_model::isi::account_recovery::FinalizeAccountRecovery>,
     dispatch_instruction::<iroha_data_model::isi::contract_alias::SetContractAlias>,
     dispatch_instruction::<iroha_data_model::isi::identifier::RegisterIdentifierPolicy>,
     dispatch_instruction::<iroha_data_model::isi::identifier::ActivateIdentifierPolicy>,
@@ -1024,7 +1031,6 @@ mod tests {
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
-        let wonderland: DomainId = "wonderland".parse()?;
         let (fake_account_id, _fake_account_keypair) = gen_account_in("wonderland");
         let trigger_id = "test_trigger_id".parse::<TriggerId>()?;
 
@@ -1121,7 +1127,6 @@ mod tests {
                 .expect_err("Error expected"),
             Error::InvariantViolation(_)
         ));
-        let wonderland: DomainId = "wonderland".parse()?;
         Register::account(Account::new(SAMPLE_GENESIS_ACCOUNT_ID.clone()))
             .execute(&account_id, &mut state_transaction)?;
         let genesis_account = state_transaction

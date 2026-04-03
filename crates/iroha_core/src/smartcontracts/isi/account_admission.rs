@@ -391,7 +391,7 @@ mod tests {
 
     fn build_account_in_domain(
         account_id: AccountId,
-        domain_id: DomainId,
+        _domain_id: DomainId,
         authority: &AccountId,
     ) -> iroha_data_model::account::Account {
         iroha_data_model::account::NewAccount::new(account_id.clone()).build(authority)

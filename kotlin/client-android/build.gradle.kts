@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.android.library)
@@ -27,6 +28,7 @@ android {
 
         compilerOptions {
             jvmTarget.set(JvmTarget.JVM_1_8)
+            freeCompilerArgs.add("-Xjdk-release=8")
         }
     }
 
@@ -44,6 +46,30 @@ repositories {
 
 dependencies {
     api(project(":core-jvm"))
+}
+
+val jniLibsDir = layout.projectDirectory.dir("src/main/jniLibs")
+
+fun irohaDir(): String {
+    val props = Properties()
+    val file = rootProject.file("local.properties")
+    if (file.exists()) file.inputStream().use { props.load(it) }
+    return props.getProperty("iroha.dir") ?: rootProject.file("../..").absolutePath
+}
+
+tasks.register<Exec>("buildNativeLibs") {
+    group = "native"
+    description = "Build connect_norito_bridge .so from Rust source (requires cargo-ndk + Android NDK)"
+
+    workingDir = file(irohaDir())
+    commandLine(
+        "cargo", "ndk",
+        "-t", "arm64-v8a",
+        "-t", "x86_64",
+        "-o", jniLibsDir.asFile.absolutePath,
+        "build", "--release",
+        "-p", "connect_norito_bridge",
+    )
 }
 
 afterEvaluate {

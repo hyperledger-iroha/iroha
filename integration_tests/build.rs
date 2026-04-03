@@ -22,6 +22,7 @@ const SAMPLE_NAMES: &[&str] = &[
     "create_nft_for_every_user_trigger",
     "query_assets_and_save_cursor",
     "smart_contract_can_filter_queries",
+    "threshold_escrow",
     "trigger_cat_and_mouse",
 ];
 

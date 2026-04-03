@@ -4,6 +4,7 @@ import java.io.IOException
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.time.Instant
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
@@ -168,7 +169,7 @@ Example:
                 var i = 0
                 while (i < args.size) {
                     when (args[i]) {
-                        "--file" -> if (i + 1 < args.size) file = Path.of(args[++i])
+                        "--file" -> if (i + 1 < args.size) file = Paths.get(args[++i])
                         "--json" -> json = true
                         else -> System.err.printf("Unknown argument: %s%n", args[i])
                     }

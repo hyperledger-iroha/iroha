@@ -59,7 +59,7 @@ fn num(value: u64) -> Numeric {
     Numeric::from(value)
 }
 
-fn test_account(domain: DomainId, public_key: PublicKey) -> AccountId {
+fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
     AccountId::new(public_key)
 }
 

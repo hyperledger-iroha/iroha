@@ -2705,7 +2705,7 @@ impl Actor {
         self.request_missing_block_for_pending_rbc(key, context, Some(reason));
     }
 
-    fn keep_exact_frontier_rbc_repair_in_slot(
+    pub(super) fn keep_exact_frontier_rbc_repair_in_slot(
         &mut self,
         key: SessionKey,
         roster: &[PeerId],
@@ -2748,7 +2748,7 @@ impl Actor {
             return false;
         }
         if roster.is_empty() {
-            if self.update_frontier_slot(
+            if !self.update_frontier_slot(
                 key.0,
                 key.1,
                 key.2,
@@ -2761,9 +2761,10 @@ impl Actor {
                 None,
                 now,
             ) {
-                self.clear_missing_block_request(&key.0, MissingBlockClearReason::Obsolete);
-                self.clear_missing_block_view_change(&key.0);
+                return false;
             }
+            self.clear_missing_block_request(&key.0, MissingBlockClearReason::Obsolete);
+            self.clear_missing_block_view_change(&key.0);
             return true;
         }
 
@@ -2780,9 +2781,11 @@ impl Actor {
             );
         }
 
-        let _ = self.handle_frontier_body_gap_with_topology(
+        if !self.handle_frontier_body_gap_with_topology(
             key.0, key.1, key.2, &signers, &topology, /*exact_fetch_armed*/ true, now,
-        );
+        ) {
+            return false;
+        }
         self.clear_missing_block_request(&key.0, MissingBlockClearReason::Obsolete);
         self.clear_missing_block_view_change(&key.0);
         true
@@ -5890,7 +5893,7 @@ impl Actor {
         let (
             ignored,
             first_deliver,
-            _delivered_bytes,
+            delivered_bytes,
             invalidate,
             chunk_root_mismatch,
             defer_reason,
@@ -6194,6 +6197,9 @@ impl Actor {
         }
         if invalidate {
             self.clear_pending_rbc(&key);
+        }
+        if first_deliver && let Some(bytes) = delivered_bytes {
+            self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
         }
         if let Some(session) = self.subsystems.da_rbc.rbc.sessions.get(&key).cloned() {
             self.update_rbc_status_entry(key, &session, false);

@@ -795,6 +795,25 @@ IrohaKeyManager manager =
     IrohaKeyManager.withExportableSoftwareKeys(store, passphraseProvider);
 ```
 
+To opt into post-quantum ML-DSA signing for transaction and offline-wallet
+flows, select the signing algorithm up front:
+
+```java
+IrohaKeyManager ed25519Manager = IrohaKeyManager.withSoftwareFallback();
+IrohaKeyManager mlDsaManager =
+    IrohaKeyManager.withSoftwareFallback(SigningAlgorithm.ML_DSA);
+
+KeyGenParameters params =
+    new KeyGenParameters.Builder()
+        .setSigningAlgorithm(SigningAlgorithm.ML_DSA)
+        .build();
+IrohaKeyManager tunedManager = IrohaKeyManager.withDefaultProviders(params);
+```
+
+`ED25519` remains the default. `ML_DSA` is software-only in this pass, so
+`HARDWARE_*` and `STRONGBOX_*` preferences fail fast instead of silently
+falling back to an unexpected provider.
+
 The manager validates Ed25519 SPKI output and skips providers that return a
 different algorithm (common on emulators), falling back to the next configured
 provider.
@@ -876,12 +895,13 @@ operator guide for native setup and the manual smoke harness
 bridge on CUDA-capable devices when `IROHA_CUDA_SELFTEST=1` is set.
 
 `SoftwareKeyProvider.exportDeterministic(...)` emits a versioned, AES-GCM
-wrapped export bundle (v3) using per-export salt/nonce. The bundle records
-`kdf_kind` and work factor; v3 prefers Argon2id (64 MiB, 3 iterations,
-parallelism 2) and falls back to PBKDF2-HMAC-SHA256 when Argon2 is unavailable.
-A minimum 12 character passphrase is enforced for v3 exports/imports, and only
-the v3 payload is accepted. Salt/nonce reuse is rejected and decode guards fail
-fast on tampered lengths.
+wrapped export bundle (v4) using per-export salt/nonce. The bundle records the
+signing algorithm alongside `kdf_kind` and work factor; v4 prefers Argon2id
+(64 MiB, 3 iterations, parallelism 2) and falls back to PBKDF2-HMAC-SHA256
+when Argon2 is unavailable. A minimum 12 character passphrase is enforced for
+deterministic exports/imports. Legacy v3 Ed25519 payloads are still accepted
+for restore, while new exports use the v4 algorithm-tagged layout. Salt/nonce
+reuse is rejected and decode guards fail fast on tampered lengths.
 The companion `importDeterministic(...)` helper restores the key pair while
 validating the export's public key and authentication tag, ensuring passphrase
 mismatches or tampering are rejected.

@@ -91,6 +91,8 @@ impl Default for MockToriiData {
             da_reschedule_total: 0,
             txs_approved: 7,
             txs_rejected: 1,
+            last_rejection_at_ms: None,
+            txs_rejected_recent_5m: 0,
             uptime: Uptime(Duration::from_secs(123)),
             view_changes: 0,
             queue_size: 4,

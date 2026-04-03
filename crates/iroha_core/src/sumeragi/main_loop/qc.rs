@@ -233,6 +233,7 @@ impl Actor {
             .remove(&(qc.height, qc.view, qc.subject_block_hash));
         self.flush_frontier_body_requesters(block.as_ref());
         self.flush_pending_fetch_requests(block.as_ref());
+        self.flush_pending_block_body_requests_if_ready(block.as_ref());
         self.clear_missing_block_request(
             &qc.subject_block_hash,
             MissingBlockClearReason::PayloadAvailable,
@@ -1451,7 +1452,7 @@ impl Actor {
         true
     }
 
-    fn requester_has_local_roster_proof(
+    pub(super) fn requester_has_local_roster_proof(
         &self,
         block_hash: HashOf<BlockHeader>,
         height: u64,
@@ -1946,11 +1947,16 @@ impl Actor {
                 .pending
                 .missing_block_requests
                 .values()
+                .chain(self.pending.missing_commit_qc_requests.values())
                 .filter_map(|stats| stats.first_seen.elapsed().as_millis().try_into().ok())
                 .min()
                 .unwrap_or(0);
-            telemetry
-                .set_missing_block_inflight(self.pending.missing_block_requests.len(), oldest_ms);
+            let inflight = self
+                .pending
+                .missing_block_requests
+                .len()
+                .saturating_add(self.pending.missing_commit_qc_requests.len());
+            telemetry.set_missing_block_inflight(inflight, oldest_ms);
         }
     }
 
@@ -2952,6 +2958,35 @@ impl Actor {
         if allowed {
             self.note_missing_block_dependency_event(now);
             self.prune_missing_block_recovery_state(now);
+        }
+        self.update_missing_block_gauges();
+    }
+
+    pub(super) fn clear_missing_commit_qc_request(
+        &mut self,
+        block_hash: &HashOf<BlockHeader>,
+        reason: MissingBlockClearReason,
+    ) {
+        let now = Instant::now();
+        let stats =
+            clear_missing_block_request(&mut self.pending.missing_commit_qc_requests, block_hash);
+        let cleared = stats.is_some();
+        if let Some(stats) = stats {
+            let dwell = stats.first_seen.elapsed();
+            self.clear_missing_payload_fetch_window_gate_for_block(stats.height, *block_hash);
+            debug!(
+                ?block_hash,
+                reason = reason.as_str(),
+                dwell_ms = dwell.as_millis(),
+                "cleared known-block commit-QC recovery request"
+            );
+            #[cfg(feature = "telemetry")]
+            if let Some(telemetry) = self.telemetry_handle() {
+                telemetry.observe_missing_block_dwell(dwell);
+            }
+        }
+        if cleared {
+            self.note_missing_block_dependency_event(now);
         }
         self.update_missing_block_gauges();
     }

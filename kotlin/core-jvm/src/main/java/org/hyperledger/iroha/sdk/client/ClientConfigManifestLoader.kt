@@ -5,6 +5,7 @@ import java.net.URI
 import java.nio.charset.StandardCharsets
 import java.nio.file.Files
 import java.nio.file.Path
+import java.nio.file.Paths
 import java.security.MessageDigest
 import java.time.Duration
 import java.time.Instant
@@ -214,7 +215,7 @@ object ClientConfigManifestLoader {
     }
 
     private fun resolveRelative(manifestPath: Path, target: String): Path {
-        val baseDir = manifestPath.toAbsolutePath().parent ?: return Path.of(target).toAbsolutePath()
+        val baseDir = manifestPath.toAbsolutePath().parent ?: return Paths.get(target).toAbsolutePath()
         return baseDir.resolve(target).normalize()
     }
 

@@ -139,7 +139,7 @@ fn test_domain_register_request(
         owner: owner.clone(),
         controllers: vec![test_domain_name_controller(owner)?],
         term_years: 1,
-        pricing_class_hint: Some(0),
+        pricing_class_hint: None,
         payment: PaymentProofV1 {
             asset_id: "61CtjvNd9T3THAR65GsMVHr82Bjc".to_owned(),
             gross_amount: 120,
@@ -408,6 +408,14 @@ fn preflight_bind_addresses(
         drop(listener);
     }
     Ok(())
+}
+
+fn should_run_bind_preflight_for_runs_started(runs_started: usize) -> bool {
+    // Only probe sockets before the first start attempt. Restarting a peer or a full
+    // network after a partial bootstrap can briefly leave API/P2P ports in a kernel
+    // cleanup state, and the actual `irohad`/Tokio listeners are a better source of truth
+    // than this best-effort preflight probe on those retries.
+    runs_started == 0
 }
 
 fn sync_timeout_env() -> Duration {
@@ -2185,13 +2193,19 @@ impl Network {
     where
         I: IntoIterator<Item = usize>,
     {
-        let preflight = preflight_bind_addresses(
-            self.peers
-                .iter()
-                .flat_map(|peer| [peer.p2p_address(), peer.api_address()]),
-        );
-        if let Err(err) = preflight {
-            return Err(err).wrap_err("preflight bind failed for network peers");
+        if self
+            .peers
+            .iter()
+            .all(NetworkPeer::should_run_bind_preflight)
+        {
+            let preflight = preflight_bind_addresses(
+                self.peers
+                    .iter()
+                    .flat_map(|peer| [peer.p2p_address(), peer.api_address()]),
+            );
+            if let Err(err) = preflight {
+                return Err(err).wrap_err("preflight bind failed for network peers");
+            }
         }
 
         // Ensure we resolve `irohad` once before spawning peers; caches for subsequent calls.
@@ -5525,6 +5539,10 @@ pub struct NetworkPeer {
 }
 
 impl NetworkPeer {
+    fn should_run_bind_preflight(&self) -> bool {
+        should_run_bind_preflight_for_runs_started(self.runs_count.load(Ordering::Relaxed))
+    }
+
     fn record_probe_status(
         probe: &Arc<StdMutex<PeerStartupProbe>>,
         status: &Status,
@@ -5575,9 +5593,11 @@ impl NetworkPeer {
         config_layers: impl Iterator<Item = T>,
         genesis: Option<&GenesisBlock>,
     ) -> Result<()> {
-        let preflight = preflight_bind_addresses([self.p2p_address(), self.api_address()]);
-        if let Err(err) = preflight {
-            return Err(err).wrap_err("preflight bind failed for peer");
+        if self.should_run_bind_preflight() {
+            let preflight = preflight_bind_addresses([self.p2p_address(), self.api_address()]);
+            if let Err(err) = preflight {
+                return Err(err).wrap_err("preflight bind failed for peer");
+            }
         }
 
         let mut run_guard = self.run.lock().await;
@@ -5734,7 +5754,6 @@ impl NetworkPeer {
                 async move {
                     if let Err(err) = peer_exit.monitor(shutdown_rx).await {
                         error!("something went very bad during peer exit monitoring: {err}");
-                        panic!()
                     }
                 }
                 .instrument(span.clone()),
@@ -7394,6 +7413,40 @@ mod shutdown_tests {
     }
 
     #[tokio::test]
+    async fn shutdown_treats_already_exited_child_as_graceful_completion() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("exit 0");
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        let child = cmd.spawn().expect("spawn short-lived child");
+
+        let (events, _rx) = broadcast::channel(4);
+        let (block_height, _rx) = watch::channel(None);
+        let (_fatal_tx, fatal_rx) = watch::channel(false);
+        let mut peer_exit = PeerExit {
+            child,
+            span: tracing::Span::none(),
+            is_running: Arc::new(AtomicBool::new(true)),
+            is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
+            events,
+            block_height,
+            fatal_rx,
+            stderr_log_ready: Arc::new(Notify::new()),
+            stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let status = peer_exit
+            .shutdown_or_kill()
+            .await
+            .expect("already-exited child should be handled cleanly");
+
+        assert!(
+            status.success(),
+            "expected successful exit status, got {status:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn log_drain_exits_on_shutdown_notify() {
         let dir = tempdir().expect("tempdir");
         let log_path = dir.path().join("stdout.log");
@@ -7721,9 +7774,16 @@ impl PeerExit {
         self.is_normal_shutdown_started
             .store(true, Ordering::Relaxed);
 
+        if self.child.id().is_none() {
+            self.span.in_scope(|| {
+                info!("child already exited before shutdown signal could be delivered")
+            });
+            return self.child.wait().await.wrap_err("wait failure");
+        }
+
         self.span.in_scope(|| info!("sending SIGTERM"));
         signal::kill(
-            Pid::from_raw(self.child.id().ok_or(eyre!("race condition"))? as i32),
+            Pid::from_raw(self.child.id().expect("checked child id above") as i32),
             signal::Signal::SIGTERM,
         )
         .wrap_err("failed to send SIGTERM")?;
@@ -8561,6 +8621,13 @@ mod tests {
             Err(err) => panic!("unexpected preflight bind error: {err}"),
             Ok(()) => panic!("preflight should fail when port is already in use"),
         }
+    }
+
+    #[test]
+    fn bind_preflight_runs_only_before_first_start_attempt() {
+        assert!(should_run_bind_preflight_for_runs_started(0));
+        assert!(!should_run_bind_preflight_for_runs_started(1));
+        assert!(!should_run_bind_preflight_for_runs_started(2));
     }
 
     #[test]

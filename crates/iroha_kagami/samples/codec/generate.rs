@@ -13,7 +13,6 @@ fn main() -> Result<(), Box<dyn Error>> {
     let out_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("samples/codec");
 
     // Account sample
-    let domain: DomainId = "wonderland".parse()?;
     let public_key =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03".parse()?;
     let account_id = AccountId::new(public_key);

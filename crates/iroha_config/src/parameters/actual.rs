@@ -452,44 +452,197 @@ impl Root {
             }
         }
 
+        let configured_caps = if let Some(caps) = self.nexus.storage.configured_component_caps {
+            caps
+        } else {
+            let caps = NexusStorageConfiguredComponentCaps::capture(self);
+            self.nexus.storage.configured_component_caps = Some(caps);
+            caps
+        };
+
         let max_disk = self.nexus.storage.max_disk_usage_bytes.get();
         if max_disk == 0 {
             return;
         }
 
-        let weights = self.nexus.storage.disk_budget_weights;
-        let total_bps = u64::from(weights.total_bps().max(1));
-        let budget = |bps: u16| max_disk.saturating_mul(u64::from(bps)) / total_bps;
+        let derived_caps = match self.nexus.storage.budget_source {
+            NexusStorageBudgetSource::Unset => return,
+            NexusStorageBudgetSource::OperatorExplicit => {
+                derive_global_nexus_storage_component_caps(
+                    max_disk,
+                    self.nexus.storage.disk_budget_weights,
+                )
+            }
+            NexusStorageBudgetSource::AutoDerived => {
+                let Some(auto_default) = self.nexus.storage.auto_default.as_ref() else {
+                    return;
+                };
+                derive_auto_nexus_storage_component_caps(
+                    auto_default,
+                    self.nexus.storage.disk_budget_weights,
+                )
+            }
+        };
 
-        let mut kura_budget = budget(weights.kura_blocks_bps);
-        let wsv_budget = budget(weights.wsv_snapshots_bps);
-        let sorafs_budget = budget(weights.sorafs_bps);
-        let soranet_budget = budget(weights.soranet_spool_bps);
-        let soravpn_budget = budget(weights.soravpn_spool_bps);
-
-        let allocated = kura_budget
-            .saturating_add(wsv_budget)
-            .saturating_add(sorafs_budget)
-            .saturating_add(soranet_budget)
-            .saturating_add(soravpn_budget);
-        let remainder = max_disk.saturating_sub(allocated);
-        kura_budget = kura_budget.saturating_add(remainder);
-
-        self.kura.max_disk_usage_bytes =
-            min_nonzero_bytes(self.kura.max_disk_usage_bytes, kura_budget);
-        self.tiered_state.max_cold_bytes =
-            min_nonzero_bytes(self.tiered_state.max_cold_bytes, wsv_budget);
-        self.torii.sorafs_storage.max_capacity_bytes =
-            min_nonzero_bytes(self.torii.sorafs_storage.max_capacity_bytes, sorafs_budget);
+        self.kura.max_disk_usage_bytes = min_nonzero_bytes(
+            configured_caps.kura_max_disk_usage_bytes,
+            derived_caps.kura_bytes,
+        );
+        self.tiered_state.max_cold_bytes = min_nonzero_bytes(
+            configured_caps.wsv_cold_max_bytes,
+            derived_caps.wsv_cold_bytes,
+        );
+        self.torii.sorafs_storage.max_capacity_bytes = min_nonzero_bytes(
+            configured_caps.sorafs_max_capacity_bytes,
+            derived_caps.sorafs_bytes,
+        );
         self.streaming.soranet.provision_spool_max_bytes = min_nonzero_bytes(
-            self.streaming.soranet.provision_spool_max_bytes,
-            soranet_budget,
+            configured_caps.soranet_spool_max_bytes,
+            derived_caps.soranet_spool_bytes,
         );
         self.streaming.soravpn.provision_spool_max_bytes = min_nonzero_bytes(
-            self.streaming.soravpn.provision_spool_max_bytes,
-            soravpn_budget,
+            configured_caps.soravpn_spool_max_bytes,
+            derived_caps.soravpn_spool_bytes,
         );
     }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct NexusStorageComponentCaps {
+    kura_bytes: u64,
+    wsv_cold_bytes: u64,
+    sorafs_bytes: u64,
+    soranet_spool_bytes: u64,
+    soravpn_spool_bytes: u64,
+}
+
+impl NexusStorageComponentCaps {
+    fn add_budget(&mut self, component: NexusStorageBudgetComponent, budget_bytes: u64) {
+        match component {
+            NexusStorageBudgetComponent::Kura => {
+                self.kura_bytes = self.kura_bytes.saturating_add(budget_bytes);
+            }
+            NexusStorageBudgetComponent::WsvCold => {
+                self.wsv_cold_bytes = self.wsv_cold_bytes.saturating_add(budget_bytes);
+            }
+            NexusStorageBudgetComponent::Sorafs => {
+                self.sorafs_bytes = self.sorafs_bytes.saturating_add(budget_bytes);
+            }
+            NexusStorageBudgetComponent::SoranetSpool => {
+                self.soranet_spool_bytes = self.soranet_spool_bytes.saturating_add(budget_bytes);
+            }
+            NexusStorageBudgetComponent::SoravpnSpool => {
+                self.soravpn_spool_bytes = self.soravpn_spool_bytes.saturating_add(budget_bytes);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct NexusStorageConfiguredComponentCaps {
+    kura_max_disk_usage_bytes: Bytes<u64>,
+    wsv_cold_max_bytes: Bytes<u64>,
+    sorafs_max_capacity_bytes: Bytes<u64>,
+    soranet_spool_max_bytes: Bytes<u64>,
+    soravpn_spool_max_bytes: Bytes<u64>,
+}
+
+impl NexusStorageConfiguredComponentCaps {
+    fn capture(root: &Root) -> Self {
+        Self {
+            kura_max_disk_usage_bytes: root.kura.max_disk_usage_bytes,
+            wsv_cold_max_bytes: root.tiered_state.max_cold_bytes,
+            sorafs_max_capacity_bytes: root.torii.sorafs_storage.max_capacity_bytes,
+            soranet_spool_max_bytes: root.streaming.soranet.provision_spool_max_bytes,
+            soravpn_spool_max_bytes: root.streaming.soravpn.provision_spool_max_bytes,
+        }
+    }
+}
+
+fn derive_global_nexus_storage_component_caps(
+    max_disk_bytes: u64,
+    weights: NexusStorageWeights,
+) -> NexusStorageComponentCaps {
+    let total_bps = u64::from(weights.total_bps().max(1));
+    let budget = |bps: u16| max_disk_bytes.saturating_mul(u64::from(bps)) / total_bps;
+
+    let mut caps = NexusStorageComponentCaps {
+        kura_bytes: budget(weights.kura_blocks_bps),
+        wsv_cold_bytes: budget(weights.wsv_snapshots_bps),
+        sorafs_bytes: budget(weights.sorafs_bps),
+        soranet_spool_bytes: budget(weights.soranet_spool_bps),
+        soravpn_spool_bytes: budget(weights.soravpn_spool_bps),
+    };
+    let allocated = caps
+        .kura_bytes
+        .saturating_add(caps.wsv_cold_bytes)
+        .saturating_add(caps.sorafs_bytes)
+        .saturating_add(caps.soranet_spool_bytes)
+        .saturating_add(caps.soravpn_spool_bytes);
+    caps.kura_bytes = caps
+        .kura_bytes
+        .saturating_add(max_disk_bytes.saturating_sub(allocated));
+    caps
+}
+
+fn derive_auto_nexus_storage_component_caps(
+    auto_default: &NexusStorageAutoDefault,
+    weights: NexusStorageWeights,
+) -> NexusStorageComponentCaps {
+    let mut caps = NexusStorageComponentCaps::default();
+    for filesystem_group in &auto_default.filesystem_groups {
+        let group_caps = split_auto_budget_across_components(
+            filesystem_group.budget_bytes,
+            &filesystem_group.components,
+            weights,
+        );
+        caps.kura_bytes = caps.kura_bytes.saturating_add(group_caps.kura_bytes);
+        caps.wsv_cold_bytes = caps
+            .wsv_cold_bytes
+            .saturating_add(group_caps.wsv_cold_bytes);
+        caps.sorafs_bytes = caps.sorafs_bytes.saturating_add(group_caps.sorafs_bytes);
+        caps.soranet_spool_bytes = caps
+            .soranet_spool_bytes
+            .saturating_add(group_caps.soranet_spool_bytes);
+        caps.soravpn_spool_bytes = caps
+            .soravpn_spool_bytes
+            .saturating_add(group_caps.soravpn_spool_bytes);
+    }
+    caps
+}
+
+fn split_auto_budget_across_components(
+    budget_bytes: u64,
+    components: &[NexusStorageBudgetComponent],
+    weights: NexusStorageWeights,
+) -> NexusStorageComponentCaps {
+    let mut caps = NexusStorageComponentCaps::default();
+    let total_bps: u64 = components
+        .iter()
+        .map(|component| u64::from(component.weight_bps(weights)))
+        .sum();
+
+    let divisor = total_bps.max(1);
+    let mut allocated = 0_u64;
+    for component in components {
+        let budget =
+            budget_bytes.saturating_mul(u64::from(component.weight_bps(weights))) / divisor;
+        caps.add_budget(*component, budget);
+        allocated = allocated.saturating_add(budget);
+    }
+
+    let remainder = budget_bytes.saturating_sub(allocated);
+    if remainder == 0 {
+        return caps;
+    }
+
+    if let Some(first_component) = NexusStorageBudgetComponent::ORDER
+        .into_iter()
+        .find(|component| components.contains(component))
+    {
+        caps.add_budget(first_component, remainder);
+    }
+    caps
 }
 
 fn min_nonzero_bytes(current: Bytes<u64>, limit: u64) -> Bytes<u64> {
@@ -754,6 +907,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         let mut root = minimal_root();
         root.nexus.enabled = true;
         root.nexus.storage.max_disk_usage_bytes = Bytes(1_000);
+        root.nexus.storage.budget_source = NexusStorageBudgetSource::OperatorExplicit;
         root.nexus.storage.max_wsv_memory_bytes = Bytes(512);
         root.nexus.storage.disk_budget_weights = NexusStorageWeights {
             kura_blocks_bps: 5_000,
@@ -789,6 +943,62 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .as_os_str(),
             defaults::tiered_state::DEFAULT_COLD_STORE_ROOT
         );
+    }
+
+    #[test]
+    fn apply_storage_budget_uses_auto_default_group_caps() {
+        let mut root = minimal_root();
+        root.nexus.enabled = true;
+        root.nexus.storage.max_disk_usage_bytes = Bytes(2_000);
+        root.nexus.storage.budget_source = NexusStorageBudgetSource::AutoDerived;
+        root.nexus.storage.auto_default = Some(NexusStorageAutoDefault {
+            version: NexusStorageAutoDefault::VERSION,
+            aggregate_budget_bytes: 2_000,
+            filesystem_groups: vec![
+                NexusStorageAutoDefaultFilesystemGroup {
+                    filesystem_id: "dev:1".to_owned(),
+                    budget_bytes: 800,
+                    components: vec![
+                        NexusStorageBudgetComponent::Kura,
+                        NexusStorageBudgetComponent::Sorafs,
+                    ],
+                },
+                NexusStorageAutoDefaultFilesystemGroup {
+                    filesystem_id: "dev:2".to_owned(),
+                    budget_bytes: 1_200,
+                    components: vec![
+                        NexusStorageBudgetComponent::WsvCold,
+                        NexusStorageBudgetComponent::SoranetSpool,
+                        NexusStorageBudgetComponent::SoravpnSpool,
+                    ],
+                },
+            ],
+        });
+        root.nexus.storage.max_wsv_memory_bytes = Bytes(256);
+        root.nexus.storage.disk_budget_weights = NexusStorageWeights {
+            kura_blocks_bps: 5_000,
+            wsv_snapshots_bps: 2_000,
+            sorafs_bps: 2_000,
+            soranet_spool_bps: 500,
+            soravpn_spool_bps: 500,
+        };
+        root.tiered_state.enabled = false;
+        root.tiered_state.cold_store_root = None;
+        root.tiered_state.da_store_root = None;
+        root.kura.max_disk_usage_bytes = Bytes(0);
+        root.tiered_state.max_cold_bytes = Bytes(0);
+        root.torii.sorafs_storage.max_capacity_bytes = Bytes(0);
+        root.streaming.soranet.provision_spool_max_bytes = Bytes(0);
+        root.streaming.soravpn.provision_spool_max_bytes = Bytes(0);
+
+        root.apply_storage_budget();
+
+        assert_eq!(root.kura.max_disk_usage_bytes.get(), 572);
+        assert_eq!(root.tiered_state.max_cold_bytes.get(), 800);
+        assert_eq!(root.torii.sorafs_storage.max_capacity_bytes.get(), 228);
+        assert_eq!(root.streaming.soranet.provision_spool_max_bytes.get(), 200);
+        assert_eq!(root.streaming.soravpn.provision_spool_max_bytes.get(), 200);
+        assert_eq!(root.tiered_state.hot_retained_bytes.get(), 256);
     }
 
     #[test]
@@ -2414,27 +2624,174 @@ impl Default for LaneRelayEmergency {
     }
 }
 
+/// Provenance of the effective Nexus aggregate storage budget.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NexusStorageBudgetSource {
+    /// No aggregate budget was configured and no persisted auto-derived metadata is active.
+    Unset,
+    /// The operator explicitly set the aggregate budget.
+    OperatorExplicit,
+    /// The aggregate budget was auto-derived and is backed by persisted filesystem metadata.
+    AutoDerived,
+}
+
+/// Storage component participating in Nexus disk budgeting.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum NexusStorageBudgetComponent {
+    /// Kura block storage.
+    Kura,
+    /// Tiered-state cold or DA-backed cold storage.
+    WsvCold,
+    /// SoraFS storage root.
+    Sorafs,
+    /// SoraNet provisioning spool.
+    SoranetSpool,
+    /// SoraVPN provisioning spool.
+    SoravpnSpool,
+}
+
+impl NexusStorageBudgetComponent {
+    /// Components in the deterministic split and remainder order.
+    pub const ORDER: [Self; 5] = [
+        Self::Kura,
+        Self::WsvCold,
+        Self::Sorafs,
+        Self::SoranetSpool,
+        Self::SoravpnSpool,
+    ];
+
+    /// Stable string label used in persisted config metadata.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Kura => "kura",
+            Self::WsvCold => "wsv_cold",
+            Self::Sorafs => "sorafs",
+            Self::SoranetSpool => "soranet_spool",
+            Self::SoravpnSpool => "soravpn_spool",
+        }
+    }
+
+    /// Parse a persisted component label.
+    #[must_use]
+    pub fn parse_label(label: &str) -> Option<Self> {
+        match label {
+            "kura" => Some(Self::Kura),
+            "wsv_cold" => Some(Self::WsvCold),
+            "sorafs" => Some(Self::Sorafs),
+            "soranet_spool" => Some(Self::SoranetSpool),
+            "soravpn_spool" => Some(Self::SoravpnSpool),
+            _ => None,
+        }
+    }
+
+    fn weight_bps(self, weights: NexusStorageWeights) -> u16 {
+        match self {
+            Self::Kura => weights.kura_blocks_bps,
+            Self::WsvCold => weights.wsv_snapshots_bps,
+            Self::Sorafs => weights.sorafs_bps,
+            Self::SoranetSpool => weights.soranet_spool_bps,
+            Self::SoravpnSpool => weights.soravpn_spool_bps,
+        }
+    }
+}
+
+impl FromStr for NexusStorageBudgetComponent {
+    type Err = ();
+
+    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+        Self::parse_label(s).ok_or(())
+    }
+}
+
+/// Persisted per-filesystem metadata backing an auto-derived Nexus budget.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NexusStorageAutoDefault {
+    /// Metadata schema version.
+    pub version: u32,
+    /// Aggregate budget derived across all filesystem groups.
+    pub aggregate_budget_bytes: u64,
+    /// Per-filesystem budget groups in deterministic order.
+    pub filesystem_groups: Vec<NexusStorageAutoDefaultFilesystemGroup>,
+}
+
+impl NexusStorageAutoDefault {
+    /// Current metadata schema version persisted into `config.toml`.
+    pub const VERSION: u32 = 1;
+
+    /// Whether this metadata can be used to activate auto-derived budgeting for the aggregate.
+    #[must_use]
+    pub fn matches_aggregate_budget(&self, aggregate_budget_bytes: u64) -> bool {
+        self.version == Self::VERSION
+            && self.aggregate_budget_bytes == aggregate_budget_bytes
+            && self.aggregate_budget_bytes == self.sum_budget_bytes()
+    }
+
+    /// Sum the persisted per-filesystem budgets.
+    #[must_use]
+    pub fn sum_budget_bytes(&self) -> u64 {
+        self.filesystem_groups.iter().fold(0_u64, |total, group| {
+            total.saturating_add(group.budget_bytes)
+        })
+    }
+}
+
+/// One persisted filesystem group inside an auto-derived Nexus budget.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NexusStorageAutoDefaultFilesystemGroup {
+    /// Stable filesystem identity recorded at derivation time.
+    pub filesystem_id: String,
+    /// Budget derived for this filesystem group.
+    pub budget_bytes: u64,
+    /// Components that share the filesystem, ordered deterministically.
+    pub components: Vec<NexusStorageBudgetComponent>,
+}
+
 /// Storage budget configuration for Nexus-enabled nodes.
-#[derive(Debug, Clone, Copy)]
+#[derive(Clone)]
 pub struct NexusStorage {
     /// Aggregate on-disk storage budget (bytes).
     pub max_disk_usage_bytes: Bytes<u64>,
+    /// Provenance of the effective aggregate disk budget.
+    pub budget_source: NexusStorageBudgetSource,
+    /// Persisted auto-derived metadata, when available.
+    pub auto_default: Option<NexusStorageAutoDefault>,
     /// Block interval between disk budget enforcement scans (0 = every block).
     pub budget_enforce_interval_blocks: u64,
     /// WSV hot-tier deterministic payload size budget (bytes).
     pub max_wsv_memory_bytes: Bytes<u64>,
     /// Budget weights for dividing the disk cap across subsystems.
     pub disk_budget_weights: NexusStorageWeights,
+    pub(crate) configured_component_caps: Option<NexusStorageConfiguredComponentCaps>,
+}
+
+impl fmt::Debug for NexusStorage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("NexusStorage")
+            .field("max_disk_usage_bytes", &self.max_disk_usage_bytes)
+            .field("budget_source", &self.budget_source)
+            .field("auto_default", &self.auto_default)
+            .field(
+                "budget_enforce_interval_blocks",
+                &self.budget_enforce_interval_blocks,
+            )
+            .field("max_wsv_memory_bytes", &self.max_wsv_memory_bytes)
+            .field("disk_budget_weights", &self.disk_budget_weights)
+            .finish()
+    }
 }
 
 impl Default for NexusStorage {
     fn default() -> Self {
         Self {
             max_disk_usage_bytes: defaults::nexus::storage::MAX_DISK_USAGE_BYTES,
+            budget_source: NexusStorageBudgetSource::Unset,
+            auto_default: None,
             budget_enforce_interval_blocks:
                 defaults::nexus::storage::BUDGET_ENFORCE_INTERVAL_BLOCKS,
             max_wsv_memory_bytes: defaults::nexus::storage::MAX_WSV_MEMORY_BYTES,
             disk_budget_weights: NexusStorageWeights::default(),
+            configured_component_caps: None,
         }
     }
 }
@@ -8397,6 +8754,31 @@ impl Default for FraudMonitoring {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn nexus_storage_budget_component_from_str_matches_persisted_labels() {
+        assert_eq!(
+            "kura".parse::<NexusStorageBudgetComponent>(),
+            Ok(NexusStorageBudgetComponent::Kura)
+        );
+        assert_eq!(
+            "wsv_cold".parse::<NexusStorageBudgetComponent>(),
+            Ok(NexusStorageBudgetComponent::WsvCold)
+        );
+        assert_eq!(
+            "sorafs".parse::<NexusStorageBudgetComponent>(),
+            Ok(NexusStorageBudgetComponent::Sorafs)
+        );
+        assert_eq!(
+            "soranet_spool".parse::<NexusStorageBudgetComponent>(),
+            Ok(NexusStorageBudgetComponent::SoranetSpool)
+        );
+        assert_eq!(
+            "soravpn_spool".parse::<NexusStorageBudgetComponent>(),
+            Ok(NexusStorageBudgetComponent::SoravpnSpool)
+        );
+        assert!("unknown".parse::<NexusStorageBudgetComponent>().is_err());
+    }
 
     #[test]
     fn npos_timeouts_from_block_time_defaults() {

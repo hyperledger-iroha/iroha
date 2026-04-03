@@ -301,7 +301,6 @@ fn account_permission_revoke_then_grant_last_wins_detached() -> Result<()> {
     let metrics_url = client.torii_url.join("/metrics")?;
 
     let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
-    let wonderland_domain: DomainId = "wonderland".parse()?;
     client.submit_blocking(Register::account(Account::new(mouse_id.clone())))?;
 
     let perm: Permission = CanModifyAccountMetadata {
@@ -583,7 +582,6 @@ fn stored_vs_granted_permission_payload() {
             .with_name(__asset_definition_id.name().to_string())
     });
     let (mouse_id, mouse_keypair) = gen_account_in("wonderland");
-    let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain");
     let register_mouse_account = Register::account(Account::new(mouse_id.clone()));
     iroha
         .submit_all_blocking::<InstructionBox>([register_mouse_account.into(), create_asset.into()])

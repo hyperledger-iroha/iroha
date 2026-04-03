@@ -397,6 +397,39 @@ mod tests {
     }
 
     #[test]
+    fn publish_manifest_allows_cross_account_direct_grant() {
+        let mut state = test_state();
+        let grantee = AccountId::new(KeyPair::random().public_key().clone());
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::cross-grant"));
+        let dataspace = DataSpaceId::new(77);
+        seed_dataspace_catalog(&mut state, dataspace);
+        grant_manifest_permission(&mut state.world, &grantee, dataspace);
+        let manifest = sample_manifest(uaid, dataspace, 7);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        PublishSpaceDirectoryManifest {
+            manifest: manifest.clone(),
+        }
+        .execute(&grantee, &mut tx)
+        .expect("cross-account direct grant should authorize publish");
+        tx.apply();
+        block.commit().unwrap();
+
+        let view = state.view();
+        let stored = view
+            .world()
+            .space_directory_manifests()
+            .get(&uaid)
+            .and_then(|set| set.get(&dataspace))
+            .expect("manifest stored after cross-account direct grant");
+        assert_eq!(stored.manifest.uaid, manifest.uaid);
+        assert_eq!(stored.manifest.dataspace, manifest.dataspace);
+    }
+
+    #[test]
     fn publishing_replaces_existing_manifest_and_rebuilds_bindings() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
@@ -804,6 +837,34 @@ mod tests {
         assert!(
             message.contains("unknown dataspace id"),
             "error should mention unknown dataspace: {message}"
+        );
+    }
+
+    #[test]
+    fn publish_manifest_rejects_after_direct_permission_revoke() {
+        let mut state = test_state();
+        let grantee = AccountId::new(KeyPair::random().public_key().clone());
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::revoked-grant"));
+        let dataspace = DataSpaceId::new(78);
+        seed_dataspace_catalog(&mut state, dataspace);
+        grant_manifest_permission(&mut state.world, &grantee, dataspace);
+        state
+            .world
+            .account_permissions
+            .insert(grantee.clone(), Permissions::new());
+        let manifest = sample_manifest(uaid, dataspace, 8);
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        let err = PublishSpaceDirectoryManifest { manifest }
+            .execute(&grantee, &mut tx)
+            .expect_err("revoked direct grant should reject publish");
+        let message = err.to_string();
+        assert!(
+            message.contains("CanPublishSpaceDirectoryManifest"),
+            "error references missing permission after revoke: {message}"
         );
     }
 }

@@ -293,6 +293,20 @@ impl Actor {
                                     now,
                                 )
                         });
+                let missing_commit_qc_request = self
+                    .pending
+                    .missing_commit_qc_requests
+                    .get(hash)
+                    .is_some_and(|request| {
+                        request.height == pending.height
+                            && request.view == pending.view
+                            && self.missing_commit_qc_request_has_actionable_dependency(
+                                *hash,
+                                request,
+                                committed_height,
+                                now,
+                            )
+                    });
                 let expected_epoch = self.epoch_for_height(pending.height);
                 let commit_qc_cached = cached_qc_for(
                     &self.qc_cache,
@@ -303,7 +317,7 @@ impl Actor {
                     expected_epoch,
                 )
                 .is_some();
-                if has_votes || missing_request || commit_qc_cached {
+                if has_votes || missing_request || missing_commit_qc_request || commit_qc_cached {
                     continue;
                 }
                 let pending_age = now.saturating_duration_since(pending.inserted_at);
@@ -1606,7 +1620,8 @@ impl Actor {
             || rebroadcast.local_vote
             || rebroadcast.votes > 0
             || rebroadcast.block_sync
-            || rebroadcast.block;
+            || rebroadcast.block
+            || rebroadcast.missing_block_fetch;
         if !action_taken {
             self.pending.pending_blocks.insert(block_hash, pending);
             if handoff_frontier_quorum_timeout_owner {
@@ -1677,6 +1692,7 @@ impl Actor {
                         && matches!(phase, crate::sumeragi::consensus::Phase::Commit))
             });
             self.pending.pending_fetch_requests.remove(&block_hash);
+            self.pending.pending_block_body_requests.remove(&block_hash);
             self.subsystems.validation.inflight.remove(&block_hash);
             self.subsystems
                 .validation
@@ -1726,6 +1742,7 @@ impl Actor {
             rebroadcasted_votes = rebroadcast.votes,
             rebroadcasted_block = rebroadcast.block,
             rebroadcasted_block_sync = rebroadcast.block_sync,
+            requested_missing_block_fetch = rebroadcast.missing_block_fetch,
             drop_pending,
             same_slot_vote_backed_evidence,
             frontier_slot_owner_active,
@@ -1822,6 +1839,7 @@ impl Actor {
             current_vote_count = 1;
         }
         current_vote_count = current_vote_count.max(vote_count);
+        let observed_vote_backing = current_vote_count > 0;
         if self.relay_backpressure_active(now, self.rebroadcast_cooldown()) {
             super::status::inc_retransmit_skip_relay_backpressure();
             debug!(
@@ -1835,6 +1853,7 @@ impl Actor {
                 votes: 0,
                 block_sync: false,
                 block: false,
+                missing_block_fetch: false,
             };
         }
         let retransmit_targets = self.quorum_retransmit_targets_for_missing_votes(
@@ -1858,6 +1877,7 @@ impl Actor {
                 votes: 0,
                 block_sync: false,
                 block: false,
+                missing_block_fetch: false,
             };
         }
 
@@ -1878,6 +1898,7 @@ impl Actor {
                 votes: 0,
                 block_sync: false,
                 block: false,
+                missing_block_fetch: false,
             };
         }
 
@@ -1895,6 +1916,7 @@ impl Actor {
                 votes: 0,
                 block_sync: false,
                 block: false,
+                missing_block_fetch: false,
             };
         }
 
@@ -1907,6 +1929,7 @@ impl Actor {
                 votes: 0,
                 block_sync: false,
                 block: false,
+                missing_block_fetch: false,
             };
         }
         super::status::record_retransmit_target_set_size(retransmit_targets.len());
@@ -1919,7 +1942,11 @@ impl Actor {
             &retransmit_targets,
         );
         let mut block_sync = false;
+        let mut missing_block_fetch = false;
         if !drop_pending && !retransmit_targets.is_empty() {
+            let has_cached_commit_qc = self
+                .cached_commit_qc_for_block(block_hash, height, view)
+                .is_some();
             block_sync = self.with_registered_pending_block(block_hash, pending, |actor| {
                 actor.maybe_replay_known_block_commit_evidence(
                     block_hash,
@@ -1929,14 +1956,24 @@ impl Actor {
                     "quorum_reschedule",
                 )
             });
+            if !has_cached_commit_qc && observed_vote_backing {
+                missing_block_fetch = self.maybe_request_known_block_commit_qc_recovery(
+                    block_hash,
+                    height,
+                    view,
+                    &retransmit_targets,
+                    Some(pending),
+                    "quorum_reschedule",
+                );
+            }
         }
         let mut block = false;
-        if !drop_pending && !retransmit_targets.is_empty() {
+        if !drop_pending && !retransmit_targets.is_empty() && observed_vote_backing {
             let created = self.frontier_block_created_for_wire(&pending.block);
             self.broadcast_block_created(created, &retransmit_targets);
             block = true;
         }
-        if local_vote || votes > 0 || block_sync || block {
+        if local_vote || votes > 0 || block_sync || block || missing_block_fetch {
             pending.mark_precommit_rebroadcast(now);
         }
         RescheduleRebroadcast {
@@ -1944,6 +1981,7 @@ impl Actor {
             votes,
             block_sync,
             block,
+            missing_block_fetch,
         }
     }
 
@@ -2059,6 +2097,7 @@ struct RescheduleRebroadcast {
     votes: usize,
     block_sync: bool,
     block: bool,
+    missing_block_fetch: bool,
 }
 
 #[cfg(test)]

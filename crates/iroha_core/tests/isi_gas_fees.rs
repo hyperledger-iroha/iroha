@@ -40,7 +40,7 @@ fn new_state(
     State::new(world, kura, query_handle)
 }
 
-fn new_account_in_domain(account_id: &AccountId, domain: &str) -> Account {
+fn new_account_in_domain(account_id: &AccountId, _domain: &str) -> Account {
     Account::new(account_id.clone()).build(account_id)
 }
 

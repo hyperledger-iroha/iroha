@@ -55,7 +55,7 @@ fn asset_totals_track_multi_account_mint_and_burn() {
     let (holder_looking_glass, _kp_b) = gen_account_in("looking_glass");
     let (burn_to_zero, _kp_c) = gen_account_in("looking_glass");
 
-    for (account_id, domain_id) in [
+    for (account_id, _domain_id) in [
         (holder_wonderland.clone(), wonderland.clone()),
         (holder_looking_glass.clone(), looking_glass.clone()),
         (burn_to_zero.clone(), looking_glass.clone()),

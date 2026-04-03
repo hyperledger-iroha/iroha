@@ -4308,6 +4308,159 @@ fn sumeragi_summary_commands_against_torii_mock() {
     );
 }
 
+#[test]
+fn tx_status_command_against_torii_mock() {
+    use torii_mock_support::{
+        SpawnError, TempDir, ToriiMockProcess, configure_pipeline, write_client_config,
+    };
+
+    let mock = match ToriiMockProcess::spawn() {
+        Ok(proc) => proc,
+        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
+            eprintln!("skipping tx_status_command_against_torii_mock: mock server unavailable");
+            return;
+        }
+        Err(err) => panic!("failed to start Torii mock: {err}"),
+    };
+
+    let temp_dir = TempDir::new("tx_status").expect("temp dir");
+    let config_path = temp_dir.path().join("client.toml");
+    write_client_config(&config_path, mock.base_url()).expect("write config");
+
+    let hash = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+    configure_pipeline(
+        mock.base_url(),
+        &norito::json!({
+            "hash": hash,
+            "repeat_last": true,
+            "statuses": [
+                {
+                    "kind": "Committed",
+                    "block_height": 42,
+                    "scope": "global",
+                    "resolved_from": "state"
+                }
+            ]
+        }),
+    )
+    .expect("configure pipeline");
+
+    let output = command()
+        .arg("--config")
+        .arg(&config_path)
+        .args(["tx", "status", "--hash", hash])
+        .output()
+        .expect("failed to run iroha tx status");
+    assert!(
+        output.status.success(),
+        "expected tx status to succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: json::Value = json::from_slice(&output.stdout).expect("tx status JSON");
+    assert_eq!(payload["hash"].as_str(), Some(hash));
+    assert_eq!(payload["status"]["kind"].as_str(), Some("Committed"));
+    assert_eq!(payload["status"]["block_height"].as_u64(), Some(42));
+    assert_eq!(payload["scope"].as_str(), Some("global"));
+    assert_eq!(payload["resolved_from"].as_str(), Some("state"));
+
+    let missing_hash = "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff";
+    let missing = command()
+        .arg("--config")
+        .arg(&config_path)
+        .args(["tx", "status", "--hash", missing_hash])
+        .output()
+        .expect("failed to run iroha tx status for missing hash");
+    assert!(
+        !missing.status.success(),
+        "expected missing tx status to fail, stdout: {}",
+        String::from_utf8_lossy(&missing.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("Transaction status not found"),
+        "missing tx status stderr mismatch: {}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+}
+
+#[test]
+fn account_get_command_against_torii_mock() {
+    use torii_mock_support::{
+        SpawnError, TempDir, ToriiMockProcess, configure_accounts, write_client_config,
+    };
+
+    let mock = match ToriiMockProcess::spawn() {
+        Ok(proc) => proc,
+        Err(SpawnError::PythonUnavailable | SpawnError::PermissionDenied) => {
+            eprintln!("skipping account_get_command_against_torii_mock: mock server unavailable");
+            return;
+        }
+        Err(err) => panic!("failed to start Torii mock: {err}"),
+    };
+
+    let temp_dir = TempDir::new("account_get").expect("temp dir");
+    let config_path = temp_dir.path().join("client.toml");
+    write_client_config(&config_path, mock.base_url()).expect("write config");
+    let account_id = alice_account_literal();
+
+    configure_accounts(
+        mock.base_url(),
+        &norito::json!({
+            "accounts": [
+                {
+                    "account_id": account_id,
+                    "label": null,
+                    "uaid": null,
+                    "opaque_ids": [],
+                    "linked_domains": ["centralbank"]
+                }
+            ]
+        }),
+    )
+    .expect("configure accounts");
+
+    let output = command()
+        .arg("--config")
+        .arg(&config_path)
+        .args(["account", "get", "--id", account_id])
+        .output()
+        .expect("failed to run iroha account get");
+    assert!(
+        output.status.success(),
+        "expected account get to succeed, stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let payload: json::Value = json::from_slice(&output.stdout).expect("account get JSON");
+    assert_eq!(
+        payload["account_id"].as_str(),
+        Some(account_id),
+        "canonical account id mismatch"
+    );
+    assert_eq!(
+        payload["linked_domains"]
+            .as_array()
+            .and_then(|items| items.first())
+            .and_then(json::Value::as_str),
+        Some("centralbank")
+    );
+
+    let missing = command()
+        .arg("--config")
+        .arg(&config_path)
+        .args(["account", "get", "--id", bob_account_literal()])
+        .output()
+        .expect("failed to run iroha account get for missing account");
+    assert!(
+        !missing.status.success(),
+        "expected missing account get to fail, stdout: {}",
+        String::from_utf8_lossy(&missing.stdout)
+    );
+    assert!(
+        String::from_utf8_lossy(&missing.stderr).contains("Failed to get account"),
+        "missing account stderr mismatch: {}",
+        String::from_utf8_lossy(&missing.stderr)
+    );
+}
+
 // Coverage: The `zk_attachments_flow_against_torii_mock` test below exercises the
 // upload/list/get/delete CLI paths against the lightweight Torii mock.
 
@@ -5317,11 +5470,11 @@ private_key = \"802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C
         fs::write(path, contents)
     }
 
-    pub fn configure_governance(base_url: &str, config: &json::Value) -> io::Result<()> {
+    fn post_mock_config(base_url: &str, endpoint: &str, config: &json::Value) -> io::Result<()> {
         let base =
             Url::parse(base_url).map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
         let target = base
-            .join("__mock__/gov/config")
+            .join(endpoint)
             .map_err(|err| io::Error::new(io::ErrorKind::InvalidInput, err))?;
         let host = target
             .host_str()
@@ -5348,11 +5501,21 @@ private_key = \"802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C
         let mut response = String::new();
         stream.read_to_string(&mut response)?;
         if !(response.starts_with("HTTP/1.1 200") || response.starts_with("HTTP/1.0 200")) {
-            return Err(io::Error::other(format!(
-                "mock governance config failed: {response}"
-            )));
+            return Err(io::Error::other(format!("mock config failed: {response}")));
         }
         Ok(())
+    }
+
+    pub fn configure_governance(base_url: &str, config: &json::Value) -> io::Result<()> {
+        post_mock_config(base_url, "__mock__/gov/config", config)
+    }
+
+    pub fn configure_pipeline(base_url: &str, config: &json::Value) -> io::Result<()> {
+        post_mock_config(base_url, "__mock__/pipeline/config", config)
+    }
+
+    pub fn configure_accounts(base_url: &str, config: &json::Value) -> io::Result<()> {
+        post_mock_config(base_url, "__mock__/accounts/config", config)
     }
 
     fn workspace_root() -> PathBuf {

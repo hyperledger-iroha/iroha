@@ -51,8 +51,8 @@ public final class OfflineToriiClientTests {
               "items": [
                 {
                   "verdict_id_hex": "DEADBEEF",
-                  "issuer_id": "issuer@sbp",
-                  "issuer_display": "issuer@sbp",
+                  "issuer_id": "issuer@centralbank",
+                  "issuer_display": "issuer@centralbank",
                   "revoked_at_ms": 1234,
                   "reason": "compromised_device",
                   "note": "rotated",
@@ -82,8 +82,8 @@ public final class OfflineToriiClientTests {
     assert list.items().size() == 1 : "revocation item mismatch";
     final OfflineRevocationList.OfflineRevocationItem item = list.items().get(0);
     assert "DEADBEEF".equals(item.verdictIdHex()) : "verdict id mismatch";
-    assert "issuer@sbp".equals(item.issuerId()) : "issuer id mismatch";
-    assert "issuer@sbp".equals(item.issuerDisplay()) : "issuer display mismatch";
+    assert "issuer@centralbank".equals(item.issuerId()) : "issuer id mismatch";
+    assert "issuer@centralbank".equals(item.issuerDisplay()) : "issuer display mismatch";
     assert item.revokedAtMs() == 1234L : "revoked_at mismatch";
     assert "compromised_device".equals(item.reason()) : "reason mismatch";
     assert "rotated".equals(item.note()) : "note mismatch";
@@ -290,10 +290,10 @@ public final class OfflineToriiClientTests {
             """
             {
               "bundle_id_hex": "deadbeef",
-              "receiver_id": "receiver@sbp",
-              "receiver_display": "receiver@sbp",
-              "deposit_account_id": "vault@sbp",
-              "deposit_account_display": "vault@sbp",
+              "receiver_id": "receiver@centralbank",
+              "receiver_display": "receiver@centralbank",
+              "deposit_account_id": "vault@centralbank",
+              "deposit_account_display": "vault@centralbank",
               "asset_id": "%s",
               "receipt_count": 2,
               "total_amount": "42",
@@ -323,7 +323,7 @@ public final class OfflineToriiClientTests {
     assert executor.lastRequest.uri().getPath().endsWith("/v1/offline/transfers/deadbeef")
         : "transfer detail path mismatch";
     assert "deadbeef".equals(item.bundleIdHex()) : "bundle id mismatch";
-    assert "receiver@sbp".equals(item.receiverId()) : "receiver mismatch";
+    assert "receiver@centralbank".equals(item.receiverId()) : "receiver mismatch";
     assert assetDefinitionId.equals(item.assetId()) : "asset id mismatch";
     assert item.receiptCount() == 2L : "receipt count mismatch";
     assert "42".equals(item.totalAmount()) : "total amount mismatch";
