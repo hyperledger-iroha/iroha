@@ -14034,6 +14034,8 @@ async fn quorum_reschedule_rebroadcasts_block_created_while_skipping_block_sync_
  {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    let background_log = attach_background_log(actor);
+    let _ = take_background_log(&background_log);
 
     let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
     let block_hash = block.hash();
@@ -14076,30 +14078,31 @@ async fn quorum_reschedule_rebroadcasts_block_created_while_skipping_block_sync_
         now,
     );
 
-    let posts_first: Vec<_> = harness.background_rx.try_iter().collect();
-    let sync_updates_first = posts_first
+    let _ = harness.background_rx.try_iter().count();
+    let entries_first = take_background_log(&background_log);
+    let sync_updates_first = entries_first
         .iter()
-        .filter(|post| {
+        .filter(|entry| {
             matches!(
-                post,
-                BackgroundPost::Post { msg, .. }
-                    if matches!(
-                        msg.as_ref(),
-                        BlockMessage::BlockSyncUpdate(update) if update.block.hash() == block_hash
-                    )
+                entry,
+                super::BackgroundRequestLogEntry {
+                    kind: super::BackgroundRequestLogKind::Post,
+                    msg_kind: Some("BlockSyncUpdate"),
+                    ..
+                }
             )
         })
         .count();
-    let block_created_first = posts_first
+    let block_created_first = entries_first
         .iter()
-        .filter(|post| {
+        .filter(|entry| {
             matches!(
-                post,
-                BackgroundPost::Post { msg, .. }
-                    if matches!(
-                        msg.as_ref(),
-                        BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
-                    )
+                entry,
+                super::BackgroundRequestLogEntry {
+                    kind: super::BackgroundRequestLogKind::Post,
+                    msg_kind: Some("BlockCreated"),
+                    ..
+                }
             )
         })
         .count();
@@ -14129,30 +14132,31 @@ async fn quorum_reschedule_rebroadcasts_block_created_while_skipping_block_sync_
         now,
     );
 
-    let posts_second: Vec<_> = harness.background_rx.try_iter().collect();
-    let sync_updates_second = posts_second
+    let _ = harness.background_rx.try_iter().count();
+    let entries_second = take_background_log(&background_log);
+    let sync_updates_second = entries_second
         .iter()
-        .filter(|post| {
+        .filter(|entry| {
             matches!(
-                post,
-                BackgroundPost::Post { msg, .. }
-                    if matches!(
-                        msg.as_ref(),
-                        BlockMessage::BlockSyncUpdate(update) if update.block.hash() == block_hash
-                    )
+                entry,
+                super::BackgroundRequestLogEntry {
+                    kind: super::BackgroundRequestLogKind::Post,
+                    msg_kind: Some("BlockSyncUpdate"),
+                    ..
+                }
             )
         })
         .count();
-    let block_created_second = posts_second
+    let block_created_second = entries_second
         .iter()
-        .filter(|post| {
+        .filter(|entry| {
             matches!(
-                post,
-                BackgroundPost::Post { msg, .. }
-                    if matches!(
-                        msg.as_ref(),
-                        BlockMessage::BlockCreated(created) if created.block.hash() == block_hash
-                    )
+                entry,
+                super::BackgroundRequestLogEntry {
+                    kind: super::BackgroundRequestLogKind::Post,
+                    msg_kind: Some("BlockCreated"),
+                    ..
+                }
             )
         })
         .count();
@@ -24625,6 +24629,7 @@ async fn quarantined_block_sync_qc_expiry_with_empty_roster_routes_to_roster_rec
     let _missing_block_guard = status::missing_block_fetch_test_guard();
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
+    status::reset_block_sync_counters_for_tests();
     status::reset_missing_block_fetch_counters_for_tests();
     status::reset_view_change_cause_counters_for_tests();
 
@@ -82706,6 +82711,102 @@ async fn vote_roster_for_next_height_prefers_active_topology_over_cached_roster(
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn handle_vote_uses_cached_roster_for_frontier_commit_vote_validation() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_height = actor.state.view().height() as u64;
+    let height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    assert_eq!(
+        consensus_mode,
+        ConsensusMode::Permissioned,
+        "test assumes permissioned consensus"
+    );
+
+    let live_roster = actor.roster_for_live_vote_with_mode(height, consensus_mode);
+    let local_peer = actor.common_config.peer.id().clone();
+    let cached_roster: Vec<_> = live_roster
+        .iter()
+        .filter(|peer| **peer != local_peer)
+        .cloned()
+        .collect();
+    assert!(
+        !cached_roster.is_empty(),
+        "cached roster should still contain remote validators"
+    );
+    assert_ne!(
+        cached_roster, live_roster,
+        "test setup requires a cached roster that differs from the live frontier roster"
+    );
+
+    let block_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xAB; Hash::LENGTH]));
+    actor.cache_vote_roster(block_hash, height, view, cached_roster.clone());
+
+    let cached_topology = super::network_topology::Topology::new(cached_roster.clone());
+    let mut vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::Commit,
+        block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height,
+        view,
+        epoch,
+        highest_qc: None,
+        signer: 0,
+        bls_sig: Vec::new(),
+    };
+    sign_vote_for_view_with_seed(
+        &mut vote,
+        &actor.common_config.chain,
+        &cached_topology,
+        &harness.key_pairs,
+        mode_tag,
+        prf_seed,
+    );
+    let cached_signature_topology =
+        super::topology_for_view(&cached_topology, height, view, mode_tag, prf_seed);
+
+    let live_topology = super::network_topology::Topology::new(live_roster.clone());
+    let live_signature_topology =
+        super::topology_for_view(&live_topology, height, view, mode_tag, prf_seed);
+    assert!(
+        matches!(
+            super::vote_signature_check(
+                &vote,
+                &live_signature_topology,
+                &actor.common_config.chain,
+                mode_tag,
+            ),
+            Err(super::VoteSignatureError::SignerOutOfRange { .. })
+                | Err(super::VoteSignatureError::SignatureInvalid)
+        ),
+        "test setup requires the live frontier roster to reject the cached-roster vote"
+    );
+
+    actor.handle_vote(vote.clone());
+
+    let vote_key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+    assert!(
+        actor.vote_log.contains_key(&vote_key),
+        "frontier commit vote should validate against the cached roster for its block"
+    );
+    assert_eq!(
+        actor.vote_signer_peer(&vote),
+        cached_signature_topology
+            .as_ref()
+            .get(usize::try_from(vote.signer).expect("signer fits usize"))
+            .cloned(),
+        "cached roster should preserve the original signer mapping"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn maybe_emit_local_commit_vote_uses_live_roster_when_cached_roster_excludes_local() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -83697,6 +83798,111 @@ async fn precommit_vote_allows_newer_view_for_same_block() {
             .iter()
             .any(|vote| vote.block_hash == block_hash && vote.view == 1),
         "precommit vote for view 1 should be recorded"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn precommit_vote_ignores_remote_same_height_vote_when_cached_roster_differs_from_live() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    actor.locked_qc = None;
+    let height = actor.state.view().height() as u64 + 1;
+    let epoch = actor.current_epoch();
+    let (consensus_mode, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let live_roster = actor.roster_for_live_vote_with_mode(height, consensus_mode);
+    let live_topology = super::network_topology::Topology::new(live_roster.clone());
+    let local_peer = actor.common_config.peer.id().clone();
+
+    let (remote_view, remote_signer, cached_roster, remote_peer) = (0..live_roster.len())
+        .find_map(|view_idx| {
+            let view = u64::try_from(view_idx).ok()?;
+            let live_signature_topology =
+                super::topology_for_view(&live_topology, height, view, mode_tag, prf_seed);
+            let local_idx = actor.local_validator_index_for_topology(&live_signature_topology)?;
+            let local_idx = usize::try_from(local_idx).ok()?;
+            if local_idx == 0 {
+                return None;
+            }
+
+            let removed_peer = live_signature_topology.as_ref().get(local_idx - 1)?.clone();
+            let cached_roster: Vec<_> = live_roster
+                .iter()
+                .filter(|peer| **peer != removed_peer)
+                .cloned()
+                .collect();
+            let cached_topology = super::network_topology::Topology::new(cached_roster.clone());
+            let cached_signature_topology =
+                super::topology_for_view(&cached_topology, height, view, mode_tag, prf_seed);
+            let remote_peer = cached_signature_topology.as_ref().get(local_idx)?.clone();
+            (remote_peer != local_peer).then_some((
+                view,
+                ValidatorIndex::try_from(local_idx).expect("validator index fits"),
+                cached_roster,
+                remote_peer,
+            ))
+        })
+        .expect("test requires a view where cached roster drift remaps a remote signer to local");
+
+    let remote_block = sample_block(height, remote_view, None);
+    let remote_hash = remote_block.hash();
+    actor.vote_log.insert(
+        (Phase::Commit, height, remote_view, epoch, remote_signer),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash: remote_hash,
+            parent_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+            post_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+            height,
+            view: remote_view,
+            epoch,
+            highest_qc: None,
+            signer: remote_signer,
+            bls_sig: vec![0_u8; 96],
+        },
+    );
+    actor.cache_vote_roster(remote_hash, height, remote_view, cached_roster);
+
+    let resolved_signer = actor
+        .vote_signer_peer(
+            actor
+                .vote_log
+                .get(&(Phase::Commit, height, remote_view, epoch, remote_signer))
+                .expect("remote vote stored"),
+        )
+        .expect("cached roster should resolve the remote signer");
+    assert_eq!(
+        resolved_signer, remote_peer,
+        "cached vote roster should preserve the original remote signer mapping"
+    );
+    assert_ne!(
+        resolved_signer, local_peer,
+        "remote vote must not be mistaken for a local same-height vote after live-roster drift"
+    );
+    assert!(
+        actor.local_same_height_vote(height, epoch).is_none(),
+        "remote same-height vote history must not be treated as a local vote"
+    );
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let candidate_block = sample_block(height, remote_view.saturating_add(1), None);
+    let candidate_hash = candidate_block.hash();
+    insert_validated_pending(actor, candidate_block);
+
+    assert!(
+        actor.emit_precommit_vote(
+            candidate_hash,
+            height,
+            remote_view.saturating_add(1),
+            epoch,
+            ValidationStatus::Valid,
+            &topology,
+            None,
+            Some((Hash::new([]), Hash::new([]))),
+        ),
+        "remote same-height votes must not block a later local precommit"
     );
 
     harness.shutdown.send();

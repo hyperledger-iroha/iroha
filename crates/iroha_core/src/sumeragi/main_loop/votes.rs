@@ -129,16 +129,31 @@ impl Actor {
         vote: &crate::sumeragi::consensus::Vote,
     ) -> Option<PeerId> {
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
-        let roster = if vote.phase == Phase::NewView {
-            self.roster_for_new_view_with_mode(
-                vote.block_hash,
-                vote.height,
-                vote.view,
-                consensus_mode,
-            )
+        let roster = if vote.phase != Phase::NewView {
+            self.vote_roster_cache
+                .get(&vote.block_hash)
+                .filter(|cached| cached.height == vote.height)
+                .map(|cached| cached.roster.clone())
         } else {
-            self.roster_for_vote_with_mode(vote.block_hash, vote.height, vote.view, consensus_mode)
-        };
+            None
+        }
+        .unwrap_or_else(|| {
+            if vote.phase == Phase::NewView {
+                self.roster_for_new_view_with_mode(
+                    vote.block_hash,
+                    vote.height,
+                    vote.view,
+                    consensus_mode,
+                )
+            } else {
+                self.roster_for_vote_with_mode(
+                    vote.block_hash,
+                    vote.height,
+                    vote.view,
+                    consensus_mode,
+                )
+            }
+        });
         if roster.is_empty() {
             return None;
         }
@@ -620,7 +635,7 @@ impl Actor {
                 consensus_mode,
             )
         } else {
-            self.roster_for_vote_with_mode_observing_sidecar(
+            self.validation_roster_for_vote_with_mode(
                 vote.block_hash,
                 vote.height,
                 vote.view,
@@ -3210,6 +3225,32 @@ impl Actor {
     ) -> Vec<PeerId> {
         self.observe_sidecar_mismatch_for_height(height, block_hash, reason);
         self.roster_for_vote_with_mode(block_hash, height, view, consensus_mode)
+    }
+
+    fn validation_roster_for_vote_with_mode(
+        &mut self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        consensus_mode: ConsensusMode,
+        reason: &'static str,
+    ) -> Vec<PeerId> {
+        if let Some(cached) = self.vote_roster_cache.get(&block_hash)
+            && cached.height == height
+            && !cached.roster.is_empty()
+        {
+            return super::roster::canonicalize_roster_for_mode(
+                cached.roster.clone(),
+                consensus_mode,
+            );
+        }
+        self.roster_for_vote_with_mode_observing_sidecar(
+            block_hash,
+            height,
+            view,
+            consensus_mode,
+            reason,
+        )
     }
 
     fn pending_activation_roster_for_height(

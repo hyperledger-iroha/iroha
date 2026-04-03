@@ -531,32 +531,15 @@ impl Actor {
                     self.block_sync_qc_final_drop("expired");
                     warn!(?target, reason, "quarantined block-sync QC expired");
                     let current_view = self.phase_tracker.current_view(qc.height).unwrap_or(0);
-                    let (consensus_mode, _, _) = self.consensus_context_for_height(qc.height);
-                    let roster_missing = self
-                        .roster_for_vote_with_mode(
-                            qc.subject_block_hash,
-                            qc.height,
-                            current_view,
-                            consensus_mode,
-                        )
-                        .is_empty();
-                    if roster_missing {
-                        let _ = self.handle_roster_unavailable_recovery(
-                            qc.height,
-                            current_view,
-                            Some(qc.subject_block_hash),
-                            self.queue.queued_len(),
-                            now,
-                            super::ProposalDeferWarningKind::EmptyCommitTopologyProposal,
-                            "quarantined_block_sync_qc_expired_empty_commit_topology",
-                        );
-                    } else {
-                        self.trigger_view_change_with_cause(
-                            qc.height,
-                            current_view,
-                            super::ViewChangeCause::MissingQc,
-                        );
-                    }
+                    let _ = self.handle_roster_unavailable_recovery(
+                        qc.height,
+                        current_view,
+                        Some(qc.subject_block_hash),
+                        self.queue.queued_len(),
+                        now,
+                        super::ProposalDeferWarningKind::EmptyCommitTopologyProposal,
+                        "quarantined_block_sync_qc_expired_empty_commit_topology",
+                    );
                     progress = true;
                 }
             }
@@ -833,15 +816,6 @@ impl Actor {
         let block_hash = block.hash();
         let block_height = block.header().height().get();
         let block_view = block.header().view_change_index();
-        let local_committed_height = self.committed_height_snapshot();
-        if block_height > local_committed_height {
-            return BlockMessage::BlockCreated(self.frontier_block_created_for_wire(block));
-        }
-        if block_height == local_committed_height
-            && self.committed_block_hash_for_height(block_height) != Some(block_hash)
-        {
-            return BlockMessage::BlockCreated(self.frontier_block_created_for_wire(block));
-        }
         let update = super::block_sync_update_with_roster(
             block,
             self.state.as_ref(),
@@ -1488,6 +1462,10 @@ impl Actor {
         let has_commit_evidence =
             incoming_qc.is_some() || validator_checkpoint.is_some() || has_commit_votes;
         self.prune_frontier_slot_state();
+        let entry_deferral_reason = self.block_sync_update_deferral_reason();
+        let exact_frontier_body_repair = self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.block_hash == block_hash && slot.height == block_height && slot.view == block_view
+        });
         let frontier_lane_owned = (local_height.saturating_add(1)..=local_height.saturating_add(2))
             .contains(&block_height);
         let frontier_lane_locked = self
@@ -1502,9 +1480,17 @@ impl Actor {
             && frontier_lane_owned
             && has_commit_evidence
             && (requested_missing_block || block_known_locally);
+        let block_known_sidecar_fast_path =
+            block_known_locally && (incoming_qc.is_some() || validator_checkpoint.is_some());
         let frontier_lane_fast_path = frontier_lane_owned
             && !frontier_lane_deep_catchup
-            && (block_known_locally || incoming_qc.is_some() || validator_checkpoint.is_some());
+            && (block_known_sidecar_fast_path
+                || (entry_deferral_reason.is_none()
+                    && (block_known_locally
+                        || (explicit_requested_missing_block
+                            && (incoming_qc.is_some() || validator_checkpoint.is_some()))
+                        || (exact_frontier_body_repair
+                            && (incoming_qc.is_some() || validator_checkpoint.is_some())))));
         if frontier_lane_fast_path {
             let mut processed_votes = 0usize;
             let mut dropped_votes = 0usize;
@@ -1540,7 +1526,7 @@ impl Actor {
                     has_checkpoint = validator_checkpoint.is_some(),
                     "ignoring frontier-lane BlockSyncUpdate sidecars for a locally known block"
                 );
-                let sidecar_qc = incoming_qc.take().or_else(|| {
+                let mut sidecar_qc = incoming_qc.take().or_else(|| {
                     validator_checkpoint.as_ref().and_then(|checkpoint| {
                         self.commit_qc_from_validator_checkpoint(
                             block_hash,
@@ -1551,15 +1537,9 @@ impl Actor {
                     })
                 });
                 if sidecar_qc.is_some() {
-                    let _ = self.try_replay_deferred_qcs();
-                    let _ = self.try_replay_deferred_missing_payload_qcs(Instant::now());
-                    self.request_commit_pipeline_for_pending(
-                        block_hash,
-                        super::status::RoundEventCauseTrace::BlockSyncUpdated,
-                        None,
-                    );
-                }
-                if let Some(qc) = sidecar_qc {
+                    let qc = sidecar_qc
+                        .take()
+                        .expect("sidecar QC presence checked above");
                     let world_view = self.state.world_view();
                     let consensus_mode = super::effective_consensus_mode_for_height_from_world(
                         &world_view,
@@ -1603,8 +1583,35 @@ impl Actor {
                         prf_seed,
                         true,
                     ) {
-                        self.enqueue_known_block_qc_work(work);
+                        let buffered_local_block =
+                            self.pending
+                                .pending_blocks
+                                .get(&block_hash)
+                                .is_some_and(|pending| !pending.is_retry_aborted())
+                                || self.subsystems.commit.inflight.as_ref().is_some_and(
+                                    |inflight| {
+                                        inflight.block_hash == block_hash
+                                            && !inflight.pending.aborted
+                                    },
+                                )
+                                || self
+                                    .pending
+                                    .pending_processing
+                                    .get()
+                                    .is_some_and(|pending| pending == block_hash);
+                        if buffered_local_block {
+                            let _ = self.apply_known_block_qc_work(work);
+                        } else {
+                            self.enqueue_known_block_qc_work(work);
+                        }
                     }
+                    let _ = self.try_replay_deferred_qcs();
+                    let _ = self.try_replay_deferred_missing_payload_qcs(Instant::now());
+                    self.request_commit_pipeline_for_pending(
+                        block_hash,
+                        super::status::RoundEventCauseTrace::BlockSyncUpdated,
+                        None,
+                    );
                 }
                 return Ok(());
             }
@@ -2055,7 +2062,7 @@ impl Actor {
             );
             return Ok(());
         }
-        if let Some(reason) = self.block_sync_update_deferral_reason() {
+        if let Some(reason) = entry_deferral_reason {
             self.defer_block_sync_update(
                 super::message::BlockSyncUpdate {
                     block,
@@ -2071,6 +2078,73 @@ impl Actor {
                 reason,
             );
             return Ok(());
+        }
+        let cached_frontier_qc = cached_qc_for(
+            &self.qc_cache,
+            crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            block_height,
+            block_view,
+            expected_epoch,
+        )
+        .is_some();
+        let parent_known_locally = parent_hash.is_some_and(|hash| self.block_known_locally(hash));
+        let frontier_lane_payload_only = frontier_lane_owned
+            && !frontier_lane_deep_catchup
+            && !block_known
+            && incoming_qc.is_none()
+            && validator_checkpoint.is_none()
+            && !has_commit_votes
+            && !cached_frontier_qc
+            && (requested_missing_block
+                || parent_known_locally
+                || (matches!(consensus_mode, ConsensusMode::Npos)
+                    && block_height == local_height.saturating_add(1)));
+        if frontier_lane_payload_only {
+            info!(
+                height = block_height,
+                view = block_view,
+                block = %block_hash,
+                processed_votes = commit_votes_processed,
+                "routing payload-only frontier-lane BlockSyncUpdate through BlockCreated owner"
+            );
+            let creation_result = self.handle_block_created_from_block_sync(
+                super::message::BlockCreated {
+                    block: block.clone(),
+                    frontier: None,
+                },
+                sender.clone(),
+                true,
+                false,
+                requested_missing_block,
+            );
+            let payload_materialized = creation_result.is_ok()
+                && self.materialize_frontier_block_sync_payload_for_qc_recovery(&block, None);
+            if creation_result.is_ok() {
+                let mut roster = self.roster_for_vote_with_mode(
+                    block_hash,
+                    block_height,
+                    block_view,
+                    consensus_mode,
+                );
+                if roster.is_empty() {
+                    roster = self.effective_commit_topology();
+                }
+                if roster.is_empty() {
+                    roster = self.trusted_topology();
+                }
+                self.cache_vote_roster(block_hash, block_height, block_view, roster);
+            }
+            if payload_materialized || self.block_known_locally(block_hash) {
+                let _ = self.try_replay_deferred_qcs();
+                let _ = self.try_replay_deferred_missing_payload_qcs(Instant::now());
+                self.request_commit_pipeline_for_pending(
+                    block_hash,
+                    super::status::RoundEventCauseTrace::BlockSyncUpdated,
+                    None,
+                );
+            }
+            return creation_result;
         }
         // For known blocks, prefer the locally recorded commit roster snapshot and ignore
         // mismatching hints to avoid re-validating rosters on the main loop.
@@ -2165,6 +2239,7 @@ impl Actor {
         });
         let roster_start = Instant::now();
         let persisted_roster_start = Instant::now();
+        let allow_sidecar = !self.sidecar_quarantined_for_height(block_height);
         let persisted_roster = snapshot_selection.or_else(|| {
             persisted_roster_for_block(
                 self.state.as_ref(),
@@ -2175,7 +2250,7 @@ impl Actor {
                 Some(block_view),
                 &self.roster_validation_cache,
                 Some(&mut self.block_sync_roster_cache),
-                false,
+                allow_sidecar,
             )
         });
         let roster_persisted_ms =
@@ -4364,16 +4439,27 @@ impl Actor {
         }
         if let Some(lock) = self.locked_qc {
             let same_height_conflict = Self::block_sync_qc_same_height_conflict(lock, &qc);
-            if same_height_conflict && !Self::block_sync_qc_same_height_recoverable(lock, &qc, true)
-            {
-                crate::sumeragi::status::inc_block_sync_locked_qc_prefilter_drop();
-                self.log_block_sync_locked_qc_conflict(&qc, lock, "known_block_qc.height_conflict");
-                self.record_consensus_message_handling(
-                    super::status::ConsensusMessageKind::Qc,
-                    super::status::ConsensusMessageOutcome::Dropped,
-                    super::status::ConsensusMessageReason::LockedQc,
-                );
-                return None;
+            if same_height_conflict {
+                if self.defer_block_sync_qc_while_locked_payload_missing(
+                    &qc,
+                    "known_block_qc.height_conflict.missing_locked_payload",
+                ) {
+                    return None;
+                }
+                if !Self::block_sync_qc_same_height_recoverable(lock, &qc, true) {
+                    crate::sumeragi::status::inc_block_sync_locked_qc_prefilter_drop();
+                    self.log_block_sync_locked_qc_conflict(
+                        &qc,
+                        lock,
+                        "known_block_qc.height_conflict",
+                    );
+                    self.record_consensus_message_handling(
+                        super::status::ConsensusMessageKind::Qc,
+                        super::status::ConsensusMessageOutcome::Dropped,
+                        super::status::ConsensusMessageReason::LockedQc,
+                    );
+                    return None;
+                }
             }
         }
         if self.block_sync_qc_is_stale_against_lock(&qc) {
@@ -4800,8 +4886,9 @@ impl Actor {
                 "recorded commit roster from block sync QC"
             );
         }
-        self.quarantined_block_sync_qcs
-            .remove(&Self::qc_tally_key(&qc));
+        let qc_key = Self::qc_tally_key(&qc);
+        self.deferred_missing_payload_qcs.remove(&qc_key);
+        self.quarantined_block_sync_qcs.remove(&qc_key);
         super::status::record_commit_qc(qc.clone());
         self.qc_cache.insert(
             (
