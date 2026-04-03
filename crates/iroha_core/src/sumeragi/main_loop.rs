@@ -10521,7 +10521,6 @@ enum BlockSyncRosterSource {
     ValidatorCheckpointHint,
     QcHistory,
     ValidatorCheckpointHistory,
-    #[cfg(test)]
     RosterSidecar,
     PreviousBlockEvidence,
     CommitRosterJournal,
@@ -10536,7 +10535,6 @@ impl BlockSyncRosterSource {
             Self::ValidatorCheckpointHint => "validator_checkpoint_hint",
             Self::QcHistory => "commit_qc_history",
             Self::ValidatorCheckpointHistory => "validator_checkpoint_history",
-            #[cfg(test)]
             Self::RosterSidecar => "roster_sidecar",
             Self::PreviousBlockEvidence => "previous_block_evidence",
             Self::CommitRosterJournal => "commit_roster_journal",
@@ -11118,7 +11116,7 @@ fn persisted_roster_for_block(
     block_view: Option<u64>,
     roster_cache: &RosterValidationCache,
     selection_cache: Option<&mut BlockSyncRosterSelectionCache>,
-    _allow_sidecar: bool,
+    allow_sidecar: bool,
 ) -> Option<BlockSyncRosterSelection> {
     fn stake_snapshot_from_previous_roster_evidence(
         snapshot: &iroha_data_model::consensus::CommitStakeSnapshot,
@@ -11191,6 +11189,77 @@ fn persisted_roster_for_block(
             block = %block_hash,
             "persisted commit roster snapshot failed validation"
         );
+    }
+
+    if allow_sidecar && let Some(sidecar) = kura.read_roster_metadata(block_height) {
+        if sidecar.block_hash != block_hash {
+            if let Some(suppressed_since_last) =
+                allow_roster_sidecar_mismatch_warning(block_height, block_hash, sidecar.block_hash)
+            {
+                warn!(
+                    expected_height = block_height,
+                    expected = %block_hash,
+                    sidecar_height = sidecar.height,
+                    sidecar_hash = %sidecar.block_hash,
+                    suppressed_since_last,
+                    "ignoring roster sidecar with mismatched target"
+                );
+            }
+        } else {
+            let key_view = block_view
+                .or_else(|| sidecar.commit_qc.as_ref().map(|cert| cert.view))
+                .unwrap_or_else(|| {
+                    sidecar
+                        .validator_checkpoint
+                        .as_ref()
+                        .map_or(0, |checkpoint| checkpoint.view)
+                });
+            let cache_key = BlockSyncRosterCacheKey::from_hints(
+                block_hash,
+                block_height,
+                key_view,
+                consensus_mode,
+                sidecar.commit_qc.as_ref(),
+                sidecar.validator_checkpoint.as_ref(),
+                sidecar.stake_snapshot.as_ref(),
+            );
+            if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key.as_ref()) {
+                if let Some(selection) = cache.get(key) {
+                    return Some(selection);
+                }
+            }
+            if let Some(selection) = selection_from_roster_artifacts(
+                sidecar.commit_qc.as_ref(),
+                sidecar.validator_checkpoint.as_ref(),
+                sidecar.stake_snapshot.as_ref(),
+                block_hash,
+                block_height,
+                block_view,
+                BlockSyncRosterSource::RosterSidecar,
+                consensus_mode,
+                &state.chain_id,
+                mode_tag,
+                roster_cache,
+            ) {
+                if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key) {
+                    if selection.commit_qc.is_some() || selection.checkpoint.is_some() {
+                        cache.insert(key, selection.clone());
+                    }
+                }
+                if let Some(cert) = selection.commit_qc.as_ref() {
+                    status::record_commit_qc(cert.clone());
+                }
+                if let Some(checkpoint) = selection.checkpoint.as_ref() {
+                    status::record_validator_checkpoint(checkpoint.clone());
+                }
+                return Some(selection);
+            }
+            warn!(
+                height = block_height,
+                block = %block_hash,
+                "persisted roster sidecar failed validation"
+            );
+        }
     }
 
     let successor_height = block_height
@@ -11511,7 +11580,7 @@ fn block_sync_update_with_roster_inner(
         Some(block_view),
         roster_cache,
         None,
-        false,
+        true,
     )
     .or_else(|| {
         block_sync_history_roster_for_block(
@@ -28888,6 +28957,16 @@ impl Actor {
                         reason: "frontier_stall_reset",
                     },
                 );
+            }
+            let queue_depths = super::status::worker_queue_depth_snapshot();
+            if self.frontier_recovery_same_slot_reassembly_active(height, view, now, queue_depths) {
+                debug!(
+                    height,
+                    view,
+                    reason,
+                    "suppressing exact-frontier recovery rotation while same-slot reassembly remains buffered"
+                );
+                return FrontierRecoveryAdvance::None;
             }
             if reason == "quorum_timeout" {
                 return self.handle_frontier_slot_event(

@@ -876,7 +876,7 @@ seiyaku JsonNumericTest {
   meta { abi_version: 1; }
   fn run() {
     let ev = trigger_event();
-    let _amount: Amount = json_get_numeric(ev, name("amount"));
+    let _amount: Amount = ev.get_numeric(name("amount"));
   }
 }
 "#;
@@ -905,7 +905,7 @@ seiyaku JsonAssetDefinitionTest {
   meta { abi_version: 1; }
   fn run() {
     let ev = trigger_event();
-    let _asset = json_get_asset_definition_id(ev, name("asset_definition_id"));
+    let _asset = ev.get_asset_definition_id(name("asset_definition_id"));
   }
 }
 "#;
@@ -1751,16 +1751,16 @@ seiyaku StagedMintRequest {
     let created_at_ms_key = name("created_at_ms");
     let expires_at_ms_key = name("expires_at_ms");
 
-    let action = json_get_name(ev, action_key);
+    let action = ev.get_name(action_key);
     if (action == name("create")) {
-      let request_id = json_get_name(ev, request_id_key);
+      let request_id = ev.get_name(request_id_key);
       let sequence = MintRequestNextSequence + 1;
-      let fi_id = json_get_name(ev, fi_id_key);
-      let to_account_id = json_get_account_id(ev, to_account_id_key);
-      let amount_i64 = json_get_int(ev, amount_i64_key);
-      let requested_by_actor_id = json_get_json(ev, requested_by_actor_id_key);
-      let created_at_ms = json_get_int(ev, created_at_ms_key);
-      let expires_at_ms = json_get_int(ev, expires_at_ms_key);
+      let fi_id = ev.get_name(fi_id_key);
+      let to_account_id = ev.get_account_id(to_account_id_key);
+      let amount_i64 = ev.get_int(amount_i64_key);
+      let requested_by_actor_id = ev.get_json(requested_by_actor_id_key);
+      let created_at_ms = ev.get_int(created_at_ms_key);
+      let expires_at_ms = ev.get_int(expires_at_ms_key);
       update_record(sequence,
                     request_id,
                     fi_id,
@@ -1796,6 +1796,20 @@ seiyaku StagedMintRequest {
         let mut dataref_kind_map: HashMap<(usize, ir::Temp), ir::DataRefKind> = HashMap::new();
         let mut int_const_map: HashMap<(usize, ir::Temp), i64> = HashMap::new();
         let mut param_temp_map: HashMap<(usize, usize), ir::Temp> = HashMap::new();
+        let mut seen_copy_dests: HashSet<(usize, ir::Temp)> = HashSet::new();
+        let mut multi_copy_dests: HashSet<(usize, ir::Temp)> = HashSet::new();
+        for (func_idx, func) in ir_prog.functions.iter().enumerate() {
+            for bb in &func.blocks {
+                for instr in &bb.instrs {
+                    if let ir::Instr::Copy { dest, .. } = instr {
+                        let key = (func_idx, *dest);
+                        if !seen_copy_dests.insert(key) {
+                            multi_copy_dests.insert(key);
+                        }
+                    }
+                }
+            }
+        }
 
         use crate::ast::UnaryOp;
         use crate::ir::DataRefKind as DRK;
@@ -1812,17 +1826,20 @@ seiyaku StagedMintRequest {
                             dataref_kind_map.remove(&dest_key);
                             int_const_map.remove(&dest_key);
                             string_literal_temps.remove(&dest_key);
-                            if let Some(val) = string_map.get(&(func_idx, *src)).cloned() {
-                                string_map.insert(dest_key, val);
-                            }
-                            if let Some(kind) = dataref_kind_map.get(&(func_idx, *src)).copied() {
-                                dataref_kind_map.insert(dest_key, kind);
-                            }
-                            if let Some(val) = int_const_map.get(&(func_idx, *src)).copied() {
-                                int_const_map.insert(dest_key, val);
-                            }
-                            if string_literal_temps.contains(&(func_idx, *src)) {
-                                string_literal_temps.insert(dest_key);
+                            if !multi_copy_dests.contains(&dest_key) {
+                                if let Some(val) = string_map.get(&(func_idx, *src)).cloned() {
+                                    string_map.insert(dest_key, val);
+                                }
+                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *src)).copied()
+                                {
+                                    dataref_kind_map.insert(dest_key, kind);
+                                }
+                                if let Some(val) = int_const_map.get(&(func_idx, *src)).copied() {
+                                    int_const_map.insert(dest_key, val);
+                                }
+                                if string_literal_temps.contains(&(func_idx, *src)) {
+                                    string_literal_temps.insert(dest_key);
+                                }
                             }
                         }
                         continue;
@@ -2862,6 +2879,20 @@ impl Compiler {
         let mut dataref_kind_map: HashMap<(usize, ir::Temp), ir::DataRefKind> = HashMap::new();
         let mut state_path_hints: HashMap<(usize, ir::Temp), StatePathHint> = HashMap::new();
         let mut norito_literal_map: HashMap<(usize, ir::Temp), String> = HashMap::new();
+        let mut seen_copy_dests: HashSet<(usize, ir::Temp)> = HashSet::new();
+        let mut multi_copy_dests: HashSet<(usize, ir::Temp)> = HashSet::new();
+        for (func_idx, func) in ir_prog.functions.iter().enumerate() {
+            for bb in &func.blocks {
+                for instr in &bb.instrs {
+                    if let ir::Instr::Copy { dest, .. } = instr {
+                        let key = (func_idx, *dest);
+                        if !seen_copy_dests.insert(key) {
+                            multi_copy_dests.insert(key);
+                        }
+                    }
+                }
+            }
+        }
         let func_count = ir_prog.functions.len();
         let mut access_sets: Vec<AccessSets> = vec![AccessSets::default(); func_count];
         let mut hint_diagnostics = AccessHintDiagnostics::default();
@@ -2887,23 +2918,29 @@ impl Compiler {
                             int_const_map.remove(&dest_key);
                             norito_literal_map.remove(&dest_key);
                             string_literal_temps.remove(&dest_key);
-                            if let Some(val) = string_map.get(&(func_idx, *src)).cloned() {
-                                string_map.insert(dest_key, val);
-                            }
-                            if let Some(kind) = dataref_kind_map.get(&(func_idx, *src)).copied() {
-                                dataref_kind_map.insert(dest_key, kind);
-                            }
-                            if let Some(hint) = state_path_hints.get(&(func_idx, *src)).cloned() {
-                                state_path_hints.insert(dest_key, hint);
-                            }
-                            if let Some(val) = int_const_map.get(&(func_idx, *src)).copied() {
-                                int_const_map.insert(dest_key, val);
-                            }
-                            if let Some(val) = norito_literal_map.get(&(func_idx, *src)).cloned() {
-                                norito_literal_map.insert(dest_key, val);
-                            }
-                            if string_literal_temps.contains(&(func_idx, *src)) {
-                                string_literal_temps.insert(dest_key);
+                            if !multi_copy_dests.contains(&dest_key) {
+                                if let Some(val) = string_map.get(&(func_idx, *src)).cloned() {
+                                    string_map.insert(dest_key, val);
+                                }
+                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *src)).copied()
+                                {
+                                    dataref_kind_map.insert(dest_key, kind);
+                                }
+                                if let Some(hint) = state_path_hints.get(&(func_idx, *src)).cloned()
+                                {
+                                    state_path_hints.insert(dest_key, hint);
+                                }
+                                if let Some(val) = int_const_map.get(&(func_idx, *src)).copied() {
+                                    int_const_map.insert(dest_key, val);
+                                }
+                                if let Some(val) =
+                                    norito_literal_map.get(&(func_idx, *src)).cloned()
+                                {
+                                    norito_literal_map.insert(dest_key, val);
+                                }
+                                if string_literal_temps.contains(&(func_idx, *src)) {
+                                    string_literal_temps.insert(dest_key);
+                                }
                             }
                         }
                         continue;
@@ -8786,9 +8823,9 @@ fn build_entrypoint_descriptors(
             params: func
                 .param_types
                 .iter()
-                .map(|(name, ty)| EntrypointParamDescriptor {
-                    name: name.clone(),
-                    type_name: semantic::render_type_name(ty),
+                .map(|param| EntrypointParamDescriptor {
+                    name: param.name.clone(),
+                    type_name: semantic::render_type_name(&param.ty),
                 })
                 .collect(),
             return_type: func.ret_ty.as_ref().map(semantic::render_type_name),

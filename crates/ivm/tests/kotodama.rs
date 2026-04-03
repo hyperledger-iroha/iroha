@@ -1062,8 +1062,8 @@ fn contains_ephemeral_true_and_false() {
         fn f() -> int {
             let m = Map::new();
             m[7] = 111;
-            let t = contains(m, 7);
-            let f = contains(m, 8);
+            let t = m.contains(7);
+            let f = m.contains(8);
             // return t*2 + f to disambiguate (expect 2*1+0=2)
             return t*2 + f;
         }
@@ -1083,8 +1083,8 @@ fn contains_durable_true_then_false() {
         state Map<int,int> m;
         fn f() -> int {
             m[7] = 1;
-            let t = contains(m, 7);
-            let f = contains(m, 8);
+            let t = m.contains(7);
+            let f = m.contains(8);
             return t*2 + f;
         }
     "#;
@@ -1122,7 +1122,7 @@ fn method_sugar_contains_ephemeral() {
 #[test]
 fn contains_rejects_wrong_types() {
     let src = r#"
-        fn f() { let m = Map::new(); let x = contains(7, m); }
+        fn f() { let m = Map::new(); let x = 7.contains(m); }
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected type error");
@@ -1696,7 +1696,7 @@ fn map_get_handles_spills() {
         src.push_str(&format!("a{i}"));
     }
     src.push_str(";\n");
-    src.push_str("  let hit = std::map::has(m, k);\n");
+    src.push_str("  let hit = m.contains(k);\n");
     src.push_str("  return sum + v + hit;\n}\n");
 
     let prog = parse(&src).expect("parse spill map-get");
@@ -1808,7 +1808,7 @@ fn map_load_pair_handles_spilled_map_base() {
         src.push_str(&format!("a{i}"));
     }
     src.push_str(";\n");
-    src.push_str("  let hit = std::map::has(m, 7);\n");
+    src.push_str("  let hit = m.contains(7);\n");
     src.push_str("  return sum + hit;\n}\n");
 
     let prog = parse(&src).expect("parse spill map-load");
@@ -2873,27 +2873,27 @@ fn compile_unary_ops() {
 }
 
 #[test]
-fn std_map_aliases_and_iter_helpers_parse_and_type() {
-    // Ensure std::map::* aliases normalize and typecheck
+fn map_methods_and_iter_helpers_parse_and_type() {
+    // Ensure the new method syntax coexists with the remaining iterator helpers.
     let src = r#"
         fn f(m: Map<int,int>) {
-            let a = std::map::has(m, 1);
-            let b = std::map::get_or_insert_default(m, 2);
+            let a = m.contains(1);
+            let b = m.ensure(2);
             let c = std::map::keys_take2(m, 0, 1);
             let d = std::map::values_take2(m, 0, 0);
         }
     "#;
-    let prog = parse(src).expect("parse std::map aliases");
-    analyze(&prog).expect("analyze std::map aliases");
+    let prog = parse(src).expect("parse map methods");
+    analyze(&prog).expect("analyze map methods");
 }
 
 #[test]
-fn ir_lower_has_alias_ephemeral() {
-    // has(m,k) should lower like contains(m,k) on non-state param maps: MapLoadPair + Eq
+fn ir_lower_contains_method_ephemeral() {
+    // m.contains(k) should lower like contains(m,k) on non-state param maps: MapLoadPair + Eq
     use ivm::kotodama::ir::Instr;
-    let src = "fn f(m: Map<int,int>, k: int) { let x = has(m,k); }";
-    let prog = parse(src).expect("parse has");
-    let typed = analyze(&prog).expect("analyze has");
+    let src = "fn f(m: Map<int,int>, k: int) { let x = m.contains(k); }";
+    let prog = parse(src).expect("parse contains");
+    let typed = analyze(&prog).expect("analyze contains");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let f = &ir.functions[0];
     let mut saw_load_pair = false;
@@ -2912,9 +2912,9 @@ fn ir_lower_has_alias_ephemeral() {
 fn ir_lower_get_or_insert_default_ephemeral() {
     // get_or_insert_default on non-state param map should emit MapLoadPair, Branch, MapSet
     use ivm::kotodama::ir::{Instr, Terminator};
-    let src = "fn f(m: Map<int,int>, k: int) -> int { return get_or_insert_default(m, k); }";
-    let prog = parse(src).expect("parse get_or_insert_default");
-    let typed = analyze(&prog).expect("analyze get_or_insert_default");
+    let src = "fn f(m: Map<int,int>, k: int) -> int { return m.ensure(k); }";
+    let prog = parse(src).expect("parse ensure");
+    let typed = analyze(&prog).expect("analyze ensure");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let f = &ir.functions[0];
     let mut saw_pair = false;
@@ -2937,7 +2937,7 @@ fn ir_lower_get_or_insert_default_ephemeral() {
 
 #[test]
 fn semantic_get_or_insert_default_pointer_requires_explicit_default() {
-    let src = "fn f(m: Map<int, Name>) { let _ = get_or_insert_default(m, 1); }";
+    let src = "fn f(m: Map<int, Name>) { let _ = m.ensure(1); }";
     let prog = parse(src).expect("parse pointer map without default");
     let err =
         analyze(&prog).expect_err("pointer-valued get_or_insert_default should require default");
@@ -2949,7 +2949,7 @@ fn semantic_get_or_insert_default_pointer_requires_explicit_default() {
 
 #[test]
 fn semantic_get_or_insert_default_non_int_requires_explicit_default() {
-    let src = "fn f(m: Map<int, bool>) { let _ = get_or_insert_default(m, 1); }";
+    let src = "fn f(m: Map<int, bool>) { let _ = m.ensure(1); }";
     let prog = parse(src).expect("parse bool map without default");
     let err = analyze(&prog).expect_err("non-int map should require explicit default");
     assert!(
@@ -2980,7 +2980,7 @@ fn ir_lower_get_or_insert_default_pointer_variants_use_pointer_syscalls() {
         seiyaku C {{
             state S: Map<int, {ty}>;
             fn hajimari() -> {ty} {{
-                return get_or_insert_default(S, 7, {ctor});
+                return S.ensure(7, {ctor});
             }}
         }}
         "#
@@ -3125,9 +3125,9 @@ fn runtime_durable_get_or_insert_default_state_map() {
         seiyaku C {
             state S: Map<int,int>;
             fn hajimari() {
-                let x = get_or_insert_default(S, 7);
+                let x = S.ensure(7);
                 assert(x == 0);
-                let y = get_or_insert_default(S, 7);
+                let y = S.ensure(7);
                 assert(y == 0);
             }
         }

@@ -3280,6 +3280,14 @@ mod roster_metadata_tests {
             validator_checkpoint: checkpoint.clone(),
             stake_snapshot: None,
         };
+        let placeholder: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+                header.set_height(NonZeroU64::new(1).expect("non-zero height"));
+                header.set_prev_block_hash(None);
+            })
+            .into();
+        kura.store_block(Arc::new(placeholder))
+            .expect("store placeholder parent");
         let successor = sample_successor_block(block_hash, Some(evidence));
         kura.store_block(Arc::new(successor))
             .expect("store successor block");
@@ -3316,6 +3324,14 @@ mod roster_metadata_tests {
             validator_checkpoint: checkpoint,
             stake_snapshot: None,
         };
+        let placeholder: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+                header.set_height(NonZeroU64::new(1).expect("non-zero height"));
+                header.set_prev_block_hash(None);
+            })
+            .into();
+        kura.store_block(Arc::new(placeholder))
+            .expect("store placeholder parent");
         let successor = sample_successor_block(block_hash, Some(evidence));
         kura.store_block(Arc::new(successor))
             .expect("store successor block");
@@ -4397,6 +4413,36 @@ pub mod message {
                 }),
                 "commit_roster_journal",
             );
+        }
+
+        if let Some(sidecar) = kura.read_roster_metadata(block_height) {
+            if sidecar.block_hash != block_hash {
+                if let Some(suppressed_since_last) =
+                    allow_block_sync_roster_sidecar_mismatch_warning(
+                        block_height,
+                        block_hash,
+                        sidecar.block_hash,
+                    )
+                {
+                    warn!(
+                        expected_height = block_height,
+                        expected = %block_hash,
+                        sidecar_height = sidecar.height,
+                        sidecar_hash = %sidecar.block_hash,
+                        suppressed_since_last,
+                        "ignoring roster sidecar with mismatched target"
+                    );
+                }
+            } else {
+                return filter_metadata(
+                    fill_snapshot(RosterMetadata {
+                        commit_qc: sidecar.commit_qc,
+                        validator_checkpoint: sidecar.validator_checkpoint,
+                        stake_snapshot: sidecar.stake_snapshot,
+                    }),
+                    "roster_sidecar",
+                );
+            }
         }
 
         if let Some(metadata) =

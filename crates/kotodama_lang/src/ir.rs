@@ -11,8 +11,8 @@ use iroha_primitives::numeric::Numeric;
 use super::{
     ast::{BinaryOp, UnaryOp},
     semantic::{
-        self, Type, TypedBlock, TypedExpr, TypedFunction, TypedItem, TypedProgram, TypedStatement,
-        state_env_snapshot,
+        self, Type, TypedBlock, TypedExpr, TypedFunction, TypedItem, TypedParam, TypedProgram,
+        TypedStatement, state_env_snapshot,
     },
 };
 
@@ -1024,6 +1024,7 @@ pub fn lower(program: &TypedProgram) -> Result<Program, String> {
 /// Lower with a specific dynamic-iteration cap used for feature-gated dynamic bounds.
 pub fn lower_with_cap(program: &TypedProgram, dyn_iter_cap: usize) -> Result<Program, String> {
     let call_renames = build_entrypoint_call_renames(program);
+    let function_param_specs = build_function_param_specs(program);
     let mut functions = Vec::new();
     for item in &program.items {
         let TypedItem::Function(f) = item;
@@ -1034,12 +1035,14 @@ pub fn lower_with_cap(program: &TypedProgram, dyn_iter_cap: usize) -> Result<Pro
                 &impl_name,
                 dyn_iter_cap,
                 &call_renames,
+                &function_param_specs,
             )?);
             functions.push(lower_entrypoint_wrapper(
                 f,
                 &impl_name,
                 dyn_iter_cap,
                 &call_renames,
+                &function_param_specs,
             )?);
         } else {
             functions.push(lower_function_named(
@@ -1047,6 +1050,7 @@ pub fn lower_with_cap(program: &TypedProgram, dyn_iter_cap: usize) -> Result<Pro
                 &f.name,
                 dyn_iter_cap,
                 &call_renames,
+                &function_param_specs,
             )?);
         }
     }
@@ -1064,6 +1068,15 @@ fn build_entrypoint_call_renames(program: &TypedProgram) -> HashMap<String, Stri
     renames
 }
 
+fn build_function_param_specs(program: &TypedProgram) -> HashMap<String, Vec<TypedParam>> {
+    let mut specs = HashMap::new();
+    for item in &program.items {
+        let TypedItem::Function(func) = item;
+        specs.insert(func.name.clone(), func.param_types.clone());
+    }
+    specs
+}
+
 fn entrypoint_impl_symbol(name: &str) -> String {
     format!("__entrypoint_impl__{name}")
 }
@@ -1078,27 +1091,44 @@ fn lower_function_named(
     symbol_name: &str,
     dyn_iter_cap: usize,
     call_renames: &HashMap<String, String>,
+    function_param_specs: &HashMap<String, Vec<TypedParam>>,
 ) -> Result<Function, String> {
-    let mut ctx = LowerCtx::new(dyn_iter_cap, call_renames.clone());
+    let mut ctx = LowerCtx::new(
+        dyn_iter_cap,
+        call_renames.clone(),
+        function_param_specs.clone(),
+    );
     let entry = ctx.new_label();
     ctx.start_block(entry);
     // Ephemeral state allocation for contract-level `state` declarations.
     let mut vars = HashMap::new();
     let mut param_temps = Vec::new();
-    for param in &func.params {
+    for param in &func.param_types {
         let tmp = ctx.new_temp();
         param_temps.push((param.clone(), tmp));
         ctx.current_instr(Instr::LoadVar {
             dest: tmp,
-            name: param.clone(),
+            name: param.name.clone(),
         });
     }
     let state_env = state_env_snapshot();
     for (name, ty) in state_env.iter() {
         register_state_value_metadata(&mut ctx, name, ty, name);
     }
-    for (name, tmp) in param_temps {
-        vars.insert(name, tmp);
+    for (param, tmp) in param_temps {
+        if param.is_state
+            && let Type::Map(key, value) = semantic::resolve_struct_type(&param.ty)
+        {
+            ctx.state_runtime_roots.insert(param.name.clone(), tmp);
+            ctx.state_map_configs.insert(
+                param.name.clone(),
+                StateMapSpec {
+                    key: *key,
+                    value: *value,
+                },
+            );
+        }
+        vars.insert(param.name, tmp);
     }
 
     lower_block(&mut ctx, &func.body, &mut vars);
@@ -1123,8 +1153,13 @@ fn lower_entrypoint_wrapper(
     impl_name: &str,
     dyn_iter_cap: usize,
     call_renames: &HashMap<String, String>,
+    function_param_specs: &HashMap<String, Vec<TypedParam>>,
 ) -> Result<Function, String> {
-    let mut ctx = LowerCtx::new(dyn_iter_cap, call_renames.clone());
+    let mut ctx = LowerCtx::new(
+        dyn_iter_cap,
+        call_renames.clone(),
+        function_param_specs.clone(),
+    );
     let entry = ctx.new_label();
     ctx.start_block(entry);
 
@@ -1137,7 +1172,15 @@ fn lower_entrypoint_wrapper(
     };
 
     let mut args = Vec::with_capacity(func.param_types.len());
-    for (param_name, param_ty) in &func.param_types {
+    for param in &func.param_types {
+        if param.is_state {
+            return Err(format!(
+                "entrypoint `{}` cannot accept state parameter `{}`",
+                func.name, param.name
+            ));
+        }
+        let param_name = &param.name;
+        let param_ty = &param.ty;
         let payload = payload.ok_or_else(|| {
             format!("internal error: missing payload for entrypoint parameter `{param_name}`")
         })?;
@@ -3871,8 +3914,17 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                 _ => {
                     // User-defined function call: pass args; capture result(s) if any.
                     let mut arg_tmps = Vec::new();
-                    for a in args {
-                        arg_tmps.push(lower_expr(ctx, a, vars));
+                    let signature = ctx.function_param_specs.get(name).cloned();
+                    for (idx, a) in args.iter().enumerate() {
+                        if signature
+                            .as_ref()
+                            .and_then(|params| params.get(idx))
+                            .is_some_and(|param| param.is_state)
+                        {
+                            arg_tmps.push(lower_state_handle_arg(ctx, a, vars));
+                        } else {
+                            arg_tmps.push(lower_expr(ctx, a, vars));
+                        }
                     }
                     match &expr.ty {
                         semantic::Type::Unit => {
@@ -4152,16 +4204,23 @@ struct LowerCtx {
     state_map_configs: HashMap<String, StateMapSpec>,
     /// Mapping from flattened state identifiers (e.g., `s#0#1`) to Name literals used in TLVs.
     state_name_literals: HashMap<String, String>,
+    /// Runtime Name roots for `state` helper parameters.
+    state_runtime_roots: HashMap<String, Temp>,
     /// Tracks which flattened state fields have already been loaded from durable storage.
     loaded_state_fields: std::collections::HashSet<String>,
     /// Dynamic iteration cap for feature-gated dynamic bounds.
     _dyn_iter_cap: usize,
     call_renames: HashMap<String, String>,
+    function_param_specs: HashMap<String, Vec<TypedParam>>,
     error: Option<String>,
 }
 
 impl LowerCtx {
-    fn new(dyn_iter_cap: usize, call_renames: HashMap<String, String>) -> Self {
+    fn new(
+        dyn_iter_cap: usize,
+        call_renames: HashMap<String, String>,
+        function_param_specs: HashMap<String, Vec<TypedParam>>,
+    ) -> Self {
         Self {
             next_temp: 0,
             next_label: 0,
@@ -4170,9 +4229,11 @@ impl LowerCtx {
             loop_stack: Vec::new(),
             state_map_configs: Default::default(),
             state_name_literals: Default::default(),
+            state_runtime_roots: Default::default(),
             loaded_state_fields: Default::default(),
             _dyn_iter_cap: dyn_iter_cap,
             call_renames,
+            function_param_specs,
             error: None,
         }
     }
@@ -4273,8 +4334,16 @@ fn build_state_name_literal(ctx: &mut LowerCtx, name: &str) -> Temp {
     t_base
 }
 
+fn build_state_base(ctx: &mut LowerCtx, name: &str) -> Temp {
+    if let Some(temp) = ctx.state_runtime_roots.get(name).copied() {
+        temp
+    } else {
+        build_state_name_literal(ctx, name)
+    }
+}
+
 fn build_state_path(ctx: &mut LowerCtx, name: &str, key: Temp, key_codec: &KeyCodec) -> Temp {
-    let t_base = build_state_name_literal(ctx, name);
+    let t_base = build_state_base(ctx, name);
     match key_codec {
         KeyCodec::Int => {
             let t_path = ctx.new_temp();
@@ -4308,6 +4377,23 @@ fn build_state_path(ctx: &mut LowerCtx, name: &str, key: Temp, key_codec: &KeyCo
             });
             t_path
         }
+    }
+}
+
+fn lower_state_handle_arg(
+    ctx: &mut LowerCtx,
+    expr: &semantic::TypedExpr,
+    vars: &mut HashMap<String, Temp>,
+) -> Temp {
+    if let Some(base_name) = state_map_base_name(expr) {
+        build_state_base(ctx, &base_name)
+    } else {
+        ctx.record_error("state parameter arguments must reference a durable state map".into());
+        let t = ctx.new_temp();
+        ctx.current_instr(Instr::Const { dest: t, value: 0 });
+        // Use vars to keep parity with the regular lower_expr signature.
+        let _ = vars;
+        t
     }
 }
 
@@ -4526,7 +4612,8 @@ mod tests {
 
     #[test]
     fn lower_trigger_event_builtin() {
-        let src = "fn main() { let ev = trigger_event(); let _kind = json_get_name(ev, name(\"kind\")); }";
+        let src =
+            "fn main() { let ev = trigger_event(); let _kind = ev.get_name(name(\"kind\")); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -4568,7 +4655,7 @@ mod tests {
 
     #[test]
     fn lower_json_get_numeric_builtin() {
-        let src = "fn main() { let ev = trigger_event(); let _amount: Amount = json_get_numeric(ev, name(\"amount\")); }";
+        let src = "fn main() { let ev = trigger_event(); let _amount: Amount = ev.get_numeric(name(\"amount\")); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -4589,7 +4676,7 @@ mod tests {
 
     #[test]
     fn lower_json_get_asset_definition_id_builtin() {
-        let src = "fn main() { let ev = trigger_event(); let _asset = json_get_asset_definition_id(ev, name(\"asset_definition_id\")); }";
+        let src = "fn main() { let ev = trigger_event(); let _asset = ev.get_asset_definition_id(name(\"asset_definition_id\")); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -4915,7 +5002,7 @@ mod tests {
 
     #[test]
     fn lower_get_or_on_state_map_reads_without_writing() {
-        let src = "state balances: Map<int, int>; fn f() -> int { return get_or(balances, 1, 7); }";
+        let src = "state balances: Map<int, int>; fn f() -> int { return balances.get_or(1, 7); }";
         let prog = parse(src).unwrap();
         let typed = analyze(&prog).unwrap();
         let ir = lower(&typed).expect("lower");
@@ -4936,6 +5023,88 @@ mod tests {
             "expected get_or durable path to read state"
         );
         assert_eq!(state_sets, 0, "get_or must not mutate durable state");
+    }
+
+    #[test]
+    fn lower_state_map_helper_param_round_trips_root_handle() {
+        let src = r#"
+            seiyaku Demo {
+                state Balances: Map<Name, int>;
+
+                fn ensure_balance(state Map<Name, int> balances, key: Name) -> int {
+                    return balances.ensure(key, 0);
+                }
+
+                fn main() -> int {
+                    return ensure_balance(Balances, name("alice"));
+                }
+            }
+        "#;
+        let prog = parse(src).unwrap();
+        let typed = analyze(&prog).unwrap();
+        let ir = lower(&typed).expect("lower");
+        let main_fn = ir
+            .functions
+            .iter()
+            .find(|f| f.name == "main")
+            .expect("main function");
+        let helper_fn = ir
+            .functions
+            .iter()
+            .find(|f| f.name == "ensure_balance")
+            .expect("helper function");
+
+        let mut balance_handle_temps = Vec::new();
+        for bb in &main_fn.blocks {
+            for instr in &bb.instrs {
+                if let Instr::DataRef {
+                    dest,
+                    kind: DataRefKind::Name,
+                    value,
+                } = instr
+                    && value == "Balances"
+                {
+                    balance_handle_temps.push(*dest);
+                }
+            }
+        }
+        let mut main_passes_balance_literal = false;
+        for bb in &main_fn.blocks {
+            for instr in &bb.instrs {
+                if let Instr::Call { callee, args, .. } = instr
+                    && callee == "ensure_balance"
+                    && args
+                        .first()
+                        .is_some_and(|arg| balance_handle_temps.contains(arg))
+                {
+                    main_passes_balance_literal = true;
+                }
+            }
+        }
+        assert!(
+            main_passes_balance_literal,
+            "expected caller to pass the durable state root as a Name handle"
+        );
+
+        let mut helper_uses_runtime_root = false;
+        for bb in &helper_fn.blocks {
+            for instr in &bb.instrs {
+                if let Instr::PathMapKeyNorito { base, .. } = instr
+                    && helper_fn.blocks.iter().flat_map(|block| block.instrs.iter()).any(|candidate| {
+                        matches!(
+                            candidate,
+                            Instr::LoadVar { dest, name } if *dest == *base && name == "balances"
+                        )
+                    })
+                {
+                    helper_uses_runtime_root = true;
+                }
+            }
+        }
+        assert!(
+            helper_uses_runtime_root,
+            "expected helper to build durable paths from its state parameter handle"
+        );
     }
 
     #[test]
