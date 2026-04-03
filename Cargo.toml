@@ -300,7 +300,8 @@ members = [
     "tools/soranet-relay",
     "tools/norito_codegen_exporter",
     "tools/soradns-resolver",
-    "tools/telemetry-schema-diff"
+    "tools/telemetry-schema-diff",
+    "tools/kotlin-fixture-gen"
 ]
 exclude = [
     "mochi/fixtures",
