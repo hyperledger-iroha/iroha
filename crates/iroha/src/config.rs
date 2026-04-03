@@ -162,6 +162,8 @@ pub struct Config {
     pub chain: ChainId,
     /// Account ID used for signing and submitting transactions.
     pub account: AccountId,
+    /// I105 chain discriminant used when parsing and rendering account literals.
+    pub account_chain_discriminant: u16,
     /// Key pair corresponding to the account.
     pub key_pair: KeyPair,
     /// Optional Basic Auth credentials for HTTP.

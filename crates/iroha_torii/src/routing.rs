@@ -8446,6 +8446,7 @@ pub async fn handle_post_contract_instance(
         .with_metadata(metadata)
         .with_instructions(instructions.into_iter())
         .sign(&private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     handle_transaction_with_metrics(
         chain_id,
@@ -8461,6 +8462,7 @@ pub async fn handle_post_contract_instance(
         ok: true,
         namespace,
         contract_id,
+        tx_hash_hex,
         code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
         abi_hash_hex: hex::encode(<[u8; 32]>::from(prepared.abi_hash)),
     })
@@ -8674,6 +8676,111 @@ pub async fn handle_post_contract_call(
                 entrypoint: response_entrypoint,
             }
         };
+
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+/// POST /v1/contracts/call/simulate — execute a public contract entrypoint locally without submission.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_post_contract_call_simulate(
+    state: Arc<CoreState>,
+    NoritoJson(req): NoritoJson<ContractCallSimulateDto>,
+) -> Result<impl IntoResponse> {
+    let ContractCallSimulateDto {
+        authority,
+        contract_address,
+        contract_alias,
+        entrypoint,
+        payload,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
+    } = req;
+
+    if gas_limit == 0 {
+        return Err(conversion_error("gas_limit must be positive".to_owned()));
+    }
+
+    let prepared = resolve_contract_call_target(
+        &state,
+        contract_address.as_ref(),
+        contract_alias.as_ref(),
+        None,
+        None,
+    )?;
+    let PreparedContractCall {
+        code_bytes,
+        code_hash,
+        abi_hash,
+        manifest,
+        namespace,
+        contract_id,
+        contract_address,
+    } = prepared;
+    let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
+    let entrypoint_descriptor = ensure_public_contract_entrypoint(&manifest, resolved_entrypoint)?;
+    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
+    let _metadata = build_contract_call_metadata(
+        &manifest,
+        &namespace,
+        &contract_id,
+        contract_address.as_ref(),
+        Some(resolved_entrypoint),
+        normalized_payload.as_ref(),
+        gas_asset_id.as_deref(),
+        fee_sponsor.as_ref(),
+        gas_limit,
+    );
+
+    let response = match execute_contract_call_simulation(
+        &state,
+        &authority,
+        &code_bytes,
+        resolved_entrypoint,
+        entrypoint_descriptor,
+        normalized_payload.clone(),
+        gas_limit,
+    ) {
+        Ok(result) => ContractCallSimulateResponseDto {
+            ok: true,
+            dataspace: namespace,
+            contract_id,
+            contract_address,
+            code_hash_hex: hex::encode(code_hash.as_ref()),
+            abi_hash_hex: hex::encode(abi_hash.as_ref()),
+            entrypoint: resolved_entrypoint.to_owned(),
+            normalized_payload,
+            gas_limit,
+            gas_used: result.gas_used,
+            queued_instructions: result.queued_instructions,
+            result: result.result,
+            error: None,
+            vm_diagnostic: None,
+        },
+        Err(err) => ContractCallSimulateResponseDto {
+            ok: false,
+            dataspace: namespace,
+            contract_id,
+            contract_address,
+            code_hash_hex: hex::encode(code_hash.as_ref()),
+            abi_hash_hex: hex::encode(abi_hash.as_ref()),
+            entrypoint: resolved_entrypoint.to_owned(),
+            normalized_payload,
+            gas_limit,
+            gas_used: err.gas_used,
+            queued_instructions: err.queued_instructions,
+            result: None,
+            error: Some(err.message),
+            vm_diagnostic: err.vm_diagnostic,
+        },
+    };
 
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
@@ -9587,6 +9694,21 @@ struct ContractViewExecutionError {
 }
 
 #[cfg(feature = "app_api")]
+struct ContractCallSimulationExecution {
+    gas_used: u64,
+    queued_instructions: Vec<norito::json::Value>,
+    result: Option<IrohaJson>,
+}
+
+#[cfg(feature = "app_api")]
+struct ContractCallSimulationError {
+    message: String,
+    vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
+    gas_used: u64,
+    queued_instructions: Vec<norito::json::Value>,
+}
+
+#[cfg(feature = "app_api")]
 fn map_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> ContractViewVmDiagnosticDto {
     ContractViewVmDiagnosticDto {
         trap_kind: format!("{:?}", diag.trap_kind),
@@ -9613,6 +9735,22 @@ fn map_vm_diagnostic(diag: &ivm::VmExecutionDiagnostic) -> ContractViewVmDiagnos
         predecoded_loaded: diag.context.predecoded_loaded,
         predecoded_hit: diag.context.predecoded_hit,
     }
+}
+
+#[cfg(feature = "app_api")]
+fn render_contract_queued_instructions(
+    queued: &[iroha_data_model::isi::InstructionBox],
+) -> std::result::Result<Vec<norito::json::Value>, ContractCallSimulationError> {
+    queued
+        .iter()
+        .map(norito::json::to_value)
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .map_err(|err| ContractCallSimulationError {
+            message: format!("failed to serialize queued instructions: {err}"),
+            vm_diagnostic: None,
+            gas_used: 0,
+            queued_instructions: Vec::new(),
+        })
 }
 
 #[cfg(feature = "app_api")]
@@ -9703,6 +9841,114 @@ fn execute_contract_view(
         }
     })?;
     Ok(IrohaJson::from(value))
+}
+
+#[cfg(feature = "app_api")]
+fn execute_contract_call_simulation(
+    state: &CoreState,
+    authority: &iroha_data_model::account::AccountId,
+    code_bytes: &[u8],
+    selector: &str,
+    descriptor: &manifest::EntrypointDescriptor,
+    payload: Option<IrohaJson>,
+    gas_limit: u64,
+) -> std::result::Result<ContractCallSimulationExecution, ContractCallSimulationError> {
+    let entry_pc =
+        resolve_contract_entrypoint_pc(code_bytes, selector, manifest::EntryPointKind::Public)
+            .map_err(|err| ContractCallSimulationError {
+                message: err.to_string(),
+                vm_diagnostic: None,
+                gas_used: 0,
+                queued_instructions: Vec::new(),
+            })?;
+    let query_view = state.query_view();
+    let mut vm = query_view.ivm.clone();
+    let mut host = if let Some(args) = payload {
+        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts_and_args(
+            authority.clone(),
+            query_view.accounts_snapshot(),
+            args,
+        )
+    } else {
+        iroha_core::smartcontracts::ivm::host::CoreHost::with_accounts(
+            authority.clone(),
+            query_view.accounts_snapshot(),
+        )
+    };
+    host.set_crypto_config(Arc::clone(&query_view.crypto));
+    host.set_halo2_config(&query_view.zk.halo2);
+    host.set_chain_id(&query_view.chain_id);
+    host.set_axt_timing(query_view.nexus.axt);
+    host.set_durable_state_snapshot_from_world(&query_view.world);
+    host.set_public_inputs_from_parameters(query_view.world.parameters());
+    host.set_vrf_epoch_seeds_from_world(&query_view.world);
+
+    vm.load_program(code_bytes)
+        .map_err(|err| ContractCallSimulationError {
+            message: format!("failed to load contract call bytecode: {err}"),
+            vm_diagnostic: None,
+            gas_used: 0,
+            queued_instructions: Vec::new(),
+        })?;
+    vm.set_gas_limit(gas_limit);
+    vm.set_register(1, vm.memory.code_len());
+    vm.set_program_counter(entry_pc)
+        .map_err(|err| ContractCallSimulationError {
+            message: format!("failed to seek to contract call entrypoint: {err}"),
+            vm_diagnostic: None,
+            gas_used: 0,
+            queued_instructions: Vec::new(),
+        })?;
+
+    let run_result = vm.run_with_host(&mut host);
+    let queued = host.drain_instructions();
+    let _durable_state_overlay = host.drain_durable_state_overlay();
+    let gas_used = gas_limit.saturating_sub(vm.gas_remaining);
+    let queued_instructions = render_contract_queued_instructions(&queued).map_err(|mut err| {
+        err.gas_used = gas_used;
+        err
+    })?;
+
+    if let Err(err) = run_result {
+        return Err(ContractCallSimulationError {
+            message: format!("contract call simulation failed: {err}"),
+            vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+            gas_used,
+            queued_instructions,
+        });
+    }
+
+    let schema = descriptor
+        .return_type
+        .as_deref()
+        .map(parse_contract_schema_type)
+        .transpose()
+        .map_err(|err| ContractCallSimulationError {
+            message: err.to_string(),
+            vm_diagnostic: None,
+            gas_used,
+            queued_instructions: queued_instructions.clone(),
+        })?
+        .unwrap_or(ContractSchemaType::Unit);
+    let result = if schema == ContractSchemaType::Unit {
+        None
+    } else {
+        let (value, _) = decode_contract_view_result_value(&vm, 10, &schema).map_err(|err| {
+            ContractCallSimulationError {
+                message: err.to_string(),
+                vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
+                gas_used,
+                queued_instructions: queued_instructions.clone(),
+            }
+        })?;
+        Some(IrohaJson::from(value))
+    };
+
+    Ok(ContractCallSimulationExecution {
+        gas_used,
+        queued_instructions,
+        result,
+    })
 }
 
 #[cfg(feature = "app_api")]
@@ -15582,6 +15828,8 @@ pub struct DeployContractResponseDto {
     pub dataspace: String,
     /// Successful deploy nonce consumed for address derivation.
     pub deploy_nonce: u64,
+    /// Hex-encoded transaction hash submitted to the queue.
+    pub tx_hash_hex: String,
     /// Hex-encoded code hash
     pub code_hash_hex: String,
     /// Hex-encoded ABI hash (if present)
@@ -15931,6 +16179,8 @@ pub struct DeployAndActivateInstanceResponseDto {
     pub namespace: String,
     /// Contract identifier inside the namespace.
     pub contract_id: String,
+    /// Hex-encoded transaction hash submitted to the queue.
+    pub tx_hash_hex: String,
     /// Hex-encoded code hash of the deployed bytecode.
     pub code_hash_hex: String,
     /// Hex-encoded ABI hash enforced for the deployment.
@@ -15990,6 +16240,40 @@ pub struct ContractCallDto {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Request payload for simulating a deployed contract call without submitting a transaction.
+pub struct ContractCallSimulateDto {
+    /// Account authorizing the call.
+    pub authority: iroha_data_model::account::AccountId,
+    /// Optional canonical contract address.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
+    #[norito(default)]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Optional entrypoint selector; defaults to `main`.
+    #[norito(default)]
+    pub entrypoint: Option<String>,
+    /// Optional Norito JSON payload forwarded to the contract.
+    #[norito(default)]
+    pub payload: Option<IrohaJson>,
+    /// Optional gas asset id forwarded to transaction metadata.
+    #[norito(default)]
+    pub gas_asset_id: Option<String>,
+    /// Optional fee sponsor account that will be charged for gas/fees when enabled and authorized.
+    #[norito(default)]
+    pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
+    /// Caller-specified gas limit (must be > 0) forwarded to transaction metadata.
+    pub gas_limit: u64,
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
 /// Response payload returned after enqueuing a contract call transaction.
 pub struct ContractCallResponseDto {
@@ -16025,6 +16309,45 @@ pub struct ContractCallResponseDto {
     /// Entrypoint selector used for the call, if provided.
     #[norito(default)]
     pub entrypoint: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize)]
+/// Response payload returned after simulating a contract call.
+pub struct ContractCallSimulateResponseDto {
+    /// Whether simulation succeeded.
+    pub ok: bool,
+    /// Dataspace targeted by the call.
+    pub dataspace: String,
+    /// Contract id targeted by the call.
+    pub contract_id: String,
+    /// Canonical contract address targeted by the call, when available.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Hex-encoded code hash of the invoked bytecode.
+    pub code_hash_hex: String,
+    /// Hex-encoded ABI hash for the invoked bytecode.
+    pub abi_hash_hex: String,
+    /// Entrypoint selector executed for the simulation.
+    pub entrypoint: String,
+    /// Normalized Norito payload actually passed to the VM.
+    #[norito(default)]
+    pub normalized_payload: Option<IrohaJson>,
+    /// Gas limit supplied for the simulation.
+    pub gas_limit: u64,
+    /// Gas consumed by the VM run.
+    pub gas_used: u64,
+    /// Queued instructions produced by the public entrypoint.
+    pub queued_instructions: Vec<norito::json::Value>,
+    /// Decoded return value when the entrypoint returns a non-unit result.
+    #[norito(default)]
+    pub result: Option<IrohaJson>,
+    /// Error message when simulation fails.
+    #[norito(default)]
+    pub error: Option<String>,
+    /// VM diagnostic information when simulation fails.
+    #[norito(default)]
+    pub vm_diagnostic: Option<ContractViewVmDiagnosticDto>,
 }
 
 #[cfg(feature = "app_api")]
@@ -17847,6 +18170,7 @@ pub async fn handle_post_contract_deploy(
         .with_metadata(metadata)
         .with_instructions(instructions.into_iter())
         .sign(&private_key.0);
+    let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
     // Submit via queue
     handle_transaction_with_metrics(
@@ -17866,6 +18190,7 @@ pub async fn handle_post_contract_deploy(
         contract_address,
         dataspace: dataspace_alias,
         deploy_nonce,
+        tx_hash_hex,
         code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
         abi_hash_hex: hex::encode(<[u8; 32]>::from(prepared.abi_hash)),
     })

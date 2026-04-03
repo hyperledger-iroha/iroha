@@ -384,7 +384,8 @@ pub use routing::handle_get_proof_tags;
 pub use routing::handle_p2p_ws;
 pub use routing::{
     ActivateInstanceDto, ActivateInstanceResponseDto, ContractAliasResolveRequestDto,
-    ContractAliasResolveResponseDto, ContractCallDto, ContractCallResponseDto, ContractViewDto,
+    ContractAliasResolveResponseDto, ContractCallDto, ContractCallResponseDto,
+    ContractCallSimulateDto, ContractCallSimulateResponseDto, ContractViewDto,
     ContractViewResponseDto, DeployAndActivateInstanceDto, DeployAndActivateInstanceResponseDto,
     DeployContractDto, DeployContractResponseDto, EvidenceListQuery, EvidenceSubmitRequestDto,
     KaigiRelayDetailDto, KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto,
@@ -395,16 +396,16 @@ pub use routing::{
     SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto, VkListQuery,
     ZkRootsGetRequestDto, ZkVkRegisterDto, ZkVkUpdateDto, ZkVoteGetTallyRequestDto,
     handle_count_proofs, handle_get_contract_code_bytes, handle_get_proof, handle_get_vk,
-    handle_list_proofs, handle_list_vk, handle_post_contract_call, handle_post_contract_deploy,
-    handle_post_contract_instance, handle_post_contract_instance_activate,
-    handle_post_contract_view, handle_post_sorafs_register_manifest,
-    handle_post_space_directory_manifest_publish, handle_post_space_directory_manifest_revoke,
-    handle_post_sumeragi_evidence_submit, handle_post_vk_register, handle_post_vk_update,
-    handle_queries_with_opts as handle_queries, handle_queries_with_opts, handle_v1_events_sse,
-    handle_v1_new_view_json, handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count,
-    handle_v1_sumeragi_evidence_list, handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots,
-    handle_v1_zk_submit_proof, handle_v1_zk_verify, handle_v1_zk_vote_tally,
-    signed_find_proof_by_id,
+    handle_list_proofs, handle_list_vk, handle_post_contract_call,
+    handle_post_contract_call_simulate, handle_post_contract_deploy, handle_post_contract_instance,
+    handle_post_contract_instance_activate, handle_post_contract_view,
+    handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
+    handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
+    handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
+    handle_queries_with_opts, handle_v1_events_sse, handle_v1_new_view_json,
+    handle_v1_new_view_sse, handle_v1_sumeragi_evidence_count, handle_v1_sumeragi_evidence_list,
+    handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots, handle_v1_zk_submit_proof,
+    handle_v1_zk_verify, handle_v1_zk_vote_tally, signed_find_proof_by_id,
 };
 #[cfg(feature = "connect")]
 pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
@@ -17678,6 +17679,53 @@ async fn handler_post_contract_call(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_contract_call_simulate(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: NoritoJson<crate::routing::ContractCallSimulateDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("call_simulate"));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/contracts/call/simulate",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("call_simulate"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_contract_call_simulate(app.state.clone(), request).await {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("call_simulate"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_bridge_proof_submit(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -23593,6 +23641,10 @@ impl Torii {
                     post(handler_post_contract_instance_activate),
                 )
                 .route("/v1/contracts/call", post(handler_post_contract_call))
+                .route(
+                    "/v1/contracts/call/simulate",
+                    post(handler_post_contract_call_simulate),
+                )
                 .route(
                     "/v1/bridge/proofs/submit",
                     post(handler_post_bridge_proof_submit),

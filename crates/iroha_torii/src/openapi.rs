@@ -2014,6 +2014,17 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
+        "/v1/contracts/call/simulate".to_owned(),
+        Value::Object(json_post_operation(
+            "Contracts",
+            "Simulate a deployed contract call.",
+            "Execute a public contract entrypoint locally using canonical contract address or on-chain contract alias targeting and return normalized payload, gas usage, queued instructions, and diagnostics.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
         "/v1/contracts/view".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",

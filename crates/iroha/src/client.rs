@@ -3552,6 +3552,8 @@ mod evidence_http_tests {
             chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
             key_pair,
             account: account_id,
+            account_chain_discriminant:
+                iroha_config::parameters::defaults::common::chain_discriminant(),
             torii_api_url: url,
             torii_api_version: crate::config::default_torii_api_version(),
             torii_api_min_proof_version: crate::config::DEFAULT_TORII_API_MIN_PROOF_VERSION
@@ -5215,6 +5217,84 @@ pub enum TxConfirmationStatus {
     Expired,
 }
 
+/// Default timeout used by the explicit transaction-wait helper.
+pub const DEFAULT_TRANSACTION_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+/// Default poll interval used by the explicit transaction-wait helper.
+pub const DEFAULT_TRANSACTION_WAIT_POLL_INTERVAL: Duration = Duration::from_millis(500);
+
+/// Pipeline statuses that may terminate an explicit wait request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TransactionWaitTerminalStatus {
+    /// Stop when the transaction is first observed in the queue.
+    Queued,
+    /// Stop when the transaction is approved for inclusion in a block.
+    Approved,
+    /// Stop when the transaction reaches Kura persistence.
+    Committed,
+    /// Stop when the transaction is fully applied.
+    Applied,
+    /// Stop when the transaction is rejected.
+    Rejected,
+    /// Stop when the transaction expires before execution.
+    Expired,
+}
+
+impl TransactionWaitTerminalStatus {
+    /// Return the canonical Torii pipeline status label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "Queued",
+            Self::Approved => "Approved",
+            Self::Committed => "Committed",
+            Self::Applied => "Applied",
+            Self::Rejected => "Rejected",
+            Self::Expired => "Expired",
+        }
+    }
+}
+
+/// Options controlling the explicit transaction-wait helper.
+#[derive(Debug, Clone)]
+pub struct TransactionWaitOptions {
+    /// Maximum time to spend polling before the wait fails.
+    pub timeout: Duration,
+    /// Interval between `/v1/pipeline/transactions/status` polls.
+    pub poll_interval: Duration,
+    /// Statuses that should stop the wait before an applied/rejected/expired outcome.
+    pub terminal_statuses: Vec<TransactionWaitTerminalStatus>,
+}
+
+impl Default for TransactionWaitOptions {
+    fn default() -> Self {
+        Self {
+            timeout: DEFAULT_TRANSACTION_WAIT_TIMEOUT,
+            poll_interval: DEFAULT_TRANSACTION_WAIT_POLL_INTERVAL,
+            terminal_statuses: vec![
+                TransactionWaitTerminalStatus::Committed,
+                TransactionWaitTerminalStatus::Applied,
+                TransactionWaitTerminalStatus::Rejected,
+                TransactionWaitTerminalStatus::Expired,
+            ],
+        }
+    }
+}
+
+/// Structured result returned by the explicit transaction-wait helper.
+#[derive(Debug, Clone, JsonSerialize)]
+pub struct TransactionWaitOutcome {
+    /// Hex-encoded signed transaction hash that was polled.
+    pub hash: String,
+    /// Pipeline status kind that stopped the wait.
+    pub terminal_kind: String,
+    /// Number of status polls issued before the wait completed.
+    pub attempts: u64,
+    /// Wall-clock time spent waiting, in milliseconds.
+    pub elapsed_ms: u64,
+    /// Final typed pipeline status payload returned by Torii.
+    pub r#final: PipelineTransactionStatusResponse,
+}
+
 #[derive(Debug)]
 struct TxConfirmationFinalError {
     report: eyre::Report,
@@ -5356,6 +5436,7 @@ impl Client {
         Config {
             chain,
             account,
+            account_chain_discriminant: _account_chain_discriminant,
             torii_api_url,
             torii_api_version,
             torii_api_min_proof_version: _torii_api_min_proof_version,
@@ -6430,6 +6511,77 @@ impl Client {
             .get_transaction_status_response(hash)?
             .as_ref()
             .and_then(tx_confirmation_status_from_pipeline_response))
+    }
+
+    /// Poll `/v1/pipeline/transactions/status` until the transaction reaches a configured stop state.
+    ///
+    /// Applied, rejected, and expired always stop the wait because they are terminal outcomes.
+    ///
+    /// # Errors
+    /// Returns an error if polling fails consistently, the endpoint returns an unknown status kind,
+    /// or the timeout elapses before a stop state is observed.
+    pub fn wait_for_transaction_terminal_status(
+        &self,
+        hash: HashOf<SignedTransaction>,
+        options: TransactionWaitOptions,
+    ) -> Result<TransactionWaitOutcome> {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()?;
+        rt.block_on(self.wait_for_transaction_terminal_status_async(hash, options))
+    }
+
+    async fn wait_for_transaction_terminal_status_async(
+        &self,
+        hash: HashOf<SignedTransaction>,
+        options: TransactionWaitOptions,
+    ) -> Result<TransactionWaitOutcome> {
+        let TransactionWaitOptions {
+            timeout,
+            poll_interval,
+            terminal_statuses,
+        } = options;
+        let start = Instant::now();
+        let poll_interval = if poll_interval == Duration::ZERO {
+            Duration::from_millis(1)
+        } else {
+            poll_interval
+        };
+        let stop_statuses = if terminal_statuses.is_empty() {
+            TransactionWaitOptions::default().terminal_statuses
+        } else {
+            terminal_statuses
+        };
+        let target_description = format_transaction_wait_target(&stop_statuses);
+        let mut attempts = 0_u64;
+
+        loop {
+            attempts = attempts.saturating_add(1);
+            if let Some(response) = self.get_transaction_status_response(hash)? {
+                let kind = response.status.kind.as_str();
+                if tx_confirmation_status_from_pipeline_response(&response).is_none() {
+                    return Err(eyre!("unsupported pipeline status kind `{kind}`"));
+                }
+                if should_stop_waiting_on_pipeline_kind(kind, &stop_statuses) {
+                    return Ok(TransactionWaitOutcome {
+                        hash: response.hash.clone(),
+                        terminal_kind: kind.to_owned(),
+                        attempts,
+                        elapsed_ms: elapsed_ms_u64(start.elapsed()),
+                        r#final: response,
+                    });
+                }
+            }
+
+            let elapsed = start.elapsed();
+            if elapsed >= timeout {
+                return Err(eyre!(
+                    "transaction did not reach {target_description} within {} ms",
+                    timeout.as_millis()
+                ));
+            }
+            tokio::time::sleep(poll_interval.min(timeout.saturating_sub(elapsed))).await;
+        }
     }
 
     fn transaction_committed(
@@ -9456,6 +9608,67 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
+    /// POST `/v1/contracts/call/simulate` with a JSON body.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON decoding fails.
+    #[allow(clippy::too_many_arguments)]
+    pub fn post_contract_call_simulate_json(
+        &self,
+        authority: &iroha_data_model::account::AccountId,
+        contract_address: Option<&iroha_data_model::smart_contract::ContractAddress>,
+        contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
+        entrypoint: Option<&str>,
+        payload: Option<&norito::json::Value>,
+        gas_asset_id: Option<&str>,
+        fee_sponsor: Option<&iroha_data_model::account::AccountId>,
+        gas_limit: u64,
+    ) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/contracts/call/simulate");
+        let mut body = norito::json::Map::new();
+        body.insert("authority".into(), authority.to_string().into());
+        if let Some(contract_address) = contract_address {
+            body.insert(
+                "contract_address".into(),
+                norito::json::to_value(contract_address)?,
+            );
+        }
+        if let Some(contract_alias) = contract_alias {
+            body.insert(
+                "contract_alias".into(),
+                norito::json::to_value(contract_alias)?,
+            );
+        }
+        if let Some(entrypoint) = entrypoint {
+            body.insert("entrypoint".into(), entrypoint.into());
+        }
+        if let Some(payload) = payload {
+            body.insert("payload".into(), payload.clone());
+        }
+        if let Some(gas_asset_id) = gas_asset_id {
+            body.insert("gas_asset_id".into(), gas_asset_id.into());
+        }
+        if let Some(fee_sponsor) = fee_sponsor {
+            body.insert("fee_sponsor".into(), fee_sponsor.to_string().into());
+        }
+        body.insert("gas_limit".into(), gas_limit.into());
+        let body = norito::json::to_vec(&norito::json::Value::from(body))?;
+        let resp = self
+            .default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to simulate contract call: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        Ok(norito::json::from_slice(resp.body())?)
+    }
+
     /// GET `/v1/runtime/abi/hash`
     /// Returns `{ policy: "V1", abi_hash_hex: "<64-hex>" }`.
     /// # Errors
@@ -10105,6 +10318,28 @@ fn tx_confirmation_status_from_committed_result(
         Ok(_) => TxConfirmationStatus::Applied,
         Err(reason) => TxConfirmationStatus::Rejected(Some(reason.clone())),
     }
+}
+
+fn should_stop_waiting_on_pipeline_kind(
+    kind: &str,
+    terminal_statuses: &[TransactionWaitTerminalStatus],
+) -> bool {
+    matches!(kind, "Applied" | "Rejected" | "Expired")
+        || terminal_statuses
+            .iter()
+            .any(|status| status.as_str().eq_ignore_ascii_case(kind))
+}
+
+fn format_transaction_wait_target(terminal_statuses: &[TransactionWaitTerminalStatus]) -> String {
+    terminal_statuses
+        .iter()
+        .map(|status| status.as_str())
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
+fn elapsed_ms_u64(duration: Duration) -> u64 {
+    u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
 }
 
 #[doc(hidden)]
@@ -12526,6 +12761,8 @@ mod tests {
             chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
             key_pair,
             account: account_id,
+            account_chain_discriminant:
+                iroha_config::parameters::defaults::common::chain_discriminant(),
             torii_api_url: "http://127.0.0.1:8080".parse().unwrap(),
             torii_api_version: crate::config::default_torii_api_version(),
             torii_api_min_proof_version: crate::config::DEFAULT_TORII_API_MIN_PROOF_VERSION

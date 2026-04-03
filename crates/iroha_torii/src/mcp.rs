@@ -6334,7 +6334,7 @@ async fn wait_for_terminal_transaction_status(
 
         if (200..300).contains(&status_code) {
             let kind = extract_pipeline_status_kind(&status_result).ok_or_else(|| {
-                "status polling response is missing `body.status.kind` (or legacy `body.content.status.kind`)".to_owned()
+                "status polling response is missing `body.status.kind`".to_owned()
             })?;
             last_kind = Some(kind.to_owned());
             if is_terminal_pipeline_status(kind, &terminal_statuses) {
@@ -6641,18 +6641,10 @@ fn decode_transaction_hash_from_receipt_base64(encoded_receipt: &str) -> Option<
 
 fn extract_pipeline_status_kind(status_result: &Value) -> Option<&str> {
     let body = status_result.get("body")?;
-    body.get("content")
-        .and_then(Value::as_object)
-        .and_then(|content| content.get("status"))
+    body.get("status")
         .and_then(Value::as_object)
         .and_then(|status| status.get("kind"))
         .and_then(Value::as_str)
-        .or_else(|| {
-            body.get("status")
-                .and_then(Value::as_object)
-                .and_then(|status| status.get("kind"))
-                .and_then(Value::as_str)
-        })
 }
 
 fn is_terminal_pipeline_status(status: &str, terminal_statuses: &[String]) -> bool {
@@ -14221,16 +14213,13 @@ mod tests {
     }
 
     #[test]
-    fn extract_pipeline_status_kind_reads_pipeline_envelope() {
+    fn extract_pipeline_status_kind_reads_top_level_status() {
         let status_result = norito::json!({
             "status": 200,
             "body": {
-                "kind": "Transaction",
-                "content": {
-                    "hash": "deadbeef",
-                    "status": {
-                        "kind": "Committed"
-                    }
+                "hash": "deadbeef",
+                "status": {
+                    "kind": "Committed"
                 }
             }
         });

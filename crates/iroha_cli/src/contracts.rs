@@ -26,7 +26,7 @@ use iroha_crypto::{Hash, KeyPair, PrivateKey};
 use ivm::{PointerType, host::IVMHost};
 use reqwest::StatusCode;
 
-use crate::{Run, RunContext};
+use crate::{Run, RunContext, TransactionWaitArgs, wait_for_transaction_status};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
@@ -256,6 +256,8 @@ pub struct DeployArgs {
     /// Base64-encoded code (mutually exclusive with --code-file)
     #[arg(long, conflicts_with = "code_file")]
     pub code_b64: Option<String>,
+    #[command(flatten)]
+    pub wait: TransactionWaitArgs,
 }
 
 impl Run for DeployArgs {
@@ -281,7 +283,20 @@ impl Run for DeployArgs {
             &code_b64,
             self.dataspace.as_deref(),
         )?;
-        context.print_data(&v)?;
+        if self.wait.is_enabled() {
+            let tx_hash = extract_submitted_transaction_hash(&v)
+                .wrap_err("deploy response missing canonical `tx_hash_hex`")?;
+            let status = wait_for_transaction_status(&client, tx_hash, &self.wait)?;
+            context.print_data(&ContractSubmissionWaitResponse {
+                submit: v,
+                terminal_kind: status.terminal_kind,
+                attempts: status.attempts,
+                elapsed_ms: status.elapsed_ms,
+                r#final: status.r#final,
+            })?;
+        } else {
+            context.print_data(&v)?;
+        }
         Ok(())
     }
 }
@@ -356,6 +371,29 @@ pub struct ContractPayloadArgs {
     pub payload_file: Option<PathBuf>,
 }
 
+#[derive(Clone, Debug, crate::json_macros::JsonSerialize)]
+struct ContractSubmissionWaitResponse {
+    submit: norito::json::Value,
+    terminal_kind: String,
+    attempts: u64,
+    elapsed_ms: u64,
+    r#final: iroha_torii_shared::PipelineTransactionStatusResponse,
+}
+
+fn extract_submitted_transaction_hash(
+    value: &norito::json::Value,
+) -> Result<HashOf<iroha::data_model::transaction::SignedTransaction>> {
+    let tx_hash_hex = value
+        .as_object()
+        .and_then(|map| map.get("tx_hash_hex"))
+        .and_then(norito::json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| eyre!("response missing `tx_hash_hex`"))?;
+    tx_hash_hex
+        .parse::<HashOf<iroha::data_model::transaction::SignedTransaction>>()
+        .map_err(|err| eyre!("invalid `tx_hash_hex`: {err}"))
+}
+
 #[derive(clap::Args, Debug)]
 pub struct CallArgs {
     /// Optional shorthand selector. Supports `entrypoint:alias`, plain alias, or contract address.
@@ -368,8 +406,11 @@ pub struct CallArgs {
     #[arg(long, value_name = "HEX", conflicts_with = "scaffold_only")]
     pub private_key: Option<String>,
     /// Request an unsigned transaction scaffold instead of direct submission.
-    #[arg(long)]
+    #[arg(long, conflicts_with = "simulate")]
     pub scaffold_only: bool,
+    /// Simulate the contract call locally on Torii without submitting a transaction.
+    #[arg(long, conflicts_with_all = ["scaffold_only", "private_key", "wait"])]
+    pub simulate: bool,
     /// Optional contract entrypoint selector (defaults to `main`).
     #[arg(long)]
     pub entrypoint: Option<String>,
@@ -386,18 +427,24 @@ pub struct CallArgs {
     pub target: ContractTargetArgs,
     #[command(flatten)]
     pub payload: ContractPayloadArgs,
+    #[command(flatten)]
+    pub wait: TransactionWaitArgs,
 }
 
 impl Run for CallArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
         let authority = resolve_contract_authority(context, self.authority.as_deref())?;
-        let private_key = resolve_contract_call_private_key(
-            context,
-            &authority,
-            self.private_key.as_deref(),
-            self.scaffold_only,
-        )?;
+        let private_key = if self.simulate {
+            None
+        } else {
+            resolve_contract_call_private_key(
+                context,
+                &authority,
+                self.private_key.as_deref(),
+                self.scaffold_only,
+            )?
+        };
         let fee_sponsor = self
             .fee_sponsor
             .as_deref()
@@ -413,6 +460,20 @@ impl Run for CallArgs {
             self.payload.payload_json.as_deref(),
             self.payload.payload_file.as_deref(),
         )?;
+        if self.simulate {
+            let value = client.post_contract_call_simulate_json(
+                &authority,
+                target.contract_address.as_ref(),
+                target.contract_alias.as_ref(),
+                entrypoint.as_deref(),
+                payload.as_ref(),
+                self.gas_asset_id.as_deref(),
+                fee_sponsor.as_ref(),
+                self.gas_limit,
+            )?;
+            context.print_data(&value)?;
+            return Ok(());
+        }
         let value = client.post_contract_call_json(
             &authority,
             private_key.as_ref(),
@@ -425,7 +486,20 @@ impl Run for CallArgs {
             fee_sponsor.as_ref(),
             self.gas_limit,
         )?;
-        context.print_data(&value)?;
+        if self.wait.is_enabled() {
+            let tx_hash = extract_submitted_transaction_hash(&value)
+                .wrap_err("contract call response missing canonical `tx_hash_hex`")?;
+            let status = wait_for_transaction_status(&client, tx_hash, &self.wait)?;
+            context.print_data(&ContractSubmissionWaitResponse {
+                submit: value,
+                terminal_kind: status.terminal_kind,
+                attempts: status.attempts,
+                elapsed_ms: status.elapsed_ms,
+                r#final: status.r#final,
+            })?;
+        } else {
+            context.print_data(&value)?;
+        }
         Ok(())
     }
 }
@@ -2690,6 +2764,8 @@ mod tests {
             let cfg = iroha::config::Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
                 account,
+                account_chain_discriminant:
+                    iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),

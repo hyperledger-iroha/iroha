@@ -162,6 +162,9 @@ impl FastJsonWrite for SoranetVpnSummary {
 impl FastJsonWrite for Network {
     fn write_json(&self, out: &mut String) {
         out.push('{');
+        out.push_str("\"chain_discriminant\":");
+        let _ = write!(out, "{}", self.chain_discriminant);
+        out.push(',');
         out.push_str("\"block_gossip_size\":");
         let _ = write!(out, "{}", self.block_gossip_size.get());
         out.push(',');
@@ -1428,6 +1431,7 @@ impl JsonDeserialize for Queue {
 
 #[allow(clippy::too_many_arguments)]
 fn finalize_network(
+    chain_discriminant: Option<u16>,
     block_gossip_size: Option<NonZero<u32>>,
     block_gossip_period_ms: Option<u32>,
     peer_gossip_period_ms: Option<u32>,
@@ -1448,6 +1452,8 @@ fn finalize_network(
     require_sm_openssl_preview_match: Option<bool>,
 ) -> Result<Network, NoritoError> {
     Ok(Network {
+        chain_discriminant: chain_discriminant
+            .ok_or_else(|| NoritoError::Message("missing chain_discriminant".into()))?,
         block_gossip_size: block_gossip_size
             .ok_or_else(|| NoritoError::Message("missing block_gossip_size".into()))?,
         block_gossip_period_ms: block_gossip_period_ms
@@ -1488,6 +1494,7 @@ fn finalize_network(
 impl<'a> FastFromJson<'a> for Network {
     fn parse(w: &mut TapeWalker<'a>, arena: &mut Arena) -> Result<Self, NoritoError> {
         w.expect_object_start()?;
+        let mut chain_discriminant: Option<u16> = None;
         let mut block_gossip_size: Option<NonZero<u32>> = None;
         let mut block_gossip_period_ms: Option<u32> = None;
         let mut peer_gossip_period_ms: Option<u32> = None;
@@ -1506,6 +1513,7 @@ impl<'a> FastFromJson<'a> for Network {
         let mut lane_profile: Option<base::LaneProfile> = None;
         let mut require_sm_handshake_match: Option<bool> = None;
         let mut require_sm_openssl_preview_match: Option<bool> = None;
+        let kh_chain_discriminant = norito::json::key_hash_const("chain_discriminant");
         let kh_block_gossip_size = norito::json::key_hash_const("block_gossip_size");
         let kh_block_gossip_period = norito::json::key_hash_const("block_gossip_period_ms");
         let kh_peer_gossip_period = norito::json::key_hash_const("peer_gossip_period_ms");
@@ -1530,6 +1538,12 @@ impl<'a> FastFromJson<'a> for Network {
             let kh = w.read_key_hash()?;
             w.expect_colon_resync()?;
             match kh {
+                x if x == kh_chain_discriminant && w.last_key() == "chain_discriminant" => {
+                    chain_discriminant = Some(
+                        u16::try_from(w.parse_u64_inline()?)
+                            .map_err(|_| NoritoError::Message("u16 overflow".into()))?,
+                    );
+                }
                 x if x == kh_block_gossip_size && w.last_key() == "block_gossip_size" => {
                     block_gossip_size = NonZeroU32::new(
                         u32::try_from(w.parse_u64_inline()?)
@@ -1632,6 +1646,7 @@ impl<'a> FastFromJson<'a> for Network {
         }
         w.expect_object_end()?;
         finalize_network(
+            chain_discriminant,
             block_gossip_size,
             block_gossip_period_ms,
             peer_gossip_period_ms,
@@ -2513,6 +2528,8 @@ impl From<&'_ base::Queue> for Queue {
 /// Selected network configuration exposed to clients.
 #[derive(Debug, Clone)]
 pub struct Network {
+    /// I105 chain discriminant used when encoding canonical account literals.
+    pub chain_discriminant: u16,
     /// Number of block hashes per gossip message.
     pub block_gossip_size: NonZero<u32>,
     /// Block gossip interval in milliseconds.
@@ -2557,6 +2574,7 @@ impl From<&'_ base::Root> for Network {
         let privacy = SoranetPrivacySummary::from(&value.network.soranet_privacy);
         let vpn = SoranetVpnSummary::from(&value.network.soranet_vpn);
         Self {
+            chain_discriminant: *value.common.chain_discriminant.value(),
             block_gossip_size: value.block_sync.gossip_size,
             block_gossip_period_ms: u32::try_from(value.block_sync.gossip_period.as_millis())
                 .expect("block gossip period should fit into a u32"),
@@ -3321,6 +3339,7 @@ mod test {
                 filter: None,
             },
             network: Network {
+                chain_discriminant: defaults::common::chain_discriminant(),
                 block_gossip_size: nonzero!(10u32),
                 block_gossip_period_ms: 5000,
                 peer_gossip_period_ms: 1_000,
@@ -3418,6 +3437,7 @@ mod test {
                 "filter": null
               },
               "network": {
+                "chain_discriminant": 753,
                 "block_gossip_size": 10,
                 "block_gossip_period_ms": 5000,
                 "peer_gossip_period_ms": 1000,
