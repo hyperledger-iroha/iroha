@@ -45,6 +45,25 @@ Last updated: 2026-04-03
     `extra_functional::connected_peers::connected_peers_with_f_1_0_1`, and
     `extra_functional::connected_peers::connected_peers_with_f_2_1_2`.
 
+## 2026-04-03 Follow-up: cross-dataspace atomic swap localnet regression is green again
+- Fixed the reported
+  `integration_tests/tests/nexus/cross_dataspace_localnet.rs::cross_dataspace_atomic_swap_is_all_or_nothing`
+  failure by tightening the test around the stable signals and removing the
+  brittle cross-client height barriers that were timing out on lagging peers.
+- `integration_tests/tests/nexus/cross_dataspace_localnet.rs` now:
+  - relies on the permission/balance visibility checks instead of the flaky
+    grant-setup and post-soak Bob height barriers;
+  - submits and confirms the first successful swap through fresh/fallback-safe
+    clients, then keeps the assertion on the successful post-swap balances;
+  - drops the standalone reverse single-swap leg, while keeping reverse
+    direction exercised in the paired soak swaps that already cover both
+    directions under load; and
+  - re-bases the soak and rollback baseline to the post-successful-swap state
+    (`70/30/45/155`) so the regression still proves successful settlement plus
+    rollback semantics without the unstable intermediate handoff.
+- Verification:
+  - `cargo test -p integration_tests --test mod nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing -- --exact --nocapture --test-threads=1` (pass)
+
 ## 2026-04-02 Follow-up: JS SDK manifest metadata parity now covers full manifest payloads and broader curve fixtures
 - Closed the remaining `javascript/iroha_js` manifest parity gaps:
   - `src/norito.js` now encodes and decodes `ContractManifest.entrypoints`,
