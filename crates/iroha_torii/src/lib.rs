@@ -30446,8 +30446,7 @@ pub(crate) mod tests_runtime_handlers {
             .expect("body");
         let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
         let status_kind = payload
-            .get("content")
-            .and_then(|content| content.get("status"))
+            .get("status")
             .and_then(|status| status.get("kind"))
             .and_then(norito::json::Value::as_str);
         assert_eq!(status_kind, Some("Queued"));
@@ -30471,8 +30470,7 @@ pub(crate) mod tests_runtime_handlers {
         let payload_entry: norito::json::Value =
             norito::json::from_slice(&bytes_entry).expect("json");
         let status_kind_entry = payload_entry
-            .get("content")
-            .and_then(|content| content.get("status"))
+            .get("status")
             .and_then(|status| status.get("kind"))
             .and_then(norito::json::Value::as_str);
         assert_eq!(status_kind_entry, Some("Queued"));
@@ -30664,8 +30662,7 @@ pub(crate) mod tests_runtime_handlers {
             .expect("body");
         let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
         let status_kind = payload
-            .get("content")
-            .and_then(|content| content.get("status"))
+            .get("status")
             .and_then(|status| status.get("kind"))
             .and_then(norito::json::Value::as_str);
         assert_eq!(status_kind, Some("Applied"));
@@ -30689,8 +30686,7 @@ pub(crate) mod tests_runtime_handlers {
         let payload_entry: norito::json::Value =
             norito::json::from_slice(&bytes_entry).expect("json");
         let status_kind_entry = payload_entry
-            .get("content")
-            .and_then(|content| content.get("status"))
+            .get("status")
             .and_then(|status| status.get("kind"))
             .and_then(norito::json::Value::as_str);
         assert_eq!(status_kind_entry, Some("Applied"));

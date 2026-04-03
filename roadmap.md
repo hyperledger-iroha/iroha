@@ -2,6 +2,158 @@
 
 Last updated: 2026-04-03
 
+Latest sync (2026-04-03 rebuilt midpoint retry still blocks before peer spawn):
+the current tree rebuilds cleanly, but a fresh midpoint load retry still does
+not reach actual `iroha3d` launch.
+
+- fresh rebuild succeeded with:
+  `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha_target_retry_20260403 cargo build --release -p izanami --bin izanami -p irohad --bin iroha3d`;
+- fresh midpoint retry
+  `/tmp/izanami_permissioned_load25_20260403T163041_retry.log`
+  still stopped after only `TEST_NETWORK peer dir ...` lines;
+- the corresponding peer dirs only contain `config.base.toml`, so the block is
+  before `run-1-config.toml` generation and before `iroha3d` child spawn; and
+- until that startup-path blocker is fixed, a fresh stepped offered-load curve
+  still cannot be trusted from this machine even on rebuilt binaries.
+
+Open work for this slice now remains:
+- isolate where startup stops between `NetworkBuilder::build()` and
+  `NetworkPeer::start()` in
+  `/Users/mtakemiya/dev/iroha/crates/iroha_test_network/src/lib.rs`;
+- determine whether the block is in permit handling, startup staging, or
+  `Program::Irohad.resolve_async()` / pre-spawn setup; and
+- rerun the midpoint sweep only after a fresh probe reaches real peer spawn and
+  produces `run-1-*` artifacts.
+
+Latest sync (2026-04-03 Izanami fault isolation + ingress attribution hardening):
+Izanami now exposes one-fault-at-a-time chaos selection, deterministic
+multi-submitter fan-out, and explicit ingress/backlog attribution, while the
+relay/harness shutdown race coverage is green on the patched tree.
+
+- shipped in `crates/izanami` / `scripts`:
+  - all seven fault toggles now round-trip through CLI/config/TUI/persistence,
+    and fault scheduling only draws from the enabled scenario set;
+  - `--submitters <N>` now drives deterministic fan-out with one shared
+    `max_inflight` budget, stable preferred ingress endpoints, and structured
+    offered / ingress-accepted / blocking-applied / in-flight / backlog /
+    per-endpoint failover-unhealthy metrics; and
+  - `scripts/run_izanami_fault_matrix.sh` now launches crash-only, wipe-only,
+    spam-only, network-only, CPU-only, disk-only, and full-mix sweeps with a
+    collected summary table.
+- shipped in the relay/harness regression layer:
+  - `irohad` now has targeted coverage proving a closed relay worker queue
+    stays a local restart signal instead of escalating into validator
+    termination; and
+  - `iroha_test_network` now treats an already-exited child caught during the
+    shutdown race as graceful by probing `try_wait()` before attempting
+    SIGTERM/SIGQUIT/SIGKILL escalation.
+- targeted verification is green for:
+  - `cargo test -p izanami`
+  - `cargo test -p irohad relay_ingress_requests_restart_when_worker_queue_closes -- --nocapture`
+  - `cargo test -p iroha_test_network monitor_handles_shutdown_race_after_child_already_exited -- --nocapture`
+  - `cargo test -p iroha_core quorum_reschedule_emits_local_vote_for_detached_valid_pending_block -- --nocapture`
+  - `cargo test -p iroha_core --lib zero_vote_quorum_timeout_seeds_slot_from_same_height_commit_qc_for_other_hash -- --nocapture`
+  - `cargo test -p iroha_core --lib reschedule_near_quorum_retransmit_rearms_after_single_cooldown_window -- --nocapture`
+
+Open work for this slice now remains:
+- run the new fault-matrix helper on a clean host so crash-only, wipe-only,
+  spam-only, network-only, CPU-only, disk-only, and full-mix results can be
+  compared without the current host contamination;
+- use the new `--submitters` fan-out and attribution counters to separate
+  ingress/client saturation from consensus saturation, and move to distributed
+  load generation if a single host still bottlenecks first; and
+- rerun the broader gates (`cargo test -p irohad`, `cargo test -p
+  iroha_test_network`, `cargo clippy --workspace --all-targets -- -D
+  warnings`, `cargo test --workspace`) from a clean slot if a fresh
+  repo-wide green stamp is required.
+
+Latest sync (2026-04-03 knee-sweep blockage):
+the next fresh midpoint sweep on this host is blocked by unreaped `iroha3d`
+test-network leftovers.
+
+- fresh midpoint probe
+  `/tmp/izanami_permissioned_load25_20260403T131947_manualsweep.log`
+  never advanced beyond peer-dir startup logging;
+- the host still shows many historical `irohad_test_network_*` `iroha3d`
+  processes in `UE` state that ignore `SIGKILL`, so new sweep points are not
+  trustworthy until those leftovers are cleared or the machine is restarted; and
+- valid evidence currently in hand is still enough to place the saturation knee
+  only coarsely:
+  healthy at `10 TPS`, failing by `100 TPS`, and flatly saturated at `10000 TPS`.
+
+Open work for this slice now remains:
+- rerun the middle of the offered-load curve (`25`, `50`, `75`, `100`, `250`,
+  `500`, `1000`) on a clean host or after reboot;
+- capture both permissioned and NPoS midpoint runs under the same short harness
+  so the knee can be placed precisely; and
+- once the host is clean, replace the current coarse `10 -> 100 -> 10000`
+  picture with an actual accepted-TPS curve.
+
+Latest sync (2026-04-03 `10000 TPS` offered-load saturation check):
+the earlier `tps=10` probe was only a moderate-load sanity check. A real
+five-digit offered-load pass on the single-host Izanami harness is red in both
+modes.
+
+- permissioned `/tmp/izanami_permissioned_load10000_20260403T125008_sat10k.log`
+  stalled at `strict/quorum=7/7`, failed on `no strict block height progress
+  for 60s`, and only delivered about `32.7` successful workload tx/s before
+  ingress backpressure took over;
+- NPoS `/tmp/izanami_npos_load10000_20260403T125234_sat10k.log`
+  stalled at `strict/quorum=5/5`, failed on `no strict block height progress
+  for 60s`, and only delivered about `29.0` successful workload tx/s before
+  ingress backpressure took over; and
+- both logs show the harness saturating at ingress
+  (`haven't got tx confirmation within 20s`, high failover/unhealthy counts),
+  so this is not evidence that Sumeragi is near `10000 TPS` on a shared host.
+
+Open work for this slice now remains:
+- run a stepped saturation sweep (`100`, `500`, `1000`, `2000`, `5000`,
+  `10000`) with enough `max_inflight` to locate the real knee for each mode;
+- separate client/ingress saturation from consensus saturation, likely by using
+  multiple submitters or distributed load generation instead of one shared-host
+  Izanami process; and
+- if the goal is true Sumeragi ceiling measurement, add telemetry that records
+  offered TPS, accepted TPS, commit TPS, and queue depth explicitly so the next
+  pass can attribute the first hard bottleneck.
+
+Latest sync (2026-04-03 focused Sumeragi stress matrix):
+fresh stress probes on `/tmp/iroha_target_stress_20260403/release/{izanami,iroha3d}`
+show that both modes tolerate higher submission pressure, but both still fail
+once one faulty peer is put under repeated disruption.
+
+- high-load healthy probes (`tps=10`, `max_inflight=16`, `faulty=0`,
+  `target_blocks=400`) are green:
+  - permissioned `/tmp/izanami_permissioned_load10_20260403T073943_stress2.log`
+    hit `406` in `281.21864525s` with `p95=1001ms` and `2807` successes; and
+  - NPoS `/tmp/izanami_npos_load10_20260403T073943_stress2.log`
+    hit `404` in `331.178972916s` with `p95=1252ms` and `3306` successes;
+- mixed-fault faulty-peer probes (`faulty=1`, crash/wipe/spam plus latency,
+  partition, CPU, disk; `target_blocks=200`) are red in both modes:
+  - permissioned stalls almost immediately at `strict/quorum=3/16` and aborts
+    on `no strict block height progress for 180s`; and
+  - NPoS gets farther (`strict/quorum=14/52`) but still aborts on
+    `no block height progress for 180s`, with connection-refused and submitter
+    thread exits after the lagging peer falls over;
+- network-focused faulty-peer follow-up (`faulty=1`, crash/wipe/spam plus only
+  latency+partition; `target_blocks=100`) is also red in both modes:
+  - permissioned fails at `9/37`; and
+  - NPoS fails at `4/47`; and
+- none of these stress failures show the old top-level signatures
+  (`route_unavailable`, `missing_qc`, `no proposal observed for view before changing view`,
+  same-height vote-history conflicts). The current weakness is tolerated
+  outlier lag plus ingress collapse under repeated faulty-peer disruption.
+
+Open work for this slice now remains:
+- isolate which default faulty-peer actions are actually breaking liveness
+  first, since Izanami always includes crash/restart, wipe-storage, and spam,
+  and the added latency/partition toggles merely expand that scenario set;
+- reduce or harden the teardown hang in the permissioned faulty-peer runs,
+  since both permissioned fault cases needed manual interruption after the
+  no-progress abort was already logged; and
+- add a narrower stress sweep that separates restart/wipe faults from
+  network-only perturbation at the Sumeragi layer, so the next pass can locate
+  the first disruption level where each mode still converges.
+
 Latest sync (2026-04-03 multisig submit-timeout recovery):
 the remaining broad-run executor-upgrade multisig failure is hardened on the
 patched tree without changing multisig semantics.
@@ -53,7 +205,6 @@ Open work for this slice now remains:
 - otherwise, no current stable-soak blocker remains for the permissioned / NPoS
   acceptance slice on this patch set.
 
-<<<<<<< Updated upstream
 Latest sync (2026-04-03 multisig + pipeline-event closure):
 the executor-upgrade multisig registration regressions are fixed, and the
 later broad-run `events::pipeline::pipeline_event_scenarios` timeout flake is
@@ -276,8 +427,6 @@ Open work for this slice now remains:
 - none for this specific CLI timing fix; broader repo-wide gates remain tracked
   in the older roadmap entries below.
 
-=======
->>>>>>> Stashed changes
 Latest sync (2026-04-03 maintained mobile SDK signing selection):
 the Kotlin, Java Android, and Swift SDKs now let apps choose `ED25519` or
 `ML_DSA` for transaction/offline-wallet signing while keeping existing wire

@@ -6334,7 +6334,7 @@ async fn wait_for_terminal_transaction_status(
 
         if (200..300).contains(&status_code) {
             let kind = extract_pipeline_status_kind(&status_result).ok_or_else(|| {
-                "status polling response is missing `body.content.status.kind`".to_owned()
+                "status polling response is missing `body.status.kind` (or legacy `body.content.status.kind`)".to_owned()
             })?;
             last_kind = Some(kind.to_owned());
             if is_terminal_pipeline_status(kind, &terminal_statuses) {

@@ -33,9 +33,9 @@ use iroha_genesis::GenesisBlock;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, Signatory};
 use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use tokio::{
-    sync::{Notify, Semaphore},
+    sync::{Notify, OwnedSemaphorePermit, Semaphore},
     task::{JoinHandle, JoinSet, spawn_blocking},
-    time::{self, MissedTickBehavior},
+    time,
 };
 use toml::Table;
 use tracing::{debug, info, warn};
@@ -241,6 +241,7 @@ impl Default for IngressEndpointPoolConfig {
 struct IngressStats {
     failover_total: AtomicU64,
     endpoint_unhealthy_total: AtomicU64,
+    endpoint_stats: StdMutex<Vec<IngressEndpointStats>>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -249,14 +250,47 @@ struct IngressStatsSnapshot {
     endpoint_unhealthy_total: u64,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct IngressEndpointStats {
+    endpoint: String,
+    failover_total: u64,
+    unhealthy_total: u64,
+}
+
 impl IngressStats {
-    fn record_failover(&self) {
-        self.failover_total.fetch_add(1, Ordering::Relaxed);
+    fn ensure_endpoints(&self, labels: &[String]) {
+        if let Ok(mut guard) = self.endpoint_stats.lock() {
+            if guard.is_empty() {
+                *guard = labels
+                    .iter()
+                    .cloned()
+                    .map(|endpoint| IngressEndpointStats {
+                        endpoint,
+                        failover_total: 0,
+                        unhealthy_total: 0,
+                    })
+                    .collect();
+            }
+        }
     }
 
-    fn record_endpoint_unhealthy(&self) {
+    fn record_failover(&self, endpoint_idx: usize) {
+        self.failover_total.fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut guard) = self.endpoint_stats.lock()
+            && let Some(endpoint) = guard.get_mut(endpoint_idx)
+        {
+            endpoint.failover_total = endpoint.failover_total.saturating_add(1);
+        }
+    }
+
+    fn record_endpoint_unhealthy(&self, endpoint_idx: usize) {
         self.endpoint_unhealthy_total
             .fetch_add(1, Ordering::Relaxed);
+        if let Ok(mut guard) = self.endpoint_stats.lock()
+            && let Some(endpoint) = guard.get_mut(endpoint_idx)
+        {
+            endpoint.unhealthy_total = endpoint.unhealthy_total.saturating_add(1);
+        }
     }
 
     fn snapshot(&self) -> IngressStatsSnapshot {
@@ -264,6 +298,13 @@ impl IngressStats {
             failover_total: self.failover_total.load(Ordering::Relaxed),
             endpoint_unhealthy_total: self.endpoint_unhealthy_total.load(Ordering::Relaxed),
         }
+    }
+
+    fn endpoint_snapshots(&self) -> Vec<IngressEndpointStats> {
+        self.endpoint_stats
+            .lock()
+            .map(|guard| guard.clone())
+            .unwrap_or_default()
     }
 }
 
@@ -328,6 +369,7 @@ impl EndpointHealthPool {
         ingress_stats: Arc<IngressStats>,
     ) -> Self {
         let len = labels.len();
+        ingress_stats.ensure_endpoints(&labels);
         Self {
             labels: Arc::new(labels),
             state: Arc::new(StdMutex::new(vec![EndpointHealthState::default(); len])),
@@ -345,11 +387,21 @@ impl EndpointHealthPool {
         }
     }
 
-    fn run_with_failover<T, F>(&self, op_name: &'static str, operation: F) -> Result<T>
+    fn run_with_failover_preferred<T, F>(
+        &self,
+        op_name: &'static str,
+        preferred_endpoint_idx: usize,
+        operation: F,
+    ) -> Result<T>
     where
         F: FnMut(usize, &str) -> Result<T>,
     {
-        self.run_with_failover_at(op_name, Instant::now(), operation)
+        self.run_with_failover_at_with_preference(
+            op_name,
+            Some(preferred_endpoint_idx),
+            Instant::now(),
+            operation,
+        )
     }
 
     fn run_with_failover_excluding<T, F>(
@@ -369,12 +421,29 @@ impl EndpointHealthPool {
         )
     }
 
-    fn select_endpoint(&self, op_name: &'static str) -> Result<usize> {
-        self.select_endpoint_at(op_name, Instant::now())
+    fn select_endpoint_preferred(
+        &self,
+        op_name: &'static str,
+        preferred_endpoint_idx: usize,
+    ) -> Result<usize> {
+        self.select_endpoint_at_with_preference(
+            op_name,
+            Some(preferred_endpoint_idx),
+            Instant::now(),
+        )
     }
 
     fn select_endpoint_at(&self, op_name: &'static str, now: Instant) -> Result<usize> {
-        self.attempt_order_at(now)
+        self.select_endpoint_at_with_preference(op_name, None, now)
+    }
+
+    fn select_endpoint_at_with_preference(
+        &self,
+        op_name: &'static str,
+        preferred_endpoint_idx: Option<usize>,
+        now: Instant,
+    ) -> Result<usize> {
+        self.attempt_order_at_with_preference(now, preferred_endpoint_idx)
             .into_iter()
             .next()
             .ok_or_else(|| eyre!("no ingress endpoints available for operation `{op_name}`"))
@@ -417,10 +486,10 @@ impl EndpointHealthPool {
                 let retryable = failure_class.is_retryable();
                 let transitioned_unhealthy = self.mark_failure_at(endpoint_idx, now, failure_class);
                 if transitioned_unhealthy {
-                    self.ingress_stats.record_endpoint_unhealthy();
+                    self.ingress_stats.record_endpoint_unhealthy(endpoint_idx);
                     warn!(
-                        target: "izanami::ingress",
-                        operation = op_name,
+                            target: "izanami::ingress",
+                            operation = op_name,
                         endpoint = label,
                         failure_class = failure_class.as_str(),
                         "marking pinned ingress endpoint unhealthy"
@@ -444,12 +513,25 @@ impl EndpointHealthPool {
         &self,
         op_name: &'static str,
         now: Instant,
+        operation: F,
+    ) -> Result<T>
+    where
+        F: FnMut(usize, &str) -> Result<T>,
+    {
+        self.run_with_failover_at_with_preference(op_name, None, now, operation)
+    }
+
+    fn run_with_failover_at_with_preference<T, F>(
+        &self,
+        op_name: &'static str,
+        preferred_endpoint_idx: Option<usize>,
+        now: Instant,
         mut operation: F,
     ) -> Result<T>
     where
         F: FnMut(usize, &str) -> Result<T>,
     {
-        let attempt_order = self.attempt_order_at(now);
+        let attempt_order = self.attempt_order_at_with_preference(now, preferred_endpoint_idx);
         if attempt_order.is_empty() {
             return Err(eyre!(
                 "no ingress endpoints available for operation `{op_name}`"
@@ -461,7 +543,7 @@ impl EndpointHealthPool {
         for (attempt_idx, endpoint_idx) in attempt_order.into_iter().take(max_attempts).enumerate()
         {
             if attempt_idx > 0 {
-                self.ingress_stats.record_failover();
+                self.ingress_stats.record_failover(endpoint_idx);
             }
             let label = self
                 .labels
@@ -480,7 +562,7 @@ impl EndpointHealthPool {
                     let transitioned_unhealthy =
                         self.mark_failure_at(endpoint_idx, now, failure_class);
                     if transitioned_unhealthy {
-                        self.ingress_stats.record_endpoint_unhealthy();
+                        self.ingress_stats.record_endpoint_unhealthy(endpoint_idx);
                         warn!(
                             target: "izanami::ingress",
                             operation = op_name,
@@ -543,7 +625,7 @@ impl EndpointHealthPool {
         for (attempt_idx, endpoint_idx) in attempt_order.into_iter().take(max_attempts).enumerate()
         {
             if attempt_idx > 0 {
-                self.ingress_stats.record_failover();
+                self.ingress_stats.record_failover(endpoint_idx);
             }
             let label = self
                 .labels
@@ -562,7 +644,7 @@ impl EndpointHealthPool {
                     let transitioned_unhealthy =
                         self.mark_failure_at(endpoint_idx, now, failure_class);
                     if transitioned_unhealthy {
-                        self.ingress_stats.record_endpoint_unhealthy();
+                        self.ingress_stats.record_endpoint_unhealthy(endpoint_idx);
                         warn!(
                             target: "izanami::ingress",
                             operation = op_name,
@@ -762,14 +844,20 @@ impl EndpointHealthPool {
     }
 
     fn attempt_order_preview_at(&self, now: Instant) -> Vec<usize> {
+        self.attempt_order_preview_at_with_preference(now, None)
+    }
+
+    fn attempt_order_preview_at_with_preference(
+        &self,
+        now: Instant,
+        preferred_endpoint_idx: Option<usize>,
+    ) -> Vec<usize> {
         let len = self.labels.len();
         if len == 0 {
             return Vec::new();
         }
         let lagging_flags = self.lagging_flags_at(now, len);
-        let base = self.cursor.load(Ordering::Relaxed);
-        let base_idx_u64 = base % u64::try_from(len).unwrap_or(1);
-        let base_idx = usize::try_from(base_idx_u64).unwrap_or(0);
+        let base_idx = self.base_index(len, preferred_endpoint_idx, false);
         let state = self
             .state
             .lock()
@@ -818,19 +906,46 @@ impl EndpointHealthPool {
     }
 
     fn attempt_order_at(&self, now: Instant) -> Vec<usize> {
+        self.attempt_order_at_with_preference(now, None)
+    }
+
+    fn attempt_order_at_with_preference(
+        &self,
+        now: Instant,
+        preferred_endpoint_idx: Option<usize>,
+    ) -> Vec<usize> {
         let len = self.labels.len();
         if len == 0 {
             return Vec::new();
         }
         let lagging_flags = self.lagging_flags_at(now, len);
-        let base = self.cursor.fetch_add(1, Ordering::Relaxed);
-        let base_idx_u64 = base % u64::try_from(len).unwrap_or(1);
-        let base_idx = usize::try_from(base_idx_u64).unwrap_or(0);
+        let base_idx = self.base_index(len, preferred_endpoint_idx, true);
         let mut guard = self
             .state
             .lock()
             .expect("endpoint health state mutex should not be poisoned");
         self.attempt_order_with_state(guard.as_mut_slice(), &lagging_flags, now, base_idx, true)
+    }
+
+    fn base_index(
+        &self,
+        len: usize,
+        preferred_endpoint_idx: Option<usize>,
+        increment_cursor: bool,
+    ) -> usize {
+        if len == 0 {
+            return 0;
+        }
+        if let Some(preferred_endpoint_idx) = preferred_endpoint_idx {
+            return preferred_endpoint_idx % len;
+        }
+        let base = if increment_cursor {
+            self.cursor.fetch_add(1, Ordering::Relaxed)
+        } else {
+            self.cursor.load(Ordering::Relaxed)
+        };
+        let base_idx_u64 = base % u64::try_from(len).unwrap_or(1);
+        usize::try_from(base_idx_u64).unwrap_or(0)
     }
 
     fn mark_success_at(&self, endpoint_idx: usize, now: Instant) {
@@ -995,18 +1110,27 @@ impl IngressEndpointPool {
         });
     }
 
-    fn run_with_failover<T, F>(&self, op_name: &'static str, mut operation: F) -> Result<T>
+    fn run_with_failover_preferred<T, F>(
+        &self,
+        op_name: &'static str,
+        submitter_idx: usize,
+        mut operation: F,
+    ) -> Result<T>
     where
         F: FnMut(&NetworkPeer) -> Result<T>,
     {
         let endpoints = Arc::clone(&self.endpoints);
-        self.health
-            .run_with_failover(op_name, move |endpoint_idx, _label| {
+        let preferred_endpoint_idx = self.preferred_endpoint_index(submitter_idx).unwrap_or(0);
+        self.health.run_with_failover_preferred(
+            op_name,
+            preferred_endpoint_idx,
+            move |endpoint_idx, _label| {
                 let endpoint = endpoints
                     .get(endpoint_idx)
                     .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
                 operation(&endpoint.peer)
-            })
+            },
+        )
     }
 
     fn run_with_failover_excluding<T, F>(
@@ -1031,8 +1155,14 @@ impl IngressEndpointPool {
         )
     }
 
-    fn select_endpoint(&self, op_name: &'static str) -> Result<usize> {
-        self.health.select_endpoint(op_name)
+    fn select_endpoint_preferred(
+        &self,
+        op_name: &'static str,
+        submitter_idx: usize,
+    ) -> Result<usize> {
+        let preferred_endpoint_idx = self.preferred_endpoint_index(submitter_idx).unwrap_or(0);
+        self.health
+            .select_endpoint_preferred(op_name, preferred_endpoint_idx)
     }
 
     fn run_on_endpoint<T, F>(
@@ -1056,6 +1186,10 @@ impl IngressEndpointPool {
 
     fn submission_backpressure_delay(&self, now: Instant) -> Option<Duration> {
         self.health.submission_backpressure_delay_at(now)
+    }
+
+    fn preferred_endpoint_index(&self, submitter_idx: usize) -> Option<usize> {
+        (!self.endpoints.is_empty()).then_some(submitter_idx % self.endpoints.len())
     }
 }
 
@@ -2517,6 +2651,7 @@ impl IzanamiRunner {
         );
         let genesis = Arc::new(self.network.genesis());
         let metrics = Arc::new(Metrics::default());
+        metrics.set_submitters(self.config.submitters);
         let ingress_stats = Arc::new(IngressStats::default());
         let ingress_pool = Arc::new(IngressEndpointPool::from_peers(
             &self.peers,
@@ -2547,6 +2682,7 @@ impl IzanamiRunner {
                 self.config.latency_p95_threshold,
                 &run_control,
                 Some(ingress_pool.as_ref()),
+                Some(metrics.as_ref()),
                 soft_target_kpi,
             )
             .await
@@ -2611,15 +2747,25 @@ impl IzanamiRunner {
 
         let snapshot = metrics.snapshot();
         let ingress_snapshot = ingress_stats.snapshot();
+        let ingress_endpoint_stats = ingress_stats.endpoint_snapshots();
         if let Some(err) = run_error {
             warn!(
                 target: "izanami::summary",
+                offered = snapshot.offered,
+                ingress_accepted = snapshot.ingress_accepted,
+                blocking_applied_success = snapshot.blocking_applied_success,
                 successes = snapshot.successes,
                 failures = snapshot.failures,
                 expected_failures = snapshot.expected_failures,
                 unexpected_successes = snapshot.unexpected_successes,
+                inflight_current = snapshot.inflight_current,
+                inflight_peak = snapshot.inflight_peak,
+                backlog_depth = snapshot.backlog_depth,
+                backlog_peak = snapshot.backlog_peak,
+                submitters = snapshot.submitters,
                 izanami_ingress_failover_total = ingress_snapshot.failover_total,
                 izanami_ingress_endpoint_unhealthy_total = ingress_snapshot.endpoint_unhealthy_total,
+                ?ingress_endpoint_stats,
                 ?err,
                 "izanami run finished with errors"
             );
@@ -2627,12 +2773,21 @@ impl IzanamiRunner {
         } else {
             info!(
                 target: "izanami::summary",
+                offered = snapshot.offered,
+                ingress_accepted = snapshot.ingress_accepted,
+                blocking_applied_success = snapshot.blocking_applied_success,
                 successes = snapshot.successes,
                 failures = snapshot.failures,
                 expected_failures = snapshot.expected_failures,
                 unexpected_successes = snapshot.unexpected_successes,
+                inflight_current = snapshot.inflight_current,
+                inflight_peak = snapshot.inflight_peak,
+                backlog_depth = snapshot.backlog_depth,
+                backlog_peak = snapshot.backlog_peak,
+                submitters = snapshot.submitters,
                 izanami_ingress_failover_total = ingress_snapshot.failover_total,
                 izanami_ingress_endpoint_unhealthy_total = ingress_snapshot.endpoint_unhealthy_total,
+                ?ingress_endpoint_stats,
                 "izanami run complete"
             );
             Ok(())
@@ -2659,6 +2814,9 @@ impl IzanamiRunner {
         let toggles = self.config.faults;
         let fault_cfg = FaultConfig {
             interval: self.config.fault_interval.clone(),
+            crash_restart: toggles.crash_restart(),
+            wipe_storage: toggles.wipe_storage(),
+            spam_invalid_transactions: toggles.spam_invalid_transactions(),
             network_latency: toggles
                 .network_latency()
                 .then_some(NetworkLatencyConfig::default()),
@@ -2709,88 +2867,104 @@ impl IzanamiRunner {
         let submission_confirmation = submission_confirmation_mode(&self.config);
         let workload = Arc::clone(&self.workload);
         let semaphore = Arc::new(Semaphore::new(self.config.max_inflight));
-        let mut load_rng = rng.clone();
-        let interval = Duration::from_secs_f64(1.0 / self.config.tps);
-        let metrics = Arc::clone(metrics);
-        let ingress_pool = Arc::clone(ingress_pool);
-        let run_control = Arc::clone(run_control);
-        let stop_notify = run_control.stop_notifier();
-        let deadline = run_control.deadline();
-        let submission_counter = Arc::clone(submission_counter);
         let backlog_limit = submission_backlog_limit(self.config.max_inflight);
-        let handle = tokio::spawn(async move {
-            let mut ticker = time::interval(interval);
-            ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
-            let mut submissions = JoinSet::new();
-            while !run_control.should_stop() {
-                tokio::select! {
-                    _ = ticker.tick() => {},
-                    () = stop_notify.notified() => break,
-                    () = time::sleep_until(deadline.into()) => break,
-                }
-                drain_ready_submissions(&mut submissions);
-                if run_control.should_stop() {
-                    break;
-                }
-                if !wait_for_submission_capacity(
-                    &mut submissions,
-                    backlog_limit,
-                    stop_notify.as_ref(),
-                    deadline,
-                )
-                .await
-                {
-                    break;
-                }
-                if run_control.should_stop() {
-                    break;
-                }
-                if let Some(retry_after) =
-                    ingress_pool.submission_backpressure_delay(Instant::now())
-                {
-                    debug!(
-                        target: "izanami::ingress",
-                        ?retry_after,
-                        "deferring workload submit while ingress endpoints remain in cooldown"
-                    );
-                    tokio::select! {
-                        () = time::sleep(retry_after) => {},
-                        () = stop_notify.notified() => break,
-                        () = time::sleep_until(deadline.into()) => break,
-                    }
-                    continue;
-                }
-                let plan = match workload.next_plan(&mut load_rng).await {
-                    Ok(plan) => plan,
-                    Err(err) => {
-                        warn!(target: "izanami::workload", ?err, "failed to build transaction plan");
-                        continue;
-                    }
-                };
-                let metrics = Arc::clone(&metrics);
-                let ingress_pool = Arc::clone(&ingress_pool);
-                let submission_counter = Arc::clone(&submission_counter);
+        let per_submitter_interval =
+            Duration::from_secs_f64(self.config.submitters as f64 / self.config.tps);
+        (0..self.config.submitters)
+            .map(|submitter_idx| {
+                let mut load_rng = StdRng::seed_from_u64(rng.next_u64());
+                let phase_delay =
+                    Duration::from_secs_f64(submitter_idx as f64 / self.config.tps);
+                let metrics = Arc::clone(metrics);
+                let ingress_pool = Arc::clone(ingress_pool);
+                let run_control = Arc::clone(run_control);
+                let stop_notify = run_control.stop_notifier();
+                let deadline = run_control.deadline();
+                let submission_counter = Arc::clone(submission_counter);
                 let workload = Arc::clone(&workload);
                 let semaphore = Arc::clone(&semaphore);
-                submissions.spawn(async move {
-                    submit_plan(
-                        &ingress_pool,
-                        plan,
-                        submission_confirmation,
-                        semaphore,
-                        &metrics,
-                        &submission_counter,
-                        &workload,
-                    )
-                    .await;
-                });
-            }
-            submissions.abort_all();
-            while let Some(result) = submissions.join_next().await {
-                let _ = result;
-            }
-        });
-        vec![handle]
+                tokio::spawn(async move {
+                    let start = Instant::now();
+                    let mut next_tick = start + phase_delay;
+                    let mut submissions = JoinSet::new();
+                    while !run_control.should_stop() {
+                        tokio::select! {
+                            () = time::sleep_until(next_tick.into()) => {},
+                            () = stop_notify.notified() => break,
+                            () = time::sleep_until(deadline.into()) => break,
+                        }
+                        next_tick = next_tick
+                            .checked_add(per_submitter_interval)
+                            .unwrap_or(deadline);
+                        drain_ready_submissions(&mut submissions);
+                        if run_control.should_stop() {
+                            break;
+                        }
+                        if !wait_for_submission_capacity(
+                            &mut submissions,
+                            backlog_limit,
+                            stop_notify.as_ref(),
+                            deadline,
+                        )
+                        .await
+                        {
+                            break;
+                        }
+                        if run_control.should_stop() {
+                            break;
+                        }
+                        if let Some(retry_after) =
+                            ingress_pool.submission_backpressure_delay(Instant::now())
+                        {
+                            debug!(
+                                target: "izanami::ingress",
+                                submitter_idx,
+                                ?retry_after,
+                                "deferring workload submit while ingress endpoints remain in cooldown"
+                            );
+                            tokio::select! {
+                                () = time::sleep(retry_after) => {},
+                                () = stop_notify.notified() => break,
+                                () = time::sleep_until(deadline.into()) => break,
+                            }
+                            continue;
+                        }
+                        let plan = match workload.next_plan(&mut load_rng).await {
+                            Ok(plan) => plan,
+                            Err(err) => {
+                                warn!(target: "izanami::workload", ?err, submitter_idx, "failed to build transaction plan");
+                                continue;
+                            }
+                        };
+                        metrics.record_offered();
+                        metrics.record_backlog_spawn();
+                        let metrics = Arc::clone(&metrics);
+                        let ingress_pool = Arc::clone(&ingress_pool);
+                        let submission_counter = Arc::clone(&submission_counter);
+                        let workload = Arc::clone(&workload);
+                        let semaphore = Arc::clone(&semaphore);
+                        submissions.spawn(async move {
+                            let _backlog_guard = BacklogGuard::new(Arc::clone(&metrics));
+                            submit_plan(
+                                &ingress_pool,
+                                plan,
+                                submission_confirmation,
+                                semaphore,
+                                &metrics,
+                                &submission_counter,
+                                &workload,
+                                submitter_idx,
+                            )
+                            .await;
+                        });
+                    }
+                    submissions.abort_all();
+                    while let Some(result) = submissions.join_next().await {
+                        let _ = result;
+                    }
+                })
+            })
+            .collect()
     }
 }
 
@@ -3249,6 +3423,7 @@ async fn wait_for_target_blocks(
     latency_p95_threshold: Option<Duration>,
     run_control: &RunControl,
     ingress_pool: Option<&IngressEndpointPool>,
+    metrics: Option<&Metrics>,
     target_blocks_soft_kpi: bool,
 ) -> Result<TargetProgressResult> {
     let start = Instant::now();
@@ -3350,6 +3525,7 @@ async fn wait_for_target_blocks(
         }
         if min_height >= target_blocks && !target_reached {
             target_reached = true;
+            let progress_metrics = metrics.map_or_else(MetricsSnapshot::default, Metrics::snapshot);
             let strict_summary = strict_block_intervals.summary();
             if let Some(summary) = block_intervals.summary() {
                 info!(
@@ -3358,6 +3534,12 @@ async fn wait_for_target_blocks(
                     strict_min_height,
                     tolerated_failures,
                     target_blocks,
+                    offered = progress_metrics.offered,
+                    ingress_accepted = progress_metrics.ingress_accepted,
+                    blocking_applied_success = progress_metrics.blocking_applied_success,
+                    inflight_current = progress_metrics.inflight_current,
+                    backlog_depth = progress_metrics.backlog_depth,
+                    submitters = progress_metrics.submitters,
                     interval_p50_ms = summary.p50_ms,
                     interval_p95_ms = summary.p95_ms,
                     interval_samples = summary.samples,
@@ -3405,6 +3587,12 @@ async fn wait_for_target_blocks(
                     strict_min_height,
                     tolerated_failures,
                     target_blocks,
+                    offered = progress_metrics.offered,
+                    ingress_accepted = progress_metrics.ingress_accepted,
+                    blocking_applied_success = progress_metrics.blocking_applied_success,
+                    inflight_current = progress_metrics.inflight_current,
+                    backlog_depth = progress_metrics.backlog_depth,
+                    submitters = progress_metrics.submitters,
                     elapsed = ?now.duration_since(start),
                     "target block height reached"
                 );
@@ -3453,6 +3641,7 @@ async fn wait_for_target_blocks(
             let interval_ms = strict_block_intervals
                 .record(blocks_advanced, elapsed)
                 .unwrap_or_default();
+            let progress_metrics = metrics.map_or_else(MetricsSnapshot::default, Metrics::snapshot);
             strict_tolerated_stall_logged_at = None;
             info!(
                 target: "izanami::progress",
@@ -3460,6 +3649,12 @@ async fn wait_for_target_blocks(
                 target_blocks,
                 blocks_advanced,
                 interval_ms,
+                offered = progress_metrics.offered,
+                ingress_accepted = progress_metrics.ingress_accepted,
+                blocking_applied_success = progress_metrics.blocking_applied_success,
+                inflight_current = progress_metrics.inflight_current,
+                backlog_depth = progress_metrics.backlog_depth,
+                submitters = progress_metrics.submitters,
                 "strict block height advanced"
             );
         } else if strict_progress.stalled(now, progress_timeout) {
@@ -3531,6 +3726,7 @@ async fn wait_for_target_blocks(
             let interval_ms = block_intervals
                 .record(blocks_advanced, elapsed)
                 .unwrap_or_default();
+            let progress_metrics = metrics.map_or_else(MetricsSnapshot::default, Metrics::snapshot);
             info!(
                 target: "izanami::progress",
                 quorum_min_height = min_height,
@@ -3539,6 +3735,12 @@ async fn wait_for_target_blocks(
                 target_blocks,
                 blocks_advanced,
                 interval_ms,
+                offered = progress_metrics.offered,
+                ingress_accepted = progress_metrics.ingress_accepted,
+                blocking_applied_success = progress_metrics.blocking_applied_success,
+                inflight_current = progress_metrics.inflight_current,
+                backlog_depth = progress_metrics.backlog_depth,
+                submitters = progress_metrics.submitters,
                 "block height advanced"
             );
         } else if progress.stalled(now, progress_timeout) {
@@ -3672,6 +3874,7 @@ async fn submit_plan(
     metrics: &Arc<Metrics>,
     submission_counter: &Arc<AtomicU64>,
     workload: &Arc<WorkloadEngine>,
+    submitter_idx: usize,
 ) {
     let ingress_pool = Arc::clone(ingress_pool);
     let signer = plan.signer.clone();
@@ -3697,13 +3900,16 @@ async fn submit_plan(
         effective_submission_confirmation(submission_confirmation, &plan.state_updates);
     let run_trigger_precheck = should_run_trigger_precheck(effective_submission_confirmation);
     let mut pinned_trigger_endpoint = if repeatable_trigger_target.is_some() {
-        match ingress_pool.select_endpoint("submit_repeatable_trigger_plan") {
+        match ingress_pool
+            .select_endpoint_preferred("submit_repeatable_trigger_plan", submitter_idx)
+        {
             Ok(endpoint_idx) => Some(endpoint_idx),
             Err(err) => {
                 warn!(
                     target: "izanami::workload",
                     ?err,
                     plan = plan_label,
+                    submitter_idx,
                     "failed to select pinned ingress endpoint for repeatable trigger plan"
                 );
                 if expect_success {
@@ -3853,6 +4059,7 @@ async fn submit_plan(
             warn!(
                 target: "izanami::workload",
                 plan = plan_label,
+                submitter_idx,
                 "submission permit channel closed before submit"
             );
             if expect_success {
@@ -3864,6 +4071,8 @@ async fn submit_plan(
             return;
         }
     };
+    metrics.record_inflight_acquired();
+    let _inflight_guard = InflightGuard::new(Arc::clone(&metrics), permit);
 
     let submission_result: Result<Option<usize>> = if let Some(endpoint_idx) =
         pinned_trigger_endpoint
@@ -3876,6 +4085,7 @@ async fn submit_plan(
             plan_label,
             expect_success,
             Arc::clone(&metrics),
+            effective_submission_confirmation,
             move || {
                 submit_repeatable_trigger_plan_on_endpoint(
                     &ingress_pool_for_submit,
@@ -3898,6 +4108,7 @@ async fn submit_plan(
             plan_label,
             expect_success,
             Arc::clone(&metrics),
+            effective_submission_confirmation,
             move || {
                 let ingress_pool_for_retry_delay = Arc::clone(&ingress_pool_for_submit);
                 run_with_queue_timeout_retry_with_policy_and_delay(
@@ -3908,8 +4119,9 @@ async fn submit_plan(
                         ingress_pool_for_retry_delay.submission_backpressure_delay(Instant::now())
                     },
                     || {
-                        ingress_pool_for_submit.run_with_failover(
+                        ingress_pool_for_submit.run_with_failover_preferred(
                             "submit_transaction_plan",
+                            submitter_idx,
                             |peer| {
                                 let client = tune_ingress_client(
                                     peer.client_for(
@@ -3943,7 +4155,6 @@ async fn submit_plan(
         .await
         .map(|()| None)
     };
-    drop(permit);
 
     match submission_result {
         Ok(submission_endpoint_idx) => {
@@ -4130,6 +4341,7 @@ async fn run_submission_result<T, F>(
     plan_label: &'static str,
     expect_success: bool,
     metrics: Arc<Metrics>,
+    confirmation_mode: SubmissionConfirmationMode,
     blocking: F,
 ) -> Result<T>
 where
@@ -4154,6 +4366,15 @@ where
         (Err(_), true) => metrics.record_failure(),
         (Err(_), false) => metrics.record_expected_failure(),
     }
+    if result.is_ok() {
+        metrics.record_ingress_accepted();
+        if matches!(
+            confirmation_mode,
+            SubmissionConfirmationMode::BlockingApplied
+        ) {
+            metrics.record_blocking_applied_success();
+        }
+    }
     if let Err(err) = &result {
         warn!(
             target: "izanami::workload",
@@ -4175,20 +4396,51 @@ async fn run_submission<F>(
 where
     F: FnOnce() -> Result<()> + Send + 'static,
 {
-    run_submission_result(plan_label, expect_success, metrics, blocking)
-        .await
-        .is_ok()
+    run_submission_result(
+        plan_label,
+        expect_success,
+        metrics,
+        SubmissionConfirmationMode::AcceptedByIngress,
+        blocking,
+    )
+    .await
+    .is_ok()
 }
 
 #[derive(Default)]
 struct Metrics {
+    offered: AtomicU64,
+    ingress_accepted: AtomicU64,
+    blocking_applied_success: AtomicU64,
     successes: AtomicU64,
     failures: AtomicU64,
     expected_failures: AtomicU64,
     unexpected_successes: AtomicU64,
+    inflight_current: AtomicU64,
+    inflight_peak: AtomicU64,
+    backlog_depth: AtomicU64,
+    backlog_peak: AtomicU64,
+    submitters: AtomicU64,
 }
 
 impl Metrics {
+    fn set_submitters(&self, count: usize) {
+        self.submitters.store(count as u64, Ordering::Relaxed);
+    }
+
+    fn record_offered(&self) {
+        self.offered.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_ingress_accepted(&self) {
+        self.ingress_accepted.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_blocking_applied_success(&self) {
+        self.blocking_applied_success
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn record_success(&self) {
         self.successes.fetch_add(1, Ordering::Relaxed);
     }
@@ -4205,22 +4457,98 @@ impl Metrics {
         self.unexpected_successes.fetch_add(1, Ordering::Relaxed);
     }
 
+    fn record_inflight_acquired(&self) {
+        let current = self.inflight_current.fetch_add(1, Ordering::Relaxed) + 1;
+        update_peak(&self.inflight_peak, current);
+    }
+
+    fn record_inflight_released(&self) {
+        self.inflight_current.fetch_sub(1, Ordering::Relaxed);
+    }
+
+    fn record_backlog_spawn(&self) {
+        let current = self.backlog_depth.fetch_add(1, Ordering::Relaxed) + 1;
+        update_peak(&self.backlog_peak, current);
+    }
+
+    fn record_backlog_complete(&self) {
+        self.backlog_depth.fetch_sub(1, Ordering::Relaxed);
+    }
+
     fn snapshot(&self) -> MetricsSnapshot {
         MetricsSnapshot {
+            offered: self.offered.load(Ordering::Relaxed),
+            ingress_accepted: self.ingress_accepted.load(Ordering::Relaxed),
+            blocking_applied_success: self.blocking_applied_success.load(Ordering::Relaxed),
             successes: self.successes.load(Ordering::Relaxed),
             failures: self.failures.load(Ordering::Relaxed),
             expected_failures: self.expected_failures.load(Ordering::Relaxed),
             unexpected_successes: self.unexpected_successes.load(Ordering::Relaxed),
+            inflight_current: self.inflight_current.load(Ordering::Relaxed),
+            inflight_peak: self.inflight_peak.load(Ordering::Relaxed),
+            backlog_depth: self.backlog_depth.load(Ordering::Relaxed),
+            backlog_peak: self.backlog_peak.load(Ordering::Relaxed),
+            submitters: self.submitters.load(Ordering::Relaxed),
         }
     }
 }
 
-#[derive(Clone, Copy)]
+fn update_peak(peak: &AtomicU64, candidate: u64) {
+    let _ = peak.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |current| {
+        (candidate > current).then_some(candidate)
+    });
+}
+
+struct BacklogGuard {
+    metrics: Arc<Metrics>,
+}
+
+impl BacklogGuard {
+    fn new(metrics: Arc<Metrics>) -> Self {
+        Self { metrics }
+    }
+}
+
+impl Drop for BacklogGuard {
+    fn drop(&mut self) {
+        self.metrics.record_backlog_complete();
+    }
+}
+
+struct InflightGuard {
+    metrics: Arc<Metrics>,
+    _permit: OwnedSemaphorePermit,
+}
+
+impl InflightGuard {
+    fn new(metrics: Arc<Metrics>, permit: OwnedSemaphorePermit) -> Self {
+        Self {
+            metrics,
+            _permit: permit,
+        }
+    }
+}
+
+impl Drop for InflightGuard {
+    fn drop(&mut self) {
+        self.metrics.record_inflight_released();
+    }
+}
+
+#[derive(Clone, Copy, Default)]
 struct MetricsSnapshot {
+    offered: u64,
+    ingress_accepted: u64,
+    blocking_applied_success: u64,
     successes: u64,
     failures: u64,
     expected_failures: u64,
     unexpected_successes: u64,
+    inflight_current: u64,
+    inflight_peak: u64,
+    backlog_depth: u64,
+    backlog_peak: u64,
+    submitters: u64,
 }
 
 #[cfg(test)]
@@ -4444,6 +4772,7 @@ mod tests {
             seed: Some(42),
             tps: 1.0,
             max_inflight: 4,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -4510,6 +4839,7 @@ mod tests {
             seed: Some(7),
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -4579,6 +4909,7 @@ mod tests {
             seed: Some(7),
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -4647,6 +4978,7 @@ mod tests {
             seed: Some(7),
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -4679,6 +5011,7 @@ mod tests {
             seed: Some(7),
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -4724,6 +5057,7 @@ mod tests {
             seed: Some(7),
             tps: 5.0,
             max_inflight: 8,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -4773,6 +5107,7 @@ mod tests {
             seed: Some(23),
             tps: 2.0,
             max_inflight: 4,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -4838,6 +5173,7 @@ mod tests {
             seed: Some(31),
             tps: 2.0,
             max_inflight: 4,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -4917,6 +5253,7 @@ mod tests {
             seed: Some(41),
             tps: 2.0,
             max_inflight: 4,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -5087,6 +5424,7 @@ mod tests {
             seed: Some(7),
             tps: 5.0,
             max_inflight: 8,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -5179,6 +5517,7 @@ mod tests {
             seed: Some(21),
             tps: 7.0,
             max_inflight: 13,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -5226,6 +5565,7 @@ mod tests {
             seed: Some(22),
             tps: 7.0,
             max_inflight: 13,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -5282,6 +5622,7 @@ mod tests {
             seed: Some(17),
             tps: 3.0,
             max_inflight: 6,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -5318,6 +5659,7 @@ mod tests {
             seed: Some(9),
             tps: 5.0,
             max_inflight: 8,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -5351,6 +5693,7 @@ mod tests {
             seed: Some(29),
             tps: 4.0,
             max_inflight: 6,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -5404,6 +5747,7 @@ mod tests {
             seed: Some(5),
             tps: 5.0,
             max_inflight: 8,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -5433,6 +5777,7 @@ mod tests {
             seed: Some(5),
             tps: 5.0,
             max_inflight: 8,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -5699,6 +6044,7 @@ mod tests {
             seed: Some(12),
             tps: 5.0,
             max_inflight: 8,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -5730,6 +6076,7 @@ mod tests {
             seed: Some(13),
             tps: 5.0,
             max_inflight: 8,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -5761,6 +6108,7 @@ mod tests {
             seed: Some(15),
             tps: 5.0,
             max_inflight: 8,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -5789,6 +6137,7 @@ mod tests {
             seed: Some(27),
             tps: 5.0,
             max_inflight: 8,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -5878,6 +6227,7 @@ mod tests {
             seed: Some(11),
             tps: 5.0,
             max_inflight: 8,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -5914,6 +6264,7 @@ mod tests {
             seed: Some(7),
             tps: 1.0,
             max_inflight: 4,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -7159,6 +7510,7 @@ mod tests {
             seed: Some(9),
             tps: 1.0,
             max_inflight: 4,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -7205,6 +7557,7 @@ mod tests {
             None,
             &run_control,
             None,
+            None,
             false,
         )
         .await?;
@@ -7236,6 +7589,7 @@ mod tests {
             seed: Some(10),
             tps: 1.0,
             max_inflight: 4,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -7283,6 +7637,7 @@ mod tests {
             None,
             &run_control,
             None,
+            None,
             true,
         )
         .await?;
@@ -7320,6 +7675,7 @@ mod tests {
             seed: Some(11),
             tps: 1.0,
             max_inflight: 4,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -7367,6 +7723,7 @@ mod tests {
             Some(Duration::from_millis(1)),
             &run_control,
             None,
+            None,
             true,
         )
         .await;
@@ -7397,6 +7754,7 @@ mod tests {
             None,
             &run_control,
             None,
+            None,
             true,
         )
         .await
@@ -7423,6 +7781,7 @@ mod tests {
             seed: Some(5),
             tps: 0.1,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -7472,17 +7831,73 @@ mod tests {
     #[test]
     fn metrics_snapshot_accumulates_counts() {
         let metrics = Metrics::default();
+        metrics.set_submitters(3);
+        metrics.record_offered();
+        metrics.record_ingress_accepted();
+        metrics.record_blocking_applied_success();
+        metrics.record_backlog_spawn();
+        metrics.record_inflight_acquired();
         metrics.record_success();
         metrics.record_success();
         metrics.record_failure();
         metrics.record_expected_failure();
         metrics.record_unexpected_success();
+        metrics.record_inflight_released();
+        metrics.record_backlog_complete();
 
         let snapshot = metrics.snapshot();
+        assert_eq!(snapshot.offered, 1);
+        assert_eq!(snapshot.ingress_accepted, 1);
+        assert_eq!(snapshot.blocking_applied_success, 1);
         assert_eq!(snapshot.successes, 2);
         assert_eq!(snapshot.failures, 1);
         assert_eq!(snapshot.expected_failures, 1);
         assert_eq!(snapshot.unexpected_successes, 1);
+        assert_eq!(snapshot.inflight_current, 0);
+        assert_eq!(snapshot.inflight_peak, 1);
+        assert_eq!(snapshot.backlog_depth, 0);
+        assert_eq!(snapshot.backlog_peak, 1);
+        assert_eq!(snapshot.submitters, 3);
+    }
+
+    #[test]
+    fn endpoint_pool_preferred_endpoint_round_robins_submitters() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:401".to_string(),
+                "http://127.0.0.1:402".to_string(),
+                "http://127.0.0.1:403".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 3,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(5),
+                reprobe_interval: Duration::from_millis(500),
+            },
+            ingress_stats,
+        );
+
+        assert_eq!(
+            pool.select_endpoint_preferred("submit", 0)
+                .expect("submitter 0 should resolve a preferred endpoint"),
+            0
+        );
+        assert_eq!(
+            pool.select_endpoint_preferred("submit", 1)
+                .expect("submitter 1 should resolve a preferred endpoint"),
+            1
+        );
+        assert_eq!(
+            pool.select_endpoint_preferred("submit", 2)
+                .expect("submitter 2 should resolve a preferred endpoint"),
+            2
+        );
+        assert_eq!(
+            pool.select_endpoint_preferred("submit", 3)
+                .expect("submitter 3 should wrap to the first endpoint"),
+            0
+        );
     }
 
     #[test]
@@ -7521,6 +7936,7 @@ mod tests {
             seed: Some(17),
             tps: 1.0,
             max_inflight: 4,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -7766,13 +8182,23 @@ mod tests {
             lookup(&["sumeragi", "advanced", "rbc", "disk_store_ttl_ms"]),
             Some(IZANAMI_RBC_SESSION_TTL_MS)
         );
+        let expected_store_max_sessions = if is_shared_host_balanced_latency_profile(&config) {
+            IZANAMI_SHARED_HOST_SOAK_RBC_STORE_MAX_SESSIONS
+        } else {
+            IZANAMI_TEST_NETWORK_RBC_STORE_MAX_SESSIONS
+        };
+        let expected_store_soft_sessions = if is_shared_host_balanced_latency_profile(&config) {
+            IZANAMI_SHARED_HOST_SOAK_RBC_STORE_SOFT_SESSIONS
+        } else {
+            IZANAMI_TEST_NETWORK_RBC_STORE_SOFT_SESSIONS
+        };
         assert_eq!(
             lookup(&["sumeragi", "advanced", "rbc", "store_max_sessions"]),
-            Some(IZANAMI_SHARED_HOST_SOAK_RBC_STORE_MAX_SESSIONS)
+            Some(expected_store_max_sessions)
         );
         assert_eq!(
             lookup(&["sumeragi", "advanced", "rbc", "store_soft_sessions"]),
-            Some(IZANAMI_SHARED_HOST_SOAK_RBC_STORE_SOFT_SESSIONS)
+            Some(expected_store_soft_sessions)
         );
         assert_eq!(
             lookup(&[
@@ -7913,6 +8339,7 @@ mod tests {
             seed: Some(19),
             tps: 1.0,
             max_inflight: 4,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -7989,6 +8416,7 @@ mod tests {
             seed: Some(19),
             tps: 1.0,
             max_inflight: 4,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8096,6 +8524,7 @@ mod tests {
             seed: Some(71),
             tps: 1.0,
             max_inflight: 4,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
@@ -8148,6 +8577,7 @@ mod tests {
             seed: Some(47),
             tps: 5.0,
             max_inflight: 8,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(20),
@@ -8227,6 +8657,7 @@ mod tests {
             seed: Some(13),
             tps: 0.5,
             max_inflight: 2,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(5)..=Duration::from_secs(5),
@@ -8272,6 +8703,7 @@ mod tests {
             seed: Some(23),
             tps: 1.0,
             max_inflight: 4,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),

@@ -780,6 +780,16 @@ fn first_existing_candidate<'a>(
     None
 }
 
+fn colocated_binary_candidate_for(current_exe: &Path, bin: &str) -> Option<PathBuf> {
+    let current_dir = current_exe.parent()?;
+    current_dir.join(bin).canonicalize().ok()
+}
+
+fn current_exe_colocated_binary(bin: &str) -> Option<PathBuf> {
+    let current_exe = std::env::current_exe().ok()?;
+    colocated_binary_candidate_for(&current_exe, bin)
+}
+
 fn build_cache_dir(target_dir: &Path) -> PathBuf {
     target_dir.join(BUILD_CACHE_DIR)
 }
@@ -1547,6 +1557,19 @@ impl Program {
         let cargo_bin_candidate = std::env::var(&cargo_bin_env)
             .ok()
             .and_then(|p| PathBuf::from(p).canonicalize().ok());
+        let colocated_candidate = current_exe_colocated_binary(&bin);
+
+        if let Some(found) = colocated_candidate.clone() {
+            match self {
+                Program::Irohad => {
+                    let _ = IROHAD_BIN.set(found.clone());
+                }
+                Program::Iroha => {
+                    let _ = IROHA_BIN.set(found.clone());
+                }
+            }
+            return Ok(found);
+        }
 
         // 3) Prepare candidate locations under the current target directory
         let profile = default_build_profile();
@@ -1560,6 +1583,9 @@ impl Program {
             }
         };
         if let Some(path) = cargo_bin_candidate {
+            push_candidate(path);
+        }
+        if let Some(path) = colocated_candidate {
             push_candidate(path);
         }
         push_candidate(primary_binary.clone());
@@ -7447,6 +7473,45 @@ mod shutdown_tests {
     }
 
     #[tokio::test]
+    async fn monitor_handles_shutdown_race_after_child_already_exited() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("exit 0");
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        let child = cmd.spawn().expect("spawn short-lived child");
+
+        let (events, _rx) = broadcast::channel(4);
+        let (block_height, _rx) = watch::channel(None);
+        let (_fatal_tx, fatal_rx) = watch::channel(false);
+        let stderr_log_ready = Arc::new(Notify::new());
+        let peer_exit = PeerExit {
+            child,
+            span: tracing::Span::none(),
+            is_running: Arc::new(AtomicBool::new(true)),
+            is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
+            events,
+            block_height,
+            fatal_rx,
+            stderr_log_ready: Arc::clone(&stderr_log_ready),
+            stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            stderr_log_ready.notify_waiters();
+        });
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        shutdown_tx
+            .send(())
+            .expect("shutdown signal should be delivered");
+
+        tokio::time::timeout(Duration::from_secs(1), peer_exit.monitor(shutdown_rx))
+            .await
+            .expect("peer monitor should complete")
+            .expect("already-exited child should be treated as graceful during shutdown race");
+    }
+
+    #[tokio::test]
     async fn log_drain_exits_on_shutdown_notify() {
         let dir = tempdir().expect("tempdir");
         let log_path = dir.path().join("stdout.log");
@@ -7773,6 +7838,17 @@ impl PeerExit {
 
         self.is_normal_shutdown_started
             .store(true, Ordering::Relaxed);
+
+        if let Some(status) = self
+            .child
+            .try_wait()
+            .wrap_err("failed to poll child exit status before shutdown")?
+        {
+            self.span.in_scope(
+                || info!(%status, "child already exited before shutdown signal could be delivered"),
+            );
+            return Ok(status);
+        }
 
         if self.child.id().is_none() {
             self.span.in_scope(|| {
@@ -9717,6 +9793,36 @@ exit 0
         assert_eq!(
             resolved,
             fallback.canonicalize().expect("canonical fallback")
+        );
+    }
+
+    #[test]
+    fn colocated_binary_candidate_for_resolves_sibling_binary() {
+        let temp = tempdir().expect("temporary workspace");
+        let current_exe = temp.path().join("release/izanami");
+        let sibling = temp.path().join("release/iroha3d");
+        fs::create_dir_all(current_exe.parent().expect("current exe parent"))
+            .expect("create release dir");
+        fs::write(&current_exe, b"izanami").expect("write current exe");
+        fs::write(&sibling, b"iroha3d").expect("write sibling binary");
+
+        let resolved = colocated_binary_candidate_for(&current_exe, "iroha3d")
+            .expect("sibling binary should resolve");
+
+        assert_eq!(resolved, sibling.canonicalize().expect("canonical sibling"));
+    }
+
+    #[test]
+    fn colocated_binary_candidate_for_ignores_missing_sibling_binary() {
+        let temp = tempdir().expect("temporary workspace");
+        let current_exe = temp.path().join("release/izanami");
+        fs::create_dir_all(current_exe.parent().expect("current exe parent"))
+            .expect("create release dir");
+        fs::write(&current_exe, b"izanami").expect("write current exe");
+
+        assert!(
+            colocated_binary_candidate_for(&current_exe, "iroha3d").is_none(),
+            "missing sibling binary should not resolve"
         );
     }
 

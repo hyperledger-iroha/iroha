@@ -67,6 +67,9 @@ pub struct IzanamiArgs {
     /// Upper bound on the number of concurrently in-flight transactions submitted by Izanami.
     #[arg(long, default_value_t = 32)]
     pub max_inflight: usize,
+    /// Number of independent transaction submitter loops sharing the global inflight budget.
+    #[arg(long, default_value_t = 1)]
+    pub submitters: usize,
     /// Workload profile controlling which recipes are scheduled.
     #[arg(long, value_enum, default_value_t = WorkloadProfile::Stable)]
     pub workload_profile: WorkloadProfile,
@@ -109,6 +112,18 @@ pub const MIN_PIPELINE_TIME: Duration = Duration::from_millis(2);
 #[derive(Debug, Clone, Args)]
 #[allow(clippy::struct_excessive_bools)]
 pub struct FaultArgs {
+    /// Enable crash-and-restart faults.
+    #[arg(long = "fault-enable-crash-restart", default_value_t = true)]
+    pub crash_restart: bool,
+    /// Enable wipe-storage-and-restart faults.
+    #[arg(long = "fault-enable-wipe-storage", default_value_t = true)]
+    pub wipe_storage: bool,
+    /// Enable invalid-transaction spam faults.
+    #[arg(
+        long = "fault-enable-spam-invalid-transactions",
+        default_value_t = true
+    )]
+    pub spam_invalid_transactions: bool,
     /// Enable transient network latency faults.
     #[arg(long = "fault-enable-network-latency", default_value_t = true)]
     pub network_latency: bool,
@@ -125,7 +140,10 @@ pub struct FaultArgs {
 
 impl FaultArgs {
     pub fn to_toggles(&self) -> FaultToggles {
-        FaultToggles::from_array([
+        FaultToggles::from_explicit_array([
+            self.crash_restart,
+            self.wipe_storage,
+            self.spam_invalid_transactions,
             self.network_latency,
             self.network_partition,
             self.cpu_stress,
@@ -137,6 +155,9 @@ impl FaultArgs {
 impl Default for FaultArgs {
     fn default() -> Self {
         Self {
+            crash_restart: true,
+            wipe_storage: true,
+            spam_invalid_transactions: true,
             network_latency: true,
             network_partition: true,
             cpu_stress: true,
@@ -148,6 +169,9 @@ impl Default for FaultArgs {
 impl From<FaultToggles> for FaultArgs {
     fn from(toggles: FaultToggles) -> Self {
         Self {
+            crash_restart: toggles.crash_restart(),
+            wipe_storage: toggles.wipe_storage(),
+            spam_invalid_transactions: toggles.spam_invalid_transactions(),
             network_latency: toggles.network_latency(),
             network_partition: toggles.network_partition(),
             cpu_stress: toggles.cpu_stress(),
@@ -163,34 +187,76 @@ pub struct FaultToggles {
 }
 
 impl FaultToggles {
-    const NETWORK_LATENCY: u8 = 1 << 0;
-    const NETWORK_PARTITION: u8 = 1 << 1;
-    const CPU_STRESS: u8 = 1 << 2;
-    const DISK_SATURATION: u8 = 1 << 3;
+    const CRASH_RESTART: u8 = 1 << 0;
+    const WIPE_STORAGE: u8 = 1 << 1;
+    const SPAM_INVALID_TRANSACTIONS: u8 = 1 << 2;
+    const NETWORK_LATENCY: u8 = 1 << 3;
+    const NETWORK_PARTITION: u8 = 1 << 4;
+    const CPU_STRESS: u8 = 1 << 5;
+    const DISK_SATURATION: u8 = 1 << 6;
+    const ALL_BITS: u8 = Self::CRASH_RESTART
+        | Self::WIPE_STORAGE
+        | Self::SPAM_INVALID_TRANSACTIONS
+        | Self::NETWORK_LATENCY
+        | Self::NETWORK_PARTITION
+        | Self::CPU_STRESS
+        | Self::DISK_SATURATION;
 
+    /// Legacy helper preserving the historical "optional add-on faults" semantics used by tests.
     pub const fn from_array(flags: [bool; 4]) -> Self {
+        Self::from_explicit_array([true, true, true, flags[0], flags[1], flags[2], flags[3]])
+    }
+
+    pub const fn from_explicit_array(flags: [bool; 7]) -> Self {
         let mut bits = 0u8;
         if flags[0] {
-            bits |= Self::NETWORK_LATENCY;
+            bits |= Self::CRASH_RESTART;
         }
         if flags[1] {
-            bits |= Self::NETWORK_PARTITION;
+            bits |= Self::WIPE_STORAGE;
         }
         if flags[2] {
-            bits |= Self::CPU_STRESS;
+            bits |= Self::SPAM_INVALID_TRANSACTIONS;
         }
         if flags[3] {
+            bits |= Self::NETWORK_LATENCY;
+        }
+        if flags[4] {
+            bits |= Self::NETWORK_PARTITION;
+        }
+        if flags[5] {
+            bits |= Self::CPU_STRESS;
+        }
+        if flags[6] {
             bits |= Self::DISK_SATURATION;
         }
         Self { bits }
     }
 
     pub const fn from_bits(bits: u8) -> Self {
-        Self { bits: bits & 0x0F }
+        Self {
+            bits: bits & Self::ALL_BITS,
+        }
     }
 
     pub const fn bits(self) -> u8 {
         self.bits
+    }
+
+    pub const fn any_enabled(self) -> bool {
+        self.bits != 0
+    }
+
+    pub const fn crash_restart(self) -> bool {
+        self.bits & Self::CRASH_RESTART != 0
+    }
+
+    pub const fn wipe_storage(self) -> bool {
+        self.bits & Self::WIPE_STORAGE != 0
+    }
+
+    pub const fn spam_invalid_transactions(self) -> bool {
+        self.bits & Self::SPAM_INVALID_TRANSACTIONS != 0
     }
 
     pub const fn network_latency(self) -> bool {
@@ -226,6 +292,7 @@ pub struct ChaosConfig {
     pub seed: Option<u64>,
     pub tps: f64,
     pub max_inflight: usize,
+    pub submitters: usize,
     pub workload_profile: WorkloadProfile,
     pub allow_contract_deploy_in_stable: bool,
     pub fault_interval: RangeInclusive<Duration>,
@@ -307,6 +374,9 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
         if args.max_inflight == 0 {
             return Err(eyre!("max_inflight must be greater than zero"));
         }
+        if args.submitters == 0 {
+            return Err(eyre!("submitters must be greater than zero"));
+        }
         if args.fault_interval_min > args.fault_interval_max {
             return Err(eyre!(
                 "fault interval min ({:?}) cannot be greater than max ({:?})",
@@ -316,6 +386,11 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
         }
 
         let toggles = args.faults.to_toggles();
+        if args.faulty > 0 && !toggles.any_enabled() {
+            return Err(eyre!(
+                "at least one fault scenario must be enabled when faulty peers are configured"
+            ));
+        }
         let IzanamiArgs {
             tui: _,
             peers,
@@ -329,6 +404,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             seed,
             tps,
             max_inflight,
+            submitters,
             workload_profile,
             allow_contract_deploy_in_stable,
             log_filter,
@@ -357,6 +433,7 @@ impl TryFrom<IzanamiArgs> for ChaosConfig {
             seed,
             tps,
             max_inflight,
+            submitters,
             workload_profile,
             allow_contract_deploy_in_stable,
             fault_interval: fault_interval_min..=fault_interval_max,
@@ -395,6 +472,7 @@ impl IzanamiArgs {
             seed: cfg.seed,
             tps: cfg.tps,
             max_inflight: cfg.max_inflight,
+            submitters: cfg.submitters,
             workload_profile: cfg.workload_profile,
             allow_contract_deploy_in_stable: cfg.allow_contract_deploy_in_stable,
             log_filter: cfg.log_filter.clone(),
@@ -832,12 +910,16 @@ mod tests {
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
             fault_interval_min: Duration::from_secs(1),
             fault_interval_max: Duration::from_secs(2),
             faults: FaultArgs {
+                crash_restart: true,
+                wipe_storage: true,
+                spam_invalid_transactions: true,
                 network_latency: true,
                 network_partition: true,
                 cpu_stress: true,
@@ -864,6 +946,7 @@ mod tests {
             seed: Some(42),
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "warn".to_string(),
@@ -892,6 +975,7 @@ mod tests {
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -925,6 +1009,7 @@ mod tests {
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -956,6 +1041,7 @@ mod tests {
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1040,6 +1126,7 @@ mod tests {
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1073,6 +1160,7 @@ mod tests {
             seed: None,
             tps: f64::NAN,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1106,6 +1194,7 @@ mod tests {
             seed: None,
             tps: f64::MAX,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1139,6 +1228,7 @@ mod tests {
             seed: None,
             tps: f64::MIN_POSITIVE,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1172,6 +1262,7 @@ mod tests {
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1205,6 +1296,7 @@ mod tests {
             seed: None,
             tps: 1.0,
             max_inflight: 1,
+            submitters: 1,
             workload_profile: WorkloadProfile::Stable,
             allow_contract_deploy_in_stable: false,
             log_filter: "info".to_string(),
@@ -1219,6 +1311,82 @@ mod tests {
         assert!(
             err.to_string().contains("latency_p95_threshold"),
             "error should mention latency_p95_threshold: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_rejects_zero_submitters() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 1,
+            faulty: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
+            seed: None,
+            tps: 1.0,
+            max_inflight: 1,
+            submitters: 0,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs::default(),
+            nexus: false,
+        };
+        let Err(err) = ChaosConfig::try_from(args) else {
+            panic!("zero submitters should fail");
+        };
+        assert!(
+            err.to_string().contains("submitters"),
+            "error should mention submitters: {err}"
+        );
+    }
+
+    #[test]
+    fn chaos_config_rejects_faulty_peers_with_no_enabled_faults() {
+        let args = IzanamiArgs {
+            tui: false,
+            allow_net: true,
+            peers: 4,
+            faulty: 1,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
+            seed: None,
+            tps: 1.0,
+            max_inflight: 1,
+            submitters: 1,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            log_filter: "info".to_string(),
+            fault_interval_min: Duration::from_secs(1),
+            fault_interval_max: Duration::from_secs(1),
+            faults: FaultArgs {
+                crash_restart: false,
+                wipe_storage: false,
+                spam_invalid_transactions: false,
+                network_latency: false,
+                network_partition: false,
+                cpu_stress: false,
+                disk_saturation: false,
+            },
+            nexus: false,
+        };
+        let Err(err) = ChaosConfig::try_from(args) else {
+            panic!("faulty peers without enabled faults should fail");
+        };
+        assert!(
+            err.to_string().contains("fault scenario"),
+            "error should mention enabled fault scenarios: {err}"
         );
     }
 }
