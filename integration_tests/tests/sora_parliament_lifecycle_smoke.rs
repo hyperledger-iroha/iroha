@@ -84,9 +84,7 @@ fn governance_escrow_account_literal() -> String {
 
 fn governance_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
-        GOV_DOMAIN_ID
-            .parse()
-            .expect("governance domain id must parse"),
+        DomainId::parse_fully_qualified(GOV_DOMAIN_ID).expect("governance domain id must parse"),
         "xor".parse().expect("governance asset name must parse"),
     )
 }

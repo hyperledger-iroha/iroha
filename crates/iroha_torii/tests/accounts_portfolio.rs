@@ -19,6 +19,7 @@ use iroha_data_model::{
     account::NewAccount,
     asset::{AssetDefinition, AssetId},
     block::BlockHeader,
+    domain::DomainId,
     isi::{Mint, Register},
     metadata::Metadata,
     nexus::UniversalAccountId,

@@ -2438,7 +2438,7 @@ mod tests {
     #[test]
     fn metadata_changed_json_roundtrip() {
         let changed = MetadataChanged {
-            target: "default".parse().expect("valid domain"),
+            target: DomainId::try_new("default", "universal").expect("valid domain"),
             key: "metadata_key".parse().expect("valid name"),
             value: Json::from("metadata_value"),
         };

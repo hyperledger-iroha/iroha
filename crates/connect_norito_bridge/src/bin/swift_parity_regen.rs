@@ -400,14 +400,18 @@ fn run() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::DomainId;
 
     fn account_literal(account: &AccountId) -> String {
         account.to_string()
     }
 
     fn asset_definition_literal(domain: &str, name: &str) -> String {
-        AssetDefinitionId::new(domain.parse().expect("domain"), name.parse().expect("name"))
-            .to_string()
+        AssetDefinitionId::new(
+            DomainId::try_new(domain, "universal").expect("domain"),
+            name.parse().expect("name"),
+        )
+        .to_string()
     }
 
     #[test]

@@ -1474,7 +1474,7 @@ pub(crate) fn validate_header_policy(meta: &ivm::ProgramMetadata) -> Result<(), 
 #[cfg(test)]
 mod tests {
     use iroha_data_model::{
-        ChainId, Registrable, isi::smart_contract_code::RemoveSmartContractBytes,
+        ChainId, Registrable, domain::DomainId, isi::smart_contract_code::RemoveSmartContractBytes,
     };
 
     use super::*;

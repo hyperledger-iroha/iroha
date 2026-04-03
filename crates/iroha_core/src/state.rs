@@ -8371,9 +8371,11 @@ mod storage_migration_tests {
     fn domain_selector_index_tracks_default_and_local_domains() {
         let mut world = World::default();
         let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let default_domain: DomainId = iroha_data_model::account::address::DEFAULT_DOMAIN_NAME
-            .parse()
-            .expect("default domain id");
+        let default_domain = DomainId::try_new(
+            iroha_data_model::account::address::DEFAULT_DOMAIN_NAME,
+            "universal",
+        )
+        .expect("default domain id");
         let local_domain: DomainId =
             DomainId::try_new("wonderland", "universal").expect("local domain id");
 
@@ -24514,7 +24516,7 @@ mod permission_cache_tests {
     };
 
     fn wonderland_domain_id() -> DomainId {
-        "wonderland".parse().expect("domain id")
+        DomainId::try_new("wonderland", "universal").expect("domain id")
     }
 
     fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
@@ -28750,7 +28752,7 @@ mod tests {
     };
 
     fn sample_domain_id() -> DomainId {
-        "wonderland".parse().expect("sample domain id")
+        DomainId::try_new("wonderland", "universal").expect("sample domain id")
     }
 
     fn new_account_in_domain(

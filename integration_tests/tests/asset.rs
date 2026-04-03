@@ -80,7 +80,10 @@ fn unique_asset_definition_id(domain: &str, prefix: &str) -> AssetDefinitionId {
     let name: Name = format!("{prefix}{seq}")
         .parse()
         .expect("generated asset definition name should parse");
-    AssetDefinitionId::new(domain.parse().expect("domain should parse"), name)
+    AssetDefinitionId::new(
+        DomainId::parse_fully_qualified(domain).expect("domain should parse"),
+        name,
+    )
 }
 
 fn named_numeric_asset_definition(
@@ -1091,7 +1094,9 @@ mod register {
     use super::*;
 
     pub fn domain(id: &str) -> Register<Domain> {
-        Register::domain(Domain::new(id.parse().expect("should parse to DomainId")))
+        Register::domain(Domain::new(
+            DomainId::parse_fully_qualified(id).expect("should parse to DomainId"),
+        ))
     }
 
     pub fn account(id: AccountId, _domain: DomainId) -> Register<Account> {

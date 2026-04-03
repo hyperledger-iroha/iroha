@@ -367,11 +367,9 @@ fn with_offline_allowance_genesis(
     mut builder: NetworkBuilder,
     certificate: &OfflineWalletCertificate,
 ) -> NetworkBuilder {
-    let wonderland_domain: DomainId = "wonderland"
-        .parse()
+    let wonderland_domain = DomainId::try_new("wonderland", "universal")
         .expect("default wonderland domain should parse");
-    let garden_domain: DomainId = "garden_of_live_flowers"
-        .parse()
+    let garden_domain = DomainId::try_new("garden_of_live_flowers", "universal")
         .expect("default garden_of_live_flowers domain should parse");
     let preseeded_domains = BTreeSet::from([
         iroha_genesis::GENESIS_DOMAIN_ID.clone(),

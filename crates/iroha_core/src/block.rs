@@ -15688,7 +15688,7 @@ mod tests {
         )
         .expect("Valid");
 
-        let fail_domain_id = "missing-domain".parse().expect("valid id");
+        let fail_domain_id = DomainId::try_new("missing-domain", "universal").expect("valid id");
         let fail_instruction = Unregister::domain(fail_domain_id);
         let succeed_instruction = domain_b;
 
@@ -15772,7 +15772,7 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let domain_id = "domain".parse().expect("Valid");
+        let domain_id = DomainId::try_new("domain", "universal").expect("Valid");
         let create_domain = Register::domain(Domain::new(domain_id));
         let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("domain", "universal").unwrap(),

@@ -896,7 +896,7 @@ impl TestSuite {
     }
     fn normal() -> Self {
         // New domain for this test
-        let domain = "kingdom".parse().unwrap();
+        let domain = DomainId::try_new("kingdom", "universal").unwrap();
         // Make some changes to the multisig account itself
         let unauthorized_target_opt = None;
         // Semi-permanently valid
@@ -906,7 +906,7 @@ impl TestSuite {
     }
 
     fn unauthorized() -> Self {
-        let domain = "kingdom".parse().unwrap();
+        let domain = DomainId::try_new("kingdom", "universal").unwrap();
         // A target account that is not present on-ledger, ensuring the proposal execution fails
         // on final validation instead of mutating unrelated account metadata.
         let unauthorized_target_opt = Some(AccountId::new(KeyPair::random().public_key().clone()));
@@ -915,7 +915,7 @@ impl TestSuite {
     }
 
     fn expires() -> Self {
-        let domain = "kingdom".parse().unwrap();
+        let domain = DomainId::try_new("kingdom", "universal").unwrap();
         // Expires after 1 sec
         let transaction_ttl_ms_opt = Some(1_000);
 

@@ -303,7 +303,9 @@ mod json_tests {
     use super::{
         ActivatePublicLaneValidator, RebindPublicLaneValidatorPeer, RegisterPublicLaneValidator,
     };
-    use crate::{account::AccountId, metadata::Metadata, nexus::LaneId, peer::PeerId};
+    use crate::{
+        account::AccountId, domain::DomainId, metadata::Metadata, nexus::LaneId, peer::PeerId,
+    };
     use iroha_crypto::{Algorithm, KeyPair};
     use iroha_primitives::numeric::Numeric;
     use norito::json::value::{from_value, to_value};

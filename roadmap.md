@@ -2,6 +2,31 @@
 
 Last updated: 2026-04-03
 
+Latest sync (2026-04-03 explicit `DomainId` cleanup completed in checked Rust code):
+the remaining parser fallout has been removed from `iroha_cli`,
+`integration_tests`, and `connect_norito_bridge`, and the focused Rust-code
+grep for removed `DomainId` construction patterns is now clean across
+`crates/` and `integration_tests/`.
+
+- shipped in the final cleanup pass:
+  - explicit clap value parsers for `DomainId`-bearing CLI flags;
+  - removal of the last `.parse()`-based domain construction in integration
+    tests and helper binaries;
+  - `connect_norito_bridge` metadata-target parsing rewritten to use
+    `DomainId::parse_fully_qualified(...)`; and
+  - primary English docs updated to show dataspace-qualified domains.
+- focused verification is green:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p iroha_cli --tests`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p integration_tests --tests`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p connect_norito_bridge --tests`
+- remaining open work:
+  - sweep translated and versioned docs under `docs/source/` and
+    `docs/portal/` that still show `DomainId::from_str("wonderland")` or bare
+    `"wonderland".parse()` examples; and
+  - optionally run a broader workspace verification pass once the docs sweep is
+    finished, to refresh the top-level green stamp beyond the focused crates.
+
 Latest sync (2026-04-03 explicit `DomainId` constructors):
 `DomainId` no longer implements `FromStr`; runtime code now uses explicit
 `try_new(domain, dataspace)` or `parse_fully_qualified("domain.dataspace")`.

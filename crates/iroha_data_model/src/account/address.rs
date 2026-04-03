@@ -1560,7 +1560,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
-    use crate::{domain::DomainId, name::Name};
+    use crate::domain::DomainId;
 
     fn ed25519_pk() -> PublicKey {
         PublicKey::from_hex(

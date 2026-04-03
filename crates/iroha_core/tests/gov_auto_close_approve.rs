@@ -10,6 +10,7 @@ use iroha_core::{
 };
 use iroha_data_model::{
     Registrable,
+    domain::DomainId,
     prelude::{Account, Domain},
 };
 use mv::storage::StorageReadOnly;

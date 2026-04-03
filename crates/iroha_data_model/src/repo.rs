@@ -250,6 +250,7 @@ impl JsonKeyCodec for RepoAgreementId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::DomainId;
 
     const ALICE_ID_STR: &str =
         "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";

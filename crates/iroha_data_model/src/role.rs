@@ -325,7 +325,7 @@ mod tests {
     use iroha_primitives::json::Json;
 
     use super::*;
-    use crate::permission::Permission;
+    use crate::{domain::DomainId, permission::Permission};
 
     #[test]
     fn role_json_roundtrip() {

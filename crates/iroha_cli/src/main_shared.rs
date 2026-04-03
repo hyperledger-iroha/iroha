@@ -1568,7 +1568,7 @@ mod domain {
     #[derive(clap::Args, Debug)]
     pub struct Transfer {
         /// Domain name
-        #[arg(short, long)]
+        #[arg(short, long, value_parser = parse_domain_id_literal)]
         pub id: DomainId,
         /// Source account identifier (canonical I105 literal)
         #[arg(short, long)]
@@ -1581,7 +1581,7 @@ mod domain {
     #[derive(clap::Args, Debug)]
     pub struct Id {
         /// Domain name
-        #[arg(short, long)]
+        #[arg(short, long, value_parser = parse_domain_id_literal)]
         pub id: DomainId,
     }
 
@@ -3510,10 +3510,11 @@ mod multisig {
                 .and_then(NonZeroU64::new)
                 .ok_or_else(|| eyre!("ttl should be between 1 ms and 584942417 years"))?;
             let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
-            let home_domain: DomainId = iroha::account_address::default_domain_name()
-                .as_ref()
-                .parse()
-                .wrap_err("failed to parse default multisig home domain")?;
+            let home_domain = DomainId::try_new(
+                iroha::account_address::default_domain_name().as_ref(),
+                "universal",
+            )
+            .wrap_err("failed to build default multisig home domain")?;
             if !context.output_instructions() {
                 context.println(format!("multisig account id: {account}"))?;
             }
@@ -5192,7 +5193,7 @@ mod trigger {
         #[arg(long, value_name = "JSON")]
         pub data_filter: Option<String>,
         /// Data filter preset: events within a domain
-        #[arg(long)]
+        #[arg(long, value_parser = parse_domain_id_literal)]
         pub data_domain: Option<DomainId>,
         /// Data filter preset: events for an account (canonical I105 literal)
         #[arg(long)]
@@ -5616,7 +5617,7 @@ mod metadata {
 
         #[derive(clap::Args, Debug)]
         pub struct IdKey {
-            #[arg(short, long)]
+            #[arg(short, long, value_parser = parse_domain_id_literal)]
             pub id: DomainId,
             #[arg(short, long)]
             pub key: Name,
@@ -7327,6 +7328,10 @@ fn parse_asset_definition_literal(literal: &str) -> Result<AssetDefinitionId> {
         .map_err(|err| eyre!("asset definition literal: {err}"))
 }
 
+fn parse_domain_id_literal(literal: &str) -> std::result::Result<DomainId, String> {
+    DomainId::parse_fully_qualified(literal).map_err(|err| err.to_string())
+}
+
 fn parse_register_account_id(literal: &str) -> Result<AccountId> {
     let trimmed = literal.trim();
     if trimmed.is_empty() {
@@ -8371,7 +8376,7 @@ transaction_status_timeout = "77s"
             time_start_ms: None,
             time_period_ms: None,
             data_filter: None,
-            data_domain: Some("wonderland".parse().unwrap()),
+            data_domain: Some(DomainId::try_new("wonderland", "universal").unwrap()),
             data_account: None,
             data_asset: None,
             data_asset_account: None,

@@ -13,7 +13,7 @@ use iroha_data_model::{
     Registrable,
     asset::{Asset, AssetDefinition},
     block::BlockHeader,
-    domain::Domain,
+    domain::{Domain, DomainId},
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant},
 };

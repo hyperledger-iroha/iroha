@@ -12,7 +12,12 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
-use iroha_data_model::{Registrable, account::Account, domain::Domain, peer::PeerId};
+use iroha_data_model::{
+    Registrable,
+    account::Account,
+    domain::{Domain, DomainId},
+    peer::PeerId,
+};
 #[cfg(feature = "telemetry")]
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::ALICE_ID;

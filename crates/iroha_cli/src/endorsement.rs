@@ -20,6 +20,10 @@ use norito::json;
 
 use crate::{Run, RunContext};
 
+fn parse_domain_id_literal(literal: &str) -> std::result::Result<DomainId, String> {
+    DomainId::parse_fully_qualified(literal).map_err(|err| err.to_string())
+}
+
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
     /// Build a domain endorsement (optionally signing it) and emit JSON to stdout.
@@ -41,7 +45,7 @@ pub enum Command {
 #[derive(clap::Args, Debug)]
 pub struct PrepareArgs {
     /// Domain identifier being endorsed.
-    #[arg(long)]
+    #[arg(long, value_parser = parse_domain_id_literal)]
     pub domain: DomainId,
     /// Committee identifier backing this endorsement.
     #[arg(long, default_value = "default")]
@@ -79,14 +83,14 @@ pub struct SubmitArgs {
 #[derive(clap::Args, Debug)]
 pub struct ListArgs {
     /// Domain to query.
-    #[arg(long)]
+    #[arg(long, value_parser = parse_domain_id_literal)]
     pub domain: DomainId,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct PolicyArgs {
     /// Domain to query.
-    #[arg(long)]
+    #[arg(long, value_parser = parse_domain_id_literal)]
     pub domain: DomainId,
 }
 
@@ -116,7 +120,7 @@ pub struct RegisterCommitteeArgs {
 #[derive(clap::Args, Debug)]
 pub struct SetPolicyArgs {
     /// Domain requiring endorsements.
-    #[arg(long)]
+    #[arg(long, value_parser = parse_domain_id_literal)]
     pub domain: DomainId,
     /// Committee identifier to trust.
     #[arg(long)]

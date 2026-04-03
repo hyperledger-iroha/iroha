@@ -15019,8 +15019,8 @@ pub mod isi {
                 .expect("IDN domain must be accepted");
             let canonical_label =
                 name::canonicalize_domain_label("例え.テスト").expect("canonical label");
-            let canonical_id: DomainId =
-                canonical_label.parse().expect("canonical domain id parses");
+            let canonical_id: DomainId = DomainId::parse_fully_qualified(&canonical_label)
+                .expect("canonical domain id parses");
             assert!(stx.world.domain(&canonical_id).is_ok());
         }
 

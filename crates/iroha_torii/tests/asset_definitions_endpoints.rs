@@ -16,6 +16,7 @@ use iroha_core::{
     state::{State, World},
 };
 use iroha_crypto::KeyPair;
+use iroha_data_model::DomainId;
 use iroha_data_model::Registrable as _;
 use iroha_data_model::isi::SetAssetDefinitionAlias;
 use iroha_data_model::prelude as dm;

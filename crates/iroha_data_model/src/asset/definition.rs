@@ -871,6 +871,7 @@ impl HasMetadata for NewAssetDefinition {
 #[cfg(test)]
 mod validation_tests {
     use super::*;
+    use crate::domain::DomainId;
 
     #[test]
     fn constructors_leave_name_empty_without_explicit_with_name() {

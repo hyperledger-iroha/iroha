@@ -17,6 +17,7 @@ use iroha::{
     data_model::{
         ChainId,
         confidential::ConfidentialEncryptedPayload,
+        domain::DomainId,
         prelude::{
             AssetDefinition, AssetDefinitionId, AssetId, FindAssetById, InstructionBox, Level, Log,
             Mint, Numeric, Register, Transfer,

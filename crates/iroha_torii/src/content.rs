@@ -645,7 +645,7 @@ mod tests {
             prelude::{BlobClass, DaStripeLayout},
             types::RetentionPolicy,
         },
-        domain::Domain,
+        domain::{Domain, DomainId},
         nexus::{DataSpaceId, LaneId},
         role::RoleId,
     };

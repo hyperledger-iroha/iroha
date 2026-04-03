@@ -3,7 +3,7 @@
 
 //! Contract tests for SoraFS repair worker endpoints.
 
-use std::{num::NonZeroU64, str::FromStr, sync::Arc};
+use std::{num::NonZeroU64, sync::Arc};
 
 use axum::{
     Router,

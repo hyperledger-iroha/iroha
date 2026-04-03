@@ -16,7 +16,7 @@ use iroha_core::{
     state::{State, WorldReadOnly},
 };
 use iroha_crypto::Signature;
-use iroha_data_model::{asset::AssetDefinitionId, name::Name};
+use iroha_data_model::{DomainId, asset::AssetDefinitionId, name::Name};
 use ivm::kotodama::compiler::CompilerOptions;
 use mv::storage::StorageReadOnly;
 use norito::json;

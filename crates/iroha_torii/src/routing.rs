@@ -9277,7 +9277,9 @@ fn normalize_contract_value(
             ))
         }),
         ContractSchemaType::DomainId => match value {
-            Value::String(raw) => raw.parse::<iroha_data_model::domain::DomainId>().is_ok(),
+            Value::String(raw) => {
+                iroha_data_model::domain::DomainId::parse_fully_qualified(raw).is_ok()
+            }
             _ => false,
         }
         .then(|| value.clone())
@@ -26209,7 +26211,7 @@ mod tx_query_filter_tests {
     fn kaigi_call_view_hides_host_identity_for_private_calls() {
         let (host, _) = account_with_key();
         let call_id = iroha_data_model::kaigi::KaigiId::new(
-            "kaigi".parse().expect("domain"),
+            DomainId::try_new("kaigi", "universal").expect("domain"),
             "weekly-sync".parse().expect("call name"),
         );
         let record = iroha_data_model::kaigi::KaigiRecord {
@@ -26250,7 +26252,7 @@ mod tx_query_filter_tests {
         use iroha_data_model::events::data::prelude::{DomainEvent, KaigiRosterSummary};
 
         let call_id = iroha_data_model::kaigi::KaigiId::new(
-            "kaigi".parse().expect("domain"),
+            DomainId::try_new("kaigi", "universal").expect("domain"),
             "weekly-sync".parse().expect("call name"),
         );
         let roster_event = EventBox::Data(SharedDataEvent::from(
@@ -28205,7 +28207,7 @@ mod tx_query_integration_smoke {
         b3.set_creation_time(core::time::Duration::from_millis(3000));
         let signed3 = b3
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
-                "bad".parse::<dm::DomainId>().unwrap(),
+                DomainId::try_new("bad", "universal").unwrap(),
             )
             .into()])
             .sign(kp_c.private_key());
@@ -28215,7 +28217,7 @@ mod tx_query_integration_smoke {
         b4.set_creation_time(core::time::Duration::from_millis(2500));
         let signed4 = b4
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
-                "nope".parse::<dm::DomainId>().unwrap(),
+                DomainId::try_new("nope", "universal").unwrap(),
             )
             .into()])
             .sign(kp_b.private_key());
@@ -28741,7 +28743,7 @@ mod tx_query_integration_smoke {
         b2.set_creation_time(core::time::Duration::from_millis(200));
         let signed_b = b2
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
-                "nope".parse::<dm::DomainId>().unwrap(),
+                DomainId::try_new("nope", "universal").unwrap(),
             )
             .into()])
             .sign(kp_a.private_key());
@@ -28970,7 +28972,7 @@ mod tx_query_integration_smoke {
         let mut unregister_missing_builder =
             dm::TransactionBuilder::new(chain_id.clone(), acc_b.clone().into());
         unregister_missing_builder.set_creation_time(core::time::Duration::from_millis(1500));
-        let fail_inst_d = dm::Unregister::domain("void".parse::<dm::DomainId>().unwrap());
+        let fail_inst_d = dm::Unregister::domain(DomainId::try_new("void", "universal").unwrap());
         let signed_d = unregister_missing_builder
             .with_instructions::<dm::InstructionBox>([fail_inst_d.into()])
             .sign(kp_b.private_key());
@@ -29140,7 +29142,7 @@ mod tx_query_integration_smoke {
         b2.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_b = b2
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
-                "nope".parse::<dm::DomainId>().unwrap(),
+                DomainId::try_new("nope", "universal").unwrap(),
             )
             .into()])
             .sign(kp_a.private_key());
@@ -29151,7 +29153,7 @@ mod tx_query_integration_smoke {
         b3.set_creation_time(core::time::Duration::from_millis(2000));
         let signed_c = b3
             .with_instructions::<dm::InstructionBox>([dm::Unregister::domain(
-                "nada".parse::<dm::DomainId>().unwrap(),
+                DomainId::try_new("nada", "universal").unwrap(),
             )
             .into()])
             .sign(kp_a.private_key());

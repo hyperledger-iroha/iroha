@@ -173,6 +173,7 @@ mod tests {
     use norito::json;
 
     use super::*;
+    use crate::domain::DomainId;
 
     #[test]
     fn policy_json_roundtrips_with_tagged_mode() {

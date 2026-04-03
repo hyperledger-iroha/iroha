@@ -5861,7 +5861,9 @@ pub mod tests {
 
     fn sample_unregister_instruction() -> InstructionBox {
         let domain_name = format!("dummy{}", rand::random::<u64>());
-        InstructionBox::from(Unregister::domain(domain_name.parse().unwrap()))
+        InstructionBox::from(Unregister::domain(
+            DomainId::try_new(&domain_name, "universal").unwrap(),
+        ))
     }
 
     const RUNTIME_UPGRADE_ALLOWED_ID: &str = "upgrade-q1";

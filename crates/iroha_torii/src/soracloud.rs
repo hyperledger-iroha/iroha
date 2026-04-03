@@ -13156,7 +13156,7 @@ mod tests {
         Encode,
         account::{Account, AccountId},
         asset::AssetDefinitionId,
-        domain::Domain,
+        domain::{Domain, DomainId},
         isi::Grant,
         metadata::Metadata,
         name::Name,

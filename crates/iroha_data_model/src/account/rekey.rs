@@ -317,7 +317,7 @@ mod tests {
 
         assert_eq!(
             alias.domain_id(&catalog()).expect("resolve domain"),
-            Some("banking.retail".parse().expect("domain id"))
+            Some(DomainId::parse_fully_qualified("banking.retail").expect("domain id"))
         );
     }
 

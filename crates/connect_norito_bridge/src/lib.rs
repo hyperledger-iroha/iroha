@@ -576,10 +576,7 @@ enum MetadataTarget {
 
 fn parse_metadata_target(kind: u8, object: String) -> BridgeResult<MetadataTarget> {
     match kind {
-        0 => object
-            .parse::<String>()
-            .ok()
-            .and_then(|value| DomainId::parse_fully_qualified(&value).ok())
+        0 => DomainId::parse_fully_qualified(&object)
             .map(MetadataTarget::Domain)
             .map_err(|_| BridgeError::MetadataTarget),
         1 => parse_account_id(object).map(MetadataTarget::Account),

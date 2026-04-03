@@ -20,6 +20,7 @@ use iroha_crypto::{Algorithm, Hash, KeyPair};
 use iroha_data_model::{
     account::AccountId,
     asset::AssetDefinitionId,
+    domain::DomainId,
     nexus::{
         Allowance, AllowanceWindow, AssetPermissionManifest, CapabilityScope, DataSpaceCatalog,
         DataSpaceId, DataSpaceMetadata, ManifestEffect, ManifestEntry, ManifestVersion,

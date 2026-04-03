@@ -14,7 +14,7 @@ use iroha_data_model::{
     asset::AssetDefinition,
     block::BlockHeader,
     confidential::ConfidentialStatus,
-    domain::Domain,
+    domain::{Domain, DomainId},
     isi::{verifying_keys, zk::CreateElection},
     permission::Permission,
     prelude::Grant,

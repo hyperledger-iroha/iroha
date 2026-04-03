@@ -1595,6 +1595,7 @@ mod tests {
 #[cfg(test)]
 mod ttl_tests {
     use super::*;
+    use crate::domain::DomainId;
 
     #[test]
     fn zero_ttl_is_preserved_not_none() {

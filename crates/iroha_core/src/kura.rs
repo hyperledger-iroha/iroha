@@ -6270,7 +6270,6 @@ mod tests {
         fs,
         io::{Read, Seek, SeekFrom, Write},
         num::{NonZeroU32, NonZeroUsize},
-        str::FromStr,
         sync::Arc,
         thread,
         time::{Duration, Instant},

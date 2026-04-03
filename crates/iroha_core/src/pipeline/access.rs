@@ -1481,7 +1481,7 @@ mod tests {
     const TEST_GAS_LIMIT: u64 = 50_000_000;
 
     fn wonderland_domain_id() -> DomainId {
-        "wonderland".parse().expect("static domain id")
+        DomainId::try_new("wonderland", "universal").expect("static domain id")
     }
 
     fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {

@@ -15,7 +15,7 @@ use iroha_data_model::{
     account::AccountId,
     asset::{Asset, AssetDefinition},
     block::BlockHeader,
-    domain::Domain,
+    domain::{Domain, DomainId},
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant},
 };

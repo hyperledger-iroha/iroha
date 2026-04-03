@@ -232,6 +232,7 @@ impl SettlementAccumulator {
 #[cfg(test)]
 mod tests {
     use iroha_crypto::Hash;
+    use iroha_data_model::domain::DomainId;
     use settlement_router::MicroXor;
 
     use super::*;

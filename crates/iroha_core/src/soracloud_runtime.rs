@@ -1201,6 +1201,7 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         asset::AssetDefinitionId,
+        domain::DomainId,
         soracloud::{
             SORA_HF_PLACEMENT_RECORD_VERSION_V1, SORA_HF_SHARED_LEASE_MEMBER_VERSION_V1,
             SORA_HF_SHARED_LEASE_POOL_VERSION_V1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,

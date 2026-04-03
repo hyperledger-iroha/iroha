@@ -2800,6 +2800,7 @@ mod tests {
             rekey::{AccountAlias, AccountAliasDomain},
         },
         block::BlockHeader,
+        domain::DomainId,
         isi::{AddSignatory, RemoveSignatory, SetAccountQuorum},
         nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
         prelude::{Domain, InstructionBox, Register},

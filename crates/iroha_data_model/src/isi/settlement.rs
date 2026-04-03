@@ -398,6 +398,7 @@ impl crate::seal::Instruction for SettlementInstructionBox {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::DomainId;
 
     const ALICE_SIGNATORY: &str =
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
@@ -409,7 +410,10 @@ mod tests {
     }
 
     fn asset(domain: &str, name: &str) -> AssetDefinitionId {
-        AssetDefinitionId::new(domain.parse().expect("domain"), name.parse().expect("name"))
+        AssetDefinitionId::new(
+            DomainId::try_new(domain, "universal").expect("domain"),
+            name.parse().expect("name"),
+        )
     }
 
     #[test]

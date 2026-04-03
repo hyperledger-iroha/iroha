@@ -5,6 +5,7 @@ use iroha_data_model::{
         commitment::DaCommitmentLocation,
         pin_intent::{DaPinIntent, DaPinIntentWithLocation},
     },
+    domain::DomainId,
     nexus::LaneId,
     parameter::Parameters,
     query::{

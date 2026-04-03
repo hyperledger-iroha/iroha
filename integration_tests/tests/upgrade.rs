@@ -55,9 +55,7 @@ fn executor_upgrade_should_work() -> Result<()> {
 
     // Check that admin isn't allowed to transfer alice's rose by default
     let rose_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland"
-            .parse()
-            .expect("asset definition should be valid"),
+        DomainId::try_new("wonderland", "universal").expect("asset definition should be valid"),
         "rose".parse().expect("asset definition should be valid"),
     );
     let alice_rose = AssetId::new(rose_def, ALICE_ID.clone());

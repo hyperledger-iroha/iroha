@@ -16,6 +16,7 @@ use iroha_data_model::{
     account::AccountId as DMAccountId,
     asset::prelude::{AssetDefinitionId, AssetId},
     common::Owned,
+    domain::DomainId,
     governance::types::{
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
     },

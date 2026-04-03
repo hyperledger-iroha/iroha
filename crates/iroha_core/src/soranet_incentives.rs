@@ -537,12 +537,11 @@ enum ScaleAdjust {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use iroha_crypto::{Algorithm, PublicKey};
     use iroha_data_model::{
         account::AccountId,
         asset::AssetDefinitionId,
+        domain::DomainId,
         metadata::Metadata,
         soranet::incentives::{
             RelayComplianceStatusV1, RelayRewardDisputeStatusV1, RelayRewardInstructionV1,

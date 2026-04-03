@@ -471,8 +471,7 @@ fn program_config_for_account(
     account_domain: &str,
     key: &KeyPair,
 ) -> ProgramConfig {
-    let account_domain: DomainId = account_domain
-        .parse()
+    let account_domain = DomainId::try_new(account_domain, "universal")
         .expect("account domain literal should parse");
     let ttl = client
         .transaction_ttl

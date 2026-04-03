@@ -914,7 +914,12 @@ mod predicate_tests {
     use norito::json;
 
     use super::*;
-    use crate::{Registrable, account::AccountId, domain::Domain, query::json::PredicateJson};
+    use crate::{
+        Registrable,
+        account::AccountId,
+        domain::{Domain, DomainId},
+        query::json::PredicateJson,
+    };
 
     fn test_authority() -> AccountId {
         let (public_key, _private_key) =
@@ -923,7 +928,7 @@ mod predicate_tests {
     }
 
     fn sample_domain() -> Domain {
-        let domain_id = "wonderland".parse().expect("domain id");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = test_authority();
         let mut domain = Domain::new(domain_id).build(&authority);
         domain
@@ -1008,7 +1013,10 @@ mod committed_tx_predicate_tests {
     use crate::prelude::{
         DataTriggerSequence, TransactionEntrypoint, TransactionRejectionReason, TransactionResult,
     };
-    use crate::{account, block, prelude as dm, query, transaction, transaction::signed, trigger};
+    use crate::{
+        account, block, domain::DomainId, prelude as dm, query, transaction, transaction::signed,
+        trigger,
+    };
 
     fn dummy_block_hash() -> HashOf<block::BlockHeader> {
         HashOf::from_untyped_unchecked(Hash::prehashed([0xA5; Hash::LENGTH]))

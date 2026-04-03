@@ -95,7 +95,7 @@ fn overlay_parallel_workers_parity() {
             .sign(iroha_test_samples::ALICE_KEYPAIR.private_key()),
         TransactionBuilder::new(chain_id.clone(), alice_id.clone())
             .with_instructions([SetKeyValue::domain(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "dk".parse().unwrap(),
                 iroha_primitives::json::Json::new(3u32),
             )])

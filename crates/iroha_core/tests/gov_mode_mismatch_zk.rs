@@ -13,6 +13,7 @@ use iroha_core::{
 };
 use iroha_data_model::{
     Registrable,
+    domain::DomainId,
     prelude::{Account, Domain},
 };
 use iroha_primitives::json::Json;

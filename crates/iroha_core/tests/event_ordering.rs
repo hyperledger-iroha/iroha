@@ -55,7 +55,7 @@ fn data_events_follow_instruction_order_in_tx() {
         SetKeyValue::account(authority_id.clone(), "a_key".parse().unwrap(), "a_val").into(),
         // 2) Domain metadata insert
         SetKeyValue::domain(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "d_key".parse().unwrap(),
             "d_val",
         )

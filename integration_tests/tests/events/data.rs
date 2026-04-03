@@ -21,14 +21,17 @@ use iroha_test_network::*;
 use iroha_test_samples::{ALICE_ID, BOB_ID};
 use tokio::{task::spawn_blocking, time::Instant};
 
-fn produce_instructions(prefix: &str) -> (Vec<InstructionBox>, BTreeSet<String>) {
+fn produce_instructions(prefix: &str) -> (Vec<InstructionBox>, BTreeSet<DomainId>) {
     let domains = (0..4)
-        .map(|domain_index: usize| format!("{prefix}{domain_index}"))
+        .map(|domain_index: usize| {
+            DomainId::try_new(format!("{prefix}{domain_index}"), "universal")
+                .expect("generated domain ids should be valid")
+        })
         .collect::<Vec<_>>();
     let expected = domains.iter().cloned().collect::<BTreeSet<_>>();
     let instructions = domains
         .into_iter()
-        .map(|name| Domain::new(name.parse().expect("Valid")))
+        .map(Domain::new)
         .map(Register::domain)
         .map(InstructionBox::from)
         .collect::<Vec<_>>();
@@ -39,7 +42,7 @@ async fn transaction_execution_should_produce_events(
     context: &'static str,
     network: &Network,
     executable: impl Into<Executable> + Send,
-    mut expected_domains: BTreeSet<String>,
+    mut expected_domains: BTreeSet<DomainId>,
 ) -> Result<()> {
     let executable = executable.into();
     ensure_domain_registration_leases_for_network_executable(network, &executable)?;
@@ -103,9 +106,9 @@ async fn transaction_execution_should_produce_events(
             if let EventBox::Data(ev) = event
                 && let DataEvent::Domain(DomainEvent::Created(domain)) = ev.as_ref()
             {
-                let domain_name = domain.id().name().as_ref().to_owned();
-                if !expected_domains.remove(&domain_name) {
-                    unexpected_domains.push(domain_name);
+                let domain_id = domain.id().clone();
+                if !expected_domains.remove(&domain_id) {
+                    unexpected_domains.push(domain_id.to_string());
                 }
             }
         }

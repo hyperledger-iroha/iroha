@@ -554,6 +554,7 @@ mod tests {
             BlockHeader,
             consensus::{ExecKv, ExecWitness},
         },
+        domain::DomainId,
         fastpq::{TransferTranscript, TransferTranscriptBundle},
         permission::Permission,
         role::{Role, RoleId},

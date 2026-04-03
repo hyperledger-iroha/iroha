@@ -150,12 +150,10 @@ pub struct DomainEndorsementRecord {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use iroha_crypto::KeyPair;
 
     use super::*;
-    use crate::{metadata::Metadata, name::Name};
+    use crate::metadata::Metadata;
 
     #[test]
     fn scope_height_checks_bounds() {

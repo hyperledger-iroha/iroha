@@ -8194,7 +8194,8 @@ pub mod tests {
     /// Asset definition name used by the sandbox.
     pub const ASSET_STR: &str = "rose";
     /// Pre-parsed domain identifier for the sandbox domain.
-    pub static DOMAIN: LazyLock<DomainId> = LazyLock::new(|| DOMAIN_STR.parse().unwrap());
+    pub static DOMAIN: LazyLock<DomainId> =
+        LazyLock::new(|| DomainId::try_new(DOMAIN_STR, "universal").unwrap());
     /// Pre-parsed asset definition identifier for the sandbox asset.
     pub static ASSET: LazyLock<AssetDefinitionId> = LazyLock::new(|| {
         AssetDefinitionId::new(

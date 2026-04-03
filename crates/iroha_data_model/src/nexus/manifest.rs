@@ -970,6 +970,7 @@ mod tests {
     use proptest::prelude::*;
 
     use super::*;
+    use crate::domain::DomainId;
 
     fn sample_uaid() -> UniversalAccountId {
         UniversalAccountId::from_hash(Hash::new(b"uaid::sample"))

@@ -79304,7 +79304,7 @@ async fn da_proposal_rejects_single_tx_exceeding_consensus_payload_frame_cap() {
     let key = "payload".parse().expect("metadata key");
     let value = iroha_primitives::json::Json::new("X".repeat(payload_len));
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::domain(
-        "wonderland".parse().expect("domain id"),
+        DomainId::try_new("wonderland", "universal").expect("domain id"),
         key,
         value,
     )
@@ -79361,7 +79361,7 @@ async fn proposal_defers_when_all_txs_exceed_payload_budget() {
     let key = "payload".parse().expect("metadata key");
     let value = iroha_primitives::json::Json::new("X".repeat(payload_len));
     let instruction: InstructionBox = iroha_data_model::isi::SetKeyValue::domain(
-        "wonderland".parse().expect("domain id"),
+        DomainId::try_new("wonderland", "universal").expect("domain id"),
         key,
         value,
     )

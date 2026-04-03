@@ -2,6 +2,36 @@
 
 Last updated: 2026-04-03
 
+## 2026-04-03 Follow-up: explicit `DomainId` construction is now clean across checked Rust code
+- Finished the remaining first-release `DomainId` cleanup outside the earlier
+  runtime slice:
+  - `iroha_cli` clap commands that previously relied on `DomainId: FromStr`
+    now use explicit `value_parser` hooks for fully qualified
+    `domain.dataspace` literals;
+  - the last integration-test helpers that still built domains via `.parse()`
+    were migrated to `DomainId::try_new(...)` or
+    `DomainId::parse_fully_qualified(...)`;
+  - `connect_norito_bridge` now parses metadata targets and test asset
+    literals through the explicit `DomainId` APIs instead of implicit string
+    parsing; and
+  - the primary English docs were updated to show dataspace-qualified domain
+    construction (`docs/source/data_model.md`,
+    `docs/portal/docs/sdks/rust.md`).
+- A focused grep over executable Rust code is now clean for the removed parser
+  shapes: `DomainId::from_str(...)`, `let _: DomainId = "...".parse()`,
+  `Domain::new("...".parse())`, and
+  `AssetDefinitionId::new(domain.parse(), ...)` under `crates/` and
+  `integration_tests/`.
+- Verification completed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p iroha_cli --tests`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p integration_tests --tests`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p connect_norito_bridge --tests`
+- Remaining tail:
+  - translated and versioned Markdown docs still contain stale
+    `DomainId::from_str("wonderland")` / bare-domain examples and need a docs
+    sweep.
+
 ## 2026-04-03 Follow-up: `DomainId` no longer implements `FromStr`
 - `DomainId` now has only explicit constructors:
   - `DomainId::try_new(domain, dataspace)` for structured call sites; and

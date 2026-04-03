@@ -3207,9 +3207,11 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register domainless account");
 
-        let expected_domain: DomainId = crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS
-            .parse()
-            .expect("reserved universal dataspace alias should parse as domain");
+        let expected_domain = DomainId::try_new(
+            crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
+            crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
+        )
+        .expect("reserved universal dataspace alias should form a domain id");
         let created = tx
             .world
             .internal_event_buf

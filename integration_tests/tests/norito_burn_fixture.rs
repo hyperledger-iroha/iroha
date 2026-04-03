@@ -3,6 +3,7 @@
 
 use std::{fs, path::PathBuf, str::FromStr};
 
+use iroha_data_model::DomainId;
 use iroha_data_model::prelude::{
     AccountId, AssetDefinitionId, AssetId, Burn, InstructionBox, Mint, Numeric, TriggerId,
 };

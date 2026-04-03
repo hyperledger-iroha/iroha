@@ -268,8 +268,6 @@ fn finalize_hash(hasher: &blake3::Hasher) -> Digest32 {
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use iroha_crypto::{Algorithm, KeyPair};
     use norito::codec::{Decode, Encode};
 

@@ -4140,7 +4140,7 @@ mod tests {
     }
 
     fn world_with_test_domains() -> World {
-        let domain_id = "wonderland".parse().expect("Valid");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("Valid");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
@@ -5865,8 +5865,12 @@ mod tests {
 
         // Set metadata key "rank" on both domains: wonderland=1, alpha=2
         let key = "rank".parse::<Name>().expect("valid");
-        SetKeyValue::domain("wonderland".parse().unwrap(), key.clone(), Json::new(1_u32))
-            .execute(&ALICE_ID, &mut state_tx)?;
+        SetKeyValue::domain(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            key.clone(),
+            Json::new(1_u32),
+        )
+        .execute(&ALICE_ID, &mut state_tx)?;
         SetKeyValue::domain(alpha_id.clone(), key.clone(), Json::new(2_u32))
             .execute(&ALICE_ID, &mut state_tx)?;
 

@@ -274,8 +274,6 @@ fn resolve_platform_policy_label(
 
 #[cfg(test)]
 mod tests {
-    use std::str::FromStr;
-
     use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64_STANDARD};
     use iroha_crypto::{Algorithm, Hash, KeyPair, PublicKey, Signature};
     use iroha_primitives::numeric::Numeric;

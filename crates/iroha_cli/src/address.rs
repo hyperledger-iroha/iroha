@@ -547,9 +547,8 @@ mod tests {
     use super::*;
     use iroha::account_address::default_domain_name;
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
-    use iroha_data_model::{account::AccountId, domain::DomainId, name::Name};
+    use iroha_data_model::{account::AccountId, domain::DomainId};
     use iroha_i18n::{Bundle, Language, Localizer};
-    use std::str::FromStr;
 
     fn account_id_for_domain(label: &str, seed: u8) -> AccountId {
         let _ = DomainId::try_new(label, "universal").expect("domain label canonicalises");

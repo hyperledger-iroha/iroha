@@ -535,6 +535,7 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
+        domain::DomainId,
         offline::OfflineAllowanceCommitment,
     };
     use iroha_primitives::numeric::Numeric;

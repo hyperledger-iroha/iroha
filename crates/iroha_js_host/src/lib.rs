@@ -8654,7 +8654,7 @@ mod tests {
 
     fn sample_rwa_id(domain: &str, byte: u8) -> RwaId {
         RwaId::generated(
-            domain.parse().expect("valid domain id"),
+            DomainId::try_new(domain, "universal").expect("valid domain id"),
             Hash::prehashed(sample_hash(byte)),
         )
     }
@@ -9903,7 +9903,7 @@ mod tests {
             redeem_enabled: false,
         };
         let new_rwa = NewRwa::new(
-            "commodities".parse().expect("valid domain id"),
+            DomainId::try_new("commodities", "universal").expect("valid domain id"),
             Numeric::from_str("10.5").expect("valid numeric"),
             iroha_primitives::numeric::NumericSpec::fractional(1),
             "vault-cert-001".to_owned(),

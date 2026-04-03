@@ -1798,7 +1798,7 @@ fn validate_local_contract_value(
         },
         LocalContractSchemaType::DomainId => match value {
             norito::json::Value::String(raw) => {
-                raw.parse::<iroha_data_model::domain::DomainId>().is_ok()
+                iroha_data_model::domain::DomainId::parse_fully_qualified(raw).is_ok()
             }
             _ => false,
         },

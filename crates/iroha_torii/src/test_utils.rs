@@ -24,6 +24,7 @@ use iroha_data_model::{
     account::AccountId,
     block::{BlockHeader, SignedBlock},
     content::ContentAuthMode,
+    domain::DomainId,
     jurisdiction::JdgSignatureScheme,
     permission,
     prelude::{Account, Domain, ExposedPrivateKey, Grant},

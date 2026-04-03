@@ -8344,7 +8344,10 @@ mod pointer_abi_tests {
         let program = build_program(&code, 0);
         vm.load_program(&program).unwrap();
         // Prepare TLVs: nft_id (correct), key (WRONG: Json instead of Name), value (Json)
-        let nft_id = NftId::of("wonderland".parse().unwrap(), "n1".parse().unwrap());
+        let nft_id = NftId::of(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "n1".parse().unwrap(),
+        );
         let key: iroha_data_model::name::Name = "k".parse().unwrap();
         let value = iroha_primitives::json::Json::new("v");
         let nft_blob = norito::to_bytes(&nft_id).expect("encode nft id");
@@ -8516,7 +8519,7 @@ mod tests {
     }
 
     fn fixture_domain_id() -> DomainId {
-        "wonderland".parse().expect("fixture domain id")
+        DomainId::try_new("wonderland", "universal").expect("fixture domain id")
     }
 
     fn fixture_account(label: &str) -> AccountId {

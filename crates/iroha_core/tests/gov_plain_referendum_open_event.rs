@@ -15,6 +15,7 @@ use iroha_core::{
 use iroha_data_model::{
     Registrable,
     block::BlockHeader,
+    domain::DomainId,
     events::data::{DataEvent, governance::GovernanceEvent},
     isi::governance::CastPlainBallot,
     permission::Permission,
