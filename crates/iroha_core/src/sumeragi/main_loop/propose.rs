@@ -636,6 +636,18 @@ impl Actor {
         let committed_height = u64::try_from(self.state.committed_height()).unwrap_or(u64::MAX);
         self.prune_highest_qc_missing_defer_markers(committed_height);
         self.init_collector_plan(topology, proposal_height, view);
+        if let Some(existing_vote) = self.local_same_height_vote(proposal_height, proposal_epoch) {
+            warn!(
+                height = proposal_height,
+                view,
+                epoch = proposal_epoch,
+                voted_view = existing_vote.view,
+                voted_phase = ?existing_vote.phase,
+                voted_block = %existing_vote.block_hash,
+                "deferring proposal assembly: local same-height vote already anchors another branch"
+            );
+            return Ok(false);
+        }
         let _lock_lag_highest_qc_deferred = !self.highest_qc_extends_locked(highest_qc)
             && self.defer_highest_qc_update_for_lock_catchup(
                 height, view, highest_qc, now, "proposal",
@@ -1434,20 +1446,6 @@ impl Actor {
                 &block_created_msg,
                 BlockMessage::BlockCreated(created) if created.frontier.is_some()
             );
-            if let Some(existing_vote) =
-                self.local_conflicting_slot_vote(proposal_height, proposal_epoch, block_hash)
-            {
-                warn!(
-                    height = proposal_height,
-                    view,
-                    epoch = proposal_epoch,
-                    candidate_block = %block_hash,
-                    voted_view = existing_vote.view,
-                    voted_phase = ?existing_vote.phase,
-                    voted_block = %existing_vote.block_hash,
-                    "assembled candidate conflicts with local same-height vote history; broadcasting anyway so later views still have a live proposal path"
-                );
-            }
             self.subsystems
                 .propose
                 .proposal_cache
@@ -2732,6 +2730,33 @@ impl Actor {
                     owner = %owner_hash,
                     owner_view,
                     "same-height frontier owner is still locally live for this round; deferring reassembly"
+                );
+            }
+            return false;
+        }
+
+        if height == self.committed_height_snapshot().saturating_add(1)
+            && let Some(existing_vote) =
+                self.local_same_height_vote(height, self.epoch_for_height(height))
+        {
+            if pending_queue_len > 0 {
+                debug!(
+                    height,
+                    view = view_idx,
+                    queue_len = pending_queue_len,
+                    voted_view = existing_vote.view,
+                    voted_phase = ?existing_vote.phase,
+                    voted_block = %existing_vote.block_hash,
+                    "same-height local vote history already anchors the frontier; deferring fresh proposal assembly"
+                );
+            } else {
+                trace!(
+                    height,
+                    view = view_idx,
+                    voted_view = existing_vote.view,
+                    voted_phase = ?existing_vote.phase,
+                    voted_block = %existing_vote.block_hash,
+                    "same-height local vote history already anchors the frontier; deferring fresh proposal assembly"
                 );
             }
             return false;

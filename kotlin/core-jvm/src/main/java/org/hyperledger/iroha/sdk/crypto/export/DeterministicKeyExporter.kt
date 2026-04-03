@@ -19,6 +19,11 @@ import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.PBEKeySpec
 import javax.crypto.spec.SecretKeySpec
+import org.hyperledger.iroha.sdk.crypto.MlDsaKeyMaterial
+import org.hyperledger.iroha.sdk.crypto.MlDsaPrivateKey
+import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKey
+import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
+import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 
 private const val HMAC_ALGORITHM = "HmacSHA256"
 private const val DIGEST_ALGORITHM = "SHA-256"
@@ -43,7 +48,7 @@ private val ED25519_SPKI_PREFIX = byteArrayOf(
 private val ED25519_OID = byteArrayOf(0x2b, 0x65, 0x70)
 
 /**
- * Exports and recovers software-generated Ed25519 keys using salted HKDF + AES-GCM.
+ * Exports and recovers software-generated signing keys using salted HKDF + AES-GCM.
  *
  * Each export uses a fresh random salt and nonce bound to the alias, derives a key with a
  * memory-hard KDF (Argon2id preferred, PBKDF2 fallback), and records the KDF kind/work factor in
@@ -74,11 +79,11 @@ object DeterministicKeyExporter {
         alias: String,
         passphrase: CharArray,
     ): KeyExportBundle {
-        ensureEd25519KeyPair(privateKey, publicKey)
+        val signingAlgorithm = resolveSigningAlgorithm(privateKey, publicKey)
         ensurePassphraseStrength(passphrase)
 
-        val privateKeyBytes = privateKey.encoded
-        val publicKeyBytes = publicKey.encoded
+        val privateKeyBytes = privateKey.encoded ?: throw KeyExportException("Private key encoding is unavailable")
+        val publicKeyBytes = publicKey.encoded ?: throw KeyExportException("Public key encoding is unavailable")
         val salt = ByteArray(SALT_LENGTH_BYTES)
         fillRandomNonZero(salt)
         val nonce = ByteArray(NONCE_LENGTH_BYTES)
@@ -93,13 +98,14 @@ object DeterministicKeyExporter {
             val ciphertext = cipher.doFinal(privateKeyBytes)
             return KeyExportBundle(
                 alias,
+                signingAlgorithm.bridgeCode,
                 publicKeyBytes,
                 nonce,
                 ciphertext,
                 salt,
                 kdf.kind,
                 kdf.workFactor,
-                KeyExportBundle.VERSION_V3,
+                KeyExportBundle.VERSION_V4,
             )
         } catch (ex: GeneralSecurityException) {
             throw KeyExportException("Failed to encrypt private key", ex)
@@ -113,7 +119,8 @@ object DeterministicKeyExporter {
     @JvmStatic
     @Throws(KeyExportException::class)
     fun importKeyPair(bundle: KeyExportBundle, passphrase: CharArray): KeyPairData {
-        if (bundle.version != KeyExportBundle.VERSION_V3) {
+        if (bundle.version != KeyExportBundle.VERSION_V3
+            && bundle.version != KeyExportBundle.VERSION_V4) {
             throw KeyExportException("Unsupported key export version: ${bundle.version}")
         }
         ensurePassphraseStrength(passphrase)
@@ -130,12 +137,11 @@ object DeterministicKeyExporter {
             cipher.updateAAD(bundle.alias.toByteArray(Charsets.UTF_8))
             val privateKeyBytes = cipher.doFinal(bundle.ciphertext)
             try {
-                val factory = KeyFactory.getInstance(KEY_ALGORITHM)
-                val privKey = factory.generatePrivate(PKCS8EncodedKeySpec(privateKeyBytes))
-                val pubKey = factory.generatePublic(X509EncodedKeySpec(bundle.publicKey))
-                return KeyPairData(privKey, pubKey)
+                return reconstructKeyPair(bundle.signingAlgorithm, privateKeyBytes, bundle.publicKey)
+            } catch (ex: RuntimeException) {
+                throw KeyExportException("Failed to reconstruct ${bundle.signingAlgorithm.providerName} key pair", ex)
             } catch (ex: GeneralSecurityException) {
-                throw KeyExportException("Failed to reconstruct Ed25519 key pair", ex)
+                throw KeyExportException("Failed to reconstruct ${bundle.signingAlgorithm.providerName} key pair", ex)
             } finally {
                 privateKeyBytes.fill(0)
             }
@@ -146,10 +152,18 @@ object DeterministicKeyExporter {
         }
     }
 
-    private fun ensureEd25519KeyPair(privateKey: PrivateKey, publicKey: PublicKey) {
-        if (!isEd25519PrivateKey(privateKey) || !isEd25519PublicKey(publicKey)) {
-            throw KeyExportException("Deterministic export currently supports Ed25519 keys only")
+    private fun resolveSigningAlgorithm(privateKey: PrivateKey, publicKey: PublicKey): SigningAlgorithm {
+        if (privateKey is MlDsaPrivateKey && publicKey is MlDsaPublicKey) {
+            val expected = NativeSignerBridge.publicKeyFromPrivate(SigningAlgorithm.ML_DSA, privateKey.encoded)
+            if (!expected.contentEquals(publicKey.encoded)) {
+                throw KeyExportException("ML-DSA key material is internally inconsistent")
+            }
+            return SigningAlgorithm.ML_DSA
         }
+        if (isEd25519PrivateKey(privateKey) && isEd25519PublicKey(publicKey)) {
+            return SigningAlgorithm.ED25519
+        }
+        throw KeyExportException("Deterministic export supports Ed25519 and ML-DSA keys only")
     }
 
     private fun isEd25519PrivateKey(privateKey: PrivateKey): Boolean {
@@ -201,6 +215,24 @@ object DeterministicKeyExporter {
         if (offset + totalLength > encoded.size) return false
         return readAlgorithmOid(encoded, offset, lengthBytes)
     }
+
+    private fun reconstructKeyPair(
+        algorithm: SigningAlgorithm,
+        privateKeyBytes: ByteArray,
+        publicKeyBytes: ByteArray,
+    ): KeyPairData =
+        when (algorithm) {
+            SigningAlgorithm.ED25519 -> {
+                val factory = KeyFactory.getInstance(KEY_ALGORITHM)
+                val privKey = factory.generatePrivate(PKCS8EncodedKeySpec(privateKeyBytes))
+                val pubKey = factory.generatePublic(X509EncodedKeySpec(publicKeyBytes))
+                KeyPairData(privKey, pubKey, SigningAlgorithm.ED25519)
+            }
+            SigningAlgorithm.ML_DSA -> {
+                val pair = MlDsaKeyMaterial.fromRaw(privateKeyBytes, publicKeyBytes)
+                KeyPairData(pair.private, pair.public, SigningAlgorithm.ML_DSA)
+            }
+        }
 
     private fun readAlgorithmOid(
         encoded: ByteArray,
@@ -438,16 +470,16 @@ object DeterministicKeyExporter {
         }
     }
 
-    private fun hkdfSaltDomain(): String = "iroha-android-software-export-v3-salt"
+    private fun hkdfSaltDomain(): String = "iroha-android-software-export-v4-salt"
 
-    private fun hkdfInfoDomain(): String = "iroha-android-software-export-v3-info"
+    private fun hkdfInfoDomain(): String = "iroha-android-software-export-v4-info"
 
     private fun guardSaltNonceReuse(salt: ByteArray, nonce: ByteArray) {
         val fingerprintMaterial = ByteBuffer.allocate(salt.size + nonce.size)
             .put(salt)
             .put(nonce)
             .array()
-        val fingerprint = sha256("iroha-android-software-export-v3-fingerprint", fingerprintMaterial)
+        val fingerprint = sha256("iroha-android-software-export-v4-fingerprint", fingerprintMaterial)
             .toHexString()
         fingerprintMaterial.fill(0)
         synchronized(recentExportIndex) {

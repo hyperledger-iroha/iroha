@@ -832,6 +832,7 @@ public enum PipelineStatusError: Error, LocalizedError {
 
 public final class IrohaSDK: @unchecked Sendable {
     public let baseURL: URL
+    public let defaultSigningAlgorithm: SigningAlgorithm
     private let toriiClient: ToriiTransactionSubmitting
     private let toriiRestClient: ToriiClient?
 
@@ -857,12 +858,14 @@ public final class IrohaSDK: @unchecked Sendable {
 
     public init(baseURL: URL,
                 session: URLSession = .shared,
+                defaultSigningAlgorithm: SigningAlgorithm = .ed25519,
                 accelerationSettings: AccelerationSettings = AccelerationSettings(),
                 pipelineSubmitOptions: PipelineSubmitOptions = .default,
                 pipelinePollOptions: PipelineStatusPollOptions = .default,
                 pipelineEndpointMode: PipelineEndpointMode = .pipeline,
                 creationTimeProvider: (@Sendable () -> UInt64)? = nil) {
         self.baseURL = baseURL
+        self.defaultSigningAlgorithm = defaultSigningAlgorithm
         let client = ToriiClient(baseURL: baseURL, session: session)
         self.toriiClient = client
         self.toriiRestClient = client
@@ -876,12 +879,14 @@ public final class IrohaSDK: @unchecked Sendable {
 
     public init(toriiClient: ToriiTransactionSubmitting,
                 baseURL: URL,
+                defaultSigningAlgorithm: SigningAlgorithm = .ed25519,
                 accelerationSettings: AccelerationSettings = AccelerationSettings(),
                 pipelineSubmitOptions: PipelineSubmitOptions = .default,
                 pipelinePollOptions: PipelineStatusPollOptions = .default,
                 pipelineEndpointMode: PipelineEndpointMode = .pipeline,
                 creationTimeProvider: (@Sendable () -> UInt64)? = nil) {
         self.baseURL = baseURL
+        self.defaultSigningAlgorithm = defaultSigningAlgorithm
         self.toriiClient = toriiClient
         self.toriiRestClient = toriiClient as? ToriiClient
         self.accelerationSettings = accelerationSettings
@@ -899,6 +904,7 @@ public final class IrohaSDK: @unchecked Sendable {
     }
 
     public convenience init(toriiClient: ToriiClient,
+                             defaultSigningAlgorithm: SigningAlgorithm = .ed25519,
                              accelerationSettings: AccelerationSettings = AccelerationSettings(),
                              pipelineSubmitOptions: PipelineSubmitOptions = .default,
                              pipelinePollOptions: PipelineStatusPollOptions = .default,
@@ -906,11 +912,51 @@ public final class IrohaSDK: @unchecked Sendable {
                              creationTimeProvider: (@Sendable () -> UInt64)? = nil) {
         self.init(toriiClient: toriiClient,
                   baseURL: toriiClient.baseURL,
+                  defaultSigningAlgorithm: defaultSigningAlgorithm,
                   accelerationSettings: accelerationSettings,
                   pipelineSubmitOptions: pipelineSubmitOptions,
                   pipelinePollOptions: pipelinePollOptions,
                   pipelineEndpointMode: pipelineEndpointMode,
                   creationTimeProvider: creationTimeProvider)
+    }
+
+    /// Generates a new signing key using `defaultSigningAlgorithm`.
+    @available(macOS 10.15, iOS 13.0, *)
+    public func generateSigningKey(
+        metadata: SigningMetadata = SigningMetadata()
+    ) throws -> SigningKey {
+        switch defaultSigningAlgorithm {
+        case .ed25519:
+            let keypair = try Keypair.generate()
+            return try SigningKey.ed25519(privateKey: keypair.privateKeyBytes, metadata: metadata)
+        case .mlDsa:
+            let keypair = try MlDsaKeypair.generate(suite: .mlDsa65)
+            return try SigningKey.mlDsa(privateKey: keypair.secretKey, metadata: metadata)
+        default:
+            throw SigningKeyError.unsupportedAlgorithm(String(describing: defaultSigningAlgorithm))
+        }
+    }
+
+    /// Derives a signing key from seed material using `defaultSigningAlgorithm`.
+    @available(macOS 10.15, iOS 13.0, *)
+    public func signingKey(
+        fromSeed seed: Data,
+        metadata: SigningMetadata = SigningMetadata()
+    ) throws -> SigningKey {
+        guard let derived = NoritoNativeBridge.shared.keypairFromSeed(
+            algorithm: defaultSigningAlgorithm,
+            seed: seed
+        ) else {
+            throw SigningKeyError.unsupportedAlgorithm(String(describing: defaultSigningAlgorithm))
+        }
+        switch defaultSigningAlgorithm {
+        case .ed25519:
+            return try SigningKey.ed25519(privateKey: derived.privateKey, metadata: metadata)
+        case .mlDsa:
+            return try SigningKey.mlDsa(privateKey: derived.privateKey, metadata: metadata)
+        default:
+            throw SigningKeyError.unsupportedAlgorithm(String(describing: defaultSigningAlgorithm))
+        }
     }
 
     /// Default wall-clock provider for transaction creation timestamps (ms since epoch, clamped at zero).

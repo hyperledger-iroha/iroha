@@ -27,7 +27,8 @@ use iroha_crypto::{
 use iroha_data_model::{
     IntoKeyValue,
     account::{
-        AccountDomainSelector, AccountEntry, AccountId, AccountValue, OpaqueAccountId,
+        AccountDomainSelector, AccountEntry, AccountId, AccountRecoveryPolicy,
+        AccountRecoveryRequest, AccountValue, OpaqueAccountId,
         rekey::{AccountAlias, AccountRekeyRecord},
     },
     asset::{
@@ -212,7 +213,7 @@ use crate::{
                 SetReadOnly as TriggerSetReadOnly, SetTransaction as TriggerSetTransaction,
                 SetView as TriggerSetView,
             },
-            specialized::{LoadedAction, LoadedActionTrait},
+            specialized::{LoadedAction, LoadedActionTrait, TimeTriggerRetryState},
         },
     },
     state::storage_transactions::{
@@ -362,6 +363,8 @@ macro_rules! build_world_block {
             identifier_policies: $state.identifier_policies.$method(),
             identifier_claims: $state.identifier_claims.$method(),
             account_rekey_records: $state.account_rekey_records.$method(),
+            account_recovery_policies: $state.account_recovery_policies.$method(),
+            account_recovery_requests: $state.account_recovery_requests.$method(),
             asset_definitions: $state.asset_definitions.$method(),
             asset_definition_aliases: $state.asset_definition_aliases.$method(),
             asset_definition_alias_bindings: $state.asset_definition_alias_bindings.$method(),
@@ -544,6 +547,8 @@ macro_rules! build_world_transaction {
             identifier_policies: $state.identifier_policies.transaction(),
             identifier_claims: $state.identifier_claims.transaction(),
             account_rekey_records: $state.account_rekey_records.transaction(),
+            account_recovery_policies: $state.account_recovery_policies.transaction(),
+            account_recovery_requests: $state.account_recovery_requests.transaction(),
             asset_definitions: $state.asset_definitions.transaction(),
             asset_definition_aliases: $state.asset_definition_aliases.transaction(),
             asset_definition_alias_bindings: $state.asset_definition_alias_bindings.transaction(),
@@ -1428,6 +1433,10 @@ pub struct World {
     pub(crate) identifier_claims: Storage<OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records: Storage<AccountAlias, AccountRekeyRecord>,
+    /// Alias-keyed account recovery policies.
+    pub(crate) account_recovery_policies: Storage<AccountAlias, AccountRecoveryPolicy>,
+    /// Alias-keyed account recovery requests.
+    pub(crate) account_recovery_requests: Storage<AccountAlias, AccountRecoveryRequest>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: Storage<AssetDefinitionId, AssetDefinition>,
     /// Index mapping asset alias literals to canonical asset definition ids.
@@ -1837,6 +1846,11 @@ pub struct WorldBlock<'world> {
     pub(crate) identifier_claims: StorageBlock<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records: StorageBlock<'world, AccountAlias, AccountRekeyRecord>,
+    /// Alias-keyed account recovery policies.
+    pub(crate) account_recovery_policies: StorageBlock<'world, AccountAlias, AccountRecoveryPolicy>,
+    /// Alias-keyed account recovery requests.
+    pub(crate) account_recovery_requests:
+        StorageBlock<'world, AccountAlias, AccountRecoveryRequest>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: StorageBlock<'world, AssetDefinitionId, AssetDefinition>,
     /// Index mapping asset alias literals to canonical asset definition ids.
@@ -2233,6 +2247,8 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.domains, Domain);
         collect_reverts!(self.accounts, Account);
         collect_reverts!(self.account_rekey_records, AccountRekey);
+        collect_reverts!(self.account_recovery_policies, AccountRecoveryPolicy);
+        collect_reverts!(self.account_recovery_requests, AccountRecoveryRequest);
         collect_reverts!(self.asset_definitions, AssetDefinition);
         collect_reverts!(self.assets, Asset);
         collect_reverts!(self.asset_metadata, AssetMetadata);
@@ -2291,6 +2307,8 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.domains, Domain);
         collect_payload!(self.accounts, Account);
         collect_payload!(self.account_rekey_records, AccountRekey);
+        collect_payload!(self.account_recovery_policies, AccountRecoveryPolicy);
+        collect_payload!(self.account_recovery_requests, AccountRecoveryRequest);
         collect_payload!(self.asset_definitions, AssetDefinition);
         collect_payload!(self.assets, Asset);
         collect_payload!(self.asset_metadata, AssetMetadata);
@@ -2387,6 +2405,12 @@ pub struct WorldTransaction<'block, 'world> {
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records:
         StorageTransaction<'block, 'world, AccountAlias, AccountRekeyRecord>,
+    /// Alias-keyed account recovery policies.
+    pub(crate) account_recovery_policies:
+        StorageTransaction<'block, 'world, AccountAlias, AccountRecoveryPolicy>,
+    /// Alias-keyed account recovery requests.
+    pub(crate) account_recovery_requests:
+        StorageTransaction<'block, 'world, AccountAlias, AccountRecoveryRequest>,
     /// Registered asset definitions.
     pub(crate) asset_definitions:
         StorageTransaction<'block, 'world, AssetDefinitionId, AssetDefinition>,
@@ -3152,6 +3176,10 @@ pub struct WorldView<'world> {
     pub(crate) identifier_claims: StorageView<'world, OpaqueAccountId, IdentifierClaimRecord>,
     /// Stable account labels and signatory history.
     pub(crate) account_rekey_records: StorageView<'world, AccountAlias, AccountRekeyRecord>,
+    /// Alias-keyed account recovery policies.
+    pub(crate) account_recovery_policies: StorageView<'world, AccountAlias, AccountRecoveryPolicy>,
+    /// Alias-keyed account recovery requests.
+    pub(crate) account_recovery_requests: StorageView<'world, AccountAlias, AccountRecoveryRequest>,
     /// Registered asset definitions.
     pub(crate) asset_definitions: StorageView<'world, AssetDefinitionId, AssetDefinition>,
     /// Index mapping asset alias literals to canonical asset definition ids.
@@ -10841,6 +10869,8 @@ impl World {
             accounts,
             uaid_accounts: Storage::default(),
             account_rekey_records,
+            account_recovery_policies: Storage::default(),
+            account_recovery_requests: Storage::default(),
             asset_definitions,
             asset_definition_aliases: Storage::default(),
             asset_definition_alias_bindings: Storage::default(),
@@ -11397,6 +11427,8 @@ impl World {
             identifier_policies: self.identifier_policies.view(),
             identifier_claims: self.identifier_claims.view(),
             account_rekey_records: self.account_rekey_records.view(),
+            account_recovery_policies: self.account_recovery_policies.view(),
+            account_recovery_requests: self.account_recovery_requests.view(),
             asset_definitions: self.asset_definitions.view(),
             asset_definition_aliases: self.asset_definition_aliases.view(),
             asset_definition_alias_bindings: self.asset_definition_alias_bindings.view(),
@@ -11635,6 +11667,14 @@ pub trait WorldReadOnly {
     }
     /// Account label/signatory registry (read-only).
     fn account_rekey_records(&self) -> &impl StorageReadOnly<AccountAlias, AccountRekeyRecord>;
+    /// Alias-keyed account recovery policy registry (read-only).
+    fn account_recovery_policies(
+        &self,
+    ) -> &impl StorageReadOnly<AccountAlias, AccountRecoveryPolicy>;
+    /// Alias-keyed account recovery request registry (read-only).
+    fn account_recovery_requests(
+        &self,
+    ) -> &impl StorageReadOnly<AccountAlias, AccountRecoveryRequest>;
     /// Asset definition storage (read-only).
     fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition>;
     /// Alias index mapping `<name>#<domain>.<dataspace>` or `<name>#<dataspace>` to canonical
@@ -12621,6 +12661,16 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<AccountAlias, AccountRekeyRecord> {
                 &self.account_rekey_records
             }
+            fn account_recovery_policies(
+                &self,
+            ) -> &impl StorageReadOnly<AccountAlias, AccountRecoveryPolicy> {
+                &self.account_recovery_policies
+            }
+            fn account_recovery_requests(
+                &self,
+            ) -> &impl StorageReadOnly<AccountAlias, AccountRecoveryRequest> {
+                &self.account_recovery_requests
+            }
             fn asset_definitions(&self) -> &impl StorageReadOnly<AssetDefinitionId, AssetDefinition> {
                 &self.asset_definitions
             }
@@ -13350,6 +13400,8 @@ impl<'world> WorldBlock<'world> {
             identifier_policies,
             identifier_claims,
             account_rekey_records,
+            account_recovery_policies,
+            account_recovery_requests,
             asset_definitions,
             asset_definition_aliases,
             asset_definition_alias_bindings,
@@ -13625,6 +13677,8 @@ impl<'world> WorldBlock<'world> {
         identifier_claims.commit();
         identifier_policies.commit();
         ram_lfe_program_policies.commit();
+        account_recovery_requests.commit();
+        account_recovery_policies.commit();
         account_rekey_records.commit();
         asset_metadata.commit();
         asset_definition_alias_bindings.commit();
@@ -14479,6 +14533,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             identifier_policies,
             identifier_claims,
             account_rekey_records,
+            account_recovery_policies,
+            account_recovery_requests,
             asset_definitions,
             asset_definition_aliases,
             asset_definition_alias_bindings,
@@ -14729,6 +14785,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         identifier_claims.apply();
         identifier_policies.apply();
         ram_lfe_program_policies.apply();
+        account_recovery_requests.apply();
+        account_recovery_policies.apply();
         account_rekey_records.apply();
         asset_metadata.apply();
         assets.apply();
@@ -22237,6 +22295,7 @@ impl<'state> StateBlock<'state> {
                     .and_then(|json| json.try_into_any_norito::<u64>().ok());
                 registered_height.is_some_and(|height| height != current_block_height)
             })
+            .map(|(id, _)| id)
             .collect();
         let matched_count = matched.len();
         if matched_count > 0 {
@@ -22249,14 +22308,31 @@ impl<'state> StateBlock<'state> {
             );
         }
 
+        let mut suppress_remaining = std::collections::BTreeSet::new();
         matched.iter().enumerate().fold(
             (Vec::new(), Vec::new(), Vec::new()),
-            |mut acc, (invocation_index, (trg_id, action))| {
+            |mut acc, (invocation_index, trg_id)| {
+                if suppress_remaining.contains(trg_id) {
+                    return acc;
+                }
+                let Some(action) = self.world.triggers.time_triggers().get(trg_id).cloned() else {
+                    return acc;
+                };
                 let (entrypoint, result) =
-                    self.execute_time_trigger(trg_id, action, &time_event, invocation_index);
+                    self.execute_time_trigger(trg_id, &action, &time_event, invocation_index);
+                let entrypoint_hash = entrypoint.hash_as_entrypoint();
 
                 match &result {
                     Err(reason) => {
+                        if self.handle_failed_time_trigger(
+                            trg_id,
+                            &action,
+                            entrypoint_hash,
+                            reason,
+                            current_block_time_ms,
+                        ) {
+                            suppress_remaining.insert(trg_id.clone());
+                        }
                         iroha_logger::info!(
                             trigger=%trg_id,
                             block=%block_header.hash(),
@@ -22274,7 +22350,6 @@ impl<'state> StateBlock<'state> {
                     }
                 }
 
-                let entrypoint_hash = entrypoint.hash_as_entrypoint();
                 acc.0.push(entrypoint);
                 acc.1.push(entrypoint_hash);
                 acc.2.push(result);
@@ -22332,6 +22407,10 @@ impl<'state> StateBlock<'state> {
             err => return (entrypoint, err),
         };
 
+        let _ = transaction
+            .world
+            .triggers
+            .set_time_trigger_retry_state(trg_id, None);
         transaction
             .world
             .triggers
@@ -22340,6 +22419,56 @@ impl<'state> StateBlock<'state> {
         transaction.apply();
 
         (entrypoint, Ok(trigger_sequence))
+    }
+
+    fn handle_failed_time_trigger(
+        &mut self,
+        trg_id: &TriggerId,
+        action: &LoadedAction<TimeEventFilter>,
+        entrypoint_hash: HashOf<TransactionEntrypoint>,
+        reason: &TransactionRejectionReason,
+        current_block_time_ms: u64,
+    ) -> bool {
+        let event = TriggerCompletedEvent::new(
+            trg_id.clone(),
+            entrypoint_hash,
+            0,
+            TriggerCompletedOutcome::Failure(reason.to_string()),
+        );
+        self.world
+            .external_event_buf
+            .mutate_vec(|events| events.push(event.into()));
+
+        let Some(retry_policy) = action.retry_policy else {
+            return false;
+        };
+
+        let retries_used = action.retry_state.map_or(0, |state| state.retries_used);
+        let next_retry_used = retries_used.saturating_add(1);
+        if next_retry_used > retry_policy.max_retries.get() {
+            let mut transaction = self.transaction();
+            if transaction.world.triggers.remove(trg_id) {
+                crate::smartcontracts::isi::triggers::isi::remove_trigger_associated_permissions(
+                    &mut transaction,
+                    trg_id,
+                );
+            }
+            transaction.apply();
+            return true;
+        }
+
+        let retry_state = TimeTriggerRetryState {
+            retries_used: next_retry_used,
+            next_retry_at_ms: current_block_time_ms
+                .saturating_add(retry_policy.retry_after_ms.get()),
+        };
+        let mut transaction = self.transaction();
+        let _ = transaction
+            .world
+            .triggers
+            .set_time_trigger_retry_state(trg_id, Some(retry_state));
+        transaction.apply();
+        true
     }
 
     /// Create time event using previous and current blocks.
@@ -27070,6 +27199,10 @@ pub(crate) mod deserialize {
         let ram_lfe_program_policies = take_optional_default(&mut map, "ram_lfe_program_policies")?;
         let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
+        let account_recovery_policies =
+            take_optional_default(&mut map, "account_recovery_policies")?;
+        let account_recovery_requests =
+            take_optional_default(&mut map, "account_recovery_requests")?;
         let asset_definitions: Storage<AssetDefinitionId, AssetDefinition> =
             take_required(&mut map, "asset_definitions")?;
         let asset_definition_alias_bindings =
@@ -27227,6 +27360,8 @@ pub(crate) mod deserialize {
             identifier_policies,
             identifier_claims,
             account_rekey_records,
+            account_recovery_policies,
+            account_recovery_requests,
             asset_definitions,
             asset_definition_aliases: Storage::default(),
             asset_definition_alias_bindings,
@@ -41112,6 +41247,545 @@ mod tests {
         events.clear();
 
         Ok(())
+    }
+
+    fn persist_committed_test_block(kura: &Kura, block: &CommittedBlock) {
+        let block_arc = Arc::new(block.clone().into());
+        kura.store_block(Arc::clone(&block_arc))
+            .expect("store committed block in kura");
+        kura.persist_block_immediate_for_tests(&block_arc);
+    }
+
+    #[test]
+    fn scheduled_time_trigger_retry_succeeds_once_and_consumes_repeats_on_success() {
+        use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
+        use iroha_data_model::trigger::action::TimeTriggerRetryPolicy;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let trigger_id: TriggerId = "time_retry_once".parse().unwrap();
+        let asset_definition_id =
+            AssetDefinitionId::new("wonderland".parse().unwrap(), "retrycoin".parse().unwrap());
+        let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
+        let retry_policy = TimeTriggerRetryPolicy {
+            max_retries: NonZeroU32::new(1).unwrap(),
+            retry_after_ms: NonZeroU64::new(5).unwrap(),
+        };
+        let world = World::with(
+            [Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID)],
+            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [],
+        );
+        let state = State::new(world, kura.clone(), query_handle);
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(1).unwrap());
+            header.creation_time_ms = 0;
+        });
+        let mut state_block1 = state.block(block1.as_ref().header());
+        {
+            let mut stx = state_block1.transaction();
+            let action = Action::new(
+                vec![InstructionBox::from(Mint::asset_numeric(
+                    1_u32,
+                    alice_asset_id.clone(),
+                ))],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                TimeEventFilter::new(ExecutionTime::Schedule(Schedule::starting_at(
+                    Duration::from_millis(1),
+                ))),
+            )
+            .with_retry_policy(retry_policy);
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        let _ = state_block1.apply_without_execution(&block1, Vec::new());
+        state_block1.commit().unwrap();
+        persist_committed_test_block(&kura, &block1);
+
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(2).unwrap());
+            header.creation_time_ms = 6;
+        });
+        {
+            let view = state.view();
+            assert!(
+                view.time_triggers_due_for_block(&block2.as_ref().header()),
+                "scheduled retry trigger should be due for block2"
+            );
+        }
+        let mut state_block2 = state.block(block2.as_ref().header());
+        let events2 = state_block2.apply(&block2, Vec::new());
+        let completions2: Vec<_> = events2
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            completions2.len(),
+            1,
+            "expected one failed completion, events: {events2:#?}"
+        );
+        assert!(matches!(
+            completions2[0].outcome(),
+            TriggerCompletedOutcome::Failure(_)
+        ));
+        state_block2.commit().unwrap();
+        persist_committed_test_block(&kura, &block2);
+
+        {
+            let view = state.view();
+            let action = view
+                .world
+                .triggers()
+                .time_triggers()
+                .get(&trigger_id)
+                .expect("trigger should remain registered after first failure");
+            assert_eq!(action.repeats, Repeats::Exactly(1));
+            assert_eq!(
+                action.retry_state,
+                Some(TimeTriggerRetryState {
+                    retries_used: 1,
+                    next_retry_at_ms: 11,
+                })
+            );
+        }
+
+        let block3 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(3).unwrap());
+            header.creation_time_ms = 8;
+        });
+        let mut state_block3 = state.block(block3.as_ref().header());
+        {
+            let mut stx = state_block3.transaction();
+            Register::asset_definition(
+                AssetDefinition::numeric(asset_definition_id.clone())
+                    .with_name(asset_definition_id.name().to_string()),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            stx.apply();
+        }
+        let _ = state_block3.apply_without_execution(&block3, Vec::new());
+        state_block3.commit().unwrap();
+        persist_committed_test_block(&kura, &block3);
+
+        let block4 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(4).unwrap());
+            header.creation_time_ms = 12;
+        });
+        let mut state_block4 = state.block(block4.as_ref().header());
+        let events4 = state_block4.apply(&block4, Vec::new());
+        let completions4: Vec<_> = events4
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(completions4.len(), 1, "expected one retry completion");
+        assert!(matches!(
+            completions4[0].outcome(),
+            TriggerCompletedOutcome::Success
+        ));
+        state_block4.commit().unwrap();
+        persist_committed_test_block(&kura, &block4);
+
+        let view = state.view();
+        let alice_asset = view
+            .world
+            .asset(&alice_asset_id)
+            .expect("retry should mint the asset after the definition is registered");
+        assert_eq!(&**alice_asset.value(), &Numeric::from(1_u32));
+        assert!(
+            view.world.triggers().ids().get(&trigger_id).is_none(),
+            "one-shot trigger should be removed after successful retry"
+        );
+    }
+
+    #[test]
+    fn scheduled_time_trigger_retry_budget_exhaustion_unregisters_trigger() {
+        use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
+        use iroha_data_model::trigger::action::TimeTriggerRetryPolicy;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let trigger_id: TriggerId = "time_retry_exhausted".parse().unwrap();
+        let asset_definition_id = AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "exhaustcoin".parse().unwrap(),
+        );
+        let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
+        let retry_policy = TimeTriggerRetryPolicy {
+            max_retries: NonZeroU32::new(1).unwrap(),
+            retry_after_ms: NonZeroU64::new(5).unwrap(),
+        };
+        let world = World::with(
+            [Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID)],
+            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [],
+        );
+        let state = State::new(world, kura.clone(), query_handle);
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(1).unwrap());
+            header.creation_time_ms = 0;
+        });
+        let mut state_block1 = state.block(block1.as_ref().header());
+        {
+            let mut stx = state_block1.transaction();
+            let action = Action::new(
+                vec![InstructionBox::from(Mint::asset_numeric(
+                    1_u32,
+                    alice_asset_id.clone(),
+                ))],
+                Repeats::Exactly(1),
+                ALICE_ID.clone(),
+                TimeEventFilter::new(ExecutionTime::Schedule(Schedule::starting_at(
+                    Duration::from_millis(1),
+                ))),
+            )
+            .with_retry_policy(retry_policy);
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        let _ = state_block1.apply_without_execution(&block1, Vec::new());
+        state_block1.commit().unwrap();
+        persist_committed_test_block(&kura, &block1);
+
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(2).unwrap());
+            header.creation_time_ms = 6;
+        });
+        {
+            let view = state.view();
+            assert!(
+                view.time_triggers_due_for_block(&block2.as_ref().header()),
+                "scheduled retry trigger should be due for block2"
+            );
+        }
+        let mut state_block2 = state.block(block2.as_ref().header());
+        let events2 = state_block2.apply(&block2, Vec::new());
+        let completions2: Vec<_> = events2
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            completions2.len(),
+            1,
+            "expected first failure event, events: {events2:#?}"
+        );
+        assert!(matches!(
+            completions2[0].outcome(),
+            TriggerCompletedOutcome::Failure(_)
+        ));
+        state_block2.commit().unwrap();
+        persist_committed_test_block(&kura, &block2);
+
+        {
+            let view = state.view();
+            let action = view
+                .world
+                .triggers()
+                .time_triggers()
+                .get(&trigger_id)
+                .expect("trigger should still exist while retry budget remains");
+            assert_eq!(action.repeats, Repeats::Exactly(1));
+            assert_eq!(
+                action.retry_state,
+                Some(TimeTriggerRetryState {
+                    retries_used: 1,
+                    next_retry_at_ms: 11,
+                })
+            );
+        }
+
+        let block3 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(3).unwrap());
+            header.creation_time_ms = 12;
+        });
+        let mut state_block3 = state.block(block3.as_ref().header());
+        let events3 = state_block3.apply(&block3, Vec::new());
+        let completions3: Vec<_> = events3
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(completions3.len(), 1, "expected exhausted retry failure");
+        assert!(matches!(
+            completions3[0].outcome(),
+            TriggerCompletedOutcome::Failure(_)
+        ));
+        state_block3.commit().unwrap();
+        persist_committed_test_block(&kura, &block3);
+
+        let view = state.view();
+        assert!(
+            view.world.triggers().ids().get(&trigger_id).is_none(),
+            "trigger should be unregistered after retry budget exhaustion"
+        );
+        assert!(
+            view.world.asset(&alice_asset_id).is_err(),
+            "failed trigger must not mint any asset"
+        );
+    }
+
+    #[test]
+    fn periodic_time_trigger_drops_missed_ticks_while_retry_pending() {
+        use iroha_data_model::events::trigger_completed::TriggerCompletedOutcome;
+        use iroha_data_model::trigger::action::TimeTriggerRetryPolicy;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let trigger_id: TriggerId = "time_retry_periodic".parse().unwrap();
+        let asset_definition_id = AssetDefinitionId::new(
+            "wonderland".parse().unwrap(),
+            "periodiccoin".parse().unwrap(),
+        );
+        let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
+        let retry_policy = TimeTriggerRetryPolicy {
+            max_retries: NonZeroU32::new(1).unwrap(),
+            retry_after_ms: NonZeroU64::new(5).unwrap(),
+        };
+        let world = World::with(
+            [Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID)],
+            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [],
+        );
+        let state = State::new(world, kura.clone(), query_handle);
+
+        let block1 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(1).unwrap());
+            header.creation_time_ms = 0;
+        });
+        let mut state_block1 = state.block(block1.as_ref().header());
+        {
+            let mut stx = state_block1.transaction();
+            let action = Action::new(
+                vec![InstructionBox::from(Mint::asset_numeric(
+                    1_u32,
+                    alice_asset_id.clone(),
+                ))],
+                Repeats::Exactly(3),
+                ALICE_ID.clone(),
+                TimeEventFilter::new(ExecutionTime::Schedule(
+                    Schedule::starting_at(Duration::from_millis(1))
+                        .with_period(Duration::from_millis(4)),
+                )),
+            )
+            .with_retry_policy(retry_policy);
+            Register::trigger(Trigger::new(trigger_id.clone(), action))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            stx.apply();
+        }
+        let _ = state_block1.apply_without_execution(&block1, Vec::new());
+        state_block1.commit().unwrap();
+        persist_committed_test_block(&kura, &block1);
+
+        let block2 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(2).unwrap());
+            header.creation_time_ms = 2;
+        });
+        {
+            let view = state.view();
+            assert!(
+                view.time_triggers_due_for_block(&block2.as_ref().header()),
+                "periodic retry trigger should be due for block2"
+            );
+        }
+        let mut state_block2 = state.block(block2.as_ref().header());
+        let events2 = state_block2.apply(&block2, Vec::new());
+        let completions2: Vec<_> = events2
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            completions2.len(),
+            1,
+            "expected initial failure, events: {events2:#?}"
+        );
+        assert!(matches!(
+            completions2[0].outcome(),
+            TriggerCompletedOutcome::Failure(_)
+        ));
+        state_block2.commit().unwrap();
+        persist_committed_test_block(&kura, &block2);
+
+        {
+            let view = state.view();
+            let action = view
+                .world
+                .triggers()
+                .time_triggers()
+                .get(&trigger_id)
+                .expect("periodic trigger should stay registered after first failure");
+            assert_eq!(action.repeats, Repeats::Exactly(3));
+            assert_eq!(
+                action.retry_state,
+                Some(TimeTriggerRetryState {
+                    retries_used: 1,
+                    next_retry_at_ms: 7,
+                })
+            );
+        }
+
+        let block3 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(3).unwrap());
+            header.creation_time_ms = 6;
+        });
+        let mut state_block3 = state.block(block3.as_ref().header());
+        {
+            let mut stx = state_block3.transaction();
+            Register::asset_definition(
+                AssetDefinition::numeric(asset_definition_id.clone())
+                    .with_name(asset_definition_id.name().to_string()),
+            )
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            stx.apply();
+        }
+        let events3 = state_block3.apply(&block3, Vec::new());
+        let completions3: Vec<_> = events3
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert!(
+            completions3.is_empty(),
+            "scheduled ticks must be suppressed while retry is pending"
+        );
+        state_block3.commit().unwrap();
+        persist_committed_test_block(&kura, &block3);
+
+        {
+            let view = state.view();
+            let action = view
+                .world
+                .triggers()
+                .time_triggers()
+                .get(&trigger_id)
+                .expect("trigger should remain pending after suppressed block");
+            assert_eq!(action.repeats, Repeats::Exactly(3));
+            assert_eq!(
+                action.retry_state,
+                Some(TimeTriggerRetryState {
+                    retries_used: 1,
+                    next_retry_at_ms: 7,
+                })
+            );
+        }
+
+        let block4 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(4).unwrap());
+            header.creation_time_ms = 8;
+        });
+        let mut state_block4 = state.block(block4.as_ref().header());
+        let events4 = state_block4.apply(&block4, Vec::new());
+        let completions4: Vec<_> = events4
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(completions4.len(), 1, "expected retry success");
+        assert!(matches!(
+            completions4[0].outcome(),
+            TriggerCompletedOutcome::Success
+        ));
+        state_block4.commit().unwrap();
+        persist_committed_test_block(&kura, &block4);
+
+        {
+            let view = state.view();
+            let alice_asset = view
+                .world
+                .asset(&alice_asset_id)
+                .expect("retry success should mint exactly once");
+            assert_eq!(&**alice_asset.value(), &Numeric::from(1_u32));
+            let action = view
+                .world
+                .triggers()
+                .time_triggers()
+                .get(&trigger_id)
+                .expect("periodic trigger should remain after successful retry");
+            assert_eq!(action.repeats, Repeats::Exactly(2));
+            assert_eq!(action.retry_state, None);
+        }
+
+        let block5 = new_dummy_block_with_payload(|header| {
+            header.set_height(NonZeroU64::new(5).unwrap());
+            header.creation_time_ms = 10;
+        });
+        let mut state_block5 = state.block(block5.as_ref().header());
+        let events5 = state_block5.apply(&block5, Vec::new());
+        let completions5: Vec<_> = events5
+            .iter()
+            .filter_map(|event| match event {
+                EventBox::TriggerCompleted(event) if event.trigger_id() == &trigger_id => {
+                    Some(event)
+                }
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            completions5.len(),
+            1,
+            "expected next scheduled tick only once"
+        );
+        assert!(matches!(
+            completions5[0].outcome(),
+            TriggerCompletedOutcome::Success
+        ));
+        state_block5.commit().unwrap();
+        persist_committed_test_block(&kura, &block5);
+
+        let view = state.view();
+        let alice_asset = view
+            .world
+            .asset(&alice_asset_id)
+            .expect("periodic trigger should mint the next scheduled tick");
+        assert_eq!(&**alice_asset.value(), &Numeric::from(2_u32));
+        let action = view
+            .world
+            .triggers()
+            .time_triggers()
+            .get(&trigger_id)
+            .expect("periodic trigger should still have one repeat left");
+        assert_eq!(action.repeats, Repeats::Exactly(1));
+        assert_eq!(action.retry_state, None);
     }
 
     #[test]

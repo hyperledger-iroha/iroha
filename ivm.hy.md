@@ -1,18 +1,38 @@
-<!-- Auto-generated stub for Armenian (hy) translation. Replace this content with the full translation. -->
-
 ---
 lang: hy
 direction: ltr
 source: ivm.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c07499edafa5f9d743fbb4b1bbd169725674dca7760d3912b0acb40c7c00fdf3
 source_last_modified: "2026-02-08T10:32:13.839888+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-04-02
 ---
 
-# Translation In Progress
+# IVM հղում
 
-This file is a placeholder for the Armenian translation of the English document. Once the translation is complete, update the `status` field in the metadata above.
+Այս ֆայլը IVM-ի ճարտարապետության և ABI նշումների համար աշխատանքային տարածքի արմատում գտնվող մուտքային փաստաթուղթն է։
+Մանրամասն փաստաթղթերը գտնվում են `docs/source/` և `crates/ivm/docs/` ուղիներում։
 
-This stub awaits translation. Replace the placeholder body with the completed text and update the metadata status to `complete` when finished.
+Կապված փաստաթղթեր:
+- `docs/source/ivm_architecture_plan.md`
+- `docs/source/ivm_syscalls.md`
+- `crates/ivm/docs/pointer_abi.md`
+
+<!-- BEGIN GENERATED POINTER TYPES -->
+| ID | Name | ABI v1 |
+|---|---|---|
+| 0x0001 | AccountId | OK |
+| 0x0002 | AssetDefinitionId | OK |
+| 0x0003 | Name | OK |
+| 0x0004 | Json | OK |
+| 0x0005 | NftId | OK |
+| 0x0006 | Blob | OK |
+| 0x0007 | AssetId | OK |
+| 0x0008 | DomainId | OK |
+| 0x0009 | NoritoBytes | OK |
+| 0x000A | DataSpaceId | OK |
+| 0x000B | AxtDescriptor | OK |
+| 0x000C | AssetHandle | OK |
+| 0x000D | ProofBlob | OK |
+<!-- END GENERATED POINTER TYPES -->

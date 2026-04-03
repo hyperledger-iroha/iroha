@@ -6,6 +6,11 @@ import org.hyperledger.iroha.sdk.crypto.KeyGenerationOutcome
 import org.hyperledger.iroha.sdk.crypto.KeyManagementException
 import org.hyperledger.iroha.sdk.crypto.KeyProvider
 import org.hyperledger.iroha.sdk.crypto.KeyProviderMetadata
+import org.hyperledger.iroha.sdk.crypto.MlDsaPrivateKey
+import org.hyperledger.iroha.sdk.crypto.MlDsaPublicKey
+import org.hyperledger.iroha.sdk.crypto.MlDsaSigner
+import org.hyperledger.iroha.sdk.crypto.NativeSignerBridge
+import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 import org.hyperledger.iroha.sdk.crypto.SigningException
 import org.hyperledger.iroha.sdk.crypto.Signer
 import org.hyperledger.iroha.sdk.crypto.SoftwareKeyProvider
@@ -38,6 +43,7 @@ private const val ED25519_SPKI_SIZE = 44
 class IrohaKeyManager private constructor(
     providers: List<KeyProvider>,
     private val keystoreTelemetry: KeystoreTelemetryEmitter,
+    private val signingAlgorithm: SigningAlgorithm,
 ) {
     private val providers: List<KeyProvider> = providers.toList()
 
@@ -53,6 +59,7 @@ class IrohaKeyManager private constructor(
     @Throws(KeyManagementException::class)
     fun generateOrLoad(alias: String, preference: KeySecurityPreference): KeyPair {
         require(alias.isNotBlank()) { "alias must not be blank" }
+        enforceAlgorithmPreference(preference)
 
         val ordered = orderedProviders(preference)
         var lastError: KeyManagementException? = null
@@ -60,7 +67,7 @@ class IrohaKeyManager private constructor(
             try {
                 val existing = provider.load(alias)
                 if (existing != null) {
-                    ensureEd25519KeyPair(alias, preference, existing, provider.metadata(), "load")
+                    ensureExpectedKeyPair(alias, preference, existing, provider.metadata(), "load")
                     return existing
                 }
             } catch (e: KeyManagementException) {
@@ -73,7 +80,7 @@ class IrohaKeyManager private constructor(
                 val keyPair = provider.generate(alias)
                 val route = routeFromMetadata(provider.metadata())
                 val outcome = KeyGenerationOutcome(keyPair, route)
-                ensureEd25519KeyPair(alias, preference, outcome.keyPair, provider.metadata(), "generate")
+                ensureExpectedKeyPair(alias, preference, outcome.keyPair, provider.metadata(), "generate")
                 enforcePreference(preference, provider.metadata(), outcome)
                 recordKeyGenerationTelemetry(alias, preference, provider.metadata(), outcome)
                 return outcome.keyPair
@@ -102,6 +109,15 @@ class IrohaKeyManager private constructor(
         }
     }
 
+    private fun enforceAlgorithmPreference(preference: KeySecurityPreference) {
+        if (signingAlgorithm.supportsHardwareBackedKeys()) return
+        if (preference != KeySecurityPreference.SOFTWARE_ONLY) {
+            throw KeyManagementException(
+                "${signingAlgorithm.providerName} signing keys currently support SOFTWARE_ONLY"
+            )
+        }
+    }
+
     private fun recordKeyGenerationTelemetry(
         alias: String,
         preference: KeySecurityPreference,
@@ -114,19 +130,19 @@ class IrohaKeyManager private constructor(
         keystoreTelemetry.recordKeyGeneration(alias, preference?.name, metadata, outcome.route, fallback)
     }
 
-    private fun ensureEd25519KeyPair(
+    private fun ensureExpectedKeyPair(
         alias: String?,
         preference: KeySecurityPreference?,
         keyPair: KeyPair?,
         metadata: KeyProviderMetadata?,
         phase: String,
     ) {
-        val validation = validateEd25519KeyPair(keyPair)
+        val validation = validateKeyPair(signingAlgorithm, keyPair)
         if (!validation.valid) {
             recordKeyValidationFailure(alias, preference, metadata, phase, validation)
             val provider = metadata?.name ?: "unknown"
             throw KeyManagementException(
-                "Provider $provider returned non-Ed25519 key material (${validation.detail()})")
+                "Provider $provider returned unexpected ${signingAlgorithm.providerName} key material (${validation.detail()})")
         }
     }
 
@@ -135,11 +151,11 @@ class IrohaKeyManager private constructor(
         preference: KeySecurityPreference?,
         metadata: KeyProviderMetadata?,
         phase: String,
-        validation: Ed25519SpkiValidation,
+        validation: KeyMaterialValidation,
     ) {
         keystoreTelemetry.recordKeyValidationFailure(
             alias, preference?.name, metadata, phase, validation.reason,
-            validation.length, ED25519_SPKI_SIZE, validation.prefixHex,
+            validation.length, validation.expectedLength, validation.prefixHex,
         )
     }
 
@@ -155,7 +171,7 @@ class IrohaKeyManager private constructor(
         for (provider in providers) {
             try {
                 val keyPair = provider.generateEphemeral()
-                ensureEd25519KeyPair(null, null, keyPair, provider.metadata(), "ephemeral")
+                ensureExpectedKeyPair(null, null, keyPair, provider.metadata(), "ephemeral")
                 return keyPair
             } catch (e: KeyManagementException) {
                 lastError = e
@@ -172,8 +188,20 @@ class IrohaKeyManager private constructor(
     @Throws(KeyManagementException::class, SigningException::class)
     fun signerForAlias(alias: String, preference: KeySecurityPreference): Signer {
         val keyPair = generateOrLoad(alias, preference)
-        return Ed25519Signer(keyPair.private, keyPair.public)
+        return when (signingAlgorithm) {
+            SigningAlgorithm.ED25519 -> Ed25519Signer(keyPair.private, keyPair.public)
+            SigningAlgorithm.ML_DSA -> {
+                val privateKey = keyPair.private as? MlDsaPrivateKey
+                    ?: throw SigningException("Expected an ML-DSA private key for alias=$alias")
+                val publicKey = keyPair.public as? MlDsaPublicKey
+                    ?: throw SigningException("Expected an ML-DSA public key for alias=$alias")
+                MlDsaSigner(privateKey, publicKey)
+            }
+        }
     }
+
+    /** Returns the algorithm selected for app-level transaction and offline signing. */
+    fun signingAlgorithm(): SigningAlgorithm = signingAlgorithm
 
     /** Returns metadata for each configured key provider in priority order. */
     fun providerMetadata(): List<KeyProviderMetadata> =
@@ -274,7 +302,7 @@ class IrohaKeyManager private constructor(
 
     /** Returns a copy of this manager that emits keystore telemetry through `telemetry`. */
     fun withTelemetry(telemetry: KeystoreTelemetryEmitter): IrohaKeyManager =
-        IrohaKeyManager(providers, telemetry)
+        IrohaKeyManager(providers, telemetry, signingAlgorithm)
 
     private fun orderedProviders(preference: KeySecurityPreference): List<KeyProvider> {
         val ordered = providers.toMutableList()
@@ -307,17 +335,36 @@ class IrohaKeyManager private constructor(
         /** Creates a manager that uses the provided providers in priority order. */
         @JvmStatic
         fun fromProviders(providers: List<KeyProvider>): IrohaKeyManager =
-            IrohaKeyManager(providers, KeystoreTelemetryEmitter.noop())
+            fromProviders(providers, SigningAlgorithm.ED25519)
+
+        /** Creates a manager that uses the provided providers in priority order. */
+        @JvmStatic
+        fun fromProviders(
+            providers: List<KeyProvider>,
+            signingAlgorithm: SigningAlgorithm,
+        ): IrohaKeyManager = IrohaKeyManager(providers, KeystoreTelemetryEmitter.noop(), signingAlgorithm)
 
         /** Creates a manager with explicit keystore telemetry configuration. */
         @JvmStatic
         fun fromProviders(providers: List<KeyProvider>, telemetry: KeystoreTelemetryEmitter): IrohaKeyManager =
-            IrohaKeyManager(providers, telemetry)
+            IrohaKeyManager(providers, telemetry, SigningAlgorithm.ED25519)
+
+        /** Creates a manager with explicit keystore telemetry configuration. */
+        @JvmStatic
+        fun fromProviders(
+            providers: List<KeyProvider>,
+            telemetry: KeystoreTelemetryEmitter,
+            signingAlgorithm: SigningAlgorithm,
+        ): IrohaKeyManager = IrohaKeyManager(providers, telemetry, signingAlgorithm)
 
         /** Creates a manager with a software fallback provider only (desktop/emulator friendly). */
         @JvmStatic
-        fun withSoftwareFallback(): IrohaKeyManager =
-            IrohaKeyManager(listOf(SoftwareKeyProvider()), KeystoreTelemetryEmitter.noop())
+        fun withSoftwareFallback(signingAlgorithm: SigningAlgorithm = SigningAlgorithm.ED25519): IrohaKeyManager =
+            IrohaKeyManager(
+                listOf(SoftwareKeyProvider(signingAlgorithm)),
+                KeystoreTelemetryEmitter.noop(),
+                signingAlgorithm,
+            )
 
         /**
          * Creates a manager backed by an exportable software provider that persists deterministic key
@@ -327,15 +374,18 @@ class IrohaKeyManager private constructor(
         fun withExportableSoftwareKeys(
             exportStore: KeyExportStore,
             passphraseProvider: KeyPassphraseProvider,
+            signingAlgorithm: SigningAlgorithm = SigningAlgorithm.ED25519,
         ): IrohaKeyManager = IrohaKeyManager(
             listOf(
                 SoftwareKeyProvider(
                     SoftwareKeyProvider.ProviderPolicy.BOUNCY_CASTLE_REQUIRED,
                     exportStore,
                     passphraseProvider,
+                    signingAlgorithm,
                 ),
             ),
             KeystoreTelemetryEmitter.noop(),
+            signingAlgorithm,
         )
 
         /**
@@ -346,16 +396,28 @@ class IrohaKeyManager private constructor(
         fun withDefaultProviders(): IrohaKeyManager =
             withDefaultProviders(KeyGenParameters.builder().build())
 
+        /** Creates a manager with the supplied app-level signing algorithm. */
+        @JvmStatic
+        fun withDefaultProviders(signingAlgorithm: SigningAlgorithm): IrohaKeyManager =
+            withDefaultProviders(
+                KeyGenParameters.builder()
+                    .setSigningAlgorithm(signingAlgorithm)
+                    .build()
+            )
+
         /**
          * Creates a manager that attempts to use hardware-backed keystore providers with the supplied
          * generation parameters and falls back to a software provider.
          */
         @JvmStatic
         fun withDefaultProviders(keyGenParameters: KeyGenParameters): IrohaKeyManager {
+            val signingAlgorithm = keyGenParameters.signingAlgorithm()
             val providers = mutableListOf<KeyProvider>()
-            KeystoreKeyProvider.maybeCreate(keyGenParameters)?.let { providers.add(it) }
-            providers.add(SoftwareKeyProvider())
-            return IrohaKeyManager(providers, KeystoreTelemetryEmitter.noop())
+            if (signingAlgorithm.supportsHardwareBackedKeys()) {
+                KeystoreKeyProvider.maybeCreate(keyGenParameters)?.let { providers.add(it) }
+            }
+            providers.add(SoftwareKeyProvider(signingAlgorithm))
+            return IrohaKeyManager(providers, KeystoreTelemetryEmitter.noop(), signingAlgorithm)
         }
 
         /**
@@ -367,10 +429,13 @@ class IrohaKeyManager private constructor(
             keyGenParameters: KeyGenParameters,
             telemetry: KeystoreTelemetryEmitter,
         ): IrohaKeyManager {
+            val signingAlgorithm = keyGenParameters.signingAlgorithm()
             val providers = mutableListOf<KeyProvider>()
-            KeystoreKeyProvider.maybeCreate(keyGenParameters)?.let { providers.add(it) }
-            providers.add(SoftwareKeyProvider())
-            return IrohaKeyManager(providers, telemetry)
+            if (signingAlgorithm.supportsHardwareBackedKeys()) {
+                KeystoreKeyProvider.maybeCreate(keyGenParameters)?.let { providers.add(it) }
+            }
+            providers.add(SoftwareKeyProvider(signingAlgorithm))
+            return IrohaKeyManager(providers, telemetry, signingAlgorithm)
         }
 
         private fun routeFromMetadata(metadata: KeyProviderMetadata?): KeyGenerationOutcome.Route {
@@ -380,30 +445,77 @@ class IrohaKeyManager private constructor(
             return KeyGenerationOutcome.Route.SOFTWARE
         }
 
-        private fun validateEd25519KeyPair(keyPair: KeyPair?): Ed25519SpkiValidation {
+        private fun validateKeyPair(
+            signingAlgorithm: SigningAlgorithm,
+            keyPair: KeyPair?,
+        ): KeyMaterialValidation =
+            when (signingAlgorithm) {
+                SigningAlgorithm.ED25519 -> validateEd25519KeyPair(keyPair)
+                SigningAlgorithm.ML_DSA -> validateMlDsaKeyPair(keyPair)
+            }
+
+        private fun validateEd25519KeyPair(keyPair: KeyPair?): KeyMaterialValidation {
             if (keyPair?.public == null) {
-                return Ed25519SpkiValidation.invalid(0, "", "public_key_missing")
+                return KeyMaterialValidation.invalid(0, ED25519_SPKI_SIZE, "", "public_key_missing")
             }
             return validateEd25519Spki(keyPair.public.encoded)
         }
 
-        private fun validateEd25519Spki(encoded: ByteArray?): Ed25519SpkiValidation {
+        private fun validateEd25519Spki(encoded: ByteArray?): KeyMaterialValidation {
             if (encoded == null || encoded.isEmpty()) {
-                return Ed25519SpkiValidation.invalid(0, "", "spki_missing")
+                return KeyMaterialValidation.invalid(0, ED25519_SPKI_SIZE, "", "spki_missing")
             }
             val bytes = encoded!!
             val length = bytes.size
             val prefixLen = minOf(ED25519_SPKI_PREFIX.size, length)
             val prefixHex = toHex(bytes, prefixLen)
             if (length != ED25519_SPKI_SIZE) {
-                return Ed25519SpkiValidation.invalid(length, prefixHex, "length_mismatch")
+                return KeyMaterialValidation.invalid(length, ED25519_SPKI_SIZE, prefixHex, "length_mismatch")
             }
             for (i in ED25519_SPKI_PREFIX.indices) {
                 if (bytes[i] != ED25519_SPKI_PREFIX[i]) {
-                    return Ed25519SpkiValidation.invalid(length, prefixHex, "prefix_mismatch")
+                    return KeyMaterialValidation.invalid(length, ED25519_SPKI_SIZE, prefixHex, "prefix_mismatch")
                 }
             }
-            return Ed25519SpkiValidation.valid(length, prefixHex)
+            return KeyMaterialValidation.valid(length, ED25519_SPKI_SIZE, prefixHex)
+        }
+
+        private fun validateMlDsaKeyPair(keyPair: KeyPair?): KeyMaterialValidation {
+            if (keyPair?.public !is MlDsaPublicKey) {
+                return KeyMaterialValidation.invalid(0, 0, "", "mldsa_public_key_missing")
+            }
+            if (keyPair.private !is MlDsaPrivateKey) {
+                return KeyMaterialValidation.invalid(
+                    keyPair.public.encoded.size,
+                    keyPair.public.encoded.size,
+                    toHex(keyPair.public.encoded, minOf(12, keyPair.public.encoded.size)),
+                    "mldsa_private_key_missing",
+                )
+            }
+            val encodedPublic = keyPair.public.encoded
+            val expected = try {
+                NativeSignerBridge.publicKeyFromPrivate(SigningAlgorithm.ML_DSA, keyPair.private.encoded)
+            } catch (_: RuntimeException) {
+                return KeyMaterialValidation.invalid(
+                    encodedPublic.size,
+                    encodedPublic.size,
+                    toHex(encodedPublic, minOf(12, encodedPublic.size)),
+                    "mldsa_public_key_derivation_failed",
+                )
+            }
+            if (!expected.contentEquals(encodedPublic)) {
+                return KeyMaterialValidation.invalid(
+                    encodedPublic.size,
+                    expected.size,
+                    toHex(encodedPublic, minOf(12, encodedPublic.size)),
+                    "mldsa_public_key_mismatch",
+                )
+            }
+            return KeyMaterialValidation.valid(
+                encodedPublic.size,
+                expected.size,
+                toHex(encodedPublic, minOf(12, encodedPublic.size)),
+            )
         }
 
         private fun toHex(bytes: ByteArray?, length: Int): String {
@@ -413,21 +525,22 @@ class IrohaKeyManager private constructor(
         }
     }
 
-    private class Ed25519SpkiValidation private constructor(
+    private class KeyMaterialValidation private constructor(
         val valid: Boolean,
         val length: Int,
+        val expectedLength: Int,
         val prefixHex: String,
         val reason: String,
     ) {
         fun detail(): String =
-            "reason=$reason, spki_len=$length, expected_len=$ED25519_SPKI_SIZE, prefix=${prefixHex.ifEmpty { "unknown" }}"
+            "reason=$reason, key_len=$length, expected_len=$expectedLength, prefix=${prefixHex.ifEmpty { "unknown" }}"
 
         companion object {
-            fun valid(length: Int, prefixHex: String): Ed25519SpkiValidation =
-                Ed25519SpkiValidation(true, length, prefixHex, "ok")
+            fun valid(length: Int, expectedLength: Int, prefixHex: String): KeyMaterialValidation =
+                KeyMaterialValidation(true, length, expectedLength, prefixHex, "ok")
 
-            fun invalid(length: Int, prefixHex: String, reason: String): Ed25519SpkiValidation =
-                Ed25519SpkiValidation(false, length, prefixHex, reason)
+            fun invalid(length: Int, expectedLength: Int, prefixHex: String, reason: String): KeyMaterialValidation =
+                KeyMaterialValidation(false, length, expectedLength, prefixHex, reason)
         }
     }
 }

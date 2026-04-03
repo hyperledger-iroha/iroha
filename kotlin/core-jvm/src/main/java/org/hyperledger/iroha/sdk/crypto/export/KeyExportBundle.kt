@@ -9,6 +9,7 @@ import java.io.InputStream
 import java.nio.ByteBuffer
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
+import org.hyperledger.iroha.sdk.crypto.SigningAlgorithm
 
 private val MAGIC = "IRKEY".toByteArray(Charsets.UTF_8)
 
@@ -20,7 +21,8 @@ private val MAGIC = "IRKEY".toByteArray(Charsets.UTF_8)
  *
  * ```
  * magic[5] = "IRKEY"
- * version[1] = 0x03
+ * version[1] = 0x04
+ * algorithm_code[1] (v4+)
  * alias_len[2] (big-endian)
  * alias_bytes
  * public_key_len[2]
@@ -37,6 +39,7 @@ private val MAGIC = "IRKEY".toByteArray(Charsets.UTF_8)
  */
 class KeyExportBundle internal constructor(
     val alias: String,
+    val algorithmCode: Int = SigningAlgorithm.ED25519.bridgeCode,
     publicKey: ByteArray,
     nonce: ByteArray,
     ciphertext: ByteArray,
@@ -54,6 +57,7 @@ class KeyExportBundle internal constructor(
     val nonce: ByteArray get() = _nonce.copyOf()
     val ciphertext: ByteArray get() = _ciphertext.copyOf()
     val salt: ByteArray get() = _salt.copyOf()
+    val signingAlgorithm: SigningAlgorithm get() = SigningAlgorithm.fromBridgeCode(algorithmCode)
 
     /** Serializes the bundle to a base64 string with the canonical layout. */
     fun encodeBase64(): String = Base64.encode(encode())
@@ -62,7 +66,7 @@ class KeyExportBundle internal constructor(
     fun encode(): ByteArray {
         val aliasBytes = alias.toByteArray(Charsets.UTF_8)
         require(aliasBytes.size <= 0xFFFF) { "alias is too long" }
-        require(version == VERSION_V3) { "unsupported key export version: $version" }
+        require(version == VERSION_V3 || version == VERSION_V4) { "unsupported key export version: $version" }
         require(_publicKey.size <= 0xFFFF) { "publicKey is too long" }
         require(_ciphertext.size <= 0xFFFF) { "ciphertext is too long" }
         require(_nonce.size == EXPECTED_NONCE_LENGTH_BYTES) {
@@ -77,6 +81,9 @@ class KeyExportBundle internal constructor(
         try {
             output.write(MAGIC)
             output.write(version.toInt())
+            if (version >= VERSION_V4) {
+                output.write(algorithmCode and 0xFF)
+            }
             output.write(shortBytes(aliasBytes.size))
             output.write(aliasBytes)
             output.write(shortBytes(_publicKey.size))
@@ -97,6 +104,7 @@ class KeyExportBundle internal constructor(
 
     companion object {
         const val VERSION_V3: Byte = 3
+        const val VERSION_V4: Byte = 4
         const val EXPECTED_NONCE_LENGTH_BYTES: Int = 12
         const val EXPECTED_SALT_LENGTH_BYTES: Int = 16
 
@@ -123,10 +131,19 @@ class KeyExportBundle internal constructor(
                         throw KeyExportException("Key export bundle magic mismatch")
                     }
                     val version = input.read()
-                    if (version != VERSION_V3.toInt()) {
+                    if (version != VERSION_V3.toInt() && version != VERSION_V4.toInt()) {
                         throw KeyExportException(
                             "Unsupported key export version: ${if (version < 0) "EOF" else version}"
                         )
+                    }
+                    val algorithmCode = if (version >= VERSION_V4.toInt()) {
+                        val code = input.read()
+                        if (code < 0) {
+                            throw KeyExportException("Unexpected end of stream while reading algorithm code")
+                        }
+                        code
+                    } else {
+                        SigningAlgorithm.ED25519.bridgeCode
                     }
                     val aliasLength = readShort(input)
                     val aliasBytes = readExactly(input,aliasLength)
@@ -183,6 +200,7 @@ class KeyExportBundle internal constructor(
                     }
                     return KeyExportBundle(
                         String(aliasBytes, Charsets.UTF_8),
+                        algorithmCode,
                         pubKey,
                         nonce,
                         cipher,

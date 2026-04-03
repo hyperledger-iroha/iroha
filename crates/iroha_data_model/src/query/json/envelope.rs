@@ -202,6 +202,16 @@ pub enum SingularQueryJson {
         /// Optional exact domain filter such as `hbl`.
         domain: Option<String>,
     },
+    /// Looks up an account recovery policy by stable alias.
+    FindAccountRecoveryPolicyByAlias {
+        /// Stable account alias encoded as a structured JSON payload.
+        alias: crate::account::AccountAlias,
+    },
+    /// Looks up an account recovery request by stable alias.
+    FindAccountRecoveryRequestByAlias {
+        /// Stable account alias encoded as a structured JSON payload.
+        alias: crate::account::AccountAlias,
+    },
     /// Looks up an asset by identifier.
     FindAssetById {
         /// Asset definition address identifying the asset type.
@@ -246,6 +256,28 @@ impl SingularQueryJson {
             dataspace: payload_optional_string(payload, "dataspace")?,
             domain: payload_optional_string(payload, "domain")?,
         })
+    }
+
+    fn parse_recovery_policy(payload: &Map) -> Result<Self, QueryJsonError> {
+        let alias = payload
+            .get("alias")
+            .ok_or(QueryJsonError::MissingField("payload", "alias"))
+            .and_then(|value| {
+                json::from_value::<crate::account::AccountAlias>(value.clone())
+                    .map_err(|_| QueryJsonError::InvalidField("payload", "alias"))
+            })?;
+        Ok(Self::FindAccountRecoveryPolicyByAlias { alias })
+    }
+
+    fn parse_recovery_request(payload: &Map) -> Result<Self, QueryJsonError> {
+        let alias = payload
+            .get("alias")
+            .ok_or(QueryJsonError::MissingField("payload", "alias"))
+            .and_then(|value| {
+                json::from_value::<crate::account::AccountAlias>(value.clone())
+                    .map_err(|_| QueryJsonError::InvalidField("payload", "alias"))
+            })?;
+        Ok(Self::FindAccountRecoveryRequestByAlias { alias })
     }
 
     fn parse_contract_manifest(payload: &Map) -> Result<Self, QueryJsonError> {
@@ -338,6 +370,22 @@ impl SingularQueryJson {
                 }
                 map.insert("payload".to_owned(), Value::Object(payload));
             }
+            Self::FindAccountRecoveryPolicyByAlias { alias } => {
+                let mut payload = Map::new();
+                payload.insert(
+                    "alias".to_owned(),
+                    json::to_value(alias).expect("account alias serializes"),
+                );
+                map.insert("payload".to_owned(), Value::Object(payload));
+            }
+            Self::FindAccountRecoveryRequestByAlias { alias } => {
+                let mut payload = Map::new();
+                payload.insert(
+                    "alias".to_owned(),
+                    json::to_value(alias).expect("account alias serializes"),
+                );
+                map.insert("payload".to_owned(), Value::Object(payload));
+            }
             Self::FindTwitterBindingByHash { binding_hash } => {
                 let mut payload = Map::new();
                 payload.insert(
@@ -365,6 +413,12 @@ impl SingularQueryJson {
             "FindParameters" => Ok(SingularQueryJson::FindParameters),
             "FindAccountById" => Self::parse_account_by_id(singular_payload(map)?),
             "FindAliasesByAccountId" => Self::parse_aliases(singular_payload(map)?),
+            "FindAccountRecoveryPolicyByAlias" => {
+                Self::parse_recovery_policy(singular_payload(map)?)
+            }
+            "FindAccountRecoveryRequestByAlias" => {
+                Self::parse_recovery_request(singular_payload(map)?)
+            }
             "FindContractManifestByCodeHash" => {
                 Self::parse_contract_manifest(singular_payload(map)?)
             }
@@ -383,6 +437,12 @@ impl SingularQueryJson {
             SingularQueryJson::FindParameters => "FindParameters",
             SingularQueryJson::FindAccountById { .. } => "FindAccountById",
             SingularQueryJson::FindAliasesByAccountId { .. } => "FindAliasesByAccountId",
+            SingularQueryJson::FindAccountRecoveryPolicyByAlias { .. } => {
+                "FindAccountRecoveryPolicyByAlias"
+            }
+            SingularQueryJson::FindAccountRecoveryRequestByAlias { .. } => {
+                "FindAccountRecoveryRequestByAlias"
+            }
             SingularQueryJson::FindAssetById { .. } => "FindAssetById",
             SingularQueryJson::FindAssetDefinitionById { .. } => "FindAssetDefinitionById",
             SingularQueryJson::FindTriggerById { .. } => "FindTriggerById",
@@ -426,6 +486,16 @@ impl SingularQueryJson {
                     crate::query::account::prelude::FindAliasesByAccountId::new(
                         id, dataspace, domain,
                     ),
+                ))
+            }
+            SingularQueryJson::FindAccountRecoveryPolicyByAlias { alias } => {
+                Ok(SingularQueryBox::FindAccountRecoveryPolicyByAlias(
+                    crate::query::account::prelude::FindAccountRecoveryPolicyByAlias::new(alias),
+                ))
+            }
+            SingularQueryJson::FindAccountRecoveryRequestByAlias { alias } => {
+                Ok(SingularQueryBox::FindAccountRecoveryRequestByAlias(
+                    crate::query::account::prelude::FindAccountRecoveryRequestByAlias::new(alias),
                 ))
             }
             SingularQueryJson::FindAssetById {
@@ -1124,6 +1194,28 @@ mod tests {
                 assert_eq!(q.account_id(), &account_id);
                 assert_eq!(q.dataspace(), Some("centralbank"));
                 assert_eq!(q.domain(), Some("hbl"));
+            }
+            other => panic!("unexpected query variant: {other:?}"),
+        }
+
+        let alias = crate::account::AccountAlias::domainless(
+            "alice".parse().expect("alias label"),
+            crate::nexus::DataSpaceId::GLOBAL,
+        );
+        let singular = SingularQueryJson::FindAccountRecoveryPolicyByAlias {
+            alias: alias.clone(),
+        };
+        let envelope = QueryEnvelopeJson::Singular(singular.clone());
+        let json = norito::json::to_json(&envelope).expect("serialize");
+        let parsed: QueryEnvelopeJson = norito::json::from_str(&json).expect("deserialize");
+        assert_eq!(parsed, envelope);
+        let query = match parsed {
+            QueryEnvelopeJson::Singular(s) => s.into_box().expect("into box"),
+            _ => unreachable!(),
+        };
+        match query {
+            SingularQueryBox::FindAccountRecoveryPolicyByAlias(q) => {
+                assert_eq!(q.alias(), &alias);
             }
             other => panic!("unexpected query variant: {other:?}"),
         }

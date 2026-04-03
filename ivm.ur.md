@@ -1,20 +1,42 @@
-<!-- Auto-generated stub for Urdu (ur) translation. Replace this content with the full translation. -->
-
 ---
 lang: ur
 direction: rtl
 source: ivm.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c07499edafa5f9d743fbb4b1bbd169725674dca7760d3912b0acb40c7c00fdf3
 source_last_modified: "2026-02-08T10:32:13.839888+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-04-02
 ---
 
-# ترجمہ جاری ہے
+# IVM حوالہ
 
 <div dir="rtl">
-یہ فائل انگریزی دستاویز کے اردو ترجمے کے لیے ایک عارضی نمونہ ہے۔ ترجمہ مکمل ہونے کے بعد اوپر موجود میٹا ڈیٹا میں `status` فیلڈ کو اپ ڈیٹ کریں۔
 
-یہ مسودہ ترجمے کا منتظر ہے۔ اس متن کو مکمل ترجمہ شدہ مواد سے تبدیل کریں اور اختتام پر `status` کو `complete` پر سیٹ کریں۔ ساتھ ہی یہ بھی یقینی بنائیں کہ `translation_last_reviewed` انگریزی نسخے کے ساتھ آخری موازنہ کی تاریخ دکھا رہا ہو۔
+یہ فائل IVM کی آرکیٹیکچر اور ABI نوٹس کے لیے workspace root پر موجود بنیادی داخلی دستاویز ہے۔
+تفصیلی دستاویزات `docs/source/` اور `crates/ivm/docs/` میں موجود ہیں۔
+
+متعلقہ دستاویزات:
+- `docs/source/ivm_architecture_plan.md`
+- `docs/source/ivm_syscalls.md`
+- `crates/ivm/docs/pointer_abi.md`
+
+<!-- BEGIN GENERATED POINTER TYPES -->
+| ID | Name | ABI v1 |
+|---|---|---|
+| 0x0001 | AccountId | OK |
+| 0x0002 | AssetDefinitionId | OK |
+| 0x0003 | Name | OK |
+| 0x0004 | Json | OK |
+| 0x0005 | NftId | OK |
+| 0x0006 | Blob | OK |
+| 0x0007 | AssetId | OK |
+| 0x0008 | DomainId | OK |
+| 0x0009 | NoritoBytes | OK |
+| 0x000A | DataSpaceId | OK |
+| 0x000B | AxtDescriptor | OK |
+| 0x000C | AssetHandle | OK |
+| 0x000D | ProofBlob | OK |
+<!-- END GENERATED POINTER TYPES -->
+
 </div>

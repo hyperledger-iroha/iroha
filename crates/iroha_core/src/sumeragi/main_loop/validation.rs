@@ -297,6 +297,20 @@ impl Actor {
 
         let validation_priority_reason =
             self.pending_block_validation_priority_reason(hash, &pending);
+        let dispatch = if matches!(dispatch, ValidationDispatch::TryWorker)
+            && matches!(validation_priority_reason, Some("commit_qc" | "cached_qc"))
+        {
+            debug!(
+                height = pending.height,
+                view = pending.view,
+                block = %hash,
+                reason = validation_priority_reason,
+                "forcing inline validation for pending block with cached finality evidence"
+            );
+            ValidationDispatch::Inline
+        } else {
+            dispatch
+        };
         let has_commit_qc = pending.commit_qc_observed()
             || self.pending_block_has_commit_qc(hash, pending.height, pending.view);
         if !has_commit_qc

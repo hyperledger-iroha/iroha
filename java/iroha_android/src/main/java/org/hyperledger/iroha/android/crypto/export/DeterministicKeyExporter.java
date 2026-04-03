@@ -24,9 +24,13 @@ import javax.crypto.SecretKeyFactory;
 import javax.crypto.spec.GCMParameterSpec;
 import javax.crypto.spec.PBEKeySpec;
 import javax.crypto.spec.SecretKeySpec;
+import org.hyperledger.iroha.android.crypto.MlDsaPrivateKey;
+import org.hyperledger.iroha.android.crypto.MlDsaPublicKey;
+import org.hyperledger.iroha.android.crypto.NativeSignerBridge;
+import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
 
 /**
- * Exports and recovers software-generated Ed25519 keys using salted HKDF + AES-GCM.
+ * Exports and recovers software-generated signing keys using salted HKDF + AES-GCM.
  *
  * <p>Each export uses a fresh random salt and nonce bound to the alias, derives a key with a
  * memory-hard KDF (Argon2id preferred, PBKDF2 fallback), and records the KDF kind/work factor in
@@ -77,17 +81,23 @@ public final class DeterministicKeyExporter {
     Objects.requireNonNull(publicKey, "publicKey");
     Objects.requireNonNull(alias, "alias");
     Objects.requireNonNull(passphrase, "passphrase");
-    ensureEd25519KeyPair(privateKey, publicKey);
+    final SigningAlgorithm signingAlgorithm = resolveSigningAlgorithm(privateKey, publicKey);
     ensurePassphraseStrength(passphrase);
 
     final byte[] privateKeyBytes = privateKey.getEncoded();
     final byte[] publicKeyBytes = publicKey.getEncoded();
+    if (privateKeyBytes == null || privateKeyBytes.length == 0) {
+      throw new KeyExportException("Private key encoding is unavailable");
+    }
+    if (publicKeyBytes == null || publicKeyBytes.length == 0) {
+      throw new KeyExportException("Public key encoding is unavailable");
+    }
     final byte[] salt = new byte[SALT_LENGTH_BYTES];
     fillRandomNonZero(salt);
     final byte[] nonce = new byte[NONCE_LENGTH_BYTES];
     fillRandomNonZero(nonce);
     guardSaltNonceReuse(salt, nonce);
-    final byte bundleVersion = KeyExportBundle.VERSION_V3;
+    final byte bundleVersion = KeyExportBundle.VERSION_V4;
     final KdfResult kdf = derivePreferredKey(alias, passphrase, salt);
     try {
       final Cipher cipher = Cipher.getInstance(AES_TRANSFORMATION);
@@ -100,6 +110,7 @@ public final class DeterministicKeyExporter {
       final byte[] ciphertext = cipher.doFinal(privateKeyBytes);
       return new KeyExportBundle(
           alias,
+          signingAlgorithm.bridgeCode(),
           publicKeyBytes,
           nonce,
           ciphertext,
@@ -115,11 +126,21 @@ public final class DeterministicKeyExporter {
     }
   }
 
-  private static void ensureEd25519KeyPair(
+  private static SigningAlgorithm resolveSigningAlgorithm(
       final PrivateKey privateKey, final PublicKey publicKey) throws KeyExportException {
-    if (!isEd25519PrivateKey(privateKey) || !isEd25519PublicKey(publicKey)) {
-      throw new KeyExportException("Deterministic export currently supports Ed25519 keys only");
+    if (privateKey instanceof MlDsaPrivateKey && publicKey instanceof MlDsaPublicKey) {
+      final byte[] expected =
+          NativeSignerBridge.publicKeyFromPrivate(
+              SigningAlgorithm.ML_DSA, privateKey.getEncoded());
+      if (!Arrays.equals(expected, publicKey.getEncoded())) {
+        throw new KeyExportException("ML-DSA key material is internally inconsistent");
+      }
+      return SigningAlgorithm.ML_DSA;
     }
+    if (isEd25519PrivateKey(privateKey) && isEd25519PublicKey(publicKey)) {
+      return SigningAlgorithm.ED25519;
+    }
+    throw new KeyExportException("Deterministic export supports Ed25519 and ML-DSA keys only");
   }
 
   private static boolean isEd25519PrivateKey(final PrivateKey privateKey) {
@@ -265,7 +286,8 @@ public final class DeterministicKeyExporter {
       final KeyExportBundle bundle, final char[] passphrase) throws KeyExportException {
     Objects.requireNonNull(bundle, "bundle");
     Objects.requireNonNull(passphrase, "passphrase");
-    if (bundle.version() != KeyExportBundle.VERSION_V3) {
+    if (bundle.version() != KeyExportBundle.VERSION_V3
+        && bundle.version() != KeyExportBundle.VERSION_V4) {
       throw new KeyExportException("Unsupported key export version: " + bundle.version());
     }
     ensurePassphraseStrength(passphrase);
@@ -289,14 +311,13 @@ public final class DeterministicKeyExporter {
       cipher.updateAAD(bundle.alias().getBytes(StandardCharsets.UTF_8));
       final byte[] privateKeyBytes = cipher.doFinal(bundle.ciphertext());
       try {
-        final KeyFactory factory = KeyFactory.getInstance(KEY_ALGORITHM);
-        final PrivateKey privateKey =
-            factory.generatePrivate(new PKCS8EncodedKeySpec(privateKeyBytes));
-        final PublicKey publicKey =
-            factory.generatePublic(new X509EncodedKeySpec(bundle.publicKey()));
-        return new KeyPairData(privateKey, publicKey);
+        return reconstructKeyPair(bundle.signingAlgorithm(), privateKeyBytes, bundle.publicKey());
+      } catch (final RuntimeException ex) {
+        throw new KeyExportException(
+            "Failed to reconstruct " + bundle.signingAlgorithm().providerName() + " key pair", ex);
       } catch (final GeneralSecurityException ex) {
-        throw new KeyExportException("Failed to reconstruct Ed25519 key pair", ex);
+        throw new KeyExportException(
+            "Failed to reconstruct " + bundle.signingAlgorithm().providerName() + " key pair", ex);
       } finally {
         Arrays.fill(privateKeyBytes, (byte) 0);
       }
@@ -512,12 +533,40 @@ public final class DeterministicKeyExporter {
     }
   }
 
+  private static KeyPairData reconstructKeyPair(
+      final SigningAlgorithm algorithm,
+      final byte[] privateKeyBytes,
+      final byte[] publicKeyBytes)
+      throws GeneralSecurityException {
+    return switch (algorithm) {
+      case ED25519 -> {
+        final KeyFactory factory = KeyFactory.getInstance(KEY_ALGORITHM);
+        final PrivateKey privateKey =
+            factory.generatePrivate(new PKCS8EncodedKeySpec(privateKeyBytes));
+        final PublicKey publicKey =
+            factory.generatePublic(new X509EncodedKeySpec(publicKeyBytes));
+        yield new KeyPairData(privateKey, publicKey, SigningAlgorithm.ED25519);
+      }
+      case ML_DSA -> {
+        final byte[] expected =
+            NativeSignerBridge.publicKeyFromPrivate(SigningAlgorithm.ML_DSA, privateKeyBytes);
+        if (!Arrays.equals(expected, publicKeyBytes)) {
+          throw new IllegalArgumentException("ML-DSA public key does not match private key");
+        }
+        yield new KeyPairData(
+            new MlDsaPrivateKey(privateKeyBytes, publicKeyBytes),
+            new MlDsaPublicKey(publicKeyBytes),
+            SigningAlgorithm.ML_DSA);
+      }
+    };
+  }
+
   private static String hkdfSaltDomain() {
-    return "iroha-android-software-export-v3-salt";
+    return "iroha-android-software-export-v4-salt";
   }
 
   private static String hkdfInfoDomain() {
-    return "iroha-android-software-export-v3-info";
+    return "iroha-android-software-export-v4-info";
   }
 
   private static void guardSaltNonceReuse(final byte[] salt, final byte[] nonce)
@@ -531,7 +580,7 @@ public final class DeterministicKeyExporter {
         HexFormat.of()
             .formatHex(
                 sha256(
-                    "iroha-android-software-export-v3-fingerprint", fingerprintMaterial));
+                    "iroha-android-software-export-v4-fingerprint", fingerprintMaterial));
     Arrays.fill(fingerprintMaterial, (byte) 0);
     synchronized (RECENT_EXPORT_INDEX) {
       if (RECENT_EXPORT_INDEX.contains(fingerprint)) {
@@ -586,10 +635,15 @@ public final class DeterministicKeyExporter {
   public static final class KeyPairData {
     private final PrivateKey privateKey;
     private final PublicKey publicKey;
+    private final SigningAlgorithm signingAlgorithm;
 
-    KeyPairData(final PrivateKey privateKey, final PublicKey publicKey) {
+    KeyPairData(
+        final PrivateKey privateKey,
+        final PublicKey publicKey,
+        final SigningAlgorithm signingAlgorithm) {
       this.privateKey = privateKey;
       this.publicKey = publicKey;
+      this.signingAlgorithm = signingAlgorithm;
     }
 
     public PrivateKey privateKey() {
@@ -598,6 +652,10 @@ public final class DeterministicKeyExporter {
 
     public PublicKey publicKey() {
       return publicKey;
+    }
+
+    public SigningAlgorithm signingAlgorithm() {
+      return signingAlgorithm;
     }
   }
 

@@ -2959,7 +2959,9 @@ fn touch_missing_block_request(
                     stats.view_change_window = match (stats.view_change_window, view_change_window)
                     {
                         (Some(existing), Some(window)) => Some(existing.min(window)),
-                        (Some(existing), None) => Some(existing),
+                        // An explicit `None` from a same-priority caller means view-change
+                        // escalation is intentionally deferred while recovery backlog drains.
+                        (Some(_existing), None) => None,
                         (None, Some(window)) => Some(window),
                         (None, None) => None,
                     };
@@ -3071,7 +3073,9 @@ fn observe_missing_block_request(
                     stats.view_change_window = match (stats.view_change_window, view_change_window)
                     {
                         (Some(existing), Some(window)) => Some(existing.min(window)),
-                        (Some(existing), None) => Some(existing),
+                        // Mirror `touch_missing_block_request`: explicit defer calls must be able
+                        // to clear a previously armed view-change window for the same request.
+                        (Some(_existing), None) => None,
                         (None, Some(window)) => Some(window),
                         (None, None) => None,
                     };
@@ -4827,13 +4831,36 @@ struct IdleBacklogSignals {
 }
 
 impl IdleBacklogSignals {
-    fn has_backlog(self) -> bool {
-        self.consensus_queue_backlog || self.rbc_backlog
-    }
-
     fn near_quorum_fast_timeout_gate_open(self) -> bool {
         !self.near_quorum_queue_backlog && !self.near_quorum_rbc_backlog
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StalledPendingTimeoutClass {
+    BaseQuorumTimeout,
+    NearQuorumPayloadMissingFastTimeout,
+    ActiveRecoveryBacklogTimeout,
+}
+
+impl StalledPendingTimeoutClass {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::BaseQuorumTimeout => "base_quorum",
+            Self::NearQuorumPayloadMissingFastTimeout => "near_quorum_payload_missing_fast",
+            Self::ActiveRecoveryBacklogTimeout => "active_recovery_backlog",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct StalledPendingTimeoutDecision {
+    class: StalledPendingTimeoutClass,
+    timeout: Duration,
+    vote_count: usize,
+    min_votes_for_commit: usize,
+    missing_local_data: bool,
+    same_block_recovery_active: bool,
 }
 
 #[allow(
@@ -6369,16 +6396,56 @@ impl Actor {
                             tip_hash,
                         )
                 });
-        let owner_view_covers_request = requested_view <= slot.view;
-        let locally_voted = owner_view_covers_request
-            && matches!(slot.lock_state, FrontierOwnerLockState::LocallyVoted);
+        let locally_voted = matches!(slot.lock_state, FrontierOwnerLockState::LocallyVoted);
+        let local_vote_history = self.frontier_slot_has_local_vote_history_in_slot(slot);
+        let competing_quorum_locked =
+            self.frontier_slot_competing_quorum_locked_for_view(slot, requested_view);
         pending_live
             || commit_inflight_live
             // Preserve same-height owner protection after the pending wrapper is cleaned up but a
             // frontier commit QC has already anchored the contiguous slot.
             || slot.quorum_progress.commit_qc_observed
+            // If the old same-height block already has enough observed commit votes that a fresh
+            // conflicting candidate cannot mathematically reach quorum, keep exact-slot recovery
+            // on that owner instead of reproposing new block hashes.
+            || competing_quorum_locked
             || locally_voted
-            || (owner_view_covers_request && self.frontier_slot_has_local_vote_history_in_slot(slot))
+            // Once the local validator already voted for this same-height owner, later-view
+            // reproposals become locally non-votable. Keep repair anchored to the voted branch
+            // until stronger same-height evidence supersedes it.
+            || local_vote_history
+    }
+
+    fn frontier_slot_competing_quorum_locked_for_view(
+        &self,
+        slot: &FrontierSlot,
+        requested_view: u64,
+    ) -> bool {
+        if requested_view <= slot.view {
+            return false;
+        }
+
+        let (consensus_mode, _, _) = self.consensus_context_for_height(slot.height);
+        let mut commit_roster =
+            self.roster_for_vote_with_mode(slot.block_hash, slot.height, slot.view, consensus_mode);
+        if commit_roster.is_empty() {
+            commit_roster = self.roster_for_live_vote_with_mode(slot.height, consensus_mode);
+        }
+        if commit_roster.is_empty() {
+            commit_roster = self.effective_commit_topology();
+        }
+
+        let signature_topology = super::network_topology::Topology::new(commit_roster);
+        let min_votes_for_commit = signature_topology.min_votes_for_commit().max(1);
+        let total_validators = signature_topology.as_ref().len();
+        let vote_status = self.commit_vote_quorum_status_for_block_detail(
+            slot.block_hash,
+            slot.height,
+            slot.view,
+        );
+
+        vote_status.vote_count > 0
+            && total_validators.saturating_sub(vote_status.vote_count) < min_votes_for_commit
     }
 
     fn frontier_slot_live_local_owner_for_round(
@@ -6388,7 +6455,6 @@ impl Actor {
     ) -> Option<(HashOf<BlockHeader>, u64)> {
         self.frontier_slot.as_ref().and_then(|slot| {
             (slot.height == height
-                && slot.active_view >= view
                 && self.frontier_slot_has_live_local_owner_work_for_view(slot, view))
             .then_some((slot.block_hash, slot.view))
         })
@@ -6489,6 +6555,10 @@ impl Actor {
             || self
                 .frontier_slot_live_local_owner_for_round(height, view)
                 .is_some()
+            || (height == self.committed_height_snapshot().saturating_add(1)
+                && self
+                    .local_same_height_vote(height, self.epoch_for_height(height))
+                    .is_some())
     }
 
     fn seed_frontier_slot_from_same_height_evidence(
@@ -7848,11 +7918,10 @@ impl Actor {
         evaluated_height: u64,
         queue_depths: super::status::WorkerQueueDepthSnapshot,
     ) -> IdleBacklogSignals {
-        let existing_worker_backlog = Self::consensus_queue_backlog(queue_depths);
+        let existing_worker_backlog = self.consensus_queue_backlog(queue_depths);
         let queue_active_backlog = self.queue.active_len() > 0;
         let residual_round_backlog = self.has_residual_round_backlog_for_height(evaluated_height);
-        let near_quorum_queue_backlog_raw =
-            self.consensus_queue_backlog_blocks_near_quorum_timeout(queue_depths);
+        let near_quorum_queue_backlog_raw = existing_worker_backlog;
         let rbc_backlog_summary = self.rbc_backlog_summary();
         let unresolved_rbc_backlog = rbc_backlog_summary.has_backlog();
         let near_quorum_rbc_backlog_raw = self.has_near_quorum_rbc_backlog(rbc_backlog_summary);
@@ -7878,19 +7947,18 @@ impl Actor {
         }
     }
 
-    fn consensus_queue_backlog(queue_depths: super::status::WorkerQueueDepthSnapshot) -> bool {
-        queue_depths.vote_rx > 0
-            || queue_depths.rbc_chunk_rx > 0
-            || queue_depths.block_payload_rx > 0
-            || queue_depths.block_rx > 0
-            || queue_depths.consensus_rx > 0
+    fn consensus_queue_backlog(
+        &self,
+        queue_depths: super::status::WorkerQueueDepthSnapshot,
+    ) -> bool {
+        self.consensus_queue_backlog_blocks_near_quorum_timeout(queue_depths)
     }
 
     fn near_quorum_queue_depth_threshold(cap: usize) -> u64 {
-        let cap = cap.max(1);
-        let threshold =
-            cap.min(usize::try_from(NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR).unwrap_or(2));
-        u64::try_from(threshold).unwrap_or(NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR)
+        let cap = u64::try_from(cap.max(1)).unwrap_or(u64::MAX);
+        let floor = NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR.min(cap);
+        let fractional_threshold = cap.div_ceil(NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_DIVISOR);
+        fractional_threshold.max(floor)
     }
 
     fn consensus_queue_backlog_blocks_near_quorum_timeout(
@@ -7903,11 +7971,13 @@ impl Actor {
         let rbc_chunk_threshold =
             Self::near_quorum_queue_depth_threshold(self.config.queues.rbc_chunks);
         let block_threshold = Self::near_quorum_queue_depth_threshold(self.config.queues.blocks);
+        let consensus_threshold =
+            Self::near_quorum_queue_depth_threshold(self.config.queues.control);
         queue_depths.vote_rx >= vote_threshold
             || queue_depths.rbc_chunk_rx >= rbc_chunk_threshold
             || queue_depths.block_payload_rx >= block_payload_threshold
             || queue_depths.block_rx >= block_threshold
-            || queue_depths.consensus_rx >= NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR
+            || queue_depths.consensus_rx >= consensus_threshold
     }
 
     fn rbc_backlog_exceeds_pacemaker_soft_limits(&self, summary: RbcBacklogSummary) -> bool {
@@ -8012,7 +8082,8 @@ const LOCK_LAG_FRONTIER_STALL_WINDOWS_TO_ACTIVATE: u32 = 3;
 const FRONTIER_CATCHUP_STALL_WINDOWS_TO_ACTIVATE: u32 = 3;
 const MISSING_QC_HEIGHT_STALL_WINDOWS_TO_ACTIVATE: u32 = 3;
 const NO_PROPOSAL_STORM_FORCE_BREAK_STREAK: u32 = 4;
-const NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR: u64 = 2;
+const NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_FLOOR: u64 = 8;
+const NEAR_QUORUM_QUEUE_BACKLOG_DEPTH_DIVISOR: u64 = 16;
 const ROUND_LIVENESS_STAGNATION_WINDOWS_TO_ISOLATE: u32 = 3;
 const ROUND_LIVENESS_GAP_TO_ISOLATE: u64 = 8;
 
@@ -14699,7 +14770,11 @@ impl Actor {
         .max()
     }
 
-    fn emit_frontier_block_body_fetch(&mut self, now: Instant) -> bool {
+    fn emit_frontier_block_body_fetch_internal(
+        &mut self,
+        now: Instant,
+        bypass_ingress_grace: bool,
+    ) -> bool {
         self.prune_frontier_slot_state();
         let Some(mut slot) = self.frontier_slot.take() else {
             return false;
@@ -14724,7 +14799,7 @@ impl Actor {
             self.frontier_slot = Some(slot);
             return false;
         }
-        if !self.frontier_body_fetch_grace_elapsed(&slot, now) {
+        if !bypass_ingress_grace && !self.frontier_body_fetch_grace_elapsed(&slot, now) {
             self.frontier_slot = Some(slot);
             return false;
         }
@@ -14779,6 +14854,14 @@ impl Actor {
         slot.sync_compat_fields();
         self.frontier_slot = Some(slot);
         true
+    }
+
+    fn emit_frontier_block_body_fetch(&mut self, now: Instant) -> bool {
+        self.emit_frontier_block_body_fetch_internal(now, /*bypass_ingress_grace*/ false)
+    }
+
+    fn emit_frontier_block_body_fetch_urgent(&mut self, now: Instant) -> bool {
+        self.emit_frontier_block_body_fetch_internal(now, /*bypass_ingress_grace*/ true)
     }
 
     fn retry_frontier_block_body_fetch(&mut self, now: Instant) -> bool {
@@ -19288,10 +19371,9 @@ impl Actor {
             if !authoritative_known_payload && total_chunks != 0 && received_chunks < total_chunks {
                 let force_authoritative_body_fetch =
                     self.rbc_session_should_force_frontier_authoritative_body_fetch(key, &session);
-                // Single-chunk frontier sessions are a hot-path case: if the body is still not
-                // local, pull the authoritative BlockCreated body instead of waiting for generic
-                // chunk retry cadence. For larger sessions, only fetch BlockCreated when INIT
-                // metadata is insufficient to reconstruct the signed block after payload delivery.
+                // Contiguous-frontier sessions should move onto exact authoritative body repair
+                // as soon as payload progress stalls, even when INIT metadata is otherwise
+                // sufficient to rebuild the signed block after full RBC delivery.
                 if force_authoritative_body_fetch
                     || self
                         .rbc_session_needs_block_created_recovery_from_session(key, Some(&session))
@@ -19299,7 +19381,7 @@ impl Actor {
                     self.request_missing_block_for_pending_rbc(
                         key,
                         if force_authoritative_body_fetch {
-                            "rbc_ready_single_chunk_frontier_body"
+                            "rbc_ready_frontier_payload_gap"
                         } else {
                             "rbc_ready_chunks_pending"
                         },
@@ -21183,6 +21265,21 @@ impl Actor {
         let _required = self.rbc_deliver_quorum(&topology);
         let missing_chunks = total_chunks != 0 && received_chunks < total_chunks;
         if !authoritative_known_payload {
+            let force_authoritative_body_fetch =
+                self.rbc_session_should_force_frontier_authoritative_body_fetch(key, &session);
+            if force_authoritative_body_fetch
+                || self.rbc_session_needs_block_created_recovery_from_session(key, Some(&session))
+            {
+                self.request_missing_block_for_pending_rbc(
+                    key,
+                    if force_authoritative_body_fetch {
+                        "rbc_deliver_frontier_payload_gap"
+                    } else {
+                        "rbc_deliver_metadata_gap"
+                    },
+                    None,
+                );
+            }
             let should_log = self.should_emit_rbc_deliver_deferral(
                 key,
                 now,
@@ -29385,25 +29482,6 @@ impl Actor {
     fn maybe_force_view_change_for_stalled_pending(&mut self, now: Instant) -> bool {
         let committed_height = self.state.committed_height();
         let tip_hash = self.state.latest_block_hash_fast();
-        let stalled_pending_backlog = self.pending.pending_blocks.values().any(|pending| {
-            !pending.aborted
-                && pending_extends_tip(
-                    pending.height,
-                    pending.block.header().prev_block_hash(),
-                    committed_height,
-                    tip_hash,
-                )
-        }) || self.subsystems.commit.inflight.as_ref().is_some_and(
-            |inflight| {
-                !inflight.pending.aborted
-                    && pending_extends_tip(
-                        inflight.pending.height,
-                        inflight.pending.block.header().prev_block_hash(),
-                        committed_height,
-                        tip_hash,
-                    )
-            },
-        );
         let base_timeout = self.commit_quorum_timeout().max(Duration::from_millis(1));
         let near_quorum_timeout =
             reschedule::near_quorum_payload_timeout(self.rebroadcast_cooldown()).min(base_timeout);
@@ -29422,82 +29500,27 @@ impl Actor {
             near_quorum_queue_backlog,
             near_quorum_rbc_backlog,
         } = backlog_signals;
-        let backlog_signals_active = backlog_signals.has_backlog() || stalled_pending_backlog;
+        let recovery_backlog_signals_active =
+            existing_worker_backlog || residual_round_backlog || unresolved_rbc_backlog;
         let near_quorum_fast_timeout_gate_open =
-            backlog_signals.near_quorum_fast_timeout_gate_open();
+            Self::stalled_pending_near_quorum_fast_timeout_gate_open(backlog_signals);
         let near_quorum_recent_progress_grace =
             saturating_mul_duration(self.rebroadcast_cooldown(), 4).max(Duration::from_millis(500));
-        let backlog_timeout =
-            self.backlog_extended_view_change_timeout(base_timeout, backlog_signals_active);
-        let frontier_pending_timeout =
-            saturating_mul_duration(self.recovery_deferred_qc_ttl(), 2).max(backlog_timeout);
+        let backlog_timeout = self
+            .backlog_extended_view_change_timeout(base_timeout, recovery_backlog_signals_active);
         let backlog_recent_progress_grace = self.backlog_extended_view_change_timeout(
             self.rebroadcast_cooldown().max(Duration::from_millis(500)),
-            backlog_signals_active,
+            true,
         );
-        let da_enabled = self.runtime_da_enabled();
-        let pending_effective_timeout = |pending: &PendingBlock| {
-            let block_hash = pending.block.hash();
-            let (consensus_mode, _, _) = self.consensus_context_for_height(pending.height);
-            let mut commit_roster = self.roster_for_vote_with_mode(
-                block_hash,
-                pending.height,
-                pending.view,
-                consensus_mode,
-            );
-            if commit_roster.is_empty() {
-                commit_roster = self.roster_for_live_vote_with_mode(pending.height, consensus_mode);
-            }
-            if commit_roster.is_empty() {
-                commit_roster = self.effective_commit_topology();
-            }
-            let commit_topology = super::network_topology::Topology::new(commit_roster);
-            let min_votes_for_commit = commit_topology.min_votes_for_commit().max(1);
-            let vote_status = self.commit_vote_quorum_status_for_block_detail(
-                block_hash,
-                pending.height,
-                pending.view,
-            );
-            let near_commit_quorum = vote_status.vote_count > 0
-                && vote_status.vote_count < min_votes_for_commit
-                && vote_status.vote_count.saturating_add(1) >= min_votes_for_commit;
-            let payload_available = da_enabled
-                && Self::payload_available_for_da(
-                    &self.subsystems.da_rbc.rbc.sessions,
-                    &self.subsystems.da_rbc.rbc.status_handle,
-                    pending,
-                );
-            let missing_local_data = da_enabled && !payload_available;
-            let near_quorum_fast_timeout_allowed =
-                near_commit_quorum && missing_local_data && near_quorum_fast_timeout_gate_open;
-            let backlog_hysteresis_active =
-                backlog_signals_active && !near_quorum_fast_timeout_allowed;
-            let mut effective_timeout = if near_quorum_fast_timeout_allowed {
-                near_quorum_timeout
-            } else if backlog_hysteresis_active {
-                backlog_timeout
-            } else {
-                base_timeout
-            };
-            if !near_quorum_fast_timeout_allowed {
-                effective_timeout = effective_timeout.max(frontier_pending_timeout);
-            }
-            (
-                effective_timeout,
-                near_quorum_fast_timeout_allowed,
-                vote_status.vote_count,
-                min_votes_for_commit,
-                missing_local_data,
-                backlog_hysteresis_active,
-            )
-        };
 
         let mut stalled_pending = 0usize;
         let mut max_pending_stall = Duration::ZERO;
         let mut stalled_height: Option<u64> = None;
         let mut effective_timeout: Option<Duration> = None;
+        let mut effective_timeout_class: Option<StalledPendingTimeoutClass> = None;
         let mut near_quorum_stalled = false;
-        let mut backlog_hysteresis_stalled = false;
+        let mut recovery_backlog_stalled = false;
+        let mut same_block_recovery_stalled = false;
         let near_quorum_recovery_window = near_quorum_timeout
             .checked_div(2)
             .unwrap_or(near_quorum_timeout)
@@ -29513,14 +29536,17 @@ impl Actor {
             ) {
                 continue;
             }
-            let (
-                pending_timeout,
-                near_quorum_fast_timeout_allowed,
-                vote_count,
-                min_votes_for_commit,
-                missing_local_data,
-                backlog_hysteresis_active,
-            ) = pending_effective_timeout(pending);
+            let decision =
+                self.stalled_pending_timeout_decision(*block_hash, pending, backlog_signals, now);
+            let pending_timeout = decision.timeout;
+            let near_quorum_fast_timeout_allowed = matches!(
+                decision.class,
+                StalledPendingTimeoutClass::NearQuorumPayloadMissingFastTimeout
+            );
+            let recovery_backlog_active = matches!(
+                decision.class,
+                StalledPendingTimeoutClass::ActiveRecoveryBacklogTimeout
+            );
             let stall_age = pending.progress_age(now);
             if near_quorum_fast_timeout_allowed && stall_age >= near_quorum_recovery_window {
                 near_quorum_recovery_candidates.push((
@@ -29528,8 +29554,8 @@ impl Actor {
                     pending.height,
                     pending.view,
                     stall_age,
-                    vote_count,
-                    min_votes_for_commit,
+                    decision.vote_count,
+                    decision.min_votes_for_commit,
                 ));
             }
             if near_quorum_fast_timeout_allowed && stall_age < near_quorum_recent_progress_grace {
@@ -29537,20 +29563,21 @@ impl Actor {
                     height = pending.height,
                     view = pending.view,
                     block = %block_hash,
-                    votes = vote_count,
-                    min_votes = min_votes_for_commit,
-                    missing_local_data,
+                    votes = decision.vote_count,
+                    min_votes = decision.min_votes_for_commit,
+                    missing_local_data = decision.missing_local_data,
                     stall_age_ms = stall_age.as_millis(),
                     grace_ms = near_quorum_recent_progress_grace.as_millis(),
                     "deferring forced view change: near-quorum pending shows recent progress"
                 );
                 continue;
             }
-            if backlog_hysteresis_active && stall_age < backlog_recent_progress_grace {
+            if recovery_backlog_active && stall_age < backlog_recent_progress_grace {
                 debug!(
                     height = pending.height,
                     view = pending.view,
                     block = %block_hash,
+                    timeout_class = decision.class.as_str(),
                     stall_age_ms = stall_age.as_millis(),
                     grace_ms = backlog_recent_progress_grace.as_millis(),
                     existing_worker_backlog,
@@ -29561,7 +29588,7 @@ impl Actor {
                     unresolved_rbc_backlog,
                     near_quorum_queue_backlog,
                     near_quorum_rbc_backlog,
-                    stalled_pending_backlog,
+                    same_block_recovery_active = decision.same_block_recovery_active,
                     "deferring forced view change: backlog-heavy pending shows recent progress"
                 );
                 continue;
@@ -29573,11 +29600,16 @@ impl Actor {
             max_pending_stall = max_pending_stall.max(stall_age);
             stalled_height =
                 Some(stalled_height.map_or(pending.height, |current| current.min(pending.height)));
-            effective_timeout = Some(
-                effective_timeout.map_or(pending_timeout, |current| current.min(pending_timeout)),
-            );
+            match effective_timeout {
+                Some(current) if current <= pending_timeout => {}
+                _ => {
+                    effective_timeout = Some(pending_timeout);
+                    effective_timeout_class = Some(decision.class);
+                }
+            }
             near_quorum_stalled |= near_quorum_fast_timeout_allowed;
-            backlog_hysteresis_stalled |= backlog_hysteresis_active;
+            recovery_backlog_stalled |= recovery_backlog_active;
+            same_block_recovery_stalled |= decision.same_block_recovery_active;
         }
 
         let inflight_stall = self
@@ -29587,14 +29619,21 @@ impl Actor {
             .as_ref()
             .filter(|inflight| !inflight.pending.aborted)
             .map(|inflight| {
-                let (
-                    pending_timeout,
-                    near_quorum_fast_timeout_allowed,
-                    _,
-                    _,
-                    _,
-                    backlog_hysteresis_active,
-                ) = pending_effective_timeout(&inflight.pending);
+                let decision = self.stalled_pending_timeout_decision(
+                    inflight.block_hash,
+                    &inflight.pending,
+                    backlog_signals,
+                    now,
+                );
+                let pending_timeout = decision.timeout;
+                let near_quorum_fast_timeout_allowed = matches!(
+                    decision.class,
+                    StalledPendingTimeoutClass::NearQuorumPayloadMissingFastTimeout
+                );
+                let recovery_backlog_active = matches!(
+                    decision.class,
+                    StalledPendingTimeoutClass::ActiveRecoveryBacklogTimeout
+                );
                 let stall_age = inflight.pending.progress_age(now);
                 if near_quorum_fast_timeout_allowed && stall_age >= near_quorum_recovery_window {
                     let vote_status = self.commit_vote_quorum_status_for_block_detail(
@@ -29627,7 +29666,7 @@ impl Actor {
                 }
                 let stalled = if near_quorum_fast_timeout_allowed {
                     stall_age >= pending_timeout && stall_age >= near_quorum_recent_progress_grace
-                } else if backlog_hysteresis_active {
+                } else if recovery_backlog_active {
                     stall_age >= pending_timeout && stall_age >= backlog_recent_progress_grace
                 } else {
                     stall_age >= pending_timeout
@@ -29637,8 +29676,8 @@ impl Actor {
                     stalled,
                     stall_age,
                     pending_timeout,
-                    near_quorum_fast_timeout_allowed,
-                    backlog_hysteresis_active,
+                    decision.class,
+                    decision.same_block_recovery_active,
                 )
             });
         let inflight_stalled = inflight_stall.is_some_and(|(_, stalled, _, _, _, _)| stalled);
@@ -29647,17 +29686,28 @@ impl Actor {
             true,
             stall_age,
             pending_timeout,
-            near_quorum_fast_timeout_allowed,
-            backlog_hysteresis_active,
+            timeout_class,
+            same_block_recovery_active,
         )) = inflight_stall
         {
             stalled_height = Some(stalled_height.map_or(height, |current| current.min(height)));
             max_pending_stall = max_pending_stall.max(stall_age);
-            effective_timeout = Some(
-                effective_timeout.map_or(pending_timeout, |current| current.min(pending_timeout)),
+            match effective_timeout {
+                Some(current) if current <= pending_timeout => {}
+                _ => {
+                    effective_timeout = Some(pending_timeout);
+                    effective_timeout_class = Some(timeout_class);
+                }
+            }
+            near_quorum_stalled |= matches!(
+                timeout_class,
+                StalledPendingTimeoutClass::NearQuorumPayloadMissingFastTimeout
             );
-            near_quorum_stalled |= near_quorum_fast_timeout_allowed;
-            backlog_hysteresis_stalled |= backlog_hysteresis_active;
+            recovery_backlog_stalled |= matches!(
+                timeout_class,
+                StalledPendingTimeoutClass::ActiveRecoveryBacklogTimeout
+            );
+            same_block_recovery_stalled |= same_block_recovery_active;
         }
         let mut near_quorum_preemptive_escalations = 0usize;
         if !near_quorum_recovery_candidates.is_empty() {
@@ -29750,6 +29800,8 @@ impl Actor {
             return false;
         }
         let effective_timeout = effective_timeout.unwrap_or(base_timeout);
+        let effective_timeout_class =
+            effective_timeout_class.unwrap_or(StalledPendingTimeoutClass::BaseQuorumTimeout);
 
         let height = stalled_height.unwrap_or_else(|| self.active_consensus_round_height());
         if self.phase_tracker.current_view(height).is_none() {
@@ -29789,11 +29841,13 @@ impl Actor {
             inflight_stalled,
             view_age_ms = view_age.as_millis(),
             timeout_ms = effective_timeout.as_millis(),
+            timeout_class = effective_timeout_class.as_str(),
             base_timeout_ms = base_timeout.as_millis(),
             near_quorum_timeout_ms = near_quorum_timeout.as_millis(),
             backlog_timeout_ms = backlog_timeout.as_millis(),
             near_quorum_stalled,
-            backlog_hysteresis_stalled,
+            recovery_backlog_stalled,
+            same_block_recovery_stalled,
             near_quorum_preemptive_escalations,
             existing_worker_backlog,
             queue_active_backlog,
@@ -29806,7 +29860,6 @@ impl Actor {
             near_quorum_rbc_backlog,
             near_quorum_rbc_backlog_raw,
             near_quorum_fast_timeout_gate_open,
-            stalled_pending_backlog,
             max_pending_stall_ms = max_pending_stall.as_millis(),
             "active pending block stalled past quorum timeout; routing contiguous frontier through unified recovery"
         );
@@ -29816,6 +29869,140 @@ impl Actor {
         }
         self.trigger_view_change_with_cause(height, view, ViewChangeCause::QuorumTimeout);
         true
+    }
+
+    fn stalled_pending_near_quorum_fast_timeout_gate_open(
+        backlog_signals: IdleBacklogSignals,
+    ) -> bool {
+        !backlog_signals.near_quorum_queue_backlog_raw
+            && !backlog_signals.near_quorum_rbc_backlog_raw
+            && !backlog_signals.residual_round_backlog
+    }
+
+    fn stalled_pending_same_block_recovery_active(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        height: u64,
+        view: u64,
+        now: Instant,
+    ) -> bool {
+        let committed_height = self.committed_height_snapshot();
+        self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == height
+                && slot.view == view
+                && slot.block_hash == block_hash
+                && slot.exact_fetch_armed
+                && !slot.body_present
+                && !self.authoritative_block_payload_available(block_hash)
+        }) || self
+            .pending
+            .missing_block_requests
+            .get(&block_hash)
+            .is_some_and(|request| {
+                request.height == height
+                    && request.view == view
+                    && self.missing_block_request_has_actionable_dependency(
+                        block_hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+            })
+            || self.deferred_missing_payload_qcs.values().any(|entry| {
+                entry.qc.subject_block_hash == block_hash
+                    && entry.qc.height == height
+                    && entry.qc.view == view
+                    && self.deferred_missing_payload_qc_has_actionable_dependency(
+                        entry,
+                        committed_height,
+                        now,
+                    )
+            })
+    }
+
+    fn stalled_pending_timeout_decision(
+        &self,
+        block_hash: HashOf<BlockHeader>,
+        pending: &PendingBlock,
+        backlog_signals: IdleBacklogSignals,
+        now: Instant,
+    ) -> StalledPendingTimeoutDecision {
+        let base_timeout = self.commit_quorum_timeout().max(Duration::from_millis(1));
+        let near_quorum_timeout =
+            reschedule::near_quorum_payload_timeout(self.rebroadcast_cooldown()).min(base_timeout);
+        let recovery_backlog_signals_active = backlog_signals.existing_worker_backlog
+            || backlog_signals.residual_round_backlog
+            || backlog_signals.unresolved_rbc_backlog;
+        let backlog_timeout = self
+            .backlog_extended_view_change_timeout(base_timeout, recovery_backlog_signals_active);
+        let frontier_pending_timeout =
+            saturating_mul_duration(self.recovery_deferred_qc_ttl(), 2).max(backlog_timeout);
+        let (consensus_mode, _, _) = self.consensus_context_for_height(pending.height);
+        let mut commit_roster = self.roster_for_vote_with_mode(
+            block_hash,
+            pending.height,
+            pending.view,
+            consensus_mode,
+        );
+        if commit_roster.is_empty() {
+            commit_roster = self.roster_for_live_vote_with_mode(pending.height, consensus_mode);
+        }
+        if commit_roster.is_empty() {
+            commit_roster = self.effective_commit_topology();
+        }
+        let commit_topology = super::network_topology::Topology::new(commit_roster);
+        let min_votes_for_commit = commit_topology.min_votes_for_commit().max(1);
+        let vote_status = self.commit_vote_quorum_status_for_block_detail(
+            block_hash,
+            pending.height,
+            pending.view,
+        );
+        let near_commit_quorum = vote_status.vote_count > 0
+            && vote_status.vote_count < min_votes_for_commit
+            && vote_status.vote_count.saturating_add(1) >= min_votes_for_commit;
+        let da_enabled = self.runtime_da_enabled();
+        let payload_available = da_enabled
+            && Self::payload_available_for_da(
+                &self.subsystems.da_rbc.rbc.sessions,
+                &self.subsystems.da_rbc.rbc.status_handle,
+                pending,
+            );
+        let missing_local_data = da_enabled && !payload_available;
+        let same_block_recovery_active = self.stalled_pending_same_block_recovery_active(
+            block_hash,
+            pending.height,
+            pending.view,
+            now,
+        );
+        let near_quorum_fast_timeout_allowed = near_commit_quorum
+            && missing_local_data
+            && Self::stalled_pending_near_quorum_fast_timeout_gate_open(backlog_signals)
+            && !same_block_recovery_active;
+        let recovery_backlog_active = backlog_signals.existing_worker_backlog
+            || backlog_signals.residual_round_backlog
+            || backlog_signals.unresolved_rbc_backlog
+            || same_block_recovery_active;
+        let class = if near_quorum_fast_timeout_allowed {
+            StalledPendingTimeoutClass::NearQuorumPayloadMissingFastTimeout
+        } else if recovery_backlog_active {
+            StalledPendingTimeoutClass::ActiveRecoveryBacklogTimeout
+        } else {
+            StalledPendingTimeoutClass::BaseQuorumTimeout
+        };
+        let timeout = match class {
+            StalledPendingTimeoutClass::BaseQuorumTimeout => base_timeout,
+            StalledPendingTimeoutClass::NearQuorumPayloadMissingFastTimeout => near_quorum_timeout,
+            StalledPendingTimeoutClass::ActiveRecoveryBacklogTimeout => frontier_pending_timeout,
+        };
+
+        StalledPendingTimeoutDecision {
+            class,
+            timeout,
+            vote_count: vote_status.vote_count,
+            min_votes_for_commit,
+            missing_local_data,
+            same_block_recovery_active,
+        }
     }
 
     fn force_view_change_if_idle(&mut self, now: Instant) -> bool {

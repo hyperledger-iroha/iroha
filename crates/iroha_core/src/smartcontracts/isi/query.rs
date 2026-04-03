@@ -442,6 +442,12 @@ impl ExecuteSingularQuery for SingularQueryBox {
             SingularQueryBox::FindAliasesByAccountId(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }
+            SingularQueryBox::FindAccountRecoveryPolicyByAlias(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
+            SingularQueryBox::FindAccountRecoveryRequestByAlias(q) => {
+                Ok(SingularQueryOutputBox::from(q.execute(state)?))
+            }
             SingularQueryBox::FindProofRecordById(q) => {
                 Ok(SingularQueryOutputBox::from(q.execute(state)?))
             }

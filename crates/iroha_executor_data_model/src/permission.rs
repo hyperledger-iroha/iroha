@@ -189,6 +189,14 @@ pub mod account {
     }
 
     permission! {
+        /// Permission to replace the controller for the specified account.
+        pub struct CanReplaceAccountController {
+            /// Identifier of the account whose controller may be replaced.
+            pub account: AccountId,
+        }
+    }
+
+    permission! {
         /// Permission to resolve account aliases in the specified scope.
         pub struct CanResolveAccountAlias {
             /// Alias permission scope.

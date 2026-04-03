@@ -85,5 +85,8 @@ security and operability risk first, UX throughput second.
 
 ## Status
 
-The above ordering and invariants are ready for implementation. Follow-up branches should reference
-this document when wiring execution paths and syscall exposure.
+Update (2026-04-02): the highest-priority account-rotation item has now landed
+as `ReplaceAccountController` plus alias-keyed account recovery, which
+supersedes the narrower `RotateAccountSignatory` label used in this planning
+note. The remaining items stay open. Follow-up branches should still reference
+this document for the outstanding ISIs and syscall exposure work.

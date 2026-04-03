@@ -117,10 +117,10 @@ async fn npos_telemetry_soak_matches_metrics_under_adversarial_collectors() -> R
             SumeragiParameter::RedundantSendR(REDUNDANT_SEND_R),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(900),
+            SumeragiParameter::CommitTimeMs(900),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::CommitTimeMs(900),
+            SumeragiParameter::BlockTimeMs(900),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::DaEnabled(true),
