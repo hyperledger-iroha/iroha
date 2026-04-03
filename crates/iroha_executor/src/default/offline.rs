@@ -220,7 +220,8 @@ mod tests {
     }
 
     fn sample_asset(owner: &AccountId) -> AssetId {
-        let domain: DomainId = "offline".parse().expect("valid test domain");
+        let domain: DomainId =
+            DomainId::try_new("offline", "universal").expect("valid test domain");
         let definition =
             AssetDefinitionId::new(domain, "sample".parse::<Name>().expect("valid name"));
         AssetId::new(definition, owner.clone())

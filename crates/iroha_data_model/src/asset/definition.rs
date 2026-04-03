@@ -875,7 +875,7 @@ mod validation_tests {
     #[test]
     fn constructors_leave_name_empty_without_explicit_with_name() {
         let id = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
 
@@ -930,7 +930,7 @@ mod json_tests {
 
     #[test]
     fn new_asset_definition_json_roundtrip_preserves_policy() {
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let id = AssetDefinitionId::new(domain, Name::from_str("rose").expect("asset name"));
         let mut metadata = Metadata::default();
         metadata.insert("unit".parse().expect("metadata key"), "bloom");
@@ -987,7 +987,7 @@ mod json_tests {
 
     #[test]
     fn new_asset_definition_fast_from_json_matches_value() {
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let id = AssetDefinitionId::new(domain, Name::from_str("rose").expect("asset name"));
         let new_definition = NewAssetDefinition {
             id,

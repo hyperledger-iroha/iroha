@@ -1242,7 +1242,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
 
     let asset_definition_id = AssetDefinitionId::new(
-        "wonderland".parse().expect("domain id"),
+        DomainId::try_new("wonderland", "universal").expect("domain id"),
         "minted".parse().expect("asset definition name"),
     );
     let mut seed_block = state.block(iroha_data_model::block::BlockHeader::new(
@@ -1397,7 +1397,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
 
     let asset_definition_id = AssetDefinitionId::new(
-        "wonderland".parse().expect("domain id"),
+        DomainId::try_new("wonderland", "universal").expect("domain id"),
         "n3x_like".parse().expect("asset definition name"),
     );
     let mut seed_block = state.block(iroha_data_model::block::BlockHeader::new(
@@ -1567,7 +1567,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
 
     let asset_definition_id = AssetDefinitionId::new(
-        "wonderland".parse().expect("domain id"),
+        DomainId::try_new("wonderland", "universal").expect("domain id"),
         "n3x_burn".parse().expect("asset definition name"),
     );
     let mut seed_block = state.block(iroha_data_model::block::BlockHeader::new(

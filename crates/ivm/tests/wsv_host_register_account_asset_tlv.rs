@@ -58,7 +58,7 @@ fn test_account(domain: DomainId, public_key: PublicKey) -> AccountId {
 #[test]
 fn register_account_and_asset_then_mint() {
     // Caller alice will register a new domain, an account in it, an asset def, and mint.
-    let alice_domain: DomainId = "domain".parse().unwrap();
+    let alice_domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
     let alice_pk: PublicKey =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
@@ -73,7 +73,7 @@ fn register_account_and_asset_then_mint() {
 
     // Predeclare asset id to grant mint permission
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonder".parse().unwrap(),
+        DomainId::try_new("wonder", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
     wsv.grant_permission(&alice, PermissionToken::MintAsset(rose.clone()));
@@ -90,7 +90,7 @@ fn register_account_and_asset_then_mint() {
     vm.run().expect("register domain");
 
     // 2) Register the recipient account
-    let bob_domain: DomainId = "wonder".parse().unwrap();
+    let bob_domain: DomainId = DomainId::try_new("wonder", "universal").unwrap();
     let bob_pk: PublicKey =
         "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
             .parse()
@@ -139,7 +139,7 @@ fn register_account_and_asset_then_mint() {
 
 #[test]
 fn register_asset_rejects_name_pointer_without_explicit_definition_id() {
-    let alice_domain: DomainId = "domain".parse().unwrap();
+    let alice_domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
     let alice_pk: PublicKey =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()

@@ -2,6 +2,84 @@
 
 Last updated: 2026-04-03
 
+## 2026-04-03 Follow-up: `DomainId` no longer implements `FromStr`
+- `DomainId` now has only explicit constructors:
+  - `DomainId::try_new(domain, dataspace)` for structured call sites; and
+  - `DomainId::parse_fully_qualified("domain.dataspace")` for text boundaries.
+- The old raw constructor and generic string parsing path were removed so
+  domain creation can no longer silently bypass domain-label canonicalisation.
+- Runtime code that still depended on generic parsing was migrated across the
+  main stack, including:
+  - `iroha_data_model` JSON/key codecs and domain-bearing parsers (`NFT`, `RWA`,
+    account alias scope resolution);
+  - `iroha_config`, `iroha_genesis`, `iroha_test_network`,
+    `iroha_test_samples`, `iroha_executor`, `iroha_core`, `iroha`,
+    `kotodama_lang`, `ivm`, and `fastpq_prover`;
+  - config validation paths that previously required `DomainId: FromStr`
+    through env/config derive machinery.
+- Verification completed for the runtime slice:
+  - `cargo check -p iroha_data_model`
+  - `cargo check -p kotodama_lang -p iroha_config -p iroha_executor -p fastpq_prover -p iroha_test_samples`
+  - `cargo check -p iroha_config -p iroha_genesis -p iroha_test_network -p iroha_core -p iroha_executor -p fastpq_prover -p iroha -p iroha_test_samples -p kotodama_lang -p ivm`
+- Remaining fallout is now mostly test/example migration. Repo-wide grep still
+  finds many test fixtures, CLI tests, Torii tests, and integration tests that
+  construct `DomainId` via old `.parse()` or `DomainId::from_str(...)` calls.
+
+## 2026-04-03 Follow-up: repo-wide constructor migration in progress
+- After removing `DomainId: FromStr`, a broader second-wave migration was
+  needed for constructor inference sites such as:
+  - `AssetDefinitionId::new("wonderland".parse()?, ...)`
+  - `Domain::new("domain".parse()?)`
+  - `Unregister::domain("dummy".parse()?)`
+  - struct fields like `domain: "wonderland".parse()?`
+- Those constructor patterns were codemodded across the workspace to use
+  explicit `DomainId::try_new(..., "universal")` or
+  `DomainId::parse_fully_qualified(...)` instead of implicit parsing.
+- An isolated verification pass is in progress under
+  `CARGO_TARGET_DIR=target_tmp_domain_cleanup` to avoid the shared target-dir
+  lock pileup from older cargo wrappers.
+- First isolated result from `cargo check -p iroha_data_model --tests` exposed
+  only a small remaining tail in:
+  - `kaigi_events_roundtrip.rs`
+  - `id_json.rs`
+  - `query_response_roundtrip.rs`
+  - `dump_wallet_flow_hex.rs`
+  - plus one unused import in `streaming_events_roundtrip.rs`
+- Those data-model test failures were fixed; the follow-up isolated
+  `iroha_data_model --tests` check is still compiling as of this update.
+
+## 2026-04-03 Follow-up: account scope hierarchy now models dataspaces first, domains second
+- `WorldReadOnly` now exposes an explicit account scope hierarchy:
+  - `account_scope_hierarchy(&AccountId)` returns the account’s `dataspace ->
+    domains` mapping;
+  - `account_dataspaces(...)` and `account_domains(...)` derive the flattened
+    `1..many` dataspace and `0..many` domain views from that mapping; and
+  - the universal dataspace is always present in the hierarchy, while domains
+    remain optional per dataspace.
+- Remaining qualified-domain runtime leaks were removed:
+  - domain-unregister cleanup now resolves each alias to its full qualified
+    `DomainId` before removing bindings, so `domain.universal` and
+    `domain.retail` no longer collide during cleanup;
+  - multisig home-domain inference now reads the full account scope hierarchy
+    instead of reparsing the bare alias-domain segment; and
+  - account-address domain selectors now hash the canonical full
+    `domain.dataspace` literal, eliminating selector collisions between same
+    domain labels in different dataspaces.
+- Follow-on first-release cleanup landed where it was still blocking runtime
+  initialization:
+  - `GENESIS_DOMAIN_ID` is now `genesis.universal`;
+  - config defaults that still referenced bare domains now use explicit
+    `*.universal` literals for canonical asset ids and default governance/oracle
+    domains; and
+  - test-network + integration SNS helpers now register/query domains by the
+    full `domain.dataspace` label.
+- Focused verification completed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_synth_domain cargo check -p iroha_data_model -p iroha_config -p iroha_genesis -p iroha_core -p iroha_test_network -p integration_tests`
+  - `CARGO_TARGET_DIR=target_tmp_synth_domain cargo test -p iroha_core --lib multisig_home_domain_inference_resolves_qualified_alias_domains -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_synth_domain cargo test -p iroha_core --lib unregister_domain_keeps_aliases_in_same_named_foreign_dataspace -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_synth_domain cargo test -p iroha_core account_scope_hierarchy_tracks_dataspaces_and_domains -- --nocapture`
+
 ## 2026-04-03 Follow-up: domains are now dataspace-qualified end to end
 - `DomainId` no longer models a bare label. The canonical public form is now
   always `domain.dataspace`, and parsing rejects standalone `domain` literals.

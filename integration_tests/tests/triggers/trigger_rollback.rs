@@ -24,13 +24,16 @@ async fn failed_trigger_revert() -> Result<()> {
     //When
     let trigger_id = "trigger".parse::<TriggerId>()?;
     let account_id = ALICE_ID.clone();
-    let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "xor".parse()?);
+    let asset_definition_id = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "xor".parse()?,
+    );
     let create_asset = Register::asset_definition({
         let __asset_definition_id = asset_definition_id.clone();
         AssetDefinition::numeric(__asset_definition_id.clone())
             .with_name(__asset_definition_id.name().to_string())
     });
-    let fail_isi = Unregister::domain("dummy".parse().unwrap());
+    let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
     let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
     let register_trigger = Register::trigger(Trigger::new(
         trigger_id.clone(),

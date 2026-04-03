@@ -735,7 +735,7 @@ async fn network_starts_with_relay() -> Result<()> {
     }
 
     let client = network.client();
-    let relay_domain: DomainId = "relay-net".parse()?;
+    let relay_domain: DomainId = DomainId::try_new("relay-net", "universal")?;
     ensure_domain_registration_lease_for_network(&network, &relay_domain)?;
     let register = Register::domain(Domain::new(relay_domain));
     spawn_blocking(move || client.submit(register)).await??;
@@ -961,7 +961,7 @@ impl UnstableNetwork {
 
         let account_id = ALICE_ID.clone();
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
-            "wonderland".parse().expect("Valid"),
+            DomainId::try_new("wonderland", "universal").expect("Valid"),
             "unstable".parse().expect("Valid"),
         );
 

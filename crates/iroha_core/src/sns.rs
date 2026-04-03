@@ -212,7 +212,7 @@ pub fn selector_for_namespace_literal(
     match namespace {
         SnsNamespace::AccountAlias => selector_for_account_alias_literal(literal, catalog),
         SnsNamespace::Domain => {
-            let domain = DomainId::from_str(literal.trim())
+            let domain = DomainId::parse_fully_qualified(literal.trim())
                 .map_err(|err| SnsError::BadRequest(err.reason().to_owned()))?;
             selector_for_domain(&domain).map_err(|err| SnsError::BadRequest(err.to_string()))
         }
@@ -1320,7 +1320,7 @@ mod tests {
         let chain_id = iroha_data_model::ChainId::from("sns-genesis-alias-bootstrap");
         let genesis_key = KeyPair::random();
         let genesis_account = AccountId::new(genesis_key.public_key().clone());
-        let domain_id: DomainId = "cbuae".parse().expect("domain");
+        let domain_id: DomainId = DomainId::try_new("cbuae", "universal").expect("domain");
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
         let label = AccountAlias::new(
             "gas".parse().expect("label"),
@@ -1627,11 +1627,9 @@ mod tests {
     #[test]
     fn get_name_record_refreshes_expired_lifecycle() {
         let mut world = World::default();
-        let selector = selector_for_domain(&DomainId::new(
-            "trade".parse().expect("domain"),
-            "universal".parse().expect("dataspace"),
-        ))
-        .expect("selector");
+        let selector =
+            selector_for_domain(&DomainId::try_new("trade", "universal").expect("domain id"))
+                .expect("selector");
         let owner = owner();
         let record = NameRecordV1::new(
             selector.clone(),

@@ -1355,7 +1355,7 @@ mod tests {
     }
 
     fn sample_ids() -> (DomainId, AccountId, AccountId) {
-        let domain = DomainId::from_str("nexus").expect("domain id");
+        let domain = DomainId::try_new("nexus", "universal").expect("domain id");
         let (host, _) = gen_account_in("nexus");
         let (participant, _) = gen_account_in("nexus");
         (domain, host, participant)
@@ -1761,7 +1761,8 @@ mod tests {
 
             let manifest = sample_manifest();
             for hop in &manifest.hops {
-                let relay_domain: DomainId = "relay".parse().expect("relay domain");
+                let relay_domain: DomainId =
+                    DomainId::try_new("relay", "universal").expect("relay domain");
                 if stx.world.domain(&relay_domain).is_err() {
                     Register::domain(Domain::new(relay_domain.clone()))
                         .execute(&ALICE_ID, stx)
@@ -2068,7 +2069,7 @@ mod tests {
     #[test]
     fn relay_registration_persists_metadata_and_emits_summary() {
         let (relay_id, _relay_account) = gen_account_in("relay");
-        let domain_id = DomainId::from_str("relay").expect("domain id");
+        let domain_id = DomainId::try_new("relay", "universal").expect("domain id");
         let registration = KaigiRelayRegistration {
             relay_id: relay_id.clone(),
             hpke_public_key: vec![0x10, 0x20, 0x30],
@@ -2142,7 +2143,8 @@ mod tests {
 
             let manifest = sample_manifest();
             for _hop in &manifest.hops {
-                let relay_domain: DomainId = "relay".parse().expect("relay domain");
+                let relay_domain: DomainId =
+                    DomainId::try_new("relay", "universal").expect("relay domain");
                 if stx.world.domain(&relay_domain).is_err() {
                     Register::domain(Domain::new(relay_domain))
                         .execute(&ALICE_ID, stx)
@@ -2163,7 +2165,8 @@ mod tests {
             }
 
             for hop in &manifest.hops {
-                let relay_domain: DomainId = "relay".parse().expect("relay domain");
+                let relay_domain: DomainId =
+                    DomainId::try_new("relay", "universal").expect("relay domain");
                 if stx.world.domain(&relay_domain).is_err() {
                     Register::domain(Domain::new(relay_domain.clone()))
                         .execute(&ALICE_ID, stx)

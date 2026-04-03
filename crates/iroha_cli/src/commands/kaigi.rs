@@ -787,7 +787,7 @@ impl From<RelayHealthStatusArg> for KaigiRelayHealthStatus {
 }
 
 fn parse_call_id(domain: &str, call_name: &str) -> Result<KaigiId> {
-    let domain_id = DomainId::from_str(domain).wrap_err("invalid domain id")?;
+    let domain_id = DomainId::parse_fully_qualified(domain).wrap_err("invalid domain id")?;
     let call = iroha::data_model::name::Name::from_str(call_name).wrap_err("invalid call name")?;
     Ok(KaigiId::new(domain_id, call))
 }

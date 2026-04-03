@@ -2470,7 +2470,7 @@ fn reconstruct_multisig_account_state(
             },
         )?
     } else {
-        infer_multisig_home_domain(state_transaction, &resolved_account)
+        infer_multisig_home_domain(state_transaction, &resolved_account)?
     };
 
     if let Some(raw) = account.metadata().get(&spec_key()) {
@@ -2530,26 +2530,26 @@ fn reconstruct_multisig_account_state(
 fn infer_multisig_home_domain(
     state_transaction: &StateTransaction<'_, '_>,
     account_id: &AccountId,
-) -> Option<iroha_data_model::domain::DomainId> {
-    infer_multisig_home_domain_from_aliases(state_transaction, account_id)
-        .or_else(|| infer_multisig_home_domain_from_roles(state_transaction, account_id))
+) -> Result<Option<iroha_data_model::domain::DomainId>, ValidationFail> {
+    let alias_domain = infer_multisig_home_domain_from_aliases(state_transaction, account_id)?;
+    Ok(alias_domain
+        .or_else(|| infer_multisig_home_domain_from_roles(state_transaction, account_id)))
 }
 
 fn infer_multisig_home_domain_from_aliases(
     state_transaction: &StateTransaction<'_, '_>,
     account_id: &AccountId,
-) -> Option<iroha_data_model::domain::DomainId> {
-    let mut domains = BTreeSet::new();
-    for alias in state_transaction.world.bound_account_aliases(account_id) {
-        let Some(domain) = alias.domain.as_ref() else {
-            continue;
-        };
-        let Ok(domain_id) = domain.name().as_ref().parse() else {
-            continue;
-        };
-        domains.insert(domain_id);
-    }
-    unique_home_domain_candidate(domains)
+) -> Result<Option<iroha_data_model::domain::DomainId>, ValidationFail> {
+    let hierarchy = state_transaction
+        .world
+        .account_scope_hierarchy(account_id)
+        .map_err(|err| {
+            ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
+                "multisig alias hierarchy malformed for `{account_id}`: {err}"
+            )))
+        })?;
+    let domains = hierarchy.into_values().flatten().collect();
+    Ok(unique_home_domain_candidate(domains))
 }
 
 fn infer_multisig_home_domain_from_roles(
@@ -2570,7 +2570,7 @@ fn infer_multisig_home_domain_from_roles(
         if prefix != MULTISIG_SIGNATORY || domain == DOMAINLESS_NAMESPACE {
             continue;
         }
-        let Ok(domain_id) = domain.parse() else {
+        let Ok(domain_id) = iroha_data_model::DomainId::parse_fully_qualified(domain) else {
             continue;
         };
         domains.insert(domain_id);
@@ -2801,7 +2801,7 @@ mod tests {
         },
         block::BlockHeader,
         isi::{AddSignatory, RemoveSignatory, SetAccountQuorum},
-        nexus::DataSpaceId,
+        nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
         prelude::{Domain, InstructionBox, Register},
     };
     use iroha_executor_data_model::isi::multisig::{
@@ -2890,12 +2890,29 @@ mod tests {
         domain_id: &iroha_data_model::domain::DomainId,
         label: &str,
     ) -> AccountAlias {
+        bind_account_label_in_dataspace(
+            state_transaction,
+            authority,
+            account_id,
+            domain_id,
+            DataSpaceId::GLOBAL,
+            label,
+        )
+    }
+
+    fn bind_account_label_in_dataspace(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        account_id: &AccountId,
+        domain_id: &iroha_data_model::domain::DomainId,
+        dataspace: DataSpaceId,
+        label: &str,
+    ) -> AccountAlias {
         let _ = authority;
-        let _ = domain_id;
         let label = AccountAlias::new(
             label.parse().expect("account label name"),
             Some(AccountAliasDomain::new(domain_id.name().clone())),
-            DataSpaceId::GLOBAL,
+            dataspace,
         );
         state_transaction
             .world
@@ -3012,7 +3029,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "acme".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("acme", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
@@ -3121,7 +3139,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "acme".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("acme", "universal").unwrap();
 
         let owner = KeyPair::random();
         let owner_id = new_account_id(&owner);
@@ -3178,7 +3197,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "acme".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("acme", "universal").unwrap();
 
         let owner = KeyPair::random();
         let owner_id = new_account_id(&owner);
@@ -3234,7 +3254,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "acme".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("acme", "universal").unwrap();
 
         let owner = KeyPair::random();
         let owner_id = new_account_id(&owner);
@@ -3326,7 +3347,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "acme".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("acme", "universal").unwrap();
 
         let owner = KeyPair::random();
         let owner_id = new_account_id(&owner);
@@ -3385,7 +3407,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "acme".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("acme", "universal").unwrap();
 
         let owner = KeyPair::random();
         let owner_id = new_account_id(&owner);
@@ -3447,7 +3470,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
@@ -3568,7 +3592,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
@@ -3702,7 +3727,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
@@ -3780,7 +3806,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
@@ -3896,7 +3923,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
@@ -4030,7 +4058,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
@@ -4117,7 +4146,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
@@ -4249,7 +4279,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "default".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("default", "universal").unwrap();
 
         let old_key = KeyPair::random();
         let old_account = new_account_id(&old_key);
@@ -4303,7 +4334,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "default".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("default", "universal").unwrap();
 
         let old_key = KeyPair::random();
         let old_account = new_account_id(&old_key);
@@ -4386,7 +4418,8 @@ mod tests {
 
     #[test]
     fn multisig_register_preserves_explicit_home_domain() {
-        let source_domain: iroha_data_model::domain::DomainId = "default".parse().unwrap();
+        let source_domain: iroha_data_model::domain::DomainId =
+            DomainId::try_new("default", "universal").unwrap();
         let signer = new_account_id(&KeyPair::random());
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer.clone(), 1)]),
@@ -4407,6 +4440,60 @@ mod tests {
             .expect("signatory exists");
         assert_eq!(register.home_domain.as_ref(), Some(&source_domain));
         assert_eq!(signer_in_spec.controller(), signer.controller());
+    }
+
+    #[test]
+    fn multisig_home_domain_inference_resolves_qualified_alias_domains() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::new(), kura, query_handle);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata {
+                id: DataSpaceId::GLOBAL,
+                alias: "universal".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        state_transaction.nexus.dataspace_catalog = dataspace_catalog.clone();
+        state_transaction.world.dataspace_catalog = dataspace_catalog;
+
+        let account_id = new_account_id(&KeyPair::random());
+        Register::account(iroha_data_model::account::NewAccount::new(
+            account_id.clone(),
+        ))
+        .execute(&account_id, &mut state_transaction)
+        .expect("register subject account");
+
+        let retail_domain: iroha_data_model::domain::DomainId =
+            DomainId::try_new("ops", "retail").expect("retail domain");
+        bind_account_label_in_dataspace(
+            &mut state_transaction,
+            &account_id,
+            &account_id,
+            &retail_domain,
+            retail_dataspace,
+            "desk",
+        );
+
+        assert_eq!(
+            infer_multisig_home_domain_from_aliases(&state_transaction, &account_id)
+                .expect("infer home domain"),
+            Some(retail_domain),
+            "alias inference should preserve the dataspace-qualified home domain",
+        );
     }
 
     #[test]
@@ -4504,7 +4591,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
@@ -4579,7 +4667,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "ttl".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("ttl", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
@@ -4660,7 +4749,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "signatory".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("signatory", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
@@ -4711,7 +4801,8 @@ mod tests {
     fn multisig_propose_repairs_missing_state_from_controller() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let domain_id: iroha_data_model::domain::DomainId = "repairable".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("repairable", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
@@ -4851,7 +4942,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "signatory-index".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("signatory-index", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
@@ -4915,7 +5007,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "signatory-rekey".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("signatory-rekey", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
@@ -5169,7 +5262,8 @@ seiyaku TriggerDispatch {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "signatory-approve".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("signatory-approve", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
@@ -5231,7 +5325,8 @@ seiyaku TriggerDispatch {
             ChainId::from("multisig-expired-duplicate-replace"),
         );
 
-        let domain_id: iroha_data_model::domain::DomainId = "retryable".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("retryable", "universal").unwrap();
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
         let signer1_id = new_account_id(&signer1);
@@ -5324,8 +5419,10 @@ seiyaku TriggerDispatch {
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
 
-        let multisig_domain: iroha_data_model::domain::DomainId = "multisig-home".parse().unwrap();
-        let signer_domain: iroha_data_model::domain::DomainId = "signatory-remote".parse().unwrap();
+        let multisig_domain: iroha_data_model::domain::DomainId =
+            DomainId::try_new("multisig-home", "universal").unwrap();
+        let signer_domain: iroha_data_model::domain::DomainId =
+            DomainId::try_new("signatory-remote", "universal").unwrap();
 
         let owner = KeyPair::random();
         let signer1 = KeyPair::random();
@@ -5448,8 +5545,10 @@ seiyaku TriggerDispatch {
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
 
-        let home_domain: iroha_data_model::domain::DomainId = "subject-home".parse().unwrap();
-        let alt_domain: iroha_data_model::domain::DomainId = "subject-alt".parse().unwrap();
+        let home_domain: iroha_data_model::domain::DomainId =
+            DomainId::try_new("subject-home", "universal").unwrap();
+        let alt_domain: iroha_data_model::domain::DomainId =
+            DomainId::try_new("subject-alt", "universal").unwrap();
 
         let owner = KeyPair::random();
         let shared_subject = KeyPair::random();
@@ -5591,7 +5690,8 @@ seiyaku TriggerDispatch {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "signatory-single".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("signatory-single", "universal").unwrap();
 
         let (owner, leaf_a, leaf_b) = (KeyPair::random(), KeyPair::random(), KeyPair::random());
 
@@ -5674,7 +5774,8 @@ seiyaku TriggerDispatch {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "missing".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("missing", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
@@ -5702,7 +5803,8 @@ seiyaku TriggerDispatch {
 
     #[test]
     fn multisig_role_for_large_policy_uses_hash_suffix() {
-        let domain_id: iroha_data_model::domain::DomainId = "weights".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("weights", "universal").unwrap();
         let member_count = (u8::MAX as usize) + 1;
         let mut members = Vec::with_capacity(member_count);
         for _ in 0..member_count {
@@ -5742,7 +5844,8 @@ seiyaku TriggerDispatch {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "cancel".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("cancel", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
@@ -5867,7 +5970,8 @@ seiyaku TriggerDispatch {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "weights".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("weights", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
@@ -5969,7 +6073,8 @@ seiyaku TriggerDispatch {
 
     #[test]
     fn replace_account_controller_single_to_multisig_materializes_members_and_preserves_alias() {
-        let domain_id: iroha_data_model::domain::DomainId = "replace".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("replace", "universal").unwrap();
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
         let kura = Kura::blank_kura_for_testing();
@@ -6054,7 +6159,8 @@ seiyaku TriggerDispatch {
 
     #[test]
     fn replace_account_controller_multisig_to_single_clears_memberships() {
-        let domain_id: iroha_data_model::domain::DomainId = "single".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("single", "universal").unwrap();
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
         let signer1_id = new_account_id(&signer1);
@@ -6144,7 +6250,8 @@ seiyaku TriggerDispatch {
 
     #[test]
     fn replace_account_controller_multisig_to_multisig_repoints_memberships() {
-        let domain_id: iroha_data_model::domain::DomainId = "repoint".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("repoint", "universal").unwrap();
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
         let signer3 = KeyPair::random();

@@ -2241,9 +2241,10 @@ fn extract_nexus_bootstrap_post_topology(
     peer_count: usize,
     profile: &crate::config::NexusProfile,
 ) -> Vec<Vec<InstructionBox>> {
-    let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
-    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
-    let universal_domain: DomainId = "universal".parse().expect("universal domain");
+    let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
+    let ivm_domain: DomainId = DomainId::try_new("ivm", "universal").expect("ivm domain");
+    let universal_domain: DomainId =
+        DomainId::try_new("universal", "universal").expect("universal domain");
     let gas_account = instructions::nexus_gas_account_id();
     let validator_accounts: BTreeSet<_> = (0..peer_count.max(1))
         .map(|index| AccountId::new(instructions::peer_keypair(index).public_key().clone()))
@@ -5487,7 +5488,7 @@ mod tests {
         };
         let asset = AssetId::new(
             AssetDefinitionId::new(
-                "chaosnet".parse().expect("domain id"),
+                DomainId::try_new("chaosnet", "universal").expect("domain id"),
                 "chaos_coin".parse().expect("asset name"),
             ),
             account.id.clone(),

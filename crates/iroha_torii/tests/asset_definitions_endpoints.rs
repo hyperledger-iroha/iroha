@@ -24,12 +24,13 @@ use tower::ServiceExt as _;
 
 fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) {
     let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
-    let domain_id: dm::DomainId = "wonderland".parse().expect("valid domain");
+    let domain_id: dm::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("valid domain");
     let domain = dm::Domain::new(domain_id.clone()).build(&authority);
     let account = dm::Account::new(authority.clone()).build(&authority);
 
     let cbdc_id = dm::AssetDefinitionId::new(
-        "wonderland".parse().expect("domain id"),
+        DomainId::try_new("wonderland", "universal").expect("domain id"),
         "cbdc".parse().expect("asset name"),
     );
     let cbdc = dm::AssetDefinition::numeric(cbdc_id.clone())
@@ -37,7 +38,7 @@ fn seeded_state() -> (Arc<State>, dm::AssetDefinitionId, dm::AssetDefinitionId) 
         .build(&authority);
 
     let usd_id = dm::AssetDefinitionId::new(
-        "wonderland".parse().expect("domain id"),
+        DomainId::try_new("wonderland", "universal").expect("domain id"),
         "usd".parse().expect("asset name"),
     );
     let usd = dm::AssetDefinition::numeric(usd_id.clone())
@@ -228,7 +229,8 @@ async fn asset_definitions_endpoints_return_name_and_alias() {
 #[tokio::test]
 async fn asset_definitions_query_supports_alias_binding_sort() {
     let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
-    let domain_id: dm::DomainId = "wonderland".parse().expect("valid domain");
+    let domain_id: dm::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("valid domain");
     let domain = dm::Domain::new(domain_id.clone()).build(&authority);
     let account = dm::Account::new(authority.clone()).build(&authority);
 

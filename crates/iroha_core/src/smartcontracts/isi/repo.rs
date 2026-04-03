@@ -708,18 +708,18 @@ mod tests {
     use crate::{kura::Kura, prelude::World, query::store::LiveQueryStore, state::State};
 
     fn setup_state() -> (State, RepoAgreementId, AssetDefinitionId, AssetDefinitionId) {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob_account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
 
         let cash_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let collateral_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "bond".parse().unwrap(),
         );
 
@@ -768,23 +768,23 @@ mod tests {
         AssetDefinitionId,
         AssetDefinitionId,
     ) {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
         let bob_account = Account::new(BOB_ID.clone()).build(&ALICE_ID);
 
         let cash_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let collateral_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "bond".parse().unwrap(),
         );
         let alt_collateral_def_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "note".parse().unwrap(),
             );
 
@@ -850,7 +850,7 @@ mod tests {
         AccountId,
     ) {
         crate::test_alias::ensure();
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
         let alice_account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
@@ -859,11 +859,11 @@ mod tests {
         let custodian_account = Account::new(custodian_id.clone()).build(&ALICE_ID);
 
         let cash_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let collateral_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "bond".parse().unwrap(),
         );
 

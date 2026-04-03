@@ -10,7 +10,8 @@ fn domain_metadata_mut_and_set_owned_by() {
     // Prepare an authority account to build the domain with
     let authority_key = KeyPair::random();
     let authority_pk = authority_key.public_key().clone();
-    let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
+    let domain_id: DomainId =
+        DomainId::try_new("wonderland", "universal").expect("valid domain id");
     let authority = AccountId::new(authority_pk);
 
     let mut domain = Domain::new(domain_id.clone()).build(&authority);
@@ -31,9 +32,9 @@ fn domain_metadata_mut_and_set_owned_by() {
 #[test]
 fn asset_definition_mutators_metadata_mintable_owner() {
     // Build an AssetDefinition and exercise mutators
-    let _domain_id: DomainId = "land".parse().expect("valid");
+    let _domain_id: DomainId = DomainId::try_new("land", "universal").expect("valid");
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "land".parse().unwrap(),
+        DomainId::try_new("land", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
 

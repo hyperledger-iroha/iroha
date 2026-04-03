@@ -3844,7 +3844,7 @@ mod fault_injection_tests {
             action: PrivateKaigiAction::Create(PrivateCreateKaigi {
                 call: PrivateKaigiTemplate {
                     id: KaigiId::new(
-                        DomainId::from_str("kaigi").expect("domain"),
+                        DomainId::try_new("kaigi", "universal").expect("domain"),
                         Name::from_str("private-room").expect("call"),
                     ),
                     title: Some("Private".to_owned()),
@@ -3872,7 +3872,7 @@ mod fault_injection_tests {
             },
             fee_spend: PrivateKaigiFeeSpend {
                 asset_definition_id: AssetDefinitionId::new(
-                    DomainId::from_str("wonderland").expect("domain"),
+                    DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("xor").expect("name"),
                 ),
                 anchor_root: Hash::new(b"anchor"),
@@ -3994,7 +3994,7 @@ mod tests {
             action: PrivateKaigiAction::Create(PrivateCreateKaigi {
                 call: PrivateKaigiTemplate {
                     id: KaigiId::new(
-                        DomainId::from_str("kaigi").expect("domain"),
+                        DomainId::try_new("kaigi", "universal").expect("domain"),
                         Name::from_str("private-room").expect("call"),
                     ),
                     title: Some("Private".to_owned()),
@@ -4022,7 +4022,7 @@ mod tests {
             },
             fee_spend: PrivateKaigiFeeSpend {
                 asset_definition_id: AssetDefinitionId::new(
-                    DomainId::from_str("wonderland").expect("domain"),
+                    DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("xor").expect("name"),
                 ),
                 anchor_root: Hash::new(b"anchor"),

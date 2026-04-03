@@ -130,7 +130,7 @@ where
 }
 
 fn account(domain: &str, public_key: &str) -> AccountId {
-    let _domain: DomainId = domain.parse().expect("domain id");
+    let _domain = DomainId::try_new(domain, "universal").expect("domain id");
     let public_key: PublicKey = public_key.parse().expect("public key");
     AccountId::new(public_key)
 }
@@ -173,7 +173,7 @@ impl IVMHost for LoggingCoreHost {
 }
 
 fn setup_base_world(caller: &AccountId) -> MockWorldStateView {
-    let domain: DomainId = "default".parse().expect("default domain id");
+    let domain: DomainId = DomainId::try_new("default", "universal").expect("default domain id");
     let mut wsv = MockWorldStateView::new();
     wsv.grant_permission(caller, PermissionToken::RegisterDomain);
     wsv.grant_permission(caller, PermissionToken::RegisterAccount);
@@ -214,7 +214,10 @@ fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {
     );
     let mut wsv = setup_base_world(&caller);
 
-    let asset_id = AssetDefinitionId::new("default".parse().unwrap(), "rose".parse().unwrap());
+    let asset_id = AssetDefinitionId::new(
+        DomainId::try_new("default", "universal").unwrap(),
+        "rose".parse().unwrap(),
+    );
     let recipient = parse_account_literal(ACCOUNT_A_LITERAL);
 
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
@@ -241,7 +244,10 @@ fn run_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
     let mut wsv = setup_base_world(&caller);
 
     let recipient = parse_account_literal(ACCOUNT_B_LITERAL);
-    let asset_id = AssetDefinitionId::new("default".parse().unwrap(), "rose".parse().unwrap());
+    let asset_id = AssetDefinitionId::new(
+        DomainId::try_new("default", "universal").unwrap(),
+        "rose".parse().unwrap(),
+    );
 
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::MintAsset(asset_id.clone()));
@@ -293,7 +299,10 @@ fn run_call_transfer_asset_snippet(compiler: &KotodamaCompiler, path: &Path) {
 
     let alice = parse_account_literal(ACCOUNT_A_LITERAL);
     let bob = parse_account_literal(ACCOUNT_B_LITERAL);
-    let asset_id = AssetDefinitionId::new("default".parse().unwrap(), "rose".parse().unwrap());
+    let asset_id = AssetDefinitionId::new(
+        DomainId::try_new("default", "universal").unwrap(),
+        "rose".parse().unwrap(),
+    );
 
     wsv.grant_permission(&caller, PermissionToken::RegisterAssetDefinition);
     wsv.grant_permission(&caller, PermissionToken::MintAsset(asset_id.clone()));

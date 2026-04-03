@@ -455,7 +455,8 @@ fn iroha_cli_test_build_profile_override_preserves_existing_profile() {
 
 fn local_program_config() -> ProgramConfig {
     let key = KeyPair::random();
-    let domain_id: DomainId = "wonderland".parse().expect("literal domain should parse");
+    let domain_id: DomainId =
+        DomainId::try_new("wonderland", "universal").expect("literal domain should parse");
     ProgramConfig {
         torii_url: Url::parse("http://127.0.0.1:8080").expect("literal URL should parse"),
         account_domain: domain_id,

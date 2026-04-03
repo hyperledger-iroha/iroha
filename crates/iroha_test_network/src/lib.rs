@@ -130,12 +130,10 @@ fn test_domain_register_request(
     domain: &DomainId,
     owner: &AccountId,
 ) -> Result<RegisterNameRequestV1> {
+    let domain_label = domain.to_string();
     Ok(RegisterNameRequestV1 {
-        selector: iroha_data_model::sns::NameSelectorV1::new(
-            DOMAIN_NAME_SUFFIX_ID,
-            domain.name().as_ref(),
-        )
-        .map_err(|err| eyre!("build SNS selector for domain `{domain}`: {err}"))?,
+        selector: iroha_data_model::sns::NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain_label)
+            .map_err(|err| eyre!("build SNS selector for domain `{domain}`: {err}"))?,
         owner: owner.clone(),
         controllers: vec![test_domain_name_controller(owner)?],
         term_years: 1,
@@ -164,9 +162,10 @@ pub fn ensure_domain_registration_lease(client: &Client, domain: &DomainId) -> R
         return Ok(());
     }
 
+    let domain_label = domain.to_string();
     match client
         .sns()
-        .get_name(iroha::sns::SnsNamespacePath::Domain, domain.name().as_ref())
+        .get_name(iroha::sns::SnsNamespacePath::Domain, &domain_label)
     {
         Ok(record) if record.owner == client.account && record.status == NameStatus::Active => {
             Ok(())
@@ -4956,11 +4955,12 @@ impl NetworkBuilder {
             npos_genesis_bootstrap_stake.filter(|_| matches!(consensus_mode, ConsensusMode::Npos));
         if let Some(stake_amount) = npos_bootstrap {
             let stake_amount = resolve_npos_bootstrap_stake(&genesis_isi, stake_amount);
-            let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
-            let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
-            let universal_domain: DomainId = "universal".parse().expect("universal domain");
+            let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain");
+            let ivm_domain = DomainId::try_new("ivm", "universal").expect("ivm domain");
+            let universal_domain =
+                DomainId::try_new("universal", "universal").expect("universal domain");
             let stake_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "nexus".parse().unwrap(),
+                DomainId::try_new("nexus", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
             let fee_asset_id: AssetDefinitionId =
@@ -11046,7 +11046,8 @@ exit 0
     #[test]
     fn post_topology_instructions_are_included_in_genesis() {
         init_instruction_registry();
-        let domain_id: DomainId = "post_topology_test".parse().expect("domain");
+        let domain_id: DomainId =
+            DomainId::try_new("post_topology_test", "universal").expect("domain");
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(1)
@@ -11504,8 +11505,9 @@ exit 0
     fn uses_shared_instruction_registry() {
         init_instruction_registry();
 
-        let instruction =
-            RegisterBox::Domain(Register::domain(Domain::new("test".parse().unwrap())));
+        let instruction = RegisterBox::Domain(Register::domain(Domain::new(
+            DomainId::try_new("test", "universal").unwrap(),
+        )));
         let instruction_box: InstructionBox = instruction.into();
         let bytes = norito::to_bytes(&instruction_box).expect("encode");
         let decoded: InstructionBox = norito::decode_from_bytes(&bytes).expect("decode");

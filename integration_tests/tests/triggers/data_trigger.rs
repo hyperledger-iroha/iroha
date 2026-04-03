@@ -40,7 +40,10 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
 
     run_or_skip(stringify!(two_non_intersecting_execution_paths), || async {
         let account_id = ALICE_ID.clone();
-        let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        );
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
 
         let get_asset_value = |iroha: &client::Client, asset_id: AssetId| -> Numeric {
@@ -111,7 +114,7 @@ async fn two_non_intersecting_execution_paths() -> Result<()> {
         .await?;
         assert_eq!(new_value, prev_value.checked_add(numeric!(1)).unwrap());
 
-        let neverland: DomainId = "neverland".parse()?;
+        let neverland: DomainId = DomainId::try_new("neverland", "universal")?;
         ensure_domain_registration_lease_for_network(&network, &neverland)?;
         spawn_blocking({
             let client = test_client.clone();

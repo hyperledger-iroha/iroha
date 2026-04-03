@@ -62,8 +62,8 @@ pub struct Args {
     mode_activation_height: Option<u64>,
 }
 
-const DEFAULT_NPOS_BOOTSTRAP_DOMAIN: &str = "nexus";
-const DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN: &str = "ivm";
+const DEFAULT_NPOS_BOOTSTRAP_DOMAIN: &str = "nexus.universal";
+const DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN: &str = "ivm.universal";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_ASSET_NAME: &str = "xor";
 const DEFAULT_NPOS_BOOTSTRAP_STAKE_AMOUNT: u64 = 10_000;
 const DEFAULT_NPOS_BOOTSTRAP_ESCROW_SEED: &[u8] = b"npos-escrow-account";
@@ -163,7 +163,7 @@ fn append_npos_bootstrap(
         return Ok(builder);
     }
 
-    let nexus_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_DOMAIN.parse()?;
+    let nexus_domain = DomainId::parse_fully_qualified(DEFAULT_NPOS_BOOTSTRAP_DOMAIN)?;
     let stake_asset_id = default_npos_bootstrap_stake_asset_id();
 
     let mut builder = builder.next_transaction();
@@ -378,7 +378,8 @@ impl<T: Write> RunArgs<T> for Args {
                 ));
             }
             if needs_npos_bootstrap {
-                let ivm_domain: DomainId = DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN.parse()?;
+                let ivm_domain =
+                    DomainId::parse_fully_qualified(DEFAULT_NPOS_BOOTSTRAP_IVM_DOMAIN)?;
                 let escrow_account_id = bootstrap_escrow_account_id(genesis_key_pair.public_key());
                 builder = append_npos_bootstrap(
                     builder,

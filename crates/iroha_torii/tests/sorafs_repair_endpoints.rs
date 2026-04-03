@@ -92,7 +92,7 @@ fn sign_worker_action(
 }
 
 fn seed_worker_permission(state: &Arc<State>, worker_id: &AccountId, provider_id: [u8; 32]) {
-    let domain_id = DomainId::from_str("sora").expect("domain id");
+    let domain_id = DomainId::try_new("sora", "universal").expect("domain id");
     let header = BlockHeader::new(
         NonZeroU64::new(1).expect("height should be non-zero"),
         None,

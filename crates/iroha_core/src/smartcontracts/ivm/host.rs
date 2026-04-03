@@ -5997,7 +5997,7 @@ mod pointer_abi_tests {
         let mut vm = ivm::IVM::new(1_000_000);
         vm.load_program(&meta.encode()).expect("load meta");
         // DomainId TLV payload
-        let did: DomainId = "wonder".parse().unwrap();
+        let did: DomainId = DomainId::try_new("wonder", "universal").unwrap();
         let payload = norito::to_bytes(&did).expect("encode domain id");
         let tlv = make_tlv(8u16, &payload); // PointerType::DomainId = 0x0008
         vm.memory.preload_input(0, &tlv).expect("preload input");
@@ -7678,7 +7678,7 @@ mod pointer_abi_tests {
         let mut host = CoreHost::new(authority);
 
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let payload = norito_blob(&asset_def);
@@ -7704,7 +7704,7 @@ mod pointer_abi_tests {
         let mut host = CoreHost::new(authority);
 
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let ptr = store_tlv(
@@ -8201,7 +8201,7 @@ mod pointer_abi_tests {
         let account_payload = norito::to_bytes(&authority).expect("encode account");
         let account_tlv = make_tlv(PointerType::AccountId as u16, &account_payload);
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
@@ -8248,7 +8248,7 @@ mod pointer_abi_tests {
         let account_payload = norito::to_bytes(&authority).expect("encode account");
         let account_tlv = make_tlv(PointerType::AccountId as u16, &account_payload);
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
@@ -8291,7 +8291,7 @@ mod pointer_abi_tests {
         let account_payload = norito::to_bytes(&authority).expect("encode account");
         let account_tlv = make_tlv(PointerType::AccountId as u16, &account_payload);
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_payload = norito::to_bytes(&asset_def).expect("encode asset definition");
@@ -8587,10 +8587,11 @@ mod tests {
     fn get_account_balance_syscall_reads_numeric_asset() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_fixture_account(&authority, &authority);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
@@ -8633,7 +8634,8 @@ mod tests {
     fn execute_query_syscall_charges_sorted_queries_by_scanned_items() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let accounts = vec![
             build_fixture_account(&authority, &authority),
             build_fixture_account(&fixture_account("bob"), &authority),
@@ -8711,7 +8713,8 @@ mod tests {
     fn execute_query_syscall_sorted_offset_ignores_offset_penalty() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let accounts = vec![
             build_fixture_account(&authority, &authority),
             build_fixture_account(&fixture_account("bob"), &authority),
@@ -8865,11 +8868,11 @@ mod tests {
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
         let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "commerce".parse().unwrap(),
+            DomainId::try_new("commerce", "universal").unwrap(),
             "fixed_plan".parse().unwrap(),
         );
         let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "pay".parse().unwrap(),
+            DomainId::try_new("pay", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let period_ms = 1_000_u64;
@@ -8927,10 +8930,10 @@ mod tests {
         let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
 
         let domains = vec![
-            Domain::new("commerce".parse().unwrap()).build(&provider),
-            Domain::new("users".parse().unwrap()).build(&provider),
-            Domain::new("pay".parse().unwrap()).build(&provider),
-            Domain::new("subscriptions".parse().unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("commerce", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("users", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("pay", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("subscriptions", "universal").unwrap()).build(&provider),
         ];
         let accounts = vec![
             build_fixture_account(&provider, &provider),
@@ -9093,11 +9096,11 @@ mod tests {
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
         let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "commerce".parse().unwrap(),
+            DomainId::try_new("commerce", "universal").unwrap(),
             "usage_plan".parse().unwrap(),
         );
         let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "pay".parse().unwrap(),
+            DomainId::try_new("pay", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let unit_key: Name = "compute_ms".parse().unwrap();
@@ -9154,10 +9157,10 @@ mod tests {
         let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
 
         let domains = vec![
-            Domain::new("commerce".parse().unwrap()).build(&provider),
-            Domain::new("users".parse().unwrap()).build(&provider),
-            Domain::new("pay".parse().unwrap()).build(&provider),
-            Domain::new("subscriptions".parse().unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("commerce", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("users", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("pay", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("subscriptions", "universal").unwrap()).build(&provider),
         ];
         let accounts = vec![
             build_fixture_account(&provider, &provider),
@@ -9214,11 +9217,11 @@ mod tests {
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
         let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "commerce".parse().unwrap(),
+            DomainId::try_new("commerce", "universal").unwrap(),
             "fixed_plan".parse().unwrap(),
         );
         let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "pay".parse().unwrap(),
+            DomainId::try_new("pay", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let period_ms = 1_000_u64;
@@ -9277,10 +9280,10 @@ mod tests {
         let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
 
         let domains = vec![
-            Domain::new("commerce".parse().unwrap()).build(&provider),
-            Domain::new("users".parse().unwrap()).build(&provider),
-            Domain::new("pay".parse().unwrap()).build(&provider),
-            Domain::new("subscriptions".parse().unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("commerce", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("users", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("pay", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("subscriptions", "universal").unwrap()).build(&provider),
         ];
         let accounts = vec![
             build_fixture_account(&provider, &provider),
@@ -9395,11 +9398,11 @@ mod tests {
         let provider = fixture_account_in_domain("acme", "commerce");
         let subscriber = fixture_account_in_domain("alice", "users");
         let plan_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "commerce".parse().unwrap(),
+            DomainId::try_new("commerce", "universal").unwrap(),
             "fixed_plan".parse().unwrap(),
         );
         let charge_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "pay".parse().unwrap(),
+            DomainId::try_new("pay", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let period_ms = 1_000_u64;
@@ -9455,10 +9458,10 @@ mod tests {
         let nft = Nft::new(nft_id.clone(), nft_meta).build(&subscriber);
 
         let domains = vec![
-            Domain::new("commerce".parse().unwrap()).build(&provider),
-            Domain::new("users".parse().unwrap()).build(&provider),
-            Domain::new("pay".parse().unwrap()).build(&provider),
-            Domain::new("subscriptions".parse().unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("commerce", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("users", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("pay", "universal").unwrap()).build(&provider),
+            Domain::new(DomainId::try_new("subscriptions", "universal").unwrap()).build(&provider),
         ];
         let accounts = vec![
             build_fixture_account(&provider, &provider),
@@ -9587,7 +9590,7 @@ mod tests {
         let from = authority.clone();
         let to: AccountId = fixture_account("bob");
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let amount = 7_u64;
@@ -9636,7 +9639,7 @@ mod tests {
         let from = authority;
         let to: AccountId = fixture_account("bob");
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let entries = vec![
@@ -10176,7 +10179,7 @@ mod tests {
         let mut world = World::new();
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "zkd".parse().unwrap(),
+            DomainId::try_new("zkd", "universal").unwrap(),
             "zcoin".parse().unwrap(),
         );
         let mut zk_state = ZkAssetState::default();
@@ -10900,7 +10903,7 @@ mod tests {
         let _guard = ivm::pointer_abi::PointerPolicyGuard::install(ivm::SyscallPolicy::AbiV1, 9);
 
         let mut vm = ivm::IVM::new(1_000_000);
-        let did: DomainId = "wonder".parse().unwrap();
+        let did: DomainId = DomainId::try_new("wonder", "universal").unwrap();
         let payload = norito::to_bytes(&did).expect("encode domain id");
         let tlv = make_tlv(PointerType::DomainId as u16, &payload);
         vm.memory.preload_input(0, &tlv).expect("preload input");
@@ -10928,7 +10931,7 @@ mod tests {
         let from: AccountId = fixture_account("alice");
         let to: AccountId = fixture_account("bob");
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonder".parse().unwrap(),
+            DomainId::try_new("wonder", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
         let amount = Numeric::from(1234_u64);

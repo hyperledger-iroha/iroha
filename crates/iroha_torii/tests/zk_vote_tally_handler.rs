@@ -40,7 +40,7 @@ async fn vote_tally_handler_returns_finalized_tally() {
     let mut block = state.block(header);
     let mut stx = block.transaction();
     let eid = "election-alpha".to_string();
-    let owner_domain: DomainId = "zkd".parse().expect("domain");
+    let owner_domain: DomainId = DomainId::try_new("zkd", "universal").expect("domain");
     let owner = AccountId::new(
         &owner,
         InstructionBox::from(Register::domain(Domain::new(owner_domain))),

@@ -12,12 +12,12 @@ use iroha_data_model::prelude::*;
 fn data_events_follow_instruction_order_in_tx() {
     // Build world with a domain, account, and an asset definition
     let (authority_id, kp) = iroha_test_samples::gen_account_in("wonderland");
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
     let acc = Account::new(authority_id.clone()).build(&authority_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         ),
         NumericSpec::default(),
@@ -45,7 +45,7 @@ fn data_events_follow_instruction_order_in_tx() {
     // Single transaction: three instructions in a fixed order
     let asset = AssetId::of(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         ),
         authority_id.clone(),

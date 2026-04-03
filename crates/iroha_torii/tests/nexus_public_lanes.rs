@@ -230,7 +230,7 @@ async fn da_commitments_reject_when_nexus_disabled() {
 }
 
 fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
-    let domain_id: DomainId = "nexus".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("nexus", "universal").expect("domain id");
     let validator_keypair = KeyPair::from_seed(vec![0x01; 32], Algorithm::BlsNormal);
     let validator_id = AccountId::new(validator_keypair.public_key().clone());
     let validator = Account::new(validator_id.clone()).build(&validator_id);
@@ -245,7 +245,7 @@ fn sample_world() -> (World, KeyPair, AccountId, AccountId, AccountId) {
 
     let domain = Domain::new(domain_id.clone()).build(&validator_id);
     let asset_definition_id = AssetDefinitionId::new(
-        "nexus".parse().expect("domain id"),
+        DomainId::try_new("nexus", "universal").expect("domain id"),
         "xor".parse().expect("asset definition name"),
     );
     let asset_definition =

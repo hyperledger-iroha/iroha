@@ -41,8 +41,8 @@ fn asset_totals_track_multi_account_mint_and_burn() {
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
 
-    let wonderland: DomainId = "wonderland".parse().expect("domain");
-    let looking_glass: DomainId = "looking_glass".parse().expect("domain");
+    let wonderland: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
+    let looking_glass: DomainId = DomainId::try_new("looking_glass", "universal").expect("domain");
 
     Register::domain(Domain::new(wonderland.clone()))
         .execute(&ALICE_ID, &mut stx)
@@ -66,7 +66,7 @@ fn asset_totals_track_multi_account_mint_and_burn() {
     }
 
     let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "multi_total".parse().unwrap(),
     );
     Register::asset_definition(
@@ -164,7 +164,7 @@ fn asset_totals_drop_when_unregistering_account() {
     let mut block_1 = state.block(header_1);
     let mut stx_1 = block_1.transaction();
 
-    let domain_id: DomainId = "wonderland".parse().expect("domain");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     Register::domain(Domain::new(domain_id.clone()))
         .execute(&ALICE_ID, &mut stx_1)
         .expect("register domain");
@@ -175,7 +175,7 @@ fn asset_totals_drop_when_unregistering_account() {
         .expect("register holder");
 
     let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "account_drop".parse().unwrap(),
     );
     Register::asset_definition(
@@ -251,8 +251,8 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
     let mut block_1 = state.block(header_1);
     let mut stx_1 = block_1.transaction();
 
-    let source_domain: DomainId = "source".parse().expect("domain");
-    let foreign_domain: DomainId = "foreign".parse().expect("domain");
+    let source_domain: DomainId = DomainId::try_new("source", "universal").expect("domain");
+    let foreign_domain: DomainId = DomainId::try_new("foreign", "universal").expect("domain");
     Register::domain(Domain::new(source_domain.clone()))
         .execute(&ALICE_ID, &mut stx_1)
         .expect("register source domain");
@@ -270,7 +270,7 @@ fn asset_totals_preserve_when_unregistering_domain_with_foreign_holders() {
         .expect("register foreign holder");
 
     let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "source".parse().unwrap(),
+        DomainId::try_new("source", "universal").unwrap(),
         "domain_drop".parse().unwrap(),
     );
     Register::asset_definition(
@@ -363,8 +363,8 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
     let mut block_1 = state.block(header_1);
     let mut stx_1 = block_1.transaction();
 
-    let source_domain: DomainId = "source".parse().expect("domain");
-    let foreign_domain: DomainId = "foreign".parse().expect("domain");
+    let source_domain: DomainId = DomainId::try_new("source", "universal").expect("domain");
+    let foreign_domain: DomainId = DomainId::try_new("foreign", "universal").expect("domain");
     Register::domain(Domain::new(source_domain.clone()))
         .execute(&ALICE_ID, &mut stx_1)
         .expect("register source domain");
@@ -382,7 +382,7 @@ fn unregistering_definition_domain_cleans_foreign_assets() {
         .expect("register foreign holder");
 
     let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "source".parse().unwrap(),
+        DomainId::try_new("source", "universal").unwrap(),
         "teardown".parse().unwrap(),
     );
     Register::asset_definition(

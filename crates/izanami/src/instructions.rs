@@ -3076,7 +3076,7 @@ mod tests {
         assert!(!prepared.genesis.is_empty());
         assert!(!prepared.genesis[0].is_empty());
         assert!(prepared.state.users.len() >= 3);
-        let expected: DomainId = "chaosnet".parse().unwrap();
+        let expected: DomainId = DomainId::try_new("chaosnet", "universal").unwrap();
         assert_eq!(prepared.state.base_domain(), &expected);
     }
 

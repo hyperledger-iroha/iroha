@@ -4334,7 +4334,7 @@ pub mod tests {
 
     fn world_with_authority(domain: &str) -> (World, AccountId, KeyPair) {
         let (authority_id, key_pair) = gen_account_in(domain);
-        let domain_id: DomainId = domain.parse().expect("domain id");
+        let domain_id = DomainId::try_new(domain, "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority_id);
         let account = new_account_in_domain(&authority_id, &domain_id).build(&authority_id);
         (World::with([domain], [account], []), authority_id, key_pair)
@@ -4347,7 +4347,7 @@ pub mod tests {
         manifest_active: bool,
     ) -> (World, AccountId) {
         let (authority, _) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = new_account_in_domain(&authority, &domain_id)
             .with_uaid(Some(uaid))
@@ -4678,7 +4678,7 @@ pub mod tests {
         use iroha_data_model::domain::DomainId;
 
         let chain: ChainId = "multisig-direct".parse().unwrap();
-        let domain_id: DomainId = "multisig".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("multisig", "universal").unwrap();
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
         let signer1_id = AccountId::new(signer1.public_key().clone());
@@ -4746,7 +4746,7 @@ pub mod tests {
         use iroha_data_model::domain::DomainId;
 
         let chain: ChainId = "multisig-role-only".parse().unwrap();
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let (authority_id, keypair) = gen_account_in("wonderland");
 
         let domain = Domain::new(domain_id.clone()).build(&authority_id);
@@ -4809,8 +4809,8 @@ pub mod tests {
         use iroha_executor_data_model::isi::multisig::MultisigPropose;
 
         let chain: ChainId = "multisig-propose-role-allowed".parse().unwrap();
-        let home_domain: DomainId = "banka".parse().unwrap();
-        let target_domain: DomainId = "centralbank".parse().unwrap();
+        let home_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
+        let target_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
@@ -4895,8 +4895,8 @@ pub mod tests {
         use iroha_executor_data_model::isi::multisig::MultisigPropose;
 
         let chain: ChainId = "multisig-propose-lane-validator-bypass".parse().unwrap();
-        let home_domain: DomainId = "banka".parse().unwrap();
-        let target_domain: DomainId = "centralbank".parse().unwrap();
+        let home_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
+        let target_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
@@ -5385,14 +5385,14 @@ pub mod tests {
             "repo-1".parse().expect("repo id");
         let cash_leg = iroha_data_model::repo::RepoCashLeg {
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: 1u32.into(),
         };
         let collateral_leg = iroha_data_model::repo::RepoCollateralLeg::new(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
             1u32.into(),
@@ -5464,7 +5464,7 @@ pub mod tests {
             settlement_id.clone(),
             iroha_data_model::isi::settlement::SettlementLeg::new(
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 ),
                 1u32.into(),
@@ -5473,7 +5473,7 @@ pub mod tests {
             ),
             iroha_data_model::isi::settlement::SettlementLeg::new(
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
                 1u32.into(),
@@ -5489,7 +5489,7 @@ pub mod tests {
             settlement_id,
             iroha_data_model::isi::settlement::SettlementLeg::new(
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "eur".parse().unwrap(),
                 ),
                 1u32.into(),
@@ -5498,7 +5498,7 @@ pub mod tests {
             ),
             iroha_data_model::isi::settlement::SettlementLeg::new(
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
                 1u32.into(),

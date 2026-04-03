@@ -80,7 +80,7 @@ fn protected_namespace_requires_enacted_proposal() {
     let query = LiveQueryStore::start_test();
     let kp = iroha_crypto::KeyPair::random();
     let (pk, sk) = kp.clone().into_parts();
-    let domain_id: DomainId = "apps".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("apps", "universal").unwrap();
     let authority = AccountId::of(pk);
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);

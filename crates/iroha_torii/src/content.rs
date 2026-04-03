@@ -672,7 +672,8 @@ mod tests {
         account_id: &AccountId,
         uaid: Option<iroha_data_model::nexus::UniversalAccountId>,
     ) -> std::sync::Arc<iroha_core::state::State> {
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain");
         let domain = Domain::new(domain_id.clone()).build(account_id);
         let account = Account::new(account_id.clone())
             .with_uaid(uaid)

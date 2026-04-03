@@ -121,7 +121,7 @@ mod tests {
     #[test]
     fn shared_data_event_from_arc_preserves_arc_pointer() {
         let metadata = MetadataChanged {
-            target: DomainId::from_str("wonderland").expect("domain id"),
+            target: DomainId::try_new("wonderland", "universal").expect("domain id"),
             key: Name::from_str("flag").expect("metadata key"),
             value: Json::from(norito::json!("ok")),
         };

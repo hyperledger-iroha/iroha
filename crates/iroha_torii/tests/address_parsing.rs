@@ -1437,7 +1437,7 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let domain_id: DomainId = "wonderland".parse().expect("domain parses");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain parses");
     let signatory: PublicKey = ACCOUNT_SIGNATORY.parse().expect("key parses");
     let account_id = AccountId::new(signatory);
     let account = Account::new(account_id.clone()).build(&account_id);

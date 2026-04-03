@@ -352,7 +352,7 @@ pub fn record_read_from_access_key(state_block: &StateBlock<'_>, access_key: &st
         let mut it = rest.splitn(2, ':');
         if let (Some(dom_s), Some(name_s)) = (it.next(), it.next()) {
             if let (Ok(dom), Ok(name)) = (
-                iroha_data_model::domain::DomainId::from_str(dom_s),
+                iroha_data_model::domain::DomainId::parse_fully_qualified(dom_s),
                 Name::from_str(name_s),
             ) {
                 if let Ok(domv) = state_block.world.domain(&dom) {
@@ -526,7 +526,7 @@ mod tests {
         start_block();
         // Simulate asset balance read+write
         let ad = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let aid = iroha_data_model::asset::AssetId::new(ad.clone(), (*ALICE_ID).clone());
@@ -582,7 +582,10 @@ mod tests {
 
         let _guard = exec_witness_guard();
         start_block();
-        let asset = AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let delta = TransferDeltaTranscript {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),

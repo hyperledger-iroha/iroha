@@ -1780,7 +1780,7 @@ pub mod isi {
         };
 
         fn offline_domain_id() -> DomainId {
-            DomainId::from_str("offline").expect("domain id")
+            DomainId::try_new("offline", "universal").expect("domain id")
         }
 
         fn sample_account(seed: u8) -> AccountId {
@@ -1822,8 +1822,10 @@ pub mod isi {
 
         fn sample_certificate() -> OfflineWalletCertificate {
             let controller = sample_account(0x01);
-            let definition =
-                AssetDefinitionId::new("offline".parse().unwrap(), "xor".parse().unwrap());
+            let definition = AssetDefinitionId::new(
+                DomainId::try_new("offline", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
             let asset = AssetId::new(definition, controller.clone());
             let spend_pair = iroha_crypto::KeyPair::from_seed(vec![0xEE; 32], Algorithm::Ed25519);
             let mut certificate = OfflineWalletCertificate {
@@ -2312,8 +2314,10 @@ pub mod isi {
         fn credit_deposit_account_debits_escrow_when_required() {
             let escrow = sample_account(0x02);
             let deposit = sample_account(0x03);
-            let definition_id =
-                AssetDefinitionId::new("offline".parse().unwrap(), "xor".parse().unwrap());
+            let definition_id = AssetDefinitionId::new(
+                DomainId::try_new("offline", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&deposit);
             let escrow_account = Account::new(escrow.clone()).build(&escrow);
@@ -2372,8 +2376,10 @@ pub mod isi {
         #[test]
         fn credit_deposit_account_rejects_missing_escrow_when_not_required() {
             let deposit = sample_account(0x03);
-            let definition_id =
-                AssetDefinitionId::new("offline".parse().unwrap(), "xor".parse().unwrap());
+            let definition_id = AssetDefinitionId::new(
+                DomainId::try_new("offline", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&deposit);
             let deposit_account = Account::new(deposit.clone()).build(&deposit);
@@ -2414,8 +2420,10 @@ pub mod isi {
         fn credit_deposit_account_rejects_insufficient_escrow_without_credit() {
             let escrow = sample_account(0x02);
             let deposit = sample_account(0x03);
-            let definition_id =
-                AssetDefinitionId::new("offline".parse().unwrap(), "xor".parse().unwrap());
+            let definition_id = AssetDefinitionId::new(
+                DomainId::try_new("offline", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&deposit);
             let escrow_account = Account::new(escrow.clone()).build(&escrow);
@@ -2472,8 +2480,10 @@ pub mod isi {
         fn credit_deposit_account_rejects_missing_deposit_without_escrow_debit() {
             let escrow = sample_account(0x02);
             let deposit = sample_account(0x03);
-            let definition_id =
-                AssetDefinitionId::new("offline".parse().unwrap(), "xor".parse().unwrap());
+            let definition_id = AssetDefinitionId::new(
+                DomainId::try_new("offline", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
             let domain_id = offline_domain_id();
             let domain = Domain::new(domain_id.clone()).build(&escrow);
             let escrow_account = Account::new(escrow.clone()).build(&escrow);
@@ -3779,8 +3789,10 @@ pub mod isi {
             let receiver = sample_account(0x02);
             let deposit_account = sample_account(0x03);
             let escrow_account = sample_account(0x04);
-            let definition_id =
-                AssetDefinitionId::new("offline".parse().unwrap(), "xor".parse().unwrap());
+            let definition_id = AssetDefinitionId::new(
+                DomainId::try_new("offline", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
             let asset = AssetId::new(definition_id.clone(), controller.clone());
             let operator_keys = KeyPair::from_seed(vec![0x01; 32], Algorithm::Ed25519);
             let spend_pair = KeyPair::from_seed(vec![0xEE; 32], Algorithm::Ed25519);
@@ -11312,8 +11324,10 @@ mod attestation {
             ) -> OfflineWalletCertificate {
                 let controller = test_account_id(0xA1);
                 let operator = AccountId::new(operator_pair.public_key().clone());
-                let definition =
-                    AssetDefinitionId::new("acme".parse().unwrap(), "usd".parse().unwrap());
+                let definition = AssetDefinitionId::new(
+                    DomainId::try_new("acme", "universal").unwrap(),
+                    "usd".parse().unwrap(),
+                );
                 let asset = AssetId::new(definition, controller.clone());
                 let mut certificate = OfflineWalletCertificate {
                     controller: controller.clone(),
@@ -11724,8 +11738,10 @@ mod attestation {
         ) -> OfflineWalletCertificate {
             let controller = test_account_id(0xC3);
             let operator = AccountId::new(operator_pair.public_key().clone());
-            let definition =
-                AssetDefinitionId::new("acme".parse().unwrap(), "usd".parse().unwrap());
+            let definition = AssetDefinitionId::new(
+                DomainId::try_new("acme", "universal").unwrap(),
+                "usd".parse().unwrap(),
+            );
             let asset = AssetId::new(definition, controller.clone());
             let mut certificate = OfflineWalletCertificate {
                 controller,
@@ -12075,8 +12091,10 @@ mod attestation {
         fn sample_receipt(counter: u64, key_id: &str) -> OfflineSpendReceipt {
             let controller: AccountId = test_account_id(1);
             let receiver: AccountId = test_account_id(2);
-            let definition =
-                AssetDefinitionId::new("counter".parse().unwrap(), "xor".parse().unwrap());
+            let definition = AssetDefinitionId::new(
+                DomainId::try_new("counter", "universal").unwrap(),
+                "xor".parse().unwrap(),
+            );
             let asset = AssetId::new(definition, controller.clone());
             let counter_byte = u8::try_from(counter).expect("counter fits u8");
             let certificate = OfflineWalletCertificate {
@@ -12418,8 +12436,10 @@ mod aggregate_proof_tests {
     fn sample_transfer_with_aggregate_proof() -> OfflineToOnlineTransfer {
         let controller: AccountId = test_account_id(1);
         let receiver: AccountId = test_account_id(2);
-        let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::new("agg".parse().unwrap(), "xor".parse().unwrap());
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("agg", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
         let asset = AssetId::new(asset_definition, controller.clone());
         let spend_public_key = controller.signatory().clone();
         let c_init = RistrettoPoint::hash_from_bytes::<Sha512>(b"agg-commitment");

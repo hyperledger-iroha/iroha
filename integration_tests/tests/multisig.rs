@@ -363,7 +363,7 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
         return Ok(());
     }
 
-    let domain: DomainId = "multisig-cancel-terminal".parse().unwrap();
+    let domain: DomainId = DomainId::try_new("multisig-cancel-terminal", "universal").unwrap();
     register_runtime_domain(&network, &test_client, &domain)
         .wrap_err("register multisig cancel test domain")?;
 
@@ -529,7 +529,7 @@ fn multisig_register_materializes_missing_signatory_account() -> Result<()> {
         return Ok(());
     }
 
-    let domain: DomainId = "multisig-register-materialize".parse().unwrap();
+    let domain: DomainId = DomainId::try_new("multisig-register-materialize", "universal").unwrap();
     register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
 
     let existing_signer = gen_account_in(&domain);
@@ -584,7 +584,8 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account() -
         return Ok(());
     }
 
-    let domain: DomainId = "multisig-register-rejected-materialize".parse().unwrap();
+    let domain: DomainId =
+        DomainId::try_new("multisig-register-rejected-materialize", "universal").unwrap();
     register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
 
     let existing_signer = gen_account_in(&domain);
@@ -641,7 +642,8 @@ fn multisig_register_materializes_missing_signatory_account_after_executor_upgra
         return Ok(());
     }
 
-    let domain: DomainId = "multisig-register-materialize-upgraded".parse().unwrap();
+    let domain: DomainId =
+        DomainId::try_new("multisig-register-materialize-upgraded", "universal").unwrap();
     register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
     // This regression targets multisig account materialization after the executor
     // upgrade. Keep the domain bootstrap on the pre-upgrade executor so the test
@@ -699,7 +701,8 @@ fn multisig_register_by_non_signatory_materializes_missing_signatory_account_aft
         return Ok(());
     }
 
-    let domain: DomainId = "multisig-register-rejected-upgraded".parse().unwrap();
+    let domain: DomainId =
+        DomainId::try_new("multisig-register-rejected-upgraded", "universal").unwrap();
     register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
     // Keep domain bootstrap outside the upgraded executor so this test continues
     // to isolate the post-upgrade multisig register behavior it actually covers.
@@ -758,7 +761,7 @@ fn multisig_add_signatory_materializes_missing_account() -> Result<()> {
         return Ok(());
     }
 
-    let domain: DomainId = "multisig-auto-materialize".parse().unwrap();
+    let domain: DomainId = DomainId::try_new("multisig-auto-materialize", "universal").unwrap();
     register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
 
     let existing_signer = gen_account_in(&domain);
@@ -822,7 +825,8 @@ fn multisig_add_signatory_rejected_does_not_materialize_missing_account() -> Res
         return Ok(());
     }
 
-    let domain: DomainId = "multisig-add-rejected-materialize".parse().unwrap();
+    let domain: DomainId =
+        DomainId::try_new("multisig-add-rejected-materialize", "universal").unwrap();
     register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)?;
 
     let existing_signer = gen_account_in(&domain);
@@ -1191,7 +1195,7 @@ fn multisig_recursion_base(suite: TestSuite, context: &'static str) -> Result<()
     let signatories = core::iter::repeat_with(|| gen_account_in(wonderland))
         .take(6)
         .collect::<BTreeMap<AccountId, KeyPair>>();
-    let wonderland_domain: DomainId = wonderland.parse().unwrap();
+    let wonderland_domain = DomainId::try_new(wonderland, "universal").unwrap();
     test_client.submit_all_blocking(
         signatories
             .keys()

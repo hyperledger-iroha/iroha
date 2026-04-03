@@ -1549,7 +1549,7 @@ mod tests {
     #[test]
     fn segment_signing_manifest_round_trips() {
         let kp = KeyPair::from_seed(vec![0x41; 32], Algorithm::Ed25519);
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let publisher_account = AccountId::new(kp.public_key().clone());
         let alias_binding = sample_alias_binding();
         let body = TaikaiSegmentSigningBodyV1::new(

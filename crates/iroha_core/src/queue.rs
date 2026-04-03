@@ -4297,7 +4297,8 @@ pub mod tests {
         let validator_id = AccountId::new(validator_key.public_key().clone());
         let multisig_key = KeyPair::random();
         let multisig_id = AccountId::new(multisig_key.public_key().clone());
-        let domain_id: DomainId = "wonderland".parse().expect("static domain");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("static domain");
 
         let mut multisig_metadata = Metadata::default();
         multisig_metadata.insert(
@@ -6016,7 +6017,7 @@ pub mod tests {
 
     /// Build a minimal world with a single domain and account for tests.
     pub fn world_with_test_domains() -> World {
-        let domain_id: DomainId = "wonderland".parse().expect("Valid");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
         let (account_id, _account_keypair) = gen_account_in("wonderland");
         let domain = Domain::new(domain_id.clone()).build(&account_id);
         let account = Account::new(account_id.clone()).build(&account_id);
@@ -6290,7 +6291,7 @@ pub mod tests {
         bind_manifest: bool,
     ) -> (World, AccountId, KeyPair) {
         let (account_id, key_pair) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("Valid");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
         let domain = Domain::new(domain_id.clone()).build(&account_id);
         let account = Account::new(account_id.clone())
             .with_uaid(Some(uaid))
@@ -8137,7 +8138,7 @@ pub mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, bob_keypair) = gen_account_in("wonderland");
         let world = {
-            let domain_id: DomainId = "wonderland".parse().expect("Valid");
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
             let domain = Domain::new(domain_id.clone()).build(&alice_id);
             let alice_account = Account::new(alice_id.clone()).build(&alice_id);
             let bob_account = Account::new(bob_id.clone()).build(&bob_id);

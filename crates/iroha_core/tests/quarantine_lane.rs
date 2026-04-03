@@ -16,7 +16,7 @@ fn quarantine_overflow_rejects_one_tx() {
     // Set up a minimal world with one domain and an authority account.
     let chain_id: ChainId = "chain".parse().unwrap();
     let (authority_id, kp) = iroha_test_samples::gen_account_in("wonderland");
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
     let account = Account::new(authority_id.clone()).build(&authority_id);
     let world = iroha_core::state::World::with([domain], [account], []);

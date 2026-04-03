@@ -798,7 +798,8 @@ fn local8_literal() -> String {
         .expect("canonical hex encoding");
     let canonical = hex::decode(&canonical_hex[2..]).expect("canonical hex decoding succeeds");
 
-    let domain: DomainId = "wonderland".parse().expect("wonderland domain parses");
+    let domain: DomainId =
+        DomainId::try_new("wonderland", "universal").expect("wonderland domain parses");
     let digest = match AccountDomainSelector::from_domain(&domain).expect("selector") {
         AccountDomainSelector::LocalDigest12(bytes) => bytes,
         other => panic!("expected LocalDigest12 selector for legacy local8 fixture, got {other:?}"),
@@ -2111,7 +2112,7 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
 
 #[tokio::test]
 async fn accounts_query_rejects_alias_and_dotted_i105_filter_literals() -> Result<()> {
-    let domain_id: DomainId = "aliases".parse()?;
+    let domain_id: DomainId = DomainId::try_new("aliases", "universal")?;
     let label = AccountAlias::new(
         "primary".parse()?,
         Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
@@ -2199,10 +2200,14 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     init_instruction_registry();
     // Reuse pre-existing asset definitions from the test genesis to avoid permission issues when
     // registering new definitions in the wonderland domain.
-    let cash_def_id: AssetDefinitionId =
-        AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
-    let collateral_def_id: AssetDefinitionId =
-        AssetDefinitionId::new("wonderland".parse()?, "camomile".parse()?);
+    let cash_def_id: AssetDefinitionId = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "rose".parse()?,
+    );
+    let collateral_def_id: AssetDefinitionId = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "camomile".parse()?,
+    );
     let setup_instructions: Vec<InstructionBox> = vec![
         Mint::asset_numeric(
             numeric!(1500),
@@ -2390,7 +2395,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
 async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     let relay_id = BOB_ID.clone();
     let reporter_id = ALICE_ID.clone();
-    let domain_id: DomainId = "wonderland".parse()?;
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
 
     let registration = KaigiRelayRegistration {
         relay_id: relay_id.clone(),

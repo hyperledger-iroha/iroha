@@ -34,11 +34,11 @@ static RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
 });
 
 fn build_test_transaction(chain_id: ChainId) -> TransactionBuilder {
-    let domain_id: DomainId = "domain".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("domain", "universal").unwrap();
     let create_domain = Register::domain(Domain::new(domain_id.clone()));
     let create_account = Register::account(Account::new(gen_account_in(&domain_id).0.clone()));
     let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        DomainId::try_new("domain", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let create_asset = Register::asset_definition(AssetDefinition::numeric(asset_definition_id));

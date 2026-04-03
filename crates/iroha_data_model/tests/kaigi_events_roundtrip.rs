@@ -11,7 +11,7 @@ use iroha_data_model::{
 };
 
 fn sample_domain_id() -> DomainId {
-    "kaigi_domain".parse().expect("domain id")
+    DomainId::try_new("kaigi_domain", "universal").expect("domain id")
 }
 
 fn sample_call_id() -> KaigiId {

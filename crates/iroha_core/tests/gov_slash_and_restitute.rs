@@ -29,7 +29,7 @@ fn governance_state_with_accounts(
     escrow_account: &iroha_data_model::account::AccountId,
     slash_account: &iroha_data_model::account::AccountId,
 ) -> State {
-    let domain_id: DomainId = "wonderland".parse().expect("domain");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(escrow_account);
     let alice_account =
         iroha_data_model::account::Account::new(ALICE_ID.clone()).build(escrow_account);
@@ -118,7 +118,7 @@ fn seed_slash_snapshot(
 #[allow(clippy::too_many_lines)]
 fn double_vote_slashes_plain_lock() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let (escrow_id, _) = gen_account_in("wonderland");
@@ -234,7 +234,7 @@ fn double_vote_slashes_plain_lock() {
 #[test]
 fn restitution_restores_slashed_balance() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let (escrow_id, _) = gen_account_in("wonderland");

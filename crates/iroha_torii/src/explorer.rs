@@ -1646,9 +1646,10 @@ mod tests {
 
     #[test]
     fn domain_dto_reflects_counts() {
-        let mut domain =
-            iroha_data_model::domain::Domain::new(DomainId::from_str("test").expect("domain name"))
-                .build(&ALICE_ID);
+        let mut domain = iroha_data_model::domain::Domain::new(
+            DomainId::try_new("test", "universal").expect("domain name"),
+        )
+        .build(&ALICE_ID);
         domain.metadata_mut().insert(
             "label".parse().unwrap(),
             json::Value::String("value".into()),
@@ -1668,7 +1669,7 @@ mod tests {
     #[test]
     fn asset_definition_dto_contains_metadata() {
         let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let mut definition = {
@@ -1699,7 +1700,7 @@ mod tests {
     #[test]
     fn asset_dto_formats_value() {
         let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(def_id, ALICE_ID.clone());
@@ -1872,7 +1873,7 @@ mod tests {
             isi::error::InstructionExecutionError::Repetition(isi::error::RepetitionError {
                 instruction: isi::InstructionType::Register,
                 id: iroha_data_model::IdBox::DomainId(
-                    DomainId::from_str("acme").expect("domain id"),
+                    DomainId::try_new("acme", "universal").expect("domain id"),
                 ),
             }),
         ));
@@ -1897,7 +1898,7 @@ mod tests {
     #[test]
     fn accounts_page_filters_by_domain_and_definition() {
         let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let mut aggregates = ExplorerAggregates::default();
@@ -1937,7 +1938,8 @@ mod tests {
         ));
         let alice_id = ALICE_ID.clone();
         let bob_id = BOB_ID.clone();
-        let domain_filter: DomainId = "wonderland".parse().expect("domain id");
+        let domain_filter: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain id");
         aggregates
             .account_domains
             .entry(alice_id.clone())
@@ -1965,11 +1967,11 @@ mod tests {
     #[test]
     fn assets_page_filters_by_owner_and_definition() {
         let rose_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let lily_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "lily".parse().unwrap(),
         );
         let alice_asset_id = AssetId::new(rose_def.clone(), ALICE_ID.clone());
@@ -2009,7 +2011,7 @@ mod tests {
     #[test]
     fn assets_page_filters_by_asset_id() {
         let rose_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let alice_asset_id = AssetId::new(rose_def.clone(), ALICE_ID.clone());
@@ -2171,7 +2173,7 @@ mod tests {
     #[test]
     fn instruction_kind_classifies_register_and_transfer() {
         let register = Register::domain(iroha_data_model::domain::Domain::new(
-            "test".parse().expect("domain id"),
+            DomainId::try_new("test", "universal").expect("domain id"),
         ));
         let register_box: InstructionBox = register.into();
         assert_eq!(
@@ -2180,7 +2182,7 @@ mod tests {
         );
 
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_def.clone(), ALICE_ID.clone());
@@ -2248,7 +2250,7 @@ mod tests {
     #[test]
     fn instruction_box_dto_wraps_payload_and_encoded() {
         let register = Register::domain(iroha_data_model::domain::Domain::new(
-            "payload".parse().expect("domain id"),
+            DomainId::try_new("payload", "universal").expect("domain id"),
         ));
         let instruction: InstructionBox = register.into();
         let dto = instruction_box_dto(&instruction, ExplorerInstructionKind::Register);
@@ -2309,7 +2311,7 @@ mod tests {
     #[test]
     fn instruction_dto_carries_index() {
         let register = Register::domain(iroha_data_model::domain::Domain::new(
-            "index_test".parse().expect("domain id"),
+            DomainId::try_new("index_test", "universal").expect("domain id"),
         ));
         let instruction = InstructionBox::from(register);
         let chain: ChainId = "test-chain".parse().expect("chain id");

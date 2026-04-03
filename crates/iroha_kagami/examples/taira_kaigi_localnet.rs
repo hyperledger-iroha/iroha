@@ -177,7 +177,7 @@ fn parse_bootstrap_authority(args: &Args) -> Result<Option<BootstrapAuthority>> 
             let account_id = AccountId::parse_encoded(account)
                 .map(ParsedAccountId::into_account_id)
                 .wrap_err("failed to parse bootstrap authority account id")?;
-            let linked_domain = DomainId::from_str(&args.bootstrap_authority_domain)
+            let linked_domain = DomainId::parse_fully_qualified(&args.bootstrap_authority_domain)
                 .wrap_err("invalid bootstrap authority domain")?;
             let fee_asset_id = AssetDefinitionId::from_str(asset_definition_id)
                 .wrap_err("failed to parse bootstrap authority fee asset id")?;
@@ -325,9 +325,10 @@ fn run(args: &Args) -> Result<()> {
     let host_public_key =
         PublicKey::from_str(&args.host_public_key).wrap_err("failed to parse host public key")?;
     let host = AccountId::new(host_public_key);
-    let relay_domain = DomainId::from_str(&args.relay_domain).wrap_err("invalid relay domain")?;
+    let relay_domain =
+        DomainId::parse_fully_qualified(&args.relay_domain).wrap_err("invalid relay domain")?;
     let call_id = KaigiId::new(
-        DomainId::from_str(&args.call_domain).wrap_err("invalid call domain")?,
+        DomainId::parse_fully_qualified(&args.call_domain).wrap_err("invalid call domain")?,
         Name::from_str(&args.call_name).wrap_err("invalid call name")?,
     );
     let manifest = append_kaigi_overlay(
@@ -453,7 +454,7 @@ mod tests {
             )
             .map(ParsedAccountId::into_account_id)
             .expect("bootstrap account"),
-            linked_domain: DomainId::from_str("nexus").expect("domain"),
+            linked_domain: DomainId::try_new("nexus", "universal").expect("domain"),
             fee_asset_id: AssetDefinitionId::from_str("5PeSrQmLNwwKtruJvDZrbrm9RuMw")
                 .expect("asset id"),
             fee_amount: 25_000,

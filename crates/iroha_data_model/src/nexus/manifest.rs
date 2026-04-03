@@ -1084,7 +1084,7 @@ mod tests {
                 program: Some("cbdc.transfer".parse().expect("program id")),
                 method: Some(sample_name("transfer")),
                 asset: Some(iroha_data_model::asset::AssetDefinitionId::new(
-                    "centralbank".parse().unwrap(),
+                    DomainId::try_new("centralbank", "universal").unwrap(),
                     "CBDC".parse().unwrap(),
                 )),
                 role: Some(AmxRole::Initiator),

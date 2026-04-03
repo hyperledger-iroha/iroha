@@ -291,7 +291,7 @@ mod approve_preimage_tests {
         let sid = [1u8; 32];
         let app = [2u8; 32];
         let wal = [3u8; 32];
-        let domain: DomainId = "wonderland".parse().expect("domain parses");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain parses");
         let public_key: PublicKey =
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()

@@ -49,8 +49,9 @@ fn build_domain_register_request(
     domain: &DomainId,
     owner: &AccountId,
 ) -> Result<RegisterNameRequestV1> {
+    let domain_label = domain.to_string();
     Ok(RegisterNameRequestV1 {
-        selector: NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain.name().as_ref())?,
+        selector: NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain_label)?,
         owner: owner.clone(),
         controllers: vec![account_controller(owner)?],
         term_years: 1,
@@ -73,9 +74,10 @@ fn ensure_registered_domain(client: &Client, domain: &DomainId) -> Result<()> {
 
     // Runtime domain registration now requires a matching active SNS domain
     // lease owned by the same authority.
+    let domain_label = domain.to_string();
     if client
         .sns()
-        .get_name(SnsNamespacePath::Domain, domain.name().as_ref())
+        .get_name(SnsNamespacePath::Domain, &domain_label)
         .is_err()
     {
         client
@@ -89,12 +91,12 @@ fn ensure_registered_domain(client: &Client, domain: &DomainId) -> Result<()> {
 
 #[test]
 fn build_domain_register_request_uses_domain_label_and_owner_controller() -> Result<()> {
-    let domain: DomainId = "helperdomain".parse()?;
+    let domain: DomainId = DomainId::try_new("helperdomain", "universal")?;
     let (owner, _) = gen_account_in("helper_owner");
     let request = build_domain_register_request(&domain, &owner)?;
 
     assert_eq!(request.selector.suffix_id, DOMAIN_NAME_SUFFIX_ID);
-    assert_eq!(request.selector.normalized_label(), domain.name().as_ref());
+    assert_eq!(request.selector.normalized_label(), domain.to_string());
     assert_eq!(request.owner, owner);
     assert_eq!(request.controllers, vec![account_controller(&owner)?]);
     assert_eq!(request.payment.payer, owner);
@@ -113,7 +115,7 @@ fn receive_paths_materialize_unregistered_accounts_for_assets_and_nfts() -> Resu
     };
     let client = network.client();
 
-    let domain: DomainId = "receive-without-preregister".parse()?;
+    let domain: DomainId = DomainId::try_new("receive-without-preregister", "universal")?;
     ensure_registered_domain(&client, &domain)?;
     let source_account = client.account.clone();
 

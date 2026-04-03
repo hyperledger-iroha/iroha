@@ -2690,7 +2690,7 @@ async fn actor_next_tick_deadline_prioritizes_queue_with_pending_block() {
     let key_pair = KeyPair::random();
     let (public_key, private_key) = key_pair.clone().into_parts();
     let authority = AccountId::new(public_key);
-    let domain_id: DomainId = "queue".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("queue", "universal").expect("domain id");
     let instruction: InstructionBox = Register::domain(Domain::new(domain_id)).into();
     let tx = TransactionBuilder::new(actor.common_config.chain.clone(), authority)
         .with_instructions([instruction])
@@ -59794,7 +59794,8 @@ async fn derive_rbc_allocations_splits_chunks_across_lanes() {
     let authority = AccountId::new(key_pair.public_key().clone());
     let build_tx = |count: u32| {
         let instructions = (0..count).map(|idx| {
-            let domain_id: DomainId = format!("alloc{idx}").parse().expect("domain id");
+            let domain_id =
+                DomainId::try_new(format!("alloc{idx}"), "universal").expect("domain id");
             let domain = Domain::new(domain_id);
             InstructionBox::from(Register::domain(domain))
         });
@@ -84780,7 +84781,8 @@ async fn qc_empty_block_with_time_trigger_is_not_dropped() {
     let mut state_block1 = actor.state.block(header1);
     {
         let mut stx = state_block1.transaction();
-        let domain_id: DomainId = "wonderland".parse().expect("domain parses");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain parses");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
             .expect("register domain");
@@ -96930,8 +96932,10 @@ fn exec_roots_capture_fallback_uses_witness_snapshot() {
     let _guard = crate::sumeragi::witness::exec_witness_guard();
 
     crate::sumeragi::witness::start_block();
-    let asset_def: AssetDefinitionId =
-        AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+    let asset_def: AssetDefinitionId = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal").unwrap(),
+        "rose".parse().unwrap(),
+    );
     let asset_id = AssetId::new(asset_def, (*ALICE_ID).clone());
     let pre = iroha_primitives::numeric::Numeric::from(1u32);
     let post = iroha_primitives::numeric::Numeric::from(2u32);
@@ -101933,7 +101937,7 @@ fn qc_commit_failure_with_quorum_requeues_and_realigns_qcs() {
         .parse()
         .expect("chain id parses");
     let kp_tx = KeyPair::random();
-    let domain: DomainId = "wonderland".parse().expect("domain id parses");
+    let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id parses");
     let authority = AccountId::new(kp_tx.public_key().clone());
     let register = Register::domain(Domain::new(domain));
     let tx = TransactionBuilder::new(chain, authority)
@@ -109249,7 +109253,7 @@ fn sample_transaction() -> SignedTransaction {
     let key_pair = KeyPair::random();
     let (_, private_key) = key_pair.clone().into_parts();
     let authority = AccountId::new(key_pair.public_key().clone());
-    let domain = Domain::new("wonderland".parse().expect("domain id"));
+    let domain = Domain::new(DomainId::try_new("wonderland", "universal").expect("domain id"));
     let register: InstructionBox = Register::domain(domain).into();
 
     TransactionBuilder::new(chain, authority)

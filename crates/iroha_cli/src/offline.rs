@@ -1449,8 +1449,7 @@ mod bundle_inspect_tests {
         let controller = AccountId::new(controller_key);
         let receiver = AccountId::new(receiver_key);
         let deposit = receiver.clone();
-        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+        let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let asset = AssetId::new(asset_definition, controller.clone());
@@ -1820,7 +1819,7 @@ mod tests {
     fn sample_allowance_record() -> OfflineAllowanceRecord {
         let controller = sample_account(0xA1, "wonderland");
         let definition =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "xor".parse().unwrap());
+            AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(), "xor".parse().unwrap());
         let asset = AssetId::new(definition, controller.clone());
         OfflineAllowanceRecord {
             certificate: OfflineWalletCertificate {
@@ -1935,7 +1934,7 @@ mod tests {
     }
 
     fn sample_account(tag: u8, domain: &str) -> AccountId {
-        let _domain_id = DomainId::from_str(domain).expect("domain id");
+        let _domain_id = DomainId::try_new(domain, "universal").expect("domain id");
         let mut bytes = [0u8; 32];
         bytes.fill(tag);
         let encoded = format!("ed0120{}", hex::encode_upper(bytes));

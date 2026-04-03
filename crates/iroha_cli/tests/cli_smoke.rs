@@ -57,7 +57,10 @@ const SAMPLE_BUDGET_APPROVAL_ID: &str =
     "4f1a7b86d6c16245d9b5c0e9bd4732a6d01356f3172bbfa5ef5d9cde8790f221";
 
 fn xor_asset_id() -> AssetDefinitionId {
-    AssetDefinitionId::new("sora".parse().unwrap(), "xor".parse().unwrap())
+    AssetDefinitionId::new(
+        DomainId::try_new("sora", "universal").unwrap(),
+        "xor".parse().unwrap(),
+    )
 }
 
 fn micro_xor_from_value(value: &Value) -> u64 {
@@ -4839,7 +4842,8 @@ fn address_convert_json_summary_contains_i105_and_canonical_hex() {
 
 #[test]
 fn address_convert_rejects_domain_suffix() {
-    let domain: iroha::data_model::domain::DomainId = "sora".parse().expect("domain");
+    let domain: iroha::data_model::domain::DomainId =
+        DomainId::try_new("sora", "universal").expect("domain");
     let key_pair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
     let account = AccountId::new(key_pair.public_key().clone());
     let i105 = encode_account_id_to_i105_for_discriminant(&account, 753).expect("i105");

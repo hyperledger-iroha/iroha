@@ -272,7 +272,8 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let alice_id = (*ALICE_ID).clone();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain");
         let domain = Domain::new(domain_id.clone()).build(&alice_id);
         let alice = Account::new(alice_id.clone()).build(&alice_id);
         let world = World::with([domain], [alice], Vec::<AssetDefinition>::new());

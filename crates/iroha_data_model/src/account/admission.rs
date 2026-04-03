@@ -235,7 +235,7 @@ mod tests {
         let mut minimums = BTreeMap::new();
         minimums.insert(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
             Numeric::new(5, 0),
@@ -246,7 +246,7 @@ mod tests {
             max_implicit_creations_per_block: None,
             implicit_creation_fee: Some(ImplicitAccountCreationFee {
                 asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "rose".parse().unwrap(),
                 ),
                 amount: Numeric::new(2, 0),
@@ -265,11 +265,11 @@ mod tests {
         );
         assert_eq!(
             decoded.min_initial_amount_for(&iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap()
             )),
             policy.min_initial_amount_for(&iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap()
             ))
         );

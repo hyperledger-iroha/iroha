@@ -71,7 +71,7 @@ const BOB_WRONG_INGRESS_INDEX: usize = VALIDATORS_PER_LANE;
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
-        "nexus".parse().expect("nexus domain"),
+        DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
@@ -340,18 +340,19 @@ fn npos_multilane_genesis_post_topology_transactions(
         topology.len()
     );
 
-    let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
-    let universal_domain: DomainId = "universal".parse().expect("universal domain");
-    let ds1_domain: DomainId = "ds1".parse().expect("ds1 domain");
-    let ds2_domain: DomainId = "ds2".parse().expect("ds2 domain");
+    let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
+    let universal_domain: DomainId =
+        DomainId::try_new("universal", "universal").expect("universal domain");
+    let ds1_domain: DomainId = DomainId::try_new("ds1", "universal").expect("ds1 domain");
+    let ds2_domain: DomainId = DomainId::try_new("ds2", "universal").expect("ds2 domain");
     let stake_asset_id = stake_asset_definition_id();
     let fee_asset_id = nexus_fee_asset_definition_id();
     let ds1_asset_def = AssetDefinitionId::new(
-        "nexus".parse().expect("asset definition domain"),
+        DomainId::try_new("nexus", "universal").expect("asset definition domain"),
         "ds1coin".parse().expect("asset definition name"),
     );
     let ds2_asset_def = AssetDefinitionId::new(
-        "nexus".parse().expect("asset definition domain"),
+        DomainId::try_new("nexus", "universal").expect("asset definition domain"),
         "ds2coin".parse().expect("asset definition name"),
     );
 
@@ -1096,11 +1097,11 @@ fn wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_mod
     let ds2_dataspace_id = DataSpaceId::new(DS2_ID_U64);
 
     let ds1_asset_definition_id = AssetDefinitionId::new(
-        "nexus".parse().expect("asset definition domain"),
+        DomainId::try_new("nexus", "universal").expect("asset definition domain"),
         "ds1coin".parse().expect("asset definition name"),
     );
     let ds2_asset_definition_id = AssetDefinitionId::new(
-        "nexus".parse().expect("asset definition domain"),
+        DomainId::try_new("nexus", "universal").expect("asset definition domain"),
         "ds2coin".parse().expect("asset definition name"),
     );
     let alice_ds1_asset = AssetId::new(ds1_asset_definition_id.clone(), ALICE_ID.clone());

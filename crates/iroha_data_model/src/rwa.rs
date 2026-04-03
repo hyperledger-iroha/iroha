@@ -242,9 +242,10 @@ impl FromStr for RwaId {
         let hash = hash_candidate.parse().map_err(|_| ParseError {
             reason: "Failed to parse `hash` part in `hash$domain`",
         })?;
-        let domain_id = domain_id_candidate.parse().map_err(|_| ParseError {
-            reason: "Failed to parse `domain` part in `hash$domain`",
-        })?;
+        let domain_id =
+            DomainId::parse_fully_qualified(domain_id_candidate).map_err(|_| ParseError {
+                reason: "Failed to parse `domain` part in `hash$domain`",
+            })?;
         Ok(Self::new(domain_id, hash))
     }
 }
@@ -370,7 +371,7 @@ mod json_tests {
     #[test]
     fn new_rwa_json_roundtrip() {
         let builder = NewRwa::new(
-            "vault".parse().expect("domain"),
+            DomainId::try_new("vault", "universal").expect("domain"),
             "12.50".parse().expect("quantity"),
             NumericSpec::fractional(2),
             "https://example.test/certificates/lot-7".to_owned(),

@@ -1880,7 +1880,7 @@ mod tests {
 
 #[cfg(test)]
 fn test_account_id(signatory: &str, domain: &str) -> AccountId {
-    let _domain: DomainId = domain.parse().expect("test domain id must parse");
+    let _domain = DomainId::try_new(domain, "universal").expect("test domain id must parse");
     AccountId::new(
         signatory
             .parse()
@@ -4357,11 +4357,11 @@ impl IVMHost for WsvHost {
                     // List account literals for all subjects linked to a domain:
                     // {domain_id} -> {domain_id, account_ids:[...]}
                     "wsv.list_accounts_for_domain" => {
-                        let domain: DomainId = payload
+                        let domain_literal = payload
                             .get("domain_id")
                             .and_then(|v| v.as_str())
-                            .ok_or(VMError::NoritoInvalid)?
-                            .parse()
+                            .ok_or(VMError::NoritoInvalid)?;
+                        let domain = DomainId::parse_fully_qualified(domain_literal)
                             .map_err(|_| VMError::NoritoInvalid)?;
                         let account_ids = self
                             .wsv
@@ -4731,8 +4731,8 @@ impl IVMHost for WsvHost {
                                             .get("domain_id")
                                             .and_then(|v| v.as_str())
                                             .ok_or(VMError::NoritoInvalid)?;
-                                        let domain: DomainId =
-                                            domain_s.parse().map_err(|_| VMError::NoritoInvalid)?;
+                                        let domain = DomainId::parse_fully_qualified(domain_s)
+                                            .map_err(|_| VMError::NoritoInvalid)?;
                                         let ok = self.wsv.register_domain(&self.caller, domain);
                                         if ok {
                                             return Ok(0);
@@ -5842,7 +5842,7 @@ mod tests_permission_json {
     use iroha_data_model::domain::DomainId;
 
     fn account(domain: &str, controller: &str) -> AccountId {
-        let _domain_id: DomainId = domain.parse().expect("test domain id");
+        let _domain_id = DomainId::try_new(domain, "universal").expect("test domain id");
         let public_key: PublicKey = controller.parse().expect("test public key");
         AccountId::new(public_key)
     }
@@ -5874,7 +5874,7 @@ mod tests_permission_json {
     #[test]
     fn parse_register_zk_asset_ok() {
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "land".parse().unwrap(),
+            DomainId::try_new("land", "universal").unwrap(),
             "gold".parse().unwrap(),
         );
         let s = format!("{{\"type\":\"register_zk_asset\",\"target\":\"{ad}\"}}");
@@ -5885,7 +5885,7 @@ mod tests_permission_json {
     #[test]
     fn parse_shield_ok() {
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "land".parse().unwrap(),
+            DomainId::try_new("land", "universal").unwrap(),
             "silver".parse().unwrap(),
         );
         let s = format!("{{\"type\":\"shield\",\"target\":\"{ad}\"}}");
@@ -5896,7 +5896,7 @@ mod tests_permission_json {
     #[test]
     fn parse_unshield_ok() {
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "land".parse().unwrap(),
+            DomainId::try_new("land", "universal").unwrap(),
             "bronze".parse().unwrap(),
         );
         let s = format!("{{\"type\":\"unshield\",\"target\":\"{ad}\"}}");
@@ -6575,9 +6575,9 @@ mod tests_zk_asset_bindings {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let domain: DomainId = "domain".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "domain".parse().unwrap(),
+            DomainId::try_new("domain", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let mut wsv = MockWorldStateView::new();
@@ -6616,7 +6616,7 @@ mod tests_zk_asset_bindings {
             "domain",
         );
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonder".parse().unwrap(),
+            DomainId::try_new("wonder", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let opaque = norito::decode_from_bytes::<AssetDefinitionId>(
@@ -6773,7 +6773,7 @@ mod tests_null_decode {
             "wonderland",
         );
         let asset = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain id"),
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         );
         let wsv = MockWorldStateView::with_balances(&[(

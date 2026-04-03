@@ -23,7 +23,7 @@ use tokio::{task::spawn_blocking, time::timeout};
 #[tokio::test]
 async fn client_verifies_transaction_entrypoint_and_result_proofs() -> Result<()> {
     let rose_def: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().expect("asset definition"),
+        DomainId::try_new("wonderland", "universal").expect("asset definition"),
         "rose".parse().expect("asset definition"),
     );
     let alice_rose = AssetId::new(rose_def.clone(), ALICE_ID.clone());

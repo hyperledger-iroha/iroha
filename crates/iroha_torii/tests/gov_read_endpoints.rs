@@ -167,7 +167,7 @@ async fn gov_council_current_uses_configured_fallback() {
     state.gov.parliament_term_blocks = 5;
     state.gov.parliament_min_stake = 200;
     state.gov.parliament_eligibility_asset_id = AssetDefinitionId::new(
-        "wonderland".parse().expect("asset id"),
+        DomainId::try_new("wonderland", "universal").expect("asset id"),
         "stake".parse().expect("asset id"),
     );
 

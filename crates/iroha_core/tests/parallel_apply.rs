@@ -37,11 +37,11 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let bob_id = (*iroha_test_samples::BOB_ID).clone();
     let build_world = || {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
         let ad: AssetDefinition = AssetDefinition::new(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "coin".parse().unwrap(),
             ),
             NumericSpec::default(),
@@ -66,7 +66,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
             10_u32,
             AssetId::of(
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "coin".parse().unwrap(),
                 ),
                 alice_id.clone(),
@@ -280,7 +280,7 @@ fn parallel_apply_matches_sequential_for_log_and_mint() {
     // Compare resulting asset balances (Alice's coin should be 10 in both states)
     let a_coin: AssetId = AssetId::of(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
         alice_id.clone(),
@@ -322,7 +322,7 @@ fn run_block_and_events(
         .next()
         .cloned()
         .expect("non-empty account set");
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&first_auth);
     let ad_id = AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
     let ad: AssetDefinition = AssetDefinition::new(ad_id.clone(), NumericSpec::default())
@@ -383,7 +383,7 @@ fn events_snapshot_mint_burn_transfer_match_between_modes() {
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let bob_id = (*iroha_test_samples::BOB_ID).clone();
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
@@ -440,7 +440,7 @@ fn events_snapshot_kv_and_nft_match_between_modes() {
     let chain_id = ChainId::from("chain");
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let bob_id = (*iroha_test_samples::BOB_ID).clone();
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let nft_id: NftId = "n0$wonderland".parse().unwrap();
 
     // Build transactions exercising account/domain kv and full NFT lifecycle
@@ -522,7 +522,7 @@ fn events_snapshot_asset_definition_kv_match_between_modes() {
     let chain_id = ChainId::from("chain");
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
 
@@ -555,9 +555,9 @@ fn owner_transfer_domain_and_asset_def_parity() {
     let chain_id = ChainId::from("chain");
     let alice_id = (*iroha_test_samples::ALICE_ID).clone();
     let bob_id = (*iroha_test_samples::BOB_ID).clone();
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
 

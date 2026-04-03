@@ -79,9 +79,11 @@ fn deterministic_account(label: &str, domain: &DomainId) -> AccountId {
 }
 
 fn transfer_pair(index: usize) -> (TransferTranscript, StateTransition, StateTransition) {
-    let asset_definition =
-        AssetDefinitionId::new("fixture".parse().unwrap(), "xor".parse().unwrap());
-    let domain = DomainId::from_str("fixture").expect("domain id");
+    let asset_definition = AssetDefinitionId::new(
+        DomainId::try_new("fixture", "universal").unwrap(),
+        "xor".parse().unwrap(),
+    );
+    let domain = DomainId::try_new("fixture", "universal").expect("domain id");
     let from_account = deterministic_account(&format!("sender_{index:08}"), &domain);
     let to_account = deterministic_account(&format!("receiver_{index:08}"), &domain);
     let amount = 1 + (index as u64 % 100);

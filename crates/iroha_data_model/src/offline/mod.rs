@@ -3977,7 +3977,7 @@ mod tests {
     }
 
     fn account_from_key(key: &PublicKey, domain: &str) -> AccountId {
-        let _domain_id = DomainId::from_str(domain).expect("domain id");
+        let _domain_id = DomainId::try_new(domain, "universal").expect("domain id");
         AccountId::new(key.clone())
     }
 
@@ -3988,7 +3988,7 @@ mod tests {
 
     fn sample_asset(domain: &str) -> AssetId {
         let definition = AssetDefinitionId::new(
-            domain.parse().expect("domain id"),
+            DomainId::try_new(domain, "universal").expect("domain id"),
             "usd".parse().expect("asset name"),
         );
         AssetId::new(definition, sample_account(0xD4, domain))
@@ -4498,7 +4498,7 @@ mod pos_manifest_tests {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03",
         )
         .expect("public key");
-        let _domain = DomainId::from_str("wonderland").expect("domain id");
+        let _domain = DomainId::try_new("wonderland", "universal").expect("domain id");
         let operator = AccountId::new(public_key.clone());
         let backend_root = OfflinePosBackendRoot {
             label: "torii-admission".to_string(),
@@ -4545,19 +4545,21 @@ mod receipt_challenge_tests {
 
     fn sample_account() -> AccountId {
         let key_pair = KeyPair::from_seed(vec![0xA1; 32], Algorithm::Ed25519);
-        let _domain = DomainId::from_str("wonderland").expect("domain id");
+        let _domain = DomainId::try_new("wonderland", "universal").expect("domain id");
         AccountId::new(key_pair.public_key().clone())
     }
 
     fn sample_receiver() -> AccountId {
         let key_pair = KeyPair::from_seed(vec![0xB2; 32], Algorithm::Ed25519);
-        let _domain = DomainId::from_str("soramitsu").expect("domain id");
+        let _domain = DomainId::try_new("soramitsu", "universal").expect("domain id");
         AccountId::new(key_pair.public_key().clone())
     }
 
     fn sample_asset(owner: &AccountId) -> AssetId {
-        let definition =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "xor".parse().unwrap());
+        let definition = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
         AssetId::new(definition, owner.clone())
     }
 

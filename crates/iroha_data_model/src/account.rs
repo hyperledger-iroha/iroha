@@ -884,7 +884,8 @@ mod account_id_parsing_tests {
     #[test]
     fn encoded_literals_with_domain_are_rejected() {
         let _chain_guard = guard_chain_discriminant();
-        let domain: DomainId = "fallback-domain".parse().expect("valid domain");
+        let domain: DomainId =
+            DomainId::try_new("fallback-domain", "universal").expect("valid domain");
         let key_pair = KeyPair::from_seed(vec![0x5A; 32], Algorithm::Ed25519);
         let account = AccountId::new(key_pair.public_key().clone());
         let address = AccountAddress::from_account_id(&account).expect("address encodes");
@@ -1106,7 +1107,7 @@ mod account_id_parsing_tests {
     #[test]
     fn from_str_rejects_encoded_address_with_domain_suffix() {
         let _guard = guard_chain_discriminant();
-        let domain: DomainId = "wonderland".parse().expect("valid domain");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("valid domain");
         let key_pair = KeyPair::from_seed(vec![0xBC; 32], Algorithm::Ed25519);
         let account = AccountId::new(key_pair.public_key().clone());
         let payload =

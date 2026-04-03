@@ -37,7 +37,7 @@ fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
 
 #[test]
 fn test_balance_syscall_permission() {
-    let domain: DomainId = "domain".parse().unwrap();
+    let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -47,7 +47,7 @@ fn test_balance_syscall_permission() {
     let alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 
@@ -93,7 +93,7 @@ fn test_balance_syscall_permission() {
 
 #[test]
 fn test_transfer_syscall_permission() {
-    let domain: DomainId = "domain".parse().unwrap();
+    let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -103,7 +103,7 @@ fn test_transfer_syscall_permission() {
     let alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 
@@ -144,7 +144,7 @@ fn test_transfer_syscall_permission() {
 
 #[test]
 fn test_mint_syscall_permission() {
-    let domain: DomainId = "domain".parse().unwrap();
+    let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -154,7 +154,7 @@ fn test_mint_syscall_permission() {
     let _alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 
@@ -189,7 +189,7 @@ fn test_mint_syscall_permission() {
 
 #[test]
 fn test_json_get_numeric_reads_decimal_strings() {
-    let domain: DomainId = "domain".parse().expect("domain");
+    let domain: DomainId = DomainId::try_new("domain", "universal").expect("domain");
     let public_key: PublicKey =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()

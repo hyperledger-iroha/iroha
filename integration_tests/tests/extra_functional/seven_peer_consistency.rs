@@ -96,7 +96,7 @@ fn seven_peer_cross_peer_consistency_basic() -> Result<()> {
 
     // Create a fresh domain, account, and asset definition
     let domain_name: Name = "seven".parse()?;
-    let domain_id = DomainId::new(domain_name.clone(), "universal".parse()?);
+    let domain_id = DomainId::try_new(&domain_name, "universal")?;
     let create_domain = Register::domain(Domain::new(domain_id.clone()));
     let (account_id, _kp) = gen_account_in(&domain_name);
     let create_account = Register::account(Account::new(account_id.clone()));

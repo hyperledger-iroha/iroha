@@ -3129,14 +3129,14 @@ mod tests {
         let local_registry = crate::instruction_registry::default();
 
         // Build a small suite of representative instructions
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = AccountId::new(
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
                 .unwrap(),
         );
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
@@ -3188,7 +3188,7 @@ mod tests {
 
     #[test]
     fn revoke_encode_as_instruction_box_uses_encode() {
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signatory = "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
             .parse()
             .unwrap();
@@ -3271,14 +3271,14 @@ mod tests {
         // Ensure the total ordering of InstructionBox is stable after Norito roundtrip.
         let _guard = RegistryGuard::set(crate::instruction_registry::default());
 
-        let domain_id: DomainId = "alice".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("alice", "universal").unwrap();
         let account_id = AccountId::new(
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
                 .expect("public key"),
         );
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "alice".parse().unwrap(),
+            DomainId::try_new("alice", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
@@ -3322,7 +3322,7 @@ mod tests {
         let local_registry = crate::instruction_registry::default();
 
         // Common fixtures
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let account_a = AccountId::new(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
@@ -3334,7 +3334,7 @@ mod tests {
                 .unwrap(),
         );
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def_id.clone(), account_a.clone());

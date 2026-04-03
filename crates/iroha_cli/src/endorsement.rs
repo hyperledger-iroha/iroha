@@ -304,7 +304,7 @@ mod tests {
         let kp_a = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let kp_b = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let args = PrepareArgs {
-            domain: "wonderland".parse().expect("domain id"),
+            domain: DomainId::try_new("wonderland", "universal").expect("domain id"),
             committee_id: "default".to_owned(),
             issued_at_height: 5,
             expires_at_height: 10,

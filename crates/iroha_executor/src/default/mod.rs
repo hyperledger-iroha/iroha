@@ -1746,7 +1746,8 @@ pub mod asset {
 
         impl StubExecutor {
             fn new(height: u64) -> (Self, AssetId) {
-                let domain: DomainId = "test_domain".parse().expect("valid domain");
+                let domain: DomainId =
+                    DomainId::try_new("test_domain", "universal").expect("valid domain");
                 let seed_byte = height.to_le_bytes()[0];
                 let keypair = KeyPair::from_seed(vec![seed_byte; 32], Algorithm::Ed25519);
                 let account = AccountId::new(keypair.public_key().clone());
@@ -1922,7 +1923,8 @@ pub mod asset {
         #[test]
         fn visit_instruction_dispatches_repo_instruction_box() {
             let (mut executor, _) = StubExecutor::new(1);
-            let domain: DomainId = "wonderland".parse().expect("valid domain");
+            let domain: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("valid domain");
             let counterparty_keypair = KeyPair::from_seed(vec![9; 32], Algorithm::Ed25519);
             let counterparty = AccountId::new(counterparty_keypair.public_key().clone());
             let cash_def =
@@ -2270,7 +2272,7 @@ pub mod role {
                     .as_ref()
                     .strip_prefix(&format!("{MULTISIG_SIGNATORY}{DELIMITER}"))?
                     .split_once(DELIMITER)
-                    .and_then(|(domain, _)| domain.parse().ok())
+                    .and_then(|(domain, _)| DomainId::parse_fully_qualified(domain).ok())
             }
 
             if role.id().name().as_ref().starts_with(MULTISIG_SIGNATORY) {
@@ -2703,9 +2705,12 @@ pub mod trigger {
         fn asset_metadata_permissions_not_trigger_associated() {
             let trigger_id =
                 TriggerId::from_str("metadata_cleanup").expect("trigger id must be valid");
-            let domain_id = DomainId::from_str("test").expect("domain id must be valid");
-            let asset_definition_id =
-                AssetDefinitionId::new("test".parse().unwrap(), "token".parse().unwrap());
+            let domain_id =
+                DomainId::try_new("test", "universal").expect("domain id must be valid");
+            let asset_definition_id = AssetDefinitionId::new(
+                DomainId::try_new("test", "universal").unwrap(),
+                "token".parse().unwrap(),
+            );
             let account_id = sample_account_id(0x11, &domain_id);
             let asset_id = AssetId::new(asset_definition_id.clone(), account_id);
 
@@ -2744,10 +2749,13 @@ pub mod trigger {
 
         #[test]
         fn sora_permissions_not_domain_account_or_definition_associated() {
-            let domain_id = DomainId::from_str("test").expect("domain id must be valid");
+            let domain_id =
+                DomainId::try_new("test", "universal").expect("domain id must be valid");
             let account_id = sample_account_id(0x12, &domain_id);
-            let asset_definition_id =
-                AssetDefinitionId::new("test".parse().unwrap(), "token".parse().unwrap());
+            let asset_definition_id = AssetDefinitionId::new(
+                DomainId::try_new("test", "universal").unwrap(),
+                "token".parse().unwrap(),
+            );
 
             for permission in sora_permissions() {
                 let permission = Permission::from(permission);
@@ -2771,12 +2779,16 @@ pub mod trigger {
 
         #[test]
         fn fee_sponsor_permission_associations() {
-            let domain_id = DomainId::from_str("test").expect("domain id must be valid");
+            let domain_id =
+                DomainId::try_new("test", "universal").expect("domain id must be valid");
             let sponsor = sample_account_id(0x21, &domain_id);
             let other_account = sample_account_id(0x22, &domain_id);
-            let other_domain = DomainId::from_str("other").expect("domain id must be valid");
-            let asset_definition_id =
-                AssetDefinitionId::new("test".parse().unwrap(), "token".parse().unwrap());
+            let other_domain =
+                DomainId::try_new("other", "universal").expect("domain id must be valid");
+            let asset_definition_id = AssetDefinitionId::new(
+                DomainId::try_new("test", "universal").unwrap(),
+                "token".parse().unwrap(),
+            );
             let trigger_id =
                 TriggerId::from_str("fee_sponsor_trigger").expect("trigger id must be valid");
 
@@ -2815,9 +2827,10 @@ pub mod trigger {
 
         #[test]
         fn account_alias_domain_permissions_match_qualified_domain() {
-            let domain_id = DomainId::from_str("test.universal").expect("domain id must be valid");
+            let domain_id =
+                DomainId::try_new("test", "universal").expect("domain id must be valid");
             let other_domain =
-                DomainId::from_str("other.universal").expect("domain id must be valid");
+                DomainId::try_new("other", "universal").expect("domain id must be valid");
 
             let resolve_permission = Permission::from(AnyPermission::CanResolveAccountAlias(
                 CanResolveAccountAlias {

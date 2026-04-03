@@ -398,7 +398,8 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "nft-cleanup".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("nft-cleanup", "universal").expect("domain id");
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register domain");
@@ -471,7 +472,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let users_domain: DomainId = "users".parse().expect("domain id");
+            let users_domain: DomainId =
+                DomainId::try_new("users", "universal").expect("domain id");
             let user1 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
             let user2 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
 
@@ -479,7 +481,8 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let alice_domain: DomainId = "wonderland".parse().expect("domain id");
+            let alice_domain: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             Register::domain(Domain::new(alice_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice domain");
@@ -518,7 +521,8 @@ pub mod isi {
             let query_handle = LiveQueryStore::start_test();
             let state = State::new(World::default(), kura, query_handle);
 
-            let users_domain: DomainId = "users".parse().expect("domain id");
+            let users_domain: DomainId =
+                DomainId::try_new("users", "universal").expect("domain id");
             let user1 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
             let user2 = AccountId::new(iroha_crypto::KeyPair::random().into_parts().0);
 
@@ -526,7 +530,8 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let alice_domain: DomainId = "wonderland".parse().expect("domain id");
+            let alice_domain: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             Register::domain(Domain::new(alice_domain.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .expect("register alice domain");
@@ -629,7 +634,7 @@ pub mod query {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();

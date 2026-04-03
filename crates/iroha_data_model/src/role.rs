@@ -365,7 +365,8 @@ mod tests {
         let name: Name = "auditor".parse().expect("role name");
         let id = RoleId::new(name);
         let perm = Permission::new("can_audit".into(), Json::new(norito::json!({})));
-        let _domain: crate::domain::DomainId = "wonderland".parse().unwrap();
+        let _domain: crate::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
         let keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let account_id = AccountId::new(keypair.public_key().clone());
         let role = Role::new(id, account_id.clone())

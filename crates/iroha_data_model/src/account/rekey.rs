@@ -172,7 +172,7 @@ impl AccountAlias {
             .alias
             .parse::<Name>()
             .map_err(|_| ParseError::new("dataspace alias in catalog is invalid"))?;
-        Ok(Some(DomainId::new(domain.name().clone(), dataspace_alias)))
+        Ok(Some(DomainId::try_new(domain.name(), &dataspace_alias)?))
     }
 }
 

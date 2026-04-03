@@ -642,7 +642,7 @@ mod tests {
     #[test]
     fn can_register_account_serializes_as_json_string_field() {
         let perm = CanRegisterAccount {
-            domain: "wonderland".parse().expect("valid domain"),
+            domain: DomainId::try_new("wonderland", "universal").expect("valid domain"),
         };
 
         let json = norito::json::to_json(&perm).expect("serialize to JSON");

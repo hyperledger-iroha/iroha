@@ -251,7 +251,7 @@ mod tests {
 
     fn asset(label: &str) -> AssetDefinitionId {
         let name = Name::from_str(label).expect("valid asset name");
-        let domain = DomainId::from_str("wonderland").expect("valid domain id");
+        let domain = DomainId::try_new("wonderland", "universal").expect("valid domain id");
         AssetDefinitionId::new(domain, name)
     }
 

@@ -1768,7 +1768,7 @@ fn main() { subscription_bill(); }"#,
                 .expect("public key"),
         );
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def, account);
@@ -1800,7 +1800,7 @@ fn main() { subscription_bill(); }"#,
                 .expect("public key"),
         );
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def, account);

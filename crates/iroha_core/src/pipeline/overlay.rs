@@ -1366,9 +1366,10 @@ mod tests_overlay_manifest {
     fn overlay_appends_manifest_only_when_missing() {
         // Build state with a domain/account and optionally pre-seeded manifest
         let (authority_id, kp) = gen_account_in("wonderland");
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap())
-                .build(&authority_id);
+        let domain: iroha_data_model::domain::Domain = iroha_data_model::domain::Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        )
+        .build(&authority_id);
         let account = build_wonderland_account(&authority_id);
         let world = crate::state::World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1499,7 +1500,8 @@ mod tests {
         let (program, _header_len, _meta) = sample_program();
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1575,7 +1577,8 @@ mod tests {
         // Minimal authority/world setup.
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
@@ -1680,7 +1683,8 @@ mod tests {
 
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
@@ -1831,7 +1835,8 @@ mod tests {
 
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
@@ -1985,7 +1990,8 @@ mod tests {
 
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
@@ -2143,7 +2149,8 @@ mod tests {
 
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
@@ -2277,7 +2284,8 @@ mod tests {
 
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
@@ -2333,7 +2341,8 @@ mod tests {
 
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
         let kura = Arc::new(crate::kura::Kura::blank_kura_for_testing());
@@ -2437,7 +2446,8 @@ mod tests {
 
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
@@ -2543,7 +2553,8 @@ mod tests {
 
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
@@ -2653,7 +2664,8 @@ mod tests {
 
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_wonderland_account(&authority);
         let mut world = crate::state::World::with([domain], [account], []);
         world
@@ -2767,7 +2779,8 @@ mod tests {
 
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let domain = Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&authority);
         let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
 
@@ -3485,8 +3498,10 @@ mod tests {
 
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain: iroha_data_model::domain::Domain = iroha_data_model::domain::Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        )
+        .build(&authority);
         let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -3536,8 +3551,10 @@ mod tests {
 
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let domain: iroha_data_model::domain::Domain =
-            iroha_data_model::domain::Domain::new("wonderland".parse().unwrap()).build(&authority);
+        let domain: iroha_data_model::domain::Domain = iroha_data_model::domain::Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        )
+        .build(&authority);
         let account = build_wonderland_account(&authority);
         let world = crate::state::World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();

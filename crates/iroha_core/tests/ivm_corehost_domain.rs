@@ -26,7 +26,7 @@ fn register_and_unregister_domain_queue_instructions() {
     vm.load_program(&ProgramMetadata::default().encode())
         .unwrap();
 
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let tlv = build_tlv(0x0008, &domain_id);
     vm.memory.preload_input(0, &tlv).expect("preload input");
     let ptr = Memory::INPUT_START;
@@ -54,7 +54,7 @@ fn transfer_domain_queues_instruction() {
     vm.load_program(&ProgramMetadata::default().encode())
         .unwrap();
 
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let tlv_dom = build_tlv(0x0008, &domain_id);
     vm.memory.preload_input(0, &tlv_dom).expect("preload input");
     let p_dom = Memory::INPUT_START;
@@ -95,7 +95,7 @@ fn register_domain_rejects_corrupted_hash() {
     vm.load_program(&ProgramMetadata::default().encode())
         .unwrap();
 
-    let did: DomainId = "wonderland".parse().unwrap();
+    let did: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let payload = norito::to_bytes(&did).expect("encode domain id");
     let mut blob = Vec::new();
     blob.extend_from_slice(&0x0008u16.to_be_bytes());

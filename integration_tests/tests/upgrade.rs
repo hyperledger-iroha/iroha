@@ -27,7 +27,8 @@ const ADMIN_PRIVATE_KEY_MULTIHASH: &str =
 #[test]
 fn executor_upgrade_should_work() -> Result<()> {
     let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
-    let admin_domain: DomainId = "admin".parse().expect("admin domain should parse");
+    let admin_domain: DomainId =
+        DomainId::try_new("admin", "universal").expect("admin domain should parse");
     let admin_public_key = ADMIN_PUBLIC_KEY_MULTIHASH
         .parse::<iroha::crypto::PublicKey>()
         .expect("admin public key should parse");
@@ -109,7 +110,7 @@ fn executor_upgrade_should_run_migration() -> Result<()> {
         .query(FindPermissionsByAccountId::new(alice_id.clone()))
         .execute_all()?;
     let can_unregister_domain = CanUnregisterDomain {
-        domain: "wonderland".parse()?,
+        domain: DomainId::try_new("wonderland", "universal")?,
     };
 
     assert!(alice_permissions.iter().any(|permission| {
@@ -162,7 +163,7 @@ fn executor_upgrade_should_revoke_removed_permissions() -> Result<()> {
 
     // Permission which will be removed by executor
     let can_unregister_domain = CanUnregisterDomain {
-        domain: "wonderland".parse()?,
+        domain: DomainId::try_new("wonderland", "universal")?,
     };
 
     // Register `TEST_ROLE` with permission
@@ -263,8 +264,10 @@ fn executor_custom_instructions_simple() -> Result<()> {
 
     upgrade_executor(&client, "executor_custom_instructions_simple")?;
 
-    let asset_definition_id: AssetDefinitionId =
-        AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+    let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal").unwrap(),
+        "rose".parse().unwrap(),
+    );
 
     // Give 1 rose to bob
     let bob_rose = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
@@ -317,8 +320,10 @@ fn executor_custom_instructions_complex() -> Result<()> {
     upgrade_executor(&client, "executor_custom_instructions_complex")?;
 
     // Give 6 roses to bob
-    let asset_definition_id: AssetDefinitionId =
-        AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+    let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal").unwrap(),
+        "rose".parse().unwrap(),
+    );
     let bob_rose = AssetId::new(asset_definition_id.clone(), BOB_ID.clone());
     client.submit_blocking(Mint::asset_numeric(Numeric::from(6u32), bob_rose.clone()))?;
 
@@ -390,7 +395,7 @@ fn migration_fail_should_not_cause_any_effects() {
     // Health check. Checking that things registered in migration are not registered in the genesis
 
     let domain_registered_in_migration: DomainId =
-        "failed_migration_test_domain".parse().expect("Valid");
+        DomainId::try_new("failed_migration_test_domain", "universal").expect("Valid");
     assert_domain_does_not_exist(&client, &domain_registered_in_migration);
 
     let _report = upgrade_executor(&client, "executor_with_migration_fail")
@@ -436,7 +441,10 @@ fn executor_with_fuel() -> Result<()> {
     )?;
 
     let bob_rose = AssetId::new(
-        AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap()),
+        AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        ),
         BOB_ID.clone(),
     );
     let mint_a_rose = Mint::asset_numeric(Numeric::from(1u32), bob_rose.clone());
@@ -509,7 +517,10 @@ fn executor_with_fuel_and_trigger() -> Result<()> {
     )?;
 
     let bob_rose = AssetId::new(
-        AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap()),
+        AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        ),
         BOB_ID.clone(),
     );
     let mint_a_rose = Mint::asset_numeric(Numeric::from(1u32), bob_rose.clone());
@@ -616,13 +627,13 @@ fn define_custom_parameter() -> Result<()> {
     };
     let client = network.client();
 
-    let long_domain_name = "0".repeat(2_usize.pow(5)).parse::<DomainId>()?;
+    let long_domain_name = DomainId::try_new("0".repeat(2_usize.pow(5)), "universal")?;
     let create_domain = Register::domain(Domain::new(long_domain_name));
     client.submit_blocking(create_domain)?;
 
     upgrade_executor(&client, "executor_with_custom_parameter")?;
 
-    let too_long_domain_name = "1".repeat(2_usize.pow(5)).parse::<DomainId>()?;
+    let too_long_domain_name = DomainId::try_new("1".repeat(2_usize.pow(5)), "universal")?;
     let create_domain = Register::domain(Domain::new(too_long_domain_name));
     let _err = client.submit_blocking(create_domain.clone()).unwrap_err();
 

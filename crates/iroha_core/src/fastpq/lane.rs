@@ -333,7 +333,7 @@ mod tests {
                     from_account: (*ALICE_ID).clone(),
                     to_account: (*BOB_ID).clone(),
                     asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
-                        "wonderland".parse().unwrap(),
+                        DomainId::try_new("wonderland", "universal").unwrap(),
                         "rose".parse().unwrap(),
                     ),
                     amount: Numeric::from(10u32),

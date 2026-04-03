@@ -309,13 +309,13 @@ mod tests {
 
     fn sample_account(seed: u8, domain: &str) -> AccountId {
         let key = sample_public_key(seed);
-        let _domain_id = DomainId::from_str(domain).expect("domain");
+        let _domain_id = DomainId::try_new(domain, "universal").expect("domain");
         AccountId::new(key)
     }
 
     fn sample_asset(domain: &str) -> crate::asset::AssetId {
         let definition = AssetDefinitionId::new(
-            domain.parse().expect("domain id"),
+            DomainId::try_new(domain, "universal").expect("domain id"),
             "usd".parse().expect("asset name"),
         );
         crate::asset::AssetId::new(definition, sample_account(0xD4, domain))

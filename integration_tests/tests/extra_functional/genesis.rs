@@ -58,7 +58,7 @@ async fn multiple_genesis_peers(n_peers: usize, n_genesis_peers: usize) -> eyre:
     }
 
     let client = network.client();
-    let domain_id: DomainId = "foo".parse().expect("Valid");
+    let domain_id: DomainId = DomainId::try_new("foo", "universal").expect("Valid");
     ensure_domain_registration_lease_for_network(&network, &domain_id)?;
     let create_domain = Register::domain(Domain::new(domain_id));
     let submit_result = spawn_blocking(move || client.submit_blocking(create_domain))

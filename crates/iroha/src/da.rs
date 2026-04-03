@@ -1707,8 +1707,9 @@ mod tests {
             potr_bonus_pool: XorAmount::from_micro(25_000),
             egress_credit_per_gib: XorAmount::from_micro(12_000),
         };
-        let _wonderland_domain: DomainId = "wonderland".parse().expect("domain");
-        let _sora_domain: DomainId = "sora".parse().expect("domain");
+        let _wonderland_domain: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain");
+        let _sora_domain: DomainId = DomainId::try_new("sora", "universal").expect("domain");
 
         let payer_key = KeyPair::from_seed(vec![1; 32], Algorithm::Ed25519);
         let payer = AccountId::new(payer_key.public_key().clone());
@@ -1728,7 +1729,7 @@ mod tests {
         let potr_key = KeyPair::from_seed(vec![6; 32], Algorithm::Ed25519);
         let potr_bonus = AccountId::new(potr_key.public_key().clone());
         let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
 

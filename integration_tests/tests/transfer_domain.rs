@@ -32,9 +32,10 @@ fn domain_owner_domain_permissions() -> Result<()> {
     };
     let test_client = network.client();
 
-    let kingdom_id: DomainId = "kingdom".parse()?;
+    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal")?;
     let (bob_id, _bob_keypair) = gen_account_in("kingdom");
-    let coin_id: AssetDefinitionId = AssetDefinitionId::new("kingdom".parse()?, "coin".parse()?);
+    let coin_id: AssetDefinitionId =
+        AssetDefinitionId::new(DomainId::try_new("kingdom", "universal")?, "coin".parse()?);
     let coin = AssetDefinition::numeric(coin_id.clone());
 
     // the canonical ALICE account is owner of "kingdom" domain
@@ -82,7 +83,7 @@ fn domain_owner_account_permissions() -> Result<()> {
     };
     let test_client = network.client();
 
-    let kingdom_id: DomainId = "kingdom".parse()?;
+    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal")?;
     let (mad_hatter_id, _mad_hatter_keypair) = gen_account_in("kingdom");
 
     // the canonical ALICE account is owner of "kingdom" domain
@@ -133,10 +134,11 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
     };
     let test_client = network.client();
 
-    let kingdom_id: DomainId = "kingdom".parse()?;
+    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal")?;
     let (bob_id, bob_keypair) = gen_account_in("kingdom");
     let (rabbit_id, _rabbit_keypair) = gen_account_in("kingdom");
-    let coin_id: AssetDefinitionId = AssetDefinitionId::new("kingdom".parse()?, "coin".parse()?);
+    let coin_id: AssetDefinitionId =
+        AssetDefinitionId::new(DomainId::try_new("kingdom", "universal")?, "coin".parse()?);
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
@@ -200,9 +202,10 @@ fn domain_owner_asset_permissions() -> Result<()> {
     let test_client = network.client();
 
     let alice_id = ALICE_ID.clone();
-    let kingdom_id: DomainId = "kingdom".parse()?;
+    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal")?;
     let (bob_id, bob_keypair) = gen_account_in("kingdom");
-    let coin_id: AssetDefinitionId = AssetDefinitionId::new("kingdom".parse()?, "coin".parse()?);
+    let coin_id: AssetDefinitionId =
+        AssetDefinitionId::new(DomainId::try_new("kingdom", "universal")?, "coin".parse()?);
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
@@ -246,7 +249,7 @@ fn domain_owner_nft_permissions() -> Result<()> {
     };
     let test_client = network.client();
 
-    let kingdom_id: DomainId = "kingdom".parse()?;
+    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal")?;
     let (bob_id, bob_keypair) = gen_account_in("kingdom");
     let nft_id: NftId = "nft$kingdom".parse()?;
 
@@ -303,7 +306,7 @@ fn domain_owner_trigger_permissions() -> Result<()> {
     let test_client = network.client();
 
     let alice_id = ALICE_ID.clone();
-    let kingdom_id: DomainId = "kingdom".parse()?;
+    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal")?;
     let (bob_id, _bob_keypair) = gen_account_in("kingdom");
 
     // the canonical ALICE account is owner of "kingdom" domain
@@ -313,7 +316,10 @@ fn domain_owner_trigger_permissions() -> Result<()> {
     let bob = Account::new(bob_id.clone());
     test_client.submit_blocking(Register::account(bob))?;
 
-    let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+    let asset_definition_id = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "rose".parse()?,
+    );
     let asset_id = AssetId::new(asset_definition_id, alice_id.clone());
     let trigger_id: TriggerId = "my_trigger".parse()?;
 
@@ -376,7 +382,7 @@ fn domain_owner_transfer() -> Result<()> {
     let test_client = network.client();
 
     let alice_id = ALICE_ID.clone();
-    let kingdom_id: DomainId = "kingdom".parse()?;
+    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal")?;
     let (bob_id, _bob_keypair) = gen_account_in("kingdom");
 
     // the canonical ALICE account is owner of "kingdom" domain
@@ -416,8 +422,8 @@ fn domain_owner_transfer() -> Result<()> {
 
 #[test]
 fn not_allowed_to_transfer_other_user_domain() -> Result<()> {
-    let users_domain: DomainId = "users".parse()?;
-    let foo_domain: DomainId = "foo".parse()?;
+    let users_domain: DomainId = DomainId::try_new("users", "universal")?;
+    let foo_domain: DomainId = DomainId::try_new("foo", "universal")?;
     let user1 = AccountId::new(KeyPair::random().into_parts().0);
     let user2 = AccountId::new(KeyPair::random().into_parts().0);
     let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();

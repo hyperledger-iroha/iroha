@@ -176,10 +176,7 @@ mod tests {
         let kp = KeyPair::random();
         let mut endorsement = DomainEndorsement {
             version: DOMAIN_ENDORSEMENT_VERSION_V1,
-            domain_id: DomainId::new(
-                Name::from_str("wonderland").expect("name"),
-                Name::from_str("universal").expect("dataspace alias"),
-            ),
+            domain_id: DomainId::try_new("wonderland", "universal").expect("domain id"),
             committee_id: "default".to_owned(),
             statement_hash: Hash::prehashed([0xAA; 32]),
             issued_at_height: 10,

@@ -42,8 +42,9 @@ async fn network_stable_after_add_and_after_remove_peer() -> Result<()> {
     let client = network.client();
 
     let (account, _account_keypair) = gen_account_in("domain");
-    let domain_id: DomainId = "domain".parse()?;
-    let asset_def: AssetDefinitionId = AssetDefinitionId::new("domain".parse()?, "xor".parse()?);
+    let domain_id: DomainId = DomainId::try_new("domain", "universal")?;
+    let asset_def: AssetDefinitionId =
+        AssetDefinitionId::new(DomainId::try_new("domain", "universal")?, "xor".parse()?);
     // Register a new peer early to keep the pre-join block history short.
     let new_peer = NetworkPeer::builder().build(network.env());
     let new_peer_id = new_peer.id();

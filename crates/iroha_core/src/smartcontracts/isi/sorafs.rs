@@ -6604,7 +6604,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let provider = ProviderId::new([0xA1; 32]);
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         ensure_registered_account(&mut stx, &bob(), &domain_id);
 
         RegisterProviderOwner {
@@ -6687,7 +6687,7 @@ mod sorafs_tests {
         let mut block = state.block(block_header());
         let mut stx = block.transaction();
         let provider = ProviderId::new([0xA3; 32]);
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         ensure_registered_account(&mut stx, &alice(), &domain_id);
         RegisterProviderOwner {
             provider_id: provider,

@@ -855,7 +855,7 @@ pub mod isi {
             let (authority, _authority_keypair) = gen_account_in("wonderland");
             let mut definition = {
                 let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    "hello".parse()?,
+                    DomainId::try_new("hello", "universal")?,
                     "test".parse()?,
                 );
                 AssetDefinition::numeric(__asset_definition_id.clone())
@@ -888,7 +888,7 @@ pub mod isi {
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            let wonderland: DomainId = "wonderland".parse().unwrap();
+            let wonderland: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
 
             Register::domain(Domain::new(wonderland.clone()))
                 .execute(&ALICE_ID, &mut stx)
@@ -931,7 +931,7 @@ pub mod isi {
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            let wonderland: DomainId = "wonderland".parse().unwrap();
+            let wonderland: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
 
             Register::domain(Domain::new(wonderland.clone()))
                 .execute(&ALICE_ID, &mut stx)
@@ -1838,7 +1838,7 @@ pub mod query {
             let mut stx = state_block.transaction();
 
             // Setup domain and two accounts
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -1854,7 +1854,7 @@ pub mod query {
 
             // Register asset definition and mint zero to acc1, one to acc2
             let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "test_coin".parse().unwrap(),
             );
             Register::asset_definition({
@@ -1889,7 +1889,7 @@ pub mod query {
 
         #[test]
         fn replace_account_controller_single_to_single_preserves_linked_state() {
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             let state = new_state_with_authority_and_domain_lease(&domain_id);
             let mut block = state.block(new_block_header(1, 0));
             let mut stx = block.transaction();
@@ -2204,7 +2204,7 @@ pub mod query {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -2244,7 +2244,7 @@ pub mod query {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -2290,7 +2290,7 @@ pub mod query {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -2328,7 +2328,7 @@ pub mod query {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -2374,7 +2374,7 @@ pub mod query {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -2422,7 +2422,7 @@ pub mod query {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -2437,7 +2437,7 @@ pub mod query {
                 .unwrap();
 
             let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "test_coin".parse().unwrap(),
             );
             Register::asset_definition({
@@ -2486,7 +2486,7 @@ pub mod query {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -2501,7 +2501,7 @@ pub mod query {
                 .unwrap();
 
             let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "test_coin".parse().unwrap(),
             );
             Register::asset_definition({
@@ -2542,7 +2542,7 @@ pub mod query {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -2561,7 +2561,7 @@ pub mod query {
                 .unwrap();
 
             let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "test_coin".parse().unwrap(),
             );
             Register::asset_definition({
@@ -2603,7 +2603,7 @@ pub mod query {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -2618,7 +2618,7 @@ pub mod query {
                 .unwrap();
 
             let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "test_coin".parse().unwrap(),
             );
             Register::asset_definition({
@@ -2663,7 +2663,7 @@ pub mod query {
         fn find_aliases_by_account_id_returns_primary_alias_bindings() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let linked_domain: DomainId = "banka".parse().unwrap();
+            let linked_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
             seed_authority_account(&mut world, &ALICE_ID);
@@ -2727,7 +2727,7 @@ pub mod query {
         fn find_aliases_by_account_id_returns_empty_when_filters_do_not_match() {
             let kura = Kura::blank_kura_for_testing();
             let query_handle = LiveQueryStore::start_test();
-            let linked_domain: DomainId = "banka".parse().unwrap();
+            let linked_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &ALICE_ID, &linked_domain);
             seed_authority_account(&mut world, &ALICE_ID);
@@ -2848,7 +2848,7 @@ pub mod query {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -2868,7 +2868,7 @@ pub mod query {
 
             let asset_definition: AssetDefinitionId =
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 );
             Register::asset_definition({
@@ -2914,7 +2914,7 @@ pub mod query {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -2933,7 +2933,7 @@ pub mod query {
 
             let asset_definition: AssetDefinitionId =
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 );
             Register::asset_definition({

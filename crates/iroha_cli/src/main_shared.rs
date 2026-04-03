@@ -2519,8 +2519,7 @@ mod asset {
 
             fn base_register_args() -> Register {
                 Register {
-                    id: AssetDefinitionId::new(
-                        "wonderland".parse().expect("domain"),
+                    id: AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").expect("domain"),
                         "rose".parse().expect("asset name"),
                     ),
                     name: "Rose".to_owned(),
@@ -2778,8 +2777,7 @@ mod asset {
             let dest = KeyPair::from_seed(vec![2; 32], Algorithm::Ed25519);
             let owner = AccountId::new(src.public_key().clone());
             let to = AccountId::new(dest.public_key().clone());
-            let asset_def_id = AssetDefinitionId::new(
-                "wonderland".parse().expect("domain id"),
+            let asset_def_id = AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").expect("domain id"),
                 "rose".parse().expect("asset name"),
             );
             let asset_id = AssetId::new(asset_def_id, owner.clone().into());
@@ -4123,7 +4121,7 @@ mod multisig {
 
         #[test]
         fn approval_weight_by_subject_deduplicates_cross_domain_subjects() {
-            let home: DomainId = "home".parse().unwrap();
+            let home: DomainId = DomainId::try_new("home", "universal").unwrap();
             let shared = account_from_seed(1, &home);
             let shared_alt = shared.clone();
             let peer = account_from_seed(2, &home);
@@ -4146,7 +4144,7 @@ mod multisig {
 
         #[test]
         fn fold_proposals_skips_accounts_without_spec_metadata() {
-            let domain: DomainId = "wonderland".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             let account_id = account_from_seed(9, &domain);
             let account = Account::new(account_id.clone()).build(&account_id);
 
@@ -4186,7 +4184,7 @@ mod multisig {
 
         #[test]
         fn process_proposal_enqueues_relay_context() {
-            let domain: DomainId = "wonderland".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             let parent_account = account_from_seed(1, &domain);
             let current_account = account_from_seed(2, &domain);
             let child_account = account_from_seed(3, &domain);
@@ -4258,7 +4256,7 @@ mod multisig {
 
         #[test]
         fn process_proposal_records_root_instructions() {
-            let domain: DomainId = "wonderland".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             let user_account = account_from_seed(7, &domain);
             let current_account = account_from_seed(9, &domain);
 
@@ -6910,15 +6908,14 @@ mod settlement {
             }
 
             fn sample_dvp() -> DvpIsi {
-                let domain: DomainId = "wonderland".parse().unwrap();
+                let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
                 let seller = account_with_seed(&domain, 0x11);
                 let buyer = account_with_seed(&domain, 0x22);
                 let payer = account_with_seed(&domain, 0x33);
                 let receiver = account_with_seed(&domain, 0x44);
 
                 let delivery_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(
-                        "wonderland".parse().unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
                         "bond".parse().unwrap(),
                     ),
                     Numeric::new(100, 0),
@@ -6926,8 +6923,7 @@ mod settlement {
                     buyer,
                 );
                 let payment_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(
-                        "wonderland".parse().unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
                         "usd".parse().unwrap(),
                     ),
                     Numeric::new(1000, 0),
@@ -6948,15 +6944,14 @@ mod settlement {
             }
 
             fn sample_pvp() -> PvpIsi {
-                let domain: DomainId = "wonderland".parse().unwrap();
+                let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
                 let payer = account_with_seed(&domain, 0x55);
                 let receiver = account_with_seed(&domain, 0x66);
                 let counter_payer = account_with_seed(&domain, 0x77);
                 let counter_receiver = account_with_seed(&domain, 0x88);
 
                 let primary_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(
-                        "wonderland".parse().unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
                         "usd".parse().unwrap(),
                     ),
                     Numeric::new(1000, 0),
@@ -6964,8 +6959,7 @@ mod settlement {
                     receiver,
                 );
                 let counter_leg = SettlementLeg::new(
-                    iroha_data_model::asset::AssetDefinitionId::new(
-                        "wonderland".parse().unwrap(),
+                    iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
                         "eur".parse().unwrap(),
                     ),
                     Numeric::new(900, 0),
@@ -7043,12 +7037,11 @@ mod settlement {
                     }"#,
                 );
 
-                let domain: DomainId = "wonderland".parse().unwrap();
+                let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
                 let dvp = DvpIsi {
                     settlement_id: "dvp_settlement".parse().unwrap(),
                     delivery_leg: SettlementLeg::new(
-                        iroha_data_model::asset::AssetDefinitionId::new(
-                            "wonderland".parse().unwrap(),
+                        iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
                             "bond".parse().unwrap(),
                         ),
                         Numeric::new(100, 0),
@@ -7056,8 +7049,7 @@ mod settlement {
                         account_with_seed(&domain, 0x66),
                     ),
                     payment_leg: SettlementLeg::new(
-                        iroha_data_model::asset::AssetDefinitionId::new(
-                            "wonderland".parse().unwrap(),
+                        iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
                             "doge".parse().unwrap(),
                         ),
                         Numeric::new(1000, 0),
@@ -7087,13 +7079,12 @@ mod settlement {
 
             #[test]
             fn dvp_preview_uses_placeholder_currency_for_opaque_asset_ids() {
-                let domain: DomainId = "wonderland".parse().unwrap();
+                let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
                 let seller = account_with_seed(&domain, 0x11);
                 let buyer = account_with_seed(&domain, 0x22);
                 let payer = account_with_seed(&domain, 0x33);
                 let receiver = account_with_seed(&domain, 0x44);
-                let named_payment_asset = iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                let named_payment_asset = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 );
                 let opaque_payment_asset: AssetDefinitionId = named_payment_asset
@@ -7105,8 +7096,7 @@ mod settlement {
                 let dvp = DvpIsi {
                     settlement_id: "dvp_settlement".parse().unwrap(),
                     delivery_leg: SettlementLeg::new(
-                        iroha_data_model::asset::AssetDefinitionId::new(
-                            "wonderland".parse().unwrap(),
+                        iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(),
                             "bond".parse().unwrap(),
                         ),
                         Numeric::new(100, 0),
@@ -7543,7 +7533,9 @@ mod tests {
     }
 
     fn account_with_seed(domain_literal: &str, seed: u8) -> AccountId {
-        let _domain: iroha::data_model::domain::DomainId = domain_literal.parse().expect("domain");
+        let _domain =
+            iroha::data_model::domain::DomainId::try_new(domain_literal, "universal")
+                .expect("domain");
         let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         AccountId::new(key_pair.public_key().clone())
     }
@@ -7660,7 +7652,7 @@ mod tests {
 
     #[test]
     fn resolve_account_id_with_rejects_public_key_domain() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
         let key_pair = KeyPair::from_seed(vec![7_u8; 32], Algorithm::Ed25519);
         let literal = format!("{}@{}", key_pair.public_key(), domain);
 
@@ -7772,8 +7764,7 @@ mod tests {
 
     #[test]
     fn parse_asset_definition_literal_accepts_base58() {
-        let expected = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+        let expected = AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
         let parsed = parse_asset_definition_literal(&expected.to_string())
@@ -8441,7 +8432,7 @@ mod multisig_json_tests {
     #[test]
     fn multisig_register_payload_contains_account() {
         let account = multisig_account();
-        let home_domain: DomainId = "acme".parse().expect("domain");
+        let home_domain: DomainId = DomainId::try_new("acme", "universal").expect("domain");
         let mut signatories = BTreeMap::new();
         signatories.insert(account.clone(), 1);
         let spec = MultisigSpec::new(
@@ -8641,9 +8632,9 @@ mod cli_integration_harness_tests {
             q: QueryWithParams,
         ) -> Result<(QueryOutputBatchBoxTuple, u64, Option<Self::Cursor>), Self::Error> {
             // Build three domains with metadata key `rank`: 2, 1, and None
-            let domain_id1: iroha::data_model::domain::DomainId = "d1".parse().unwrap();
-            let domain_id2: iroha::data_model::domain::DomainId = "d2".parse().unwrap();
-            let domain_id3: iroha::data_model::domain::DomainId = "d3".parse().unwrap();
+            let domain_id1: iroha::data_model::domain::DomainId = DomainId::try_new("d1", "universal").unwrap();
+            let domain_id2: iroha::data_model::domain::DomainId = DomainId::try_new("d2", "universal").unwrap();
+            let domain_id3: iroha::data_model::domain::DomainId = DomainId::try_new("d3", "universal").unwrap();
             let kp = KeyPair::random();
             let owner1 = iroha::data_model::account::AccountId::new(
                 domain_id1.clone(),
@@ -8763,7 +8754,7 @@ mod cli_integration_harness_tests {
             use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = "land".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let kp1 = KeyPair::random();
             let kp2 = KeyPair::random();
             let kp3 = KeyPair::random();
@@ -8910,19 +8901,16 @@ mod cli_integration_harness_tests {
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = "land".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let kp = KeyPair::random();
             let owner = AccountId::new(kp.public_key().clone());
-            let id1: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "land".parse().unwrap(),
+            let id1: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("land", "universal").unwrap(),
                 "gold".parse().unwrap(),
             );
-            let id2: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "land".parse().unwrap(),
+            let id2: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("land", "universal").unwrap(),
                 "silver".parse().unwrap(),
             );
-            let id3: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "land".parse().unwrap(),
+            let id3: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("land", "universal").unwrap(),
                 "bronze".parse().unwrap(),
             );
 
@@ -9075,7 +9063,7 @@ mod cli_integration_harness_tests {
             let mut domains = Vec::new();
             for i in 0..5 {
                 let name = format!("d{i}");
-                let did: DomainId = name.parse().unwrap();
+                let did = DomainId::try_new(&name, "universal").unwrap();
                 let owner = AccountId::new(kp.public_key().clone());
                 domains.push(Domain::new(did).build(&owner));
             }
@@ -9215,7 +9203,7 @@ mod cli_integration_harness_tests {
             // Build domains d0..d4 with ranks: d0=2, d1=4, d2=None, d3=1, d4=3
             let mut domains = Vec::new();
             let mk = |name: &str, rank: Option<i64>| {
-                let did: DomainId = name.parse().unwrap();
+                let did = DomainId::try_new(name, "universal").unwrap();
                 let owner = AccountId::new(kp.public_key().clone());
                 let mut d = Domain::new(did).build(&owner);
                 if let Some(r) = rank {
@@ -9335,7 +9323,7 @@ mod cli_integration_harness_tests {
             let kp = KeyPair::random();
             let mut domains = Vec::new();
             let mk = |name: &str, rank: Option<i64>| {
-                let did: DomainId = name.parse().unwrap();
+                let did = DomainId::try_new(name, "universal").unwrap();
                 let owner = AccountId::new(kp.public_key().clone());
                 let mut d = Domain::new(did).build(&owner);
                 if let Some(r) = rank {
@@ -9532,7 +9520,7 @@ mod cli_integration_harness_tests {
             use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = "land".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             // Build accounts a0..a4 with ranks: a0=2, a1=4, a2=None, a3=1, a4=3
             let mut accounts: Vec<Account> = (0..5)
                 .map(|_| {
@@ -9659,7 +9647,7 @@ mod cli_integration_harness_tests {
             use iroha::data_model::account::{Account, AccountId};
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = "land".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let mut accounts: Vec<Account> = (0..5)
                 .map(|_| {
                     let kp = KeyPair::random();
@@ -9875,7 +9863,7 @@ mod cli_integration_harness_tests {
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = "land".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let owner = AccountId::new(KeyPair::random().public_key().clone());
 
             // Build asset defs ad0..ad4 with ranks: ad0=2, ad1=4, ad2=None, ad3=1, ad4=3
@@ -10054,7 +10042,7 @@ mod cli_integration_harness_tests {
                 use iroha::data_model::asset::id::AssetDefinitionId;
                 use iroha::data_model::domain::DomainId;
 
-                let domain: DomainId = "land".parse().unwrap();
+                let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
                 let owner = AccountId::new(KeyPair::random().public_key().clone());
                 let ids: Vec<AssetDefinitionId> = (0..5)
                     .map(|i| {
@@ -10231,7 +10219,7 @@ mod cli_integration_harness_tests {
             use iroha::data_model::domain::DomainId;
             use iroha::data_model::nft::{Nft, NftId};
 
-            let domain: DomainId = "art".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("art", "universal").unwrap();
             let kp = KeyPair::random();
             let owner = AccountId::new(kp.public_key().clone());
             let id1: NftId = "n1$art".parse().unwrap();
@@ -10365,7 +10353,7 @@ mod cli_integration_harness_tests {
             use iroha::data_model::domain::DomainId;
             use iroha::data_model::nft::{Nft, NftId};
 
-            let domain: DomainId = "art".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("art", "universal").unwrap();
             let owner = AccountId::new(KeyPair::random().public_key().clone());
 
             // Build NFTs n0..n4 with ranks: n0=2, n1=4, n2=None, n3=1, n4=3
@@ -10536,7 +10524,7 @@ mod cli_integration_harness_tests {
                 use iroha::data_model::domain::DomainId;
                 use iroha::data_model::nft::{Nft, NftId};
 
-                let domain: DomainId = "art".parse().unwrap();
+                let domain: DomainId = DomainId::try_new("art", "universal").unwrap();
                 let owner = AccountId::new(KeyPair::random().public_key().clone());
 
                 let ids: Vec<NftId> = (0..5)
@@ -10709,7 +10697,7 @@ mod cli_integration_harness_tests {
             use iroha::data_model::domain::DomainId;
 
             // Build 5 accounts a0..a4 in the same domain, annotate metadata pos = index
-            let domain: DomainId = "land".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let mut accounts = Vec::new();
             for i in 0..5 {
                 let kp = KeyPair::random();
@@ -10858,7 +10846,7 @@ mod cli_integration_harness_tests {
             use iroha::data_model::asset::id::AssetDefinitionId;
             use iroha::data_model::domain::DomainId;
 
-            let domain: DomainId = "land".parse().unwrap();
+            let domain: DomainId = DomainId::try_new("land", "universal").unwrap();
             let owner = AccountId::new(KeyPair::random().public_key().clone());
 
             // Build 5 defs ad0..ad4 and tag pos metadata
@@ -11048,7 +11036,7 @@ mod cli_integration_harness {
     }
 
     fn sample_account_id(domain: &str, seed: u8) -> ScopedAccountId {
-        let domain_id: DomainId = domain.parse().expect("domain id");
+        let domain_id = DomainId::try_new(domain, "universal").expect("domain id");
         let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
         ScopedAccountId::new(domain_id, key_pair.public_key().clone())
     }
@@ -11620,8 +11608,8 @@ mod cli_integration_harness {
         let owner_w2 = sample_account_id("w2", 10);
         let mut server = MockQueryServer::default();
         server.domains = vec![
-            Domain::new("w1".parse().unwrap()).build(owner_w1.account()),
-            Domain::new("w2".parse().unwrap()).build(owner_w2.account()),
+            Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account()),
+            Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account()),
         ];
 
         // Build and execute the query via QueryBuilder against the mock server
@@ -11643,9 +11631,9 @@ mod cli_integration_harness {
         let owner_w2 = sample_account_id("w2", 12);
         let owner_w3 = sample_account_id("w3", 13);
         let mut server = MockQueryServer::default();
-        let mut w1 = Domain::new("w1".parse().unwrap()).build(owner_w1.account());
-        let mut w2 = Domain::new("w2".parse().unwrap()).build(owner_w2.account());
-        let w3 = Domain::new("w3".parse().unwrap()).build(owner_w3.account()); // no rank
+        let mut w1 = Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account());
+        let mut w2 = Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account());
+        let w3 = Domain::new(DomainId::try_new("w3", "universal").unwrap()).build(owner_w3.account()); // no rank
         w1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
         w2.metadata_mut()
@@ -11676,8 +11664,8 @@ mod cli_integration_harness {
         let owner_w2 = sample_account_id("w2", 2);
         let mut server = MockQueryServer::default();
         server.domains = vec![
-            Domain::new("w1".parse().unwrap()).build(owner_w1.account()),
-            Domain::new("w2".parse().unwrap()).build(owner_w2.account()),
+            Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account()),
+            Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account()),
         ];
 
         let qwp = build_query_with_params(
@@ -11695,11 +11683,11 @@ mod cli_integration_harness {
         assert_eq!(ids.len(), 2);
         assert_eq!(
             ids[0],
-            DomainId::new("w1".parse().unwrap(), "universal".parse().unwrap(),)
+            DomainId::try_new("w1", "universal").unwrap()
         );
         assert_eq!(
             ids[1],
-            DomainId::new("w2".parse().unwrap(), "universal".parse().unwrap(),)
+            DomainId::try_new("w2", "universal").unwrap()
         );
     }
 
@@ -11749,8 +11737,7 @@ mod cli_integration_harness {
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
             {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    "w".parse().unwrap(),
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
                     "rose".parse().unwrap(),
                 );
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
@@ -11758,8 +11745,7 @@ mod cli_integration_harness {
             }
             .build(owner_w.account()),
             {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    "w".parse().unwrap(),
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
                     "tulip".parse().unwrap(),
                 );
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
@@ -11784,10 +11770,10 @@ mod cli_integration_harness {
         assert!(
             ids.iter()
                 .any(|id| id
-                    == &AssetDefinitionId::new("w".parse().unwrap(), "rose".parse().unwrap()))
+                    == &AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(), "rose".parse().unwrap()))
         );
         assert!(ids.iter().any(
-            |id| id == &AssetDefinitionId::new("w".parse().unwrap(), "tulip".parse().unwrap())
+            |id| id == &AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(), "tulip".parse().unwrap())
         ));
     }
 
@@ -11805,8 +11791,7 @@ mod cli_integration_harness {
         let mut server = MockQueryServer::default();
         server.asset_defs = vec![
             {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    "w".parse().unwrap(),
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
                     "rose".parse().unwrap(),
                 );
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
@@ -11814,8 +11799,7 @@ mod cli_integration_harness {
             }
             .build(owner_w.account()),
             {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    "w".parse().unwrap(),
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
                     "tulip".parse().unwrap(),
                 );
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
@@ -11823,8 +11807,7 @@ mod cli_integration_harness {
             }
             .build(owner_w.account()),
             {
-                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    "w".parse().unwrap(),
+                let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
                     "peony".parse().unwrap(),
                 );
                 AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
@@ -11848,12 +11831,10 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&AssetDefinitionId::new(
-            "w".parse().unwrap(),
+        assert!(ids1.contains(&AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
             "rose".parse().unwrap()
         )));
-        assert!(ids1.contains(&AssetDefinitionId::new(
-            "w".parse().unwrap(),
+        assert!(ids1.contains(&AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
             "tulip".parse().unwrap()
         )));
         assert_eq!(rem, 1);
@@ -11867,8 +11848,7 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&AssetDefinitionId::new(
-            "w".parse().unwrap(),
+        assert!(ids2.contains(&AssetDefinitionId::new(DomainId::try_new("w", "universal").unwrap(),
             "peony".parse().unwrap()
         )));
         assert_eq!(rem2, 0);
@@ -11941,9 +11921,9 @@ mod cli_integration_harness {
         let owner_d3 = sample_account_id("d3", 3);
         let mut server = MockQueryServer::default();
         server.domains = vec![
-            Domain::new("d1".parse().unwrap()).build(owner_d1.account()),
-            Domain::new("d2".parse().unwrap()).build(owner_d2.account()),
-            Domain::new("d3".parse().unwrap()).build(owner_d3.account()),
+            Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(owner_d1.account()),
+            Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(owner_d2.account()),
+            Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(owner_d3.account()),
         ];
 
         let mut params = QueryParams::default();
@@ -11961,8 +11941,8 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids1.len(), 2);
-        assert!(ids1.contains(&"d1".parse::<DomainId>().unwrap()));
-        assert!(ids1.contains(&"d2".parse::<DomainId>().unwrap()));
+        assert!(ids1.contains(&DomainId::try_new("d1", "universal").unwrap()));
+        assert!(ids1.contains(&DomainId::try_new("d2", "universal").unwrap()));
         assert_eq!(rem, 1);
         let cur = cur.expect("should continue");
 
@@ -11974,7 +11954,7 @@ mod cli_integration_harness {
             other => panic!("unexpected batch variant: {other:?}"),
         };
         assert_eq!(ids2.len(), 1);
-        assert!(ids2.contains(&"d3".parse::<DomainId>().unwrap()));
+        assert!(ids2.contains(&DomainId::try_new("d3", "universal").unwrap()));
         assert_eq!(rem2, 0);
         assert!(cur2.is_none());
     }
@@ -11992,9 +11972,9 @@ mod cli_integration_harness {
         let owner_w1 = sample_account_id("w1", 6);
         let owner_w2 = sample_account_id("w2", 7);
         let owner_w3 = sample_account_id("w3", 8);
-        let mut w1 = Domain::new("w1".parse().unwrap()).build(owner_w1.account());
-        let mut w2 = Domain::new("w2".parse().unwrap()).build(owner_w2.account());
-        let mut w3 = Domain::new("w3".parse().unwrap()).build(owner_w3.account());
+        let mut w1 = Domain::new(DomainId::try_new("w1", "universal").unwrap()).build(owner_w1.account());
+        let mut w2 = Domain::new(DomainId::try_new("w2", "universal").unwrap()).build(owner_w2.account());
+        let mut w3 = Domain::new(DomainId::try_new("w3", "universal").unwrap()).build(owner_w3.account());
         w1.metadata_mut()
             .insert("rank".parse().unwrap(), Json::from(norito::json!(1)));
         w2.metadata_mut()
@@ -12031,7 +12011,7 @@ mod cli_integration_harness {
 
         let mut server = MockQueryServer::default();
         let asset_def_id =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "coin".parse().unwrap());
+            AssetDefinitionId::new(DomainId::try_new("wonderland", "universal").unwrap(), "coin".parse().unwrap());
         let account_id = sample_account_id("wonderland", 14);
         let asset_id = AssetId::new(asset_def_id, account_id.account().clone());
         let asset = Asset::new(asset_id.clone(), 77_u32);

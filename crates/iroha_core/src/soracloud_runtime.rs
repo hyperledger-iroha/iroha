@@ -1265,7 +1265,7 @@ mod tests {
                     source_id,
                     storage_class: StorageClass::Warm,
                     lease_asset_definition_id: AssetDefinitionId::new(
-                        "wonderland".parse().expect("domain"),
+                        DomainId::try_new("wonderland", "universal").expect("domain"),
                         "xor".parse().expect("asset"),
                     ),
                     base_fee_nanos: 10_000,

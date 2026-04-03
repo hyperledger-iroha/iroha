@@ -229,7 +229,7 @@ where
 
 fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<AccountId>) {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii_portfolio"));
-    let domain_id: DomainId = "portfolio".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("portfolio", "universal").unwrap();
     let cash_id = AssetDefinitionId::new(domain_id.clone(), "cash".parse().unwrap());
     let points_id = AssetDefinitionId::new(domain_id.clone(), "points".parse().unwrap());
     let first_account = account_id_from_signatory(domain_id.clone(), ACCOUNT_SIGNATORY);
@@ -279,7 +279,7 @@ fn seed_portfolio_accounts(state: &Arc<State>) -> (UniversalAccountId, Vec<Accou
 
 fn seed_fixture_portfolio_accounts(state: &Arc<State>) -> UniversalAccountId {
     let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::torii_fixture"));
-    let domain_id: DomainId = "portfolio_fixture".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("portfolio_fixture", "universal").unwrap();
     let cash_id = AssetDefinitionId::new(domain_id.clone(), "cash".parse().unwrap());
     let points_id = AssetDefinitionId::new(domain_id.clone(), "points".parse().unwrap());
     let first_account = account_id_from_seed(&domain_id, 0x11);

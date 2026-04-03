@@ -89,7 +89,7 @@ async fn read_peer_log_with_retry(
 #[test]
 #[ignore = "debug helper for inspecting genesis transactions"]
 fn debug_print_genesis_transactions() {
-    let kingdom_id: DomainId = "kingdom".parse().expect("Valid");
+    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
     let register_domain = Register::domain(Domain::new(kingdom_id.clone()));
     let duplicate_domain = Register::domain(Domain::new(kingdom_id.clone()));
     let Some(network) = sandbox::build_network_or_skip(
@@ -149,7 +149,7 @@ fn debug_print_genesis_transactions() {
 #[tokio::test]
 async fn genesis_transactions_are_validated_by_executor() {
     // Registering the same domain twice must be rejected during genesis execution.
-    let kingdom_id: DomainId = "kingdom".parse().expect("Valid");
+    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
     let register_domain = Register::domain(Domain::new(kingdom_id.clone()));
     let duplicate_domain = Register::domain(Domain::new(kingdom_id.clone()));
     let Some(network) = sandbox::build_network_or_skip(
@@ -231,7 +231,7 @@ fn permissions_disallow_asset_transfer() {
     let bob_id = BOB_ID.clone();
     let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
     let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().expect("Valid"),
+        DomainId::try_new("wonderland", "universal").expect("Valid"),
         "xor".parse().expect("Valid"),
     );
     let create_asset = Register::asset_definition(
@@ -370,7 +370,7 @@ fn permissions_disallow_asset_burn() {
     let bob_id = BOB_ID.clone();
     let (mouse_id, _mouse_keypair) = gen_account_in("wonderland");
     let asset_definition_id = AssetDefinitionId::new(
-        "wonderland".parse().expect("Valid"),
+        DomainId::try_new("wonderland", "universal").expect("Valid"),
         "xor".parse().expect("Valid"),
     );
     let create_asset = Register::asset_definition(
@@ -432,8 +432,8 @@ fn account_can_query_only_its_own_domain() -> Result<()> {
     let client = network.client();
 
     // Given
-    let domain_id: DomainId = "wonderland".parse()?;
-    let new_domain_id: DomainId = "wonderland2".parse()?;
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
+    let new_domain_id: DomainId = DomainId::try_new("wonderland2", "universal")?;
     let register_domain = Register::domain(Domain::new(new_domain_id.clone()));
 
     client.submit_blocking(register_domain)?;
@@ -486,7 +486,7 @@ fn permissions_differ_not_only_by_names() {
     let (mouse_id, mouse_keypair) = gen_account_in("outfit");
 
     // Registering mouse
-    let outfit_domain: DomainId = "outfit".parse().unwrap();
+    let outfit_domain: DomainId = DomainId::try_new("outfit", "universal").unwrap();
     let create_outfit_domain = Register::domain(Domain::new(outfit_domain.clone()));
     let register_mouse_account = Register::account(Account::new(mouse_id.clone()));
     client
@@ -573,7 +573,7 @@ fn stored_vs_granted_permission_payload() {
 
     // Registering mouse and asset definition
     let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().expect("Valid"),
+        DomainId::try_new("wonderland", "universal").expect("Valid"),
         "xor".parse().expect("Valid"),
     );
     let create_asset = Register::asset_definition({
@@ -624,7 +624,8 @@ fn permissions_are_unified() {
 
     // Given
     let alice_id = ALICE_ID.clone();
-    let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain");
+    let wonderland_domain: DomainId =
+        DomainId::try_new("wonderland", "universal").expect("wonderland domain");
     let rose_definition = AssetDefinitionId::new(
         wonderland_domain.clone(),
         "rose".parse().expect("valid rose name"),
@@ -660,7 +661,7 @@ fn associated_permissions_removed_on_unregister() {
     let iroha = network.client();
 
     let bob_id = BOB_ID.clone();
-    let kingdom_id: DomainId = "kingdom".parse().expect("Valid");
+    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
     let kingdom = Domain::new(kingdom_id.clone());
 
     // register kingdom and give bob permissions in this domain
@@ -720,7 +721,7 @@ fn associated_permissions_removed_from_role_on_unregister() {
     let iroha = network.client();
 
     let role_id: RoleId = "role".parse().expect("Valid");
-    let kingdom_id: DomainId = "kingdom".parse().expect("Valid");
+    let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
     let kingdom = Domain::new(kingdom_id.clone());
 
     // register kingdom and give bob permissions in this domain

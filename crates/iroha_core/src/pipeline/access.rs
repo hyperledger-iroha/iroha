@@ -494,7 +494,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
         }
         if let Some(rest) = raw.strip_prefix("domain.detail:") {
             let (id, key) = rest.split_once(':')?;
-            let id: DomainId = id.parse().ok()?;
+            let id = DomainId::parse_fully_qualified(id).ok()?;
             let key: Name = key.parse().ok()?;
             canonical.push(CanonicalStateKey::DomainMetadata(DomainMetadataKey {
                 id,
@@ -597,7 +597,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("domain:") {
-            let id: DomainId = rest.parse().ok()?;
+            let id = DomainId::parse_fully_qualified(rest).ok()?;
             canonical.push(CanonicalStateKey::Domain(id));
             return Some(());
         }
@@ -1518,7 +1518,7 @@ mod tests {
         let (bob, _) = iroha_test_samples::gen_account_in("wonderland");
         let domain_id = wonderland_domain_id();
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
         let src = AssetId::of(ad.clone(), alice.clone());
@@ -1577,7 +1577,7 @@ mod tests {
         let domain_id = wonderland_domain_id();
         let account = new_wonderland_account(&alice);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
         let asset_def = AssetDefinition::numeric(asset_def_id.clone());
@@ -1610,7 +1610,8 @@ mod tests {
     fn ivm_access_dynamic_prepass_set_account_detail_sentinel() {
         // World and state for view
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1733,7 +1734,8 @@ mod tests {
     #[test]
     fn ivm_access_dynamic_prepass_requires_gas_limit() {
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1851,7 +1853,8 @@ mod tests {
 
         // World/state setup with one account to own the manifest
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1866,7 +1869,7 @@ mod tests {
 
         // Insert manifest with access-set hints into WSV
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def, alice.clone());
@@ -1925,7 +1928,8 @@ mod tests {
         access_set_cache_clear();
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1938,7 +1942,7 @@ mod tests {
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
 
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def, alice.clone());
@@ -1983,7 +1987,8 @@ mod tests {
         access_set_cache_clear();
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -2060,7 +2065,8 @@ mod tests {
         use nonzero_ext::nonzero;
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -2113,7 +2119,8 @@ mod tests {
         use nonzero_ext::nonzero;
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -2204,7 +2211,8 @@ mod tests {
         use nonzero_ext::nonzero;
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -2278,7 +2286,8 @@ mod tests {
         use nonzero_ext::nonzero;
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -2301,7 +2310,7 @@ mod tests {
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
 
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def, alice.clone());
@@ -2432,7 +2441,7 @@ mod tests {
         let mut st_block = state.block(header);
         {
             let mut stx = st_block.transaction();
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&alice, &mut stx)
                 .unwrap();
@@ -2440,7 +2449,7 @@ mod tests {
                 .execute(&alice, &mut stx)
                 .unwrap();
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             Register::asset_definition({
@@ -2485,7 +2494,7 @@ mod tests {
         );
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def_id.clone(), alice.clone());
@@ -2509,9 +2518,11 @@ mod tests {
         let mut st_block = state.block(header);
         {
             let mut stx = st_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&alice, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&alice, &mut stx)
+            .unwrap();
             Register::account(new_wonderland_account(&alice))
                 .execute(&alice, &mut stx)
                 .unwrap();
@@ -2570,9 +2581,11 @@ mod tests {
         let mut st_block = state.block(header);
         let (code_hash, trigger_id, hints) = {
             let mut stx = st_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&alice, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&alice, &mut stx)
+            .unwrap();
             Register::account(new_wonderland_account(&alice))
                 .execute(&alice, &mut stx)
                 .unwrap();

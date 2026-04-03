@@ -51,7 +51,7 @@ const SECOND_REFERENDUM_REJECT_VOTERS: usize = 8;
 const THIRD_REFERENDUM_VOTERS: usize = 8;
 const THIRD_REFERENDUM_APPROVE_VOTERS: usize = 5;
 const GOV_MAX_CONVICTION: u64 = 6;
-const GOV_DOMAIN_ID: &str = "govsmoke";
+const GOV_DOMAIN_ID: &str = "govsmoke.universal";
 const FIRST_CONTRACT_ID: &str = "parliament.lifecycle.smoke.contract";
 const SECOND_CONTRACT_ID: &str = "parliament.lifecycle.smoke.reject.contract";
 const TX_STATUS_TIMEOUT: Duration = Duration::from_secs(900);
@@ -983,7 +983,7 @@ async fn setup_hostile_fixture(
     let honest = all_citizens.split_off(attacker_count);
     let attackers = all_citizens;
 
-    let gov_domain_id: DomainId = GOV_DOMAIN_ID.parse()?;
+    let gov_domain_id = DomainId::parse_fully_qualified(GOV_DOMAIN_ID)?;
     let asset_def_id = governance_asset_definition_id();
     alice
         .submit(Register::domain(Domain::new(gov_domain_id.clone())))
@@ -1211,7 +1211,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     let referendum_id = proposal_id_hex.clone();
     let reject_referendum_id = reject_proposal_id_hex.clone();
 
-    let gov_domain_id: DomainId = GOV_DOMAIN_ID.parse()?;
+    let gov_domain_id = DomainId::parse_fully_qualified(GOV_DOMAIN_ID)?;
     let asset_def_id = governance_asset_definition_id();
     alice
         .submit(Register::domain(Domain::new(gov_domain_id.clone())))

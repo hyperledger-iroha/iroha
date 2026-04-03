@@ -10701,7 +10701,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "sora".parse().unwrap(),
+            DomainId::try_new("sora", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let label = asset_id.to_string();
@@ -10853,7 +10853,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), false);
         let asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "sora".parse().unwrap(),
+            DomainId::try_new("sora", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let label = asset_id.to_string();
@@ -13012,7 +13012,7 @@ mod tests {
 
         let trigger_id: TriggerId = "telemetry_time_trigger".parse().expect("trigger id");
         let missing_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "ghost".parse().unwrap(),
+            DomainId::try_new("ghost", "universal").unwrap(),
             "ghost".parse().unwrap(),
         );
         let missing_asset = AssetId::new(missing_def, sut.account_id.clone());

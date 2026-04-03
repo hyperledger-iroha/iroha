@@ -1223,7 +1223,7 @@ mod tests {
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
 
         let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_definition.clone(), alice_id.clone());
@@ -1249,7 +1249,7 @@ mod tests {
             &alice_id,
             alice_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                "fallback".parse().expect("domain"),
+                DomainId::try_new("fallback", "universal").expect("domain"),
             )))],
         );
         let decision = router.route_with_view(&tx, &state.view());
@@ -1263,7 +1263,7 @@ mod tests {
             &alice_id,
             alice_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                "single".parse().expect("domain"),
+                DomainId::try_new("single", "universal").expect("domain"),
             )))],
         );
         let state = blank_state();
@@ -1308,7 +1308,7 @@ mod tests {
             &alice_id,
             alice_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                "statefree".parse().expect("domain"),
+                DomainId::try_new("statefree", "universal").expect("domain"),
             )))],
         );
         let state = blank_state();
@@ -1358,7 +1358,7 @@ mod tests {
             &alice_id,
             alice_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                "override".parse().expect("domain"),
+                DomainId::try_new("override", "universal").expect("domain"),
             )))],
         );
         let state = blank_state();
@@ -1416,7 +1416,7 @@ mod tests {
             &alice_id,
             alice_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                "override".parse().expect("domain"),
+                DomainId::try_new("override", "universal").expect("domain"),
             )))],
         );
 
@@ -1470,7 +1470,7 @@ mod tests {
             &alice_id,
             alice_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                "fallback".parse().expect("domain"),
+                DomainId::try_new("fallback", "universal").expect("domain"),
             )))],
         );
 
@@ -1533,7 +1533,7 @@ mod tests {
             &alice_id,
             alice_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                "fallback".parse().expect("domain"),
+                DomainId::try_new("fallback", "universal").expect("domain"),
             )))],
         );
 
@@ -1584,7 +1584,7 @@ mod tests {
             &alice_id,
             alice_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                "fallback".parse().expect("domain"),
+                DomainId::try_new("fallback", "universal").expect("domain"),
             )))],
         );
 
@@ -1624,7 +1624,7 @@ mod tests {
             &alice_id,
             alice_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                "castle".parse().expect("domain id"),
+                DomainId::try_new("castle", "universal").expect("domain id"),
             )))],
         );
 
@@ -1727,14 +1727,14 @@ mod tests {
             &uae_id,
             uae_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                "uae-match".parse().expect("domain id"),
+                DomainId::try_new("uae-match", "universal").expect("domain id"),
             )))],
         );
         let bank_tx = sample_transaction(
             &bank_id,
             bank_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                "bank-no-match".parse().expect("domain id"),
+                DomainId::try_new("bank-no-match", "universal").expect("domain id"),
             )))],
         );
 
@@ -1782,7 +1782,7 @@ mod tests {
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
 
         let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "uae".parse().unwrap(),
+            DomainId::try_new("uae", "universal").unwrap(),
             "aed".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_definition, sender_id.clone());
@@ -1845,7 +1845,7 @@ mod tests {
         let router = ConfigLaneRouter::new(policy, DataSpaceCatalog::default(), lane_catalog);
 
         let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "uae".parse().unwrap(),
+            DomainId::try_new("uae", "universal").unwrap(),
             "aed".parse().unwrap(),
         );
         let uae_transfer = Transfer::asset_numeric(
@@ -1924,14 +1924,14 @@ mod tests {
             &dataspace_id,
             dataspace_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                "sbp-match".parse().expect("domain id"),
+                DomainId::try_new("sbp-match", "universal").expect("domain id"),
             )))],
         );
         let domain_tx = sample_transaction(
             &domain_id,
             domain_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                "banka-no-match".parse().expect("domain id"),
+                DomainId::try_new("banka-no-match", "universal").expect("domain id"),
             )))],
         );
 
@@ -1985,7 +1985,7 @@ mod tests {
             &authority_id,
             authority_keypair.private_key(),
             vec![InstructionBox::from(Register::domain(Domain::new(
-                "legacy-no-match".parse().expect("domain id"),
+                DomainId::try_new("legacy-no-match", "universal").expect("domain id"),
             )))],
         );
         let state = state_with_account_aliases(
@@ -2271,7 +2271,7 @@ mod tests {
         .expect("dataspace catalog");
         let router = ConfigLaneRouter::new(policy, dataspace_catalog, lane_catalog);
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            "nexus".parse().unwrap(),
+            DomainId::try_new("nexus", "universal").unwrap(),
             "ds1".parse().unwrap(),
         );
         let tx = sample_transaction(

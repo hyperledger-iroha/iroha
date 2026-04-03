@@ -41,7 +41,7 @@ type CommitCertificate = Qc;
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
-        "nexus".parse().expect("nexus domain"),
+        DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
@@ -522,7 +522,7 @@ async fn fetch_metrics(
 }
 
 fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<InstructionBox>> {
-    let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
+    let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
     let stake_asset_id = stake_asset_definition_id();
     let gas_account_id = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
 

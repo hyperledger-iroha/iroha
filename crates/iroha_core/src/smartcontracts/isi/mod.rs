@@ -518,14 +518,16 @@ mod tests {
         let world = World::with([], [], []);
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura.clone(), query_handle);
-        let asset_definition_id =
-            iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+        let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        );
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
-        let wonderland: DomainId = "wonderland".parse()?;
+        let wonderland: DomainId = DomainId::try_new("wonderland", "universal")?;
         Register::domain(Domain::new(wonderland.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         Register::account(Account::new(ALICE_ID.clone()))
@@ -916,7 +918,10 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
-        let definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+        let definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        );
         let account_id = ALICE_ID.clone();
         let key = "Bytes".parse::<Name>()?;
         SetKeyValue::asset_definition(
@@ -948,7 +953,10 @@ mod tests {
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
-        let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        );
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
         Mint::asset_numeric(numeric!(1), asset_id.clone())
             .execute(&account_id, &mut state_transaction)?;
@@ -978,7 +986,7 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
-        let domain_id = "wonderland".parse::<DomainId>()?;
+        let domain_id = DomainId::try_new("wonderland", "universal")?;
         let account_id = ALICE_ID.clone();
         let key = "Bytes".parse::<Name>()?;
         SetKeyValue::domain(domain_id.clone(), key.clone(), vec![1_u32, 2_u32, 3_u32])
@@ -1122,7 +1130,7 @@ mod tests {
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
         assert!(matches!(
-            Register::domain(Domain::new("genesis".parse()?))
+            Register::domain(Domain::new(DomainId::try_new("genesis", "universal")?))
                 .execute(&account_id, &mut state_transaction)
                 .expect_err("Error expected"),
             Error::InvariantViolation(_)

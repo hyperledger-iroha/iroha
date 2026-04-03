@@ -588,12 +588,13 @@ pub fn generate_default(
     let meta = Metadata::default();
     let wonderland_name: Name = "wonderland".parse()?;
     let universal_dataspace: Name = "universal".parse()?;
-    let wonderland_domain = DomainId::new(wonderland_name.clone(), universal_dataspace.clone());
+    let wonderland_domain =
+        DomainId::try_new(wonderland_name.as_ref(), universal_dataspace.as_ref())?;
     let garden_of_live_flowers_name: Name = "garden_of_live_flowers".parse()?;
-    let garden_of_live_flowers_domain = DomainId::new(
-        garden_of_live_flowers_name.clone(),
-        universal_dataspace.clone(),
-    );
+    let garden_of_live_flowers_domain = DomainId::try_new(
+        garden_of_live_flowers_name.as_ref(),
+        universal_dataspace.as_ref(),
+    )?;
     let rose_asset_definition_id =
         AssetDefinitionId::new(wonderland_domain.clone(), "rose".parse()?);
     let cabbage_asset_definition_id =
@@ -1382,7 +1383,7 @@ fn generate_synthetic(
     let mut builder = default_genesis.into_builder().next_transaction();
 
     for domain in 0..domains {
-        let domain_id: DomainId = format!("domain_{domain}").parse()?;
+        let domain_id = DomainId::try_new(format!("domain_{domain}"), "universal")?;
         builder = builder.append_instruction(Register::domain(Domain::new(domain_id.clone())));
 
         let mut synthetic_asset_definitions = Vec::new();

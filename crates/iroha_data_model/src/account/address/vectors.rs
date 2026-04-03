@@ -1,7 +1,7 @@
 //! Deterministic address test vector generator for ADDR-2.
 
 use core::fmt;
-use std::{convert::TryInto, str::FromStr};
+use std::convert::TryInto;
 
 use hex;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
@@ -17,7 +17,6 @@ use super::{
 use crate::{
     account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
     domain::DomainId,
-    name::Name,
 };
 
 /// Default I105 prefix used for deterministic vectors.
@@ -834,10 +833,8 @@ fn decode_multisig_payload(payload: &[u8]) -> MultisigControllerPayload<'_> {
 }
 
 fn domain_id(label: &str) -> DomainId {
-    DomainId::new(
-        Name::from_str(label).unwrap_or_else(|_| panic!("invalid domain label `{label}`")),
-        Name::from_str("universal").expect("valid dataspace alias"),
-    )
+    DomainId::try_new(label, "universal")
+        .unwrap_or_else(|_| panic!("invalid domain id `{label}.universal`"))
 }
 
 fn ed25519_pk_with(byte: u8) -> PublicKey {

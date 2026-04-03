@@ -556,7 +556,7 @@ mod tests {
 
     fn sample_asset() -> AssetId {
         let definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let owner = sample_account();

@@ -150,7 +150,7 @@ fn iterable_query_response_roundtrips_header_and_json() {
 fn rwa_iterable_query_response_roundtrips_header_and_json() {
     let rwa = Rwa::new(
         RwaId::generated(
-            "vault".parse().expect("domain"),
+            DomainId::try_new("vault", "universal").expect("domain"),
             iroha_crypto::Hash::prehashed([0x11; iroha_crypto::Hash::LENGTH]),
         ),
         "12.5".parse().expect("quantity"),

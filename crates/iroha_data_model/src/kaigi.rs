@@ -741,7 +741,7 @@ mod tests {
 
     #[test]
     fn call_record_participant_management_is_deterministic() {
-        let domain_id = DomainId::from_str("nexus").expect("domain id");
+        let domain_id = DomainId::try_new("nexus", "universal").expect("domain id");
         let host = AccountId::new(KeyPair::random().public_key().clone());
         let call_id = KaigiId::new(domain_id.clone(), Name::from_str("daily").unwrap());
         let template = NewKaigi::with_defaults(call_id, host);
@@ -764,7 +764,7 @@ mod tests {
 
     #[test]
     fn call_record_preserves_creation_timestamp_and_schedule() {
-        let domain_id = DomainId::from_str("nexus").expect("domain id");
+        let domain_id = DomainId::try_new("nexus", "universal").expect("domain id");
         let host = AccountId::new(KeyPair::random().public_key().clone());
         let call_id = KaigiId::new(domain_id.clone(), Name::from_str("standup").unwrap());
         let mut template = NewKaigi::with_defaults(call_id, host);
@@ -794,7 +794,7 @@ mod tests {
 
     #[test]
     fn relay_hop_canonical_roundtrip() {
-        let _domain = DomainId::from_str("relay-domain").expect("domain");
+        let _domain = DomainId::try_new("relay-domain", "universal").expect("domain");
         let relay = AccountId::new(KeyPair::random().public_key().clone());
         let hop = KaigiRelayHop {
             relay_id: relay.clone(),
@@ -808,7 +808,7 @@ mod tests {
 
     #[test]
     fn new_kaigi_canonical_roundtrip() {
-        let domain = DomainId::from_str("wonderland").expect("domain");
+        let domain = DomainId::try_new("wonderland", "universal").expect("domain");
         let host_keypair = KeyPair::random();
         let host = AccountId::new(host_keypair.public_key().clone());
         let id = KaigiId::new(
@@ -878,7 +878,7 @@ mod tests {
         let populated_root = KaigiRecord::compute_roster_root(std::slice::from_ref(&commitment));
         assert_ne!(populated_root, empty_root);
 
-        let domain = DomainId::from_str("kaigi").expect("domain");
+        let domain = DomainId::try_new("kaigi", "universal").expect("domain");
         let host_key = KeyPair::random();
         let host = AccountId::new(host_key.public_key().clone());
         let call_id = KaigiId::new(domain.clone(), Name::from_str("privacy").expect("call"));
@@ -898,7 +898,7 @@ mod tests {
 
     #[test]
     fn relay_manifest_can_be_replaced_or_cleared() {
-        let domain_id = DomainId::from_str("kaigi").expect("domain");
+        let domain_id = DomainId::try_new("kaigi", "universal").expect("domain");
         let host_key = KeyPair::random();
         let host = AccountId::new(host_key.public_key().clone());
         let call_id = KaigiId::new(domain_id.clone(), Name::from_str("route").expect("call"));
@@ -941,7 +941,7 @@ mod tests {
 
     #[test]
     fn relay_registration_norito_roundtrip() {
-        let _domain_id = DomainId::from_str("kaigi").expect("domain");
+        let _domain_id = DomainId::try_new("kaigi", "universal").expect("domain");
         let relay_id = AccountId::new(KeyPair::random().public_key().clone());
         let registration = KaigiRelayRegistration {
             relay_id: relay_id.clone(),

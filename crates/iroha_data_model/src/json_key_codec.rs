@@ -21,7 +21,6 @@ macro_rules! impl_id_key_codec {
 }
 
 impl_id_key_codec!(
-    crate::domain::DomainId,
     crate::asset::AssetDefinitionId,
     crate::asset::AssetId,
     crate::nft::NftId,
@@ -31,6 +30,17 @@ impl_id_key_codec!(
     crate::proof::ProofId,
     crate::isi::settlement::SettlementId,
 );
+
+impl JsonKeyCodec for crate::domain::DomainId {
+    fn encode_json_key(&self, out: &mut String) {
+        json::write_json_string(&self.to_string(), out);
+    }
+
+    fn decode_json_key(encoded: &str) -> Result<Self, json::Error> {
+        crate::domain::DomainId::parse_fully_qualified(encoded)
+            .map_err(|err| json::Error::Message(err.to_string()))
+    }
+}
 
 impl JsonKeyCodec for crate::account::AccountId {
     fn encode_json_key(&self, out: &mut String) {

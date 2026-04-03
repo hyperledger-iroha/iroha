@@ -66,8 +66,11 @@ fn remittance_batch() -> TransitionBatch {
     const BOB_START: u64 = 120_000;
     let mut batch = TransitionBatch::new("fastpq-lane-balanced", PublicInputs::default());
     annotate_inputs(&mut batch, 23);
-    let domain = DomainId::from_str("remit").expect("domain id");
-    let asset_definition = AssetDefinitionId::new("remit".parse().unwrap(), "xor".parse().unwrap());
+    let domain = DomainId::try_new("remit", "universal").expect("domain id");
+    let asset_definition = AssetDefinitionId::new(
+        DomainId::try_new("remit", "universal").unwrap(),
+        "xor".parse().unwrap(),
+    );
     let from_account = deterministic_account("alice", &domain);
     let to_account = deterministic_account("bob", &domain);
 

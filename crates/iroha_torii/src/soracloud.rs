@@ -13691,7 +13691,8 @@ mod tests {
             .build()?;
 
         runtime.block_on(async move {
-            let wonderland: iroha_data_model::domain::DomainId = "wonderland".parse()?;
+            let wonderland: iroha_data_model::domain::DomainId =
+                DomainId::try_new("wonderland", "universal")?;
             let mut world = World::default();
             seed_domain_name_lease(&mut world, &SAMPLE_GENESIS_ACCOUNT_ID, &wonderland);
             let app = mk_app_state_for_tests_with_world(world);

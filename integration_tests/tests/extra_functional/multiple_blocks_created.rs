@@ -45,13 +45,13 @@ async fn multiple_blocks_created() -> Result<()> {
     submit_client.transaction_status_timeout = sync_timeout;
     submit_client.transaction_ttl = Some(sync_timeout + Duration::from_secs(5));
 
-    let domain_id: DomainId = "domain".parse()?;
+    let domain_id: DomainId = DomainId::try_new("domain", "universal")?;
     ensure_domain_registration_lease_for_network(&network, &domain_id)?;
     let create_domain = Register::domain(Domain::new(domain_id.clone()));
     let (account_id, _account_keypair) = gen_account_in("domain");
     let create_account = Register::account(Account::new(account_id.clone()));
     let asset_definition_id: AssetDefinitionId =
-        AssetDefinitionId::new("domain".parse()?, "xor".parse()?);
+        AssetDefinitionId::new(DomainId::try_new("domain", "universal")?, "xor".parse()?);
     let create_asset = Register::asset_definition({
         let __asset_definition_id = asset_definition_id.clone();
         AssetDefinition::numeric(__asset_definition_id.clone())

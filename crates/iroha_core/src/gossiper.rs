@@ -5,7 +5,6 @@ use std::{
     collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     io::Write,
     num::{NonZeroU32, NonZeroUsize},
-    str::FromStr,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -18,7 +17,6 @@ use iroha_crypto::{HashOf, KeyPair};
 use iroha_data_model::{
     ChainId, DataSpaceId,
     account::AccountId,
-    domain::DomainId,
     isi::InstructionBox,
     nexus::{LaneCatalog, LaneId, LaneVisibility},
     peer::PeerId,
@@ -93,7 +91,6 @@ fn tx_gossip_frame_payload_cap(
         return 0;
     }
     let dummy_keypair = KeyPair::random();
-    let _dummy_domain = DomainId::from_str("dummy").expect("static domain id should parse");
     let dummy_authority = AccountId::new(dummy_keypair.public_key().clone());
     let dummy_signed =
         iroha_data_model::transaction::TransactionBuilder::new(chain_id.clone(), dummy_authority)

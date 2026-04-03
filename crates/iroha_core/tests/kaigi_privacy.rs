@@ -416,7 +416,7 @@ fn kaigi_privacy_join_and_leave_flow_updates_record() {
     state.zk.kaigi_roster_join_vk = Some(roster.vk_ref.clone());
     state.zk.kaigi_roster_leave_vk = Some(roster.vk_ref.clone());
 
-    let domain_id = DomainId::from_str("kaigi").expect("domain id");
+    let domain_id = DomainId::try_new("kaigi", "universal").expect("domain id");
     let (host, _) = gen_account_in("kaigi");
     let (participant, _) = gen_account_in("kaigi");
 
@@ -575,7 +575,7 @@ fn usage_summary_emitted_on_record_usage() {
     state.zk.kaigi_roster_leave_vk = Some(roster.vk_ref.clone());
     state.zk.kaigi_usage_vk = Some(usage.vk_ref.clone());
 
-    let domain_id = DomainId::from_str("kaigi").expect("domain id");
+    let domain_id = DomainId::try_new("kaigi", "universal").expect("domain id");
     let (host, _) = gen_account_in("kaigi");
 
     let call_id = KaigiId::new(domain_id.clone(), Name::from_str("usage").unwrap());

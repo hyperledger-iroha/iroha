@@ -67,7 +67,8 @@ use norito::{
 };
 
 /// Domain of the genesis account, technically required for the pre-genesis state
-pub static GENESIS_DOMAIN_ID: LazyLock<DomainId> = LazyLock::new(|| "genesis".parse().unwrap());
+pub static GENESIS_DOMAIN_ID: LazyLock<DomainId> =
+    LazyLock::new(|| DomainId::parse_fully_qualified("genesis.universal").unwrap());
 
 /// Construct an [`InstructionRegistry`] with all built-in Iroha instructions and
 /// set it as the global registry.
@@ -748,7 +749,7 @@ pub mod genesis_instructions_json {
                 let source_str = take_string(&mut fields, "source")?;
                 let source: AccountId = parse_account_id(&source_str, "transfer source account")?;
                 let domain_str = take_string(&mut fields, "object")?;
-                let domain: DomainId = parse_id(&domain_str, "domain")?;
+                let domain = parse_domain_id(&domain_str, "domain")?;
                 let destination_str = take_string(&mut fields, "destination")?;
                 let destination: AccountId =
                     parse_account_id(&destination_str, "transfer destination account")?;
@@ -1007,6 +1008,11 @@ pub mod genesis_instructions_json {
     fn parse_account_id(value: &str, label: &'static str) -> Result<AccountId, json::Error> {
         AccountId::parse_encoded(value)
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+            .map_err(|err| json::Error::Message(format!("invalid {label}: {err}")))
+    }
+
+    fn parse_domain_id(value: &str, label: &'static str) -> Result<DomainId, json::Error> {
+        DomainId::parse_fully_qualified(value)
             .map_err(|err| json::Error::Message(format!("invalid {label}: {err}")))
     }
 
@@ -1299,7 +1305,8 @@ pub mod genesis_instructions_json {
 
         #[test]
         fn instructions_to_value_keeps_structure() {
-            let domain = Register::domain(Domain::new("demo.universal".parse().unwrap()));
+            let domain =
+                Register::domain(Domain::new(DomainId::try_new("demo", "universal").unwrap()));
             let value = instructions_to_value(&[InstructionBox::from(domain)]);
             let arr = value.as_array().expect("array");
             assert_eq!(arr.len(), 1);
@@ -1309,7 +1316,9 @@ pub mod genesis_instructions_json {
 
         #[test]
         fn serialize_register_uses_structured_json() {
-            let domain = Register::domain(Domain::new("structured.universal".parse().unwrap()));
+            let domain = Register::domain(Domain::new(
+                DomainId::try_new("structured", "universal").unwrap(),
+            ));
             let instruction: InstructionBox = domain.into();
             let mut out = String::new();
             serialize(&[instruction], &mut out);
@@ -1335,7 +1344,7 @@ pub mod genesis_instructions_json {
         #[test]
         fn deserialize_structured_instructions_roundtrip() {
             let account_id = ALICE_ID.clone();
-            let domain_id: DomainId = "wonderland.universal".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             let domain = Domain::new(domain_id.clone());
             let asset_def_id: AssetDefinitionId =
                 AssetDefinitionId::new(domain_id.clone(), "coin".parse().unwrap());
@@ -3690,7 +3699,7 @@ mod tests2 {
         let rebuilt = manifest
             .clone()
             .into_builder()
-            .domain("example.universal".parse().expect("domain id"))
+            .domain(DomainId::try_new("example", "universal").expect("domain id"))
             .finish_domain()
             .build_raw();
 
@@ -5135,7 +5144,7 @@ mod tests {
         let (public_key, _) = KeyPair::random().into_parts();
         let domain_name: Name = "wonderland".parse()?;
         let account_id = AccountId::new(public_key.clone());
-        let domain_id = DomainId::new(domain_name, "universal".parse()?);
+        let domain_id = DomainId::try_new(&domain_name, "universal")?;
 
         let genesis = builder
             .domain(domain_id)
@@ -5846,7 +5855,7 @@ mod tests {
         let (_tmp_dir, builder) = test_builder();
 
         let _genesis_block = builder
-            .domain("wonderland.universal".parse()?)
+            .domain(DomainId::try_new("wonderland", "universal")?)
             .account(alice_public_key)
             .finish_domain()
             .build_and_sign(&genesis_key_pair)?;
@@ -5887,14 +5896,14 @@ mod tests {
         let _executor_path = genesis_builder.executor.clone();
 
         genesis_builder = genesis_builder
-            .domain("wonderland.universal".parse().unwrap())
+            .domain(DomainId::try_new("wonderland", "universal").unwrap())
             .account(public_key["alice"].clone())
             .account(public_key["bob"].clone())
             .finish_domain()
-            .domain("tulgey_wood.universal".parse().unwrap())
+            .domain(DomainId::try_new("tulgey_wood", "universal").unwrap())
             .account(public_key["cheshire_cat"].clone())
             .finish_domain()
-            .domain("meadow.universal".parse().unwrap())
+            .domain(DomainId::try_new("meadow", "universal").unwrap())
             .account(public_key["mad_hatter"].clone())
             .asset("hats".parse().unwrap(), NumericSpec::default())
             .finish_domain();
@@ -5926,7 +5935,7 @@ mod tests {
         };
 
         {
-            let domain_id: DomainId = "wonderland.universal".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             assert_eq!(
                 instructions[0],
                 Register::domain(Domain::new(domain_id.clone())).into()
@@ -5947,7 +5956,7 @@ mod tests {
             );
         }
         {
-            let domain_id: DomainId = "tulgey_wood.universal".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("tulgey_wood", "universal").unwrap();
             assert_eq!(
                 instructions[3],
                 Register::domain(Domain::new(domain_id.clone())).into()
@@ -5961,7 +5970,7 @@ mod tests {
             );
         }
         {
-            let domain_id: DomainId = "meadow.universal".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("meadow", "universal").unwrap();
             assert_eq!(
                 instructions[5],
                 Register::domain(Domain::new(domain_id.clone())).into()
@@ -5977,7 +5986,7 @@ mod tests {
                 instructions[7],
                 Register::asset_definition(
                     AssetDefinition::numeric(iroha_data_model::asset::AssetDefinitionId::new(
-                        "meadow.universal".parse().unwrap(),
+                        DomainId::try_new("meadow", "universal").unwrap(),
                         "hats".parse().unwrap()
                     ),)
                     .with_name("hats".to_owned())
@@ -6146,7 +6155,8 @@ mod tests {
     fn instruction_registry_decodes_register_domain() {
         let registry = default_instruction_registry();
         let name = core::any::type_name::<Register<Domain>>();
-        let instruction = Register::domain(Domain::new("test.universal".parse().unwrap()));
+        let instruction =
+            Register::domain(Domain::new(DomainId::try_new("test", "universal").unwrap()));
         let bytes = norito::to_bytes(&instruction).expect("encode register-domain instruction");
         let decoded = registry.decode(name, &bytes).expect("entry");
         if let Err(err) = decoded {

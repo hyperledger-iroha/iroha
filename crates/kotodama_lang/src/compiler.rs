@@ -497,7 +497,7 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
             (PointerType::Name, to_bytes(&nm).ok()?)
         }
         DRK::Domain => {
-            let id: iroha_data_model::domain::DomainId = raw.parse().ok()?;
+            let id = iroha_data_model::domain::DomainId::parse_fully_qualified(raw).ok()?;
             (PointerType::DomainId, to_bytes(&id).ok()?)
         }
         DRK::Json => {
@@ -1304,7 +1304,7 @@ seiyaku Test {
                 .expect("public key"),
         );
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
@@ -1381,9 +1381,9 @@ seiyaku Test {
         };
         use iroha_primitives::json::Json;
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let nft_id: NftId = "n0$wonderland".parse().unwrap();
@@ -1473,7 +1473,7 @@ seiyaku Test {
                 .expect("public key"),
         );
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
@@ -1534,7 +1534,7 @@ seiyaku Test {
         let from_literal = sample_account_literal();
         let to = sample_account_id_alt();
         let to_literal = to.to_string();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let src = format!(
             "fn main() {{ transfer_domain(account_id(\"{from_literal}\"), domain(\"{domain}\"), account_id(\"{to_literal}\")); }}"
         );
@@ -2023,7 +2023,7 @@ seiyaku StagedMintRequest {
         };
 
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
         let asset_definition_literal = asset_definition.to_string();
@@ -2093,9 +2093,9 @@ seiyaku Test {{
             .expect("account");
         let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";
         let peer: PeerId = peer_literal.parse().expect("peer");
-        let domain: DomainId = "wonderland".parse().expect("domain");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
         let asset = AssetId::new(asset_definition.clone(), account.clone());
@@ -7345,10 +7345,12 @@ impl Compiler {
                     )
                 }
                 DataKey(DataKind::Domain, s) => {
-                    let id: iroha_data_model::domain::DomainId = s.parse().map_err(|e| {
-                        let err = format!("invalid DomainId literal `{s}`: {e}");
-                        i18n::translate(self.lang, Message::SemanticError(&err))
-                    })?;
+                    let id = iroha_data_model::domain::DomainId::parse_fully_qualified(s).map_err(
+                        |e| {
+                            let err = format!("invalid DomainId literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        },
+                    )?;
                     (
                         8u16,
                         to_bytes(&id).map_err(|e| e.to_string()).map_err(|e| {
@@ -8025,7 +8027,7 @@ fn record_isi_access(
             add_asset_def_rw(access_set, &asset_def);
         }
         ir::Instr::RegisterDomain { domain } | ir::Instr::UnregisterDomain { domain } => {
-            let Some(id) = parse_temp(string_map, func_idx, *domain) else {
+            let Some(id) = parse_domain_temp(string_map, func_idx, *domain) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
             add_domain_rw(access_set, &id);
@@ -8143,7 +8145,7 @@ fn record_isi_access(
         }
         ir::Instr::TransferDomain { domain, to } => {
             let (Some(domain), Some(to)) = (
-                parse_temp::<DomainId>(string_map, func_idx, *domain),
+                parse_domain_temp(string_map, func_idx, *domain),
                 parse_account_temp(string_map, func_idx, *to),
             ) else {
                 return apply_fallback(access_set, hint_diagnostics);
@@ -8424,6 +8426,15 @@ fn parse_temp<T: ParseTempLiteral>(
     temp: ir::Temp,
 ) -> Option<T> {
     T::parse_temp_literal(string_map.get(&(func_idx, temp))?)
+}
+
+fn parse_domain_temp(
+    string_map: &HashMap<(usize, ir::Temp), String>,
+    func_idx: usize,
+    temp: ir::Temp,
+) -> Option<iroha_data_model::domain::DomainId> {
+    iroha_data_model::domain::DomainId::parse_fully_qualified(string_map.get(&(func_idx, temp))?)
+        .ok()
 }
 
 fn parse_account_temp(

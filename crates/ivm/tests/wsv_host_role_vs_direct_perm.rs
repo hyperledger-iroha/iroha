@@ -65,7 +65,7 @@ fn role_vs_direct_permission_for_mint() {
         "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4",
     );
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonder".parse().unwrap(),
+        DomainId::try_new("wonder", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
 

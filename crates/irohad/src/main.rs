@@ -9382,7 +9382,7 @@ mod tests {
 
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
             let genesis_account_id = SAMPLE_GENESIS_ACCOUNT_ID.clone();
-            let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("valid domain id");
             let bls_keypair = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::BlsNormal);
             let bls_account_id = AccountId::new(bls_keypair.public_key().clone());
 

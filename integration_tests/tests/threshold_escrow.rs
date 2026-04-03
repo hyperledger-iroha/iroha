@@ -29,7 +29,10 @@ fn unique_asset_definition_id(test_name: &str) -> AssetDefinitionId {
     let name: Name = format!("escrow_{}", test_name.replace('-', "_"))
         .parse()
         .expect("generated asset definition name must parse");
-    AssetDefinitionId::new("wonderland".parse().expect("domain id"), name)
+    AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal").expect("domain id"),
+        name,
+    )
 }
 
 fn amount_args(amount: u64) -> norito::json::Value {

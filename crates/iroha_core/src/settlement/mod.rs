@@ -284,7 +284,7 @@ mod tests {
         let record = PendingSettlement {
             source_id: [0x22; 32],
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                "sora".parse().unwrap(),
+                DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
             local_amount_micro: 10,

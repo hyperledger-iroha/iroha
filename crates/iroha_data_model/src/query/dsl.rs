@@ -1028,7 +1028,8 @@ mod committed_tx_predicate_tests {
 
     impl TestAuthority {
         fn new(seed: u8) -> Self {
-            let _domain: crate::domain::DomainId = "wonderland".parse().unwrap();
+            let _domain: crate::domain::DomainId =
+                DomainId::try_new("wonderland", "universal").unwrap();
             let (public_key, private_key) =
                 iroha_crypto::KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519).into_parts();
             let id = account::AccountId::new(public_key);
