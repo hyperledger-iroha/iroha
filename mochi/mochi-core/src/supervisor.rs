@@ -1902,7 +1902,7 @@ impl Supervisor {
     }
 
     fn readiness_smoke_signer(&self) -> Result<SigningAuthority> {
-        let domain: DomainId = SMOKE_ACCOUNT_DOMAIN.parse().map_err(|err| {
+        let domain = DomainId::try_new(SMOKE_ACCOUNT_DOMAIN, "universal").map_err(|err| {
             SupervisorError::Config(format!(
                 "invalid readiness smoke account domain `{SMOKE_ACCOUNT_DOMAIN}`: {err}"
             ))
@@ -4619,7 +4619,8 @@ JSON
             .expect("build readiness plan");
         assert_eq!(plan.transactions.len(), 3);
 
-        let expected_domain: DomainId = SMOKE_ACCOUNT_DOMAIN.parse().expect("parse domain id");
+        let expected_domain =
+            DomainId::try_new(SMOKE_ACCOUNT_DOMAIN, "universal").expect("parse domain id");
         let expected_authority = supervisor.genesis.account_in_domain(&expected_domain);
         let mut nonces = HashSet::new();
         for (idx, tx) in plan.transactions.iter().enumerate() {

@@ -28,7 +28,7 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 }
 
 fn account(domain: &str, public_key: &str) -> AccountId {
-    let _domain = DomainId::try_new(domain, "universal").unwrap();
+    let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
     AccountId::new(public_key)
 }
@@ -89,7 +89,7 @@ fn query_get_balance_returns_json_tlv() {
         .expect("canonical I105 account id must parse")
         .into_account_id();
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
+        iroha_data_model::DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
     let wsv = MockWorldStateView::with_balances(&[(
@@ -221,8 +221,8 @@ fn query_list_triggers_returns_all() {
 
 #[test]
 fn query_list_domains_for_account_returns_sorted_domains() {
-    let beta: DomainId = DomainId::try_new("beta", "universal").unwrap();
-    let alpha: DomainId = DomainId::try_new("alpha", "universal").unwrap();
+    let beta: DomainId = iroha_data_model::DomainId::try_new("beta", "universal").unwrap();
+    let alpha: DomainId = iroha_data_model::DomainId::try_new("alpha", "universal").unwrap();
     let admin = account(
         "beta",
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
@@ -281,8 +281,9 @@ fn query_list_domains_for_account_returns_sorted_domains() {
 
 #[test]
 fn query_list_accounts_for_domain_returns_linked_subjects() {
-    let wonderland: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-    let other: DomainId = DomainId::try_new("other", "universal").unwrap();
+    let wonderland: DomainId =
+        iroha_data_model::DomainId::try_new("wonderland", "universal").unwrap();
+    let other: DomainId = iroha_data_model::DomainId::try_new("other", "universal").unwrap();
     let admin = account(
         "wonderland",
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",

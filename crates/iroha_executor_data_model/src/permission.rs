@@ -638,6 +638,7 @@ pub mod soranet {
 #[cfg(test)]
 mod tests {
     use super::account::CanRegisterAccount;
+    use iroha_data_model::DomainId;
 
     #[test]
     fn can_register_account_serializes_as_json_string_field() {
@@ -646,13 +647,13 @@ mod tests {
         };
 
         let json = norito::json::to_json(&perm).expect("serialize to JSON");
-        assert_eq!(json, "{\"domain\":\"wonderland\"}");
+        assert_eq!(json, "{\"domain\":\"wonderland.universal\"}");
 
         let value = norito::json::to_value(&perm).expect("serialize to JSON value");
         assert_eq!(
             value,
             norito::json!({
-                "domain": "wonderland",
+                "domain": "wonderland.universal",
             })
         );
     }

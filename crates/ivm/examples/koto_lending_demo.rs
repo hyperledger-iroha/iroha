@@ -1,6 +1,7 @@
 //! Kotodama lending demo: a minimal borrow/mint flow on IVM.
 use std::collections::HashMap;
 
+use iroha_data_model::DomainId;
 use ivm::{
     AccountId, AssetDefinitionId, IVM, MockWorldStateView, PermissionToken,
     kotodama::compiler::Compiler as KotodamaCompiler, mock_wsv::WsvHost,

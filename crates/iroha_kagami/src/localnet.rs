@@ -454,8 +454,7 @@ fn localnet_dataspace_fault_tolerance(peers: NonZeroU16) -> u32 {
 
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
     AssetDefinitionId::new(
-        domain
-            .parse()
+        DomainId::parse_fully_qualified(domain)
             .expect("static asset definition domain must remain valid"),
         name.parse()
             .expect("static asset definition name must remain valid"),

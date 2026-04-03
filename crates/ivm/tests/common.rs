@@ -152,7 +152,7 @@ pub fn payload_for_type(pointer_type: PointerType, payload: &[u8]) -> Vec<u8> {
             encode_from_str::<AssetDefinitionId>(payload, "AssetDefinitionId")
         }
         PointerType::AssetId => encode_from_str::<AssetId>(payload, "AssetId"),
-        PointerType::DomainId => encode_from_str::<DomainId>(payload, "DomainId"),
+        PointerType::DomainId => encode_domain_id_payload(payload),
         PointerType::Name => encode_name_payload(payload),
         PointerType::NftId => encode_from_str::<NftId>(payload, "NftId"),
         PointerType::Json => encode_json_payload(payload),
@@ -209,4 +209,15 @@ fn encode_name_payload(payload: &[u8]) -> Vec<u8> {
         // not `Name`; pass them through as raw bytes so host-side parsing decides.
         Err(_) => payload.to_vec(),
     }
+}
+
+fn encode_domain_id_payload(payload: &[u8]) -> Vec<u8> {
+    if norito::decode_from_bytes::<DomainId>(payload).is_ok() {
+        return payload.to_vec();
+    }
+
+    let raw = core::str::from_utf8(payload).expect("payload must be utf-8");
+    let domain = DomainId::parse_fully_qualified(raw)
+        .unwrap_or_else(|err| panic!("DomainId literal `{raw}` failed to parse: {err}"));
+    norito::to_bytes(&domain).expect("encode payload")
 }

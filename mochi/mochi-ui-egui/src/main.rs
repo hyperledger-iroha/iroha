@@ -9959,7 +9959,7 @@ impl MochiApp {
         if domain_raw.is_empty() {
             return Err("Domain identifier is required.".to_owned());
         }
-        let domain_id = DomainId::from_str(&domain_raw)
+        let domain_id = DomainId::parse_fully_qualified(&domain_raw)
             .map_err(|err| format!("Invalid domain `{domain_raw}`: {err}"))?;
 
         let max_per_tx_raw = self.composer_admission_max_per_tx.trim().to_owned();

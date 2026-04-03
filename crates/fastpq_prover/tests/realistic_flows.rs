@@ -12,7 +12,6 @@ use iroha_data_model::{
 };
 use iroha_primitives::numeric::Numeric;
 use norito::to_bytes;
-use std::str::FromStr;
 
 fn annotate_inputs(batch: &mut TransitionBatch, slot: u64) {
     batch.public_inputs.dsid = [0x3D; 16];

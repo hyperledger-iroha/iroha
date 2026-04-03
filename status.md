@@ -2,6 +2,47 @@
 
 Last updated: 2026-04-03
 
+## 2026-04-03 Follow-up: workspace-wide test compilation is green after full `DomainId` tail sweep
+- `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test --workspace --no-run`
+  now completes successfully.
+- The remaining first-release `DomainId` fallout after the earlier workspace
+  `cargo check` pass turned out to be tail sites in examples, benches, and
+  test modules rather than core runtime code. Those were removed from:
+  - `crates/iroha_core` examples/benches;
+  - `crates/iroha_test_network` examples;
+  - `crates/iroha` examples/tests;
+  - `python/iroha_python/iroha_python_rs` tests;
+  - `crates/iroha_executor_data_model` tests;
+  - `crates/kotodama_lang` tests;
+  - `crates/ivm` tests; and
+  - additional test/example helpers across the workspace.
+- The follow-up sweep also corrected one stale JSON expectation that still
+  serialized a domain as bare `wonderland` instead of
+  `wonderland.universal`.
+- Verification completed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test --workspace --no-run`
+
+## 2026-04-03 Follow-up: workspace-wide `cargo check` is green after final tool/UI cleanup
+- The broader workspace verification pass is now green under
+  `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check --workspace`.
+- The final untouched `DomainId` parser fallout surfaced outside the original
+  runtime slice and was removed from:
+  - `crates/iroha_kagami` (`genesis/sign.rs`, `localnet.rs`);
+  - `python/iroha_python/iroha_python_rs`;
+  - `mochi/mochi-core`;
+  - `mochi/mochi-ui-egui`; and
+  - `crates/izanami`.
+- Those follow-up fixes replaced the remaining `DomainId::from_str(...)`,
+  `.parse::<DomainId>()`, and removed bare `DomainId::new(...)` constructor
+  assumptions with explicit `DomainId::try_new(...)` or
+  `DomainId::parse_fully_qualified(...)`.
+- Additional verification completed on the newly touched crates:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p iroha_python_rs`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p mochi-core -p izanami`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check --workspace`
+
 ## 2026-04-03 Follow-up: explicit `DomainId` construction is now clean across checked Rust code
 - Finished the remaining first-release `DomainId` cleanup outside the earlier
   runtime slice:
@@ -27,10 +68,14 @@ Last updated: 2026-04-03
   - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p iroha_cli --tests`
   - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p integration_tests --tests`
   - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p connect_norito_bridge --tests`
-- Remaining tail:
-  - translated and versioned Markdown docs still contain stale
-    `DomainId::from_str("wonderland")` / bare-domain examples and need a docs
-    sweep.
+- Follow-up docs sweep completed:
+  - translated `docs/source/data_model*.md` examples now use
+    `DomainId::try_new("wonderland", "universal")` and reuse the explicit
+    `domain_id` when constructing asset definitions; and
+  - current, i18n, and versioned Rust SDK docs under `docs/portal/` now show
+    explicit account/domain construction instead of `DomainId::from_str(...)`.
+- A final docs grep is clean for the old public examples:
+  - `rg -n 'DomainId::from_str\\("wonderland"\\)|let domain_id: DomainId = "wonderland"\\.parse\\(\\)\\.unwrap\\(\\);' docs`
 
 ## 2026-04-03 Follow-up: `DomainId` no longer implements `FromStr`
 - `DomainId` now has only explicit constructors:

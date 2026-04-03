@@ -2360,6 +2360,7 @@ fn removed_free_helper_message(name: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::DomainId;
 
     fn sample_account_literal() -> String {
         iroha_data_model::account::AccountId::new(

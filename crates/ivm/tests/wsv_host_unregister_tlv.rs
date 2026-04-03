@@ -56,8 +56,9 @@ fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
 
 #[test]
 fn unregister_flow_with_dependencies() {
-    let alice_domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
-    let bob_domain: DomainId = DomainId::try_new("wonder", "universal").unwrap();
+    let alice_domain: DomainId =
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
+    let bob_domain: DomainId = iroha_data_model::DomainId::try_new("wonder", "universal").unwrap();
     let alice_pk: PublicKey =
         "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
             .parse()
@@ -69,7 +70,7 @@ fn unregister_flow_with_dependencies() {
     let alice = test_account(alice_domain, alice_pk);
     let bob = test_account(bob_domain, bob_pk);
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("wonder", "universal").unwrap(),
+        iroha_data_model::DomainId::try_new("wonder", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
 

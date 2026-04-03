@@ -1367,7 +1367,7 @@ fn parse_quantity(value: &str) -> Result<Numeric, ComposeError> {
 }
 
 fn parse_domain_id(value: &str) -> Result<DomainId, ComposeError> {
-    DomainId::from_str(value).map_err(|err| ComposeError::InvalidDomainId {
+    DomainId::parse_fully_qualified(value).map_err(|err| ComposeError::InvalidDomainId {
         domain: value.to_owned(),
         reason: err.to_string(),
     })
@@ -1976,7 +1976,7 @@ mod tests {
             default_role_on_create: Some("basic_user".parse().expect("role id")),
         };
         let draft = InstructionDraft::SetAccountAdmissionPolicy {
-            domain: "wonderland".parse().expect("domain"),
+            domain: DomainId::try_new("wonderland", "universal").expect("domain"),
             policy,
         };
         let summary = draft.summary();

@@ -3,11 +3,11 @@ use std::collections::HashMap;
 use iroha_crypto::PublicKey;
 use ivm::{
     IVM, KotodamaCompiler,
-    mock_wsv::{AccountId, DomainId, MockWorldStateView, PermissionToken, WsvHost},
+    mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
 };
 
 fn account(domain: &str, public_key: &str) -> AccountId {
-    let _domain = DomainId::try_new(domain, "universal").unwrap();
+    let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
     AccountId::new(public_key)
 }

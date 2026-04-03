@@ -65,7 +65,7 @@ fn test_account(_domain: DomainId, public_key: PublicKey) -> AccountId {
 
 #[test]
 fn balance_syscall_with_tlv_pointers() {
-    let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -75,7 +75,7 @@ fn balance_syscall_with_tlv_pointers() {
     let alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("domain", "universal").unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 
@@ -117,7 +117,7 @@ fn balance_syscall_with_tlv_pointers() {
 
 #[test]
 fn transfer_syscall_with_tlv_pointers() {
-    let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -127,7 +127,7 @@ fn transfer_syscall_with_tlv_pointers() {
     let alice = test_account(domain.clone(), pk1);
     let bob = test_account(domain, pk2);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("domain", "universal").unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 
@@ -181,13 +181,13 @@ fn transfer_syscall_with_tlv_pointers() {
 
 #[test]
 fn mint_syscall_with_tlv_pointers() {
-    let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk: PublicKey = "ed01201509A611AD6D97B01D871E58ED00C8FD7C3917B6CA61A8C2833A19E000AAC2E4"
         .parse()
         .unwrap();
     let bob = test_account(domain, pk);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("domain", "universal").unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 
@@ -225,7 +225,7 @@ fn mint_syscall_with_tlv_pointers() {
 
 #[test]
 fn transfer_batch_syscalls_buffer_entries() {
-    let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -239,7 +239,7 @@ fn transfer_batch_syscalls_buffer_entries() {
     let bob = test_account(domain.clone(), pk2);
     let carol = test_account(domain, pk3);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("domain", "universal").unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 
@@ -301,7 +301,7 @@ fn transfer_batch_syscalls_buffer_entries() {
 
 #[test]
 fn transfer_batch_apply_syscall_executes_batch() {
-    let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     let pk1: PublicKey = "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774"
         .parse()
         .unwrap();
@@ -315,7 +315,7 @@ fn transfer_batch_apply_syscall_executes_batch() {
     let bob = test_account(domain.clone(), pk2);
     let carol = test_account(domain, pk3);
     let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("domain", "universal").unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "asset".parse().unwrap(),
     );
 

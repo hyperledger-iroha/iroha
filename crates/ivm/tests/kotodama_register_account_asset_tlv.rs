@@ -22,7 +22,7 @@ fn kotodama_register_account_and_unregister_asset() {
 
     // Prepare WSV host with permissions for the caller
     let _domain: ivm::mock_wsv::DomainId =
-        DomainId::try_new("wonderland", "universal").expect("domain id");
+        iroha_data_model::DomainId::try_new("wonderland", "universal").expect("domain id");
     let caller: ivm::mock_wsv::AccountId = ivm::mock_wsv::AccountId::new(
         "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
             .parse()

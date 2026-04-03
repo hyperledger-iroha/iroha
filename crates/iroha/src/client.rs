@@ -10508,6 +10508,7 @@ mod subscription_http_tests {
     use crate::{
         data_model::{
             asset::AssetDefinitionId,
+            domain::DomainId,
             name::Name,
             nft::NftId,
             subscription::{

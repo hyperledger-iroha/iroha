@@ -15674,6 +15674,7 @@ impl ToriiFaucet {
 mod torii_faucet_tests {
     use super::*;
     use iroha_crypto::PublicKey;
+    use iroha_data_model::DomainId;
 
     fn sample_faucet() -> ToriiFaucet {
         let public_key: PublicKey =
@@ -17869,6 +17870,7 @@ mod offline_cfg_tests {
     use core::str::FromStr;
 
     use super::*;
+    use iroha_data_model::DomainId;
 
     fn bundled_tables_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))

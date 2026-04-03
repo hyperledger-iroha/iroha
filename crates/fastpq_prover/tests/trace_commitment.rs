@@ -12,6 +12,7 @@ use fastpq_prover::{
 use iroha_crypto::Hash;
 use iroha_data_model::{
     asset::id::AssetDefinitionId,
+    domain::DomainId,
     fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
 };
 use iroha_primitives::numeric::Numeric;

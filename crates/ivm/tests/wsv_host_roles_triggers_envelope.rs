@@ -4,7 +4,7 @@ use iroha_crypto::PublicKey;
 use ivm::{
     IVM, Memory, PointerType, VMError,
     instruction::wide,
-    mock_wsv::{AccountId, DomainId, MockWorldStateView, PermissionToken, WsvHost},
+    mock_wsv::{AccountId, MockWorldStateView, PermissionToken, WsvHost},
     syscalls,
 };
 mod common;
@@ -38,7 +38,7 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 }
 
 fn account(domain: &str, public_key: &str) -> AccountId {
-    let _domain = DomainId::try_new(domain, "universal").unwrap();
+    let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
     AccountId::new(public_key)
 }
@@ -155,7 +155,7 @@ fn envelope_roles_permissions_triggers() {
     assert!(host.wsv.has_permission(
         &alice,
         &PermissionToken::MintAsset(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("domain", "universal").unwrap(),
+            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
             "rose".parse().unwrap()
         ))
     ));
@@ -182,7 +182,7 @@ fn envelope_roles_permissions_triggers() {
     assert!(!host.wsv.has_permission(
         &alice,
         &PermissionToken::MintAsset(iroha_data_model::asset::AssetDefinitionId::new(
-            DomainId::try_new("domain", "universal").unwrap(),
+            iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
             "rose".parse().unwrap()
         ))
     ));

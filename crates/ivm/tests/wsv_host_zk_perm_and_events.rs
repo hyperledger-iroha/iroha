@@ -37,7 +37,7 @@ fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
 }
 
 fn account(domain: &str, public_key: &str) -> AccountId {
-    let _domain = DomainId::try_new(domain, "universal").unwrap();
+    let _domain = iroha_data_model::DomainId::try_new(domain, "universal").unwrap();
     let public_key: PublicKey = public_key.parse().unwrap();
     AccountId::new(public_key)
 }
@@ -94,12 +94,12 @@ fn zk_register_shield_permissions_and_events() {
     ));
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(&alice, domain));
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("domain", "universal").unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
     // Seed asset def and balance
@@ -183,12 +183,12 @@ fn unshield_requires_verify_even_with_permission() {
     ));
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(&alice, domain));
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("domain", "universal").unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "gold".parse().unwrap(),
     );
     assert!(wsv.register_asset_definition(&alice, ad.clone(), ivm::mock_wsv::Mintable::Infinitely));
@@ -253,12 +253,12 @@ fn zk_transfer_requires_matching_vk_reference() {
     ));
     let mut wsv = MockWorldStateView::new();
     wsv.add_account_unchecked(alice.clone());
-    let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
+    let domain: DomainId = iroha_data_model::DomainId::try_new("domain", "universal").unwrap();
     wsv.grant_permission(&alice, PermissionToken::RegisterDomain);
     assert!(wsv.register_domain(&alice, domain));
     wsv.grant_permission(&alice, PermissionToken::RegisterAssetDefinition);
     let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        DomainId::try_new("domain", "universal").unwrap(),
+        iroha_data_model::DomainId::try_new("domain", "universal").unwrap(),
         "lily".parse().unwrap(),
     );
     assert!(wsv.register_asset_definition(&alice, ad.clone(), ivm::mock_wsv::Mintable::Infinitely));

@@ -995,7 +995,7 @@ mod tests {
 
     #[test]
     fn state_entry_domain_includes_owner() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let entry = StateEntry::from_domain(domain);
         let json = entry.json.expect("domain json");

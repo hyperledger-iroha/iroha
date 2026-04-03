@@ -104,6 +104,7 @@ mod tests {
         trace::{derive_polynomial_data, hash_columns_from_coefficients},
     };
     use iroha_data_model::{
+        DomainId,
         asset::id::AssetDefinitionId,
         fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
     };

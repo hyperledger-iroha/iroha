@@ -614,6 +614,8 @@ impl Default for CompilerOptions {
 mod tests {
     use std::collections::{HashMap, HashSet};
 
+    use iroha_data_model::DomainId;
+
     use super::{
         Compiler, CompilerOptions, ContractFeature, DEFAULT_MAX_CYCLES, GLOBAL_WILDCARD_KEY,
         STATE_WILDCARD_KEY, WIDE_IMM_MAX, emit_addi, emit_load64, emit_store64,

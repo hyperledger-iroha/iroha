@@ -185,7 +185,7 @@ use iroha_crypto::KeyPair;
 use iroha_primitives::numeric::Numeric;
 
 // Domain
-let domain_id: DomainId = "wonderland".parse().unwrap();
+let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
 let new_domain = Domain::new(domain_id.clone()).with_metadata(Metadata::default());
 
 // Account
@@ -196,7 +196,7 @@ let new_account = Account::new(account_id.clone())
 
 // Asset definition and an asset for the account
 let asset_def_id = AssetDefinitionId::new(
-    "wonderland".parse().unwrap(),
+    domain_id.clone(),
     "usd".parse().unwrap(),
 );
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
