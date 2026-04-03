@@ -37,10 +37,42 @@ Open work for this slice now remains:
   broad `cargo check` / `cargo test --workspace` run as the validation source
   for this tree.
 
-Latest sync (2026-04-03 Kotodama helper-alias cleanup):
+Latest sync (2026-04-03 Kaigi localnet signer alignment):
+the Taira Kaigi overlay/bootstrap path now uses the same genesis signer contract
+as `kagami localnet` and fails fast on signer mismatches instead of producing an
+unusable signed genesis.
+
+- shipped in `iroha_kagami` / `configs/soranexus/taira`:
+  - the `taira_kaigi_localnet` helper now accepts either the base localnet seed
+    or an explicit genesis private key, derives the real localnet genesis key,
+    and checks it against the expected public key from `peer0.toml`;
+  - the Kaigi bootstrap script now reads the genesis public key from
+    `peer0.toml`, recovers the base seed from the generated localnet
+    `README.md` or `IROHA_TAIRA_LOCALNET_SEED`, and passes the new
+    `--expected-genesis-public-key` guard through both the prebuilt and
+    `cargo run` helper paths; and
+  - generated localnet `README.md` files now record `Base seed` so later Kaigi
+    bootstrap runs can recover the signer deterministically.
+- focused verification is green, including:
+  - `cargo fmt --all`
+  - `bash -n configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+  - `cargo test -p iroha_kagami --example taira_kaigi_localnet -- --nocapture`
+  - `cargo test -p iroha_kagami localnet_readme_records_base_seed_when_present -- --nocapture`
+  - `cargo test -p iroha_config survives_chain_override -- --nocapture`
+  - `cargo build --release -p iroha_kagami --example taira_kaigi_localnet`
+  - `IROHA_TAIRA_LOCALNET_SEED=Iroha bash configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+
+Open work for this slice now remains:
+- regenerate any older seeded localnet bundles so their generated `README.md`
+  includes `Base seed`, or keep exporting `IROHA_TAIRA_LOCALNET_SEED` when
+  bootstrapping bundles generated before this patch; and
+- rerun broader repo-wide verification if a fresh full-workspace green stamp is
+  needed beyond the focused Kaigi / config coverage above.
+
+Latest sync (2026-04-03 Kotodama state-map/helper-alias ergonomics):
 the first durable-handle ergonomics tranche is landed for Kotodama, and the
-remaining legacy helper aliases are now closed so the method-only surface is
-consistent for new code and docs.
+remaining legacy helper aliases are now closed so the method-only
+map/path/json surface is consistent for new code and docs.
 
 - shipped in `crates/kotodama_lang` / `crates/ivm` / docs:
   - internal helper functions can accept `state Map<K, V>` parameters and keep
@@ -117,7 +149,6 @@ Open work for this slice now remains:
 - otherwise, no current stable-soak blocker remains for the permissioned / NPoS
   acceptance slice on this patch set.
 
-<<<<<<< Updated upstream
 Latest sync (2026-04-03 multisig + pipeline-event closure):
 the executor-upgrade multisig registration regressions are fixed, and the
 later broad-run `events::pipeline::pipeline_event_scenarios` timeout flake is
@@ -340,8 +371,6 @@ Open work for this slice now remains:
 - none for this specific CLI timing fix; broader repo-wide gates remain tracked
   in the older roadmap entries below.
 
-=======
->>>>>>> Stashed changes
 Latest sync (2026-04-03 maintained mobile SDK signing selection):
 the Kotlin, Java Android, and Swift SDKs now let apps choose `ED25519` or
 `ML_DSA` for transaction/offline-wallet signing while keeping existing wire

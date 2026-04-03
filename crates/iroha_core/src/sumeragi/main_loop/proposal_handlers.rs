@@ -2065,10 +2065,63 @@ impl Actor {
             if da_enabled {
                 let session_key = Self::session_key(&block_hash, height, view);
                 if self.frontier_slot_is_exact_height(height) {
-                    // The exact-frontier path already has a local pending block, so the live RBC
-                    // runtime can retire. Keep the persisted snapshot and operator summary until
-                    // commit or TTL cleanup so restart recovery still has durable payload state.
-                    self.clear_rbc_runtime_state(session_key, false);
+                    let payload_hash = self
+                        .pending
+                        .pending_blocks
+                        .get(&block_hash)
+                        .map(|pending| pending.payload_hash)
+                        .unwrap_or_else(|| {
+                            Hash::new(&super::proposals::block_payload_bytes(&block))
+                        });
+                    let needs_retry = self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .sessions
+                        .get(&session_key)
+                        .is_some_and(|session| {
+                            !session.is_invalid()
+                                && !session.delivered
+                                && (!session.sent_ready
+                                    || super::rbc_session_needs_payload(session, payload_hash))
+                        });
+                    if needs_retry
+                        && self
+                            .subsystems
+                            .da_rbc
+                            .rbc
+                            .sessions
+                            .get(&session_key)
+                            .is_some_and(|session| {
+                                super::rbc_session_needs_payload(session, payload_hash)
+                            })
+                    {
+                        let payload_bytes = super::proposals::block_payload_bytes(&block);
+                        self.hydrate_rbc_session_from_block(
+                            session_key,
+                            &payload_bytes,
+                            payload_hash,
+                            sender.as_ref(),
+                        )?;
+                    }
+                    if needs_retry {
+                        self.populate_rbc_session_metadata_from_block(session_key, &block);
+                        self.retry_rbc_progress_after_block_created_hydration(session_key);
+                    }
+                    if !self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .sessions
+                        .get(&session_key)
+                        .is_some_and(|session| !session.is_invalid() && !session.delivered)
+                    {
+                        // The exact-frontier path already has a local pending block, so the live
+                        // RBC runtime can retire once no further READY/DELIVER progress is needed.
+                        // Keep the persisted snapshot and operator summary until commit or TTL
+                        // cleanup so restart recovery still has durable payload state.
+                        self.clear_rbc_runtime_state(session_key, false);
+                    }
                     self.publish_rbc_backlog_snapshot();
                 } else {
                     let payload_hash = self

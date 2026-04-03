@@ -32,6 +32,32 @@ fn unique_asset_definition_id(test_name: &str) -> AssetDefinitionId {
     AssetDefinitionId::new("wonderland".parse().expect("domain id"), name)
 }
 
+fn amount_args(amount: u64) -> norito::json::Value {
+    let mut map = norito::json::Map::new();
+    map.insert("amount".to_owned(), norito::json!(amount));
+    norito::json::Value::Object(map)
+}
+
+fn open_escrow_args(
+    recipient: &AccountId,
+    escrow_id: &AccountId,
+    asset_definition_id: &AssetDefinitionId,
+    target_amount: u64,
+) -> norito::json::Value {
+    let mut map = norito::json::Map::new();
+    map.insert("recipient".to_owned(), norito::json!(recipient.to_string()));
+    map.insert(
+        "escrow_account".to_owned(),
+        norito::json!(escrow_id.to_string()),
+    );
+    map.insert(
+        "asset_definition".to_owned(),
+        norito::json!(asset_definition_id.to_string()),
+    );
+    map.insert("target_amount".to_owned(), norito::json!(target_amount));
+    norito::json::Value::Object(map)
+}
+
 fn pipeline_status_kind(payload: &norito::json::Value) -> Option<&str> {
     let status = payload
         .get("content")
@@ -319,12 +345,12 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         ALICE_KEYPAIR.private_key(),
         &contract_address,
         "open_escrow",
-        Some(norito::json!({
-            "recipient": BOB_ID.to_string(),
-            "escrow_account": escrow_id.to_string(),
-            "asset_definition": asset_definition_id.to_string(),
-            "target_amount": 10
-        })),
+        Some(open_escrow_args(
+            &BOB_ID,
+            &escrow_id,
+            &asset_definition_id,
+            10,
+        )),
         "Applied",
         "open_escrow",
     )
@@ -373,7 +399,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         ALICE_KEYPAIR.private_key(),
         &contract_address,
         "deposit",
-        Some(norito::json!({ "amount": 4 })),
+        Some(amount_args(4)),
         "Applied",
         "deposit_partial",
     )
@@ -418,7 +444,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         BOB_KEYPAIR.private_key(),
         &contract_address,
         "deposit",
-        Some(norito::json!({ "amount": 1 })),
+        Some(amount_args(1)),
         "Rejected",
         "deposit_by_non_payer",
     )
@@ -431,7 +457,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         ALICE_KEYPAIR.private_key(),
         &contract_address,
         "deposit",
-        Some(norito::json!({ "amount": 7 })),
+        Some(amount_args(7)),
         "Rejected",
         "deposit_over_target",
     )
@@ -470,7 +496,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         ALICE_KEYPAIR.private_key(),
         &contract_address,
         "deposit",
-        Some(norito::json!({ "amount": 6 })),
+        Some(amount_args(6)),
         "Applied",
         "deposit_remainder",
     )
@@ -538,7 +564,7 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         ALICE_KEYPAIR.private_key(),
         &contract_address,
         "deposit",
-        Some(norito::json!({ "amount": 1 })),
+        Some(amount_args(1)),
         "Rejected",
         "deposit_after_release",
     )
@@ -574,12 +600,12 @@ async fn threshold_escrow_releases_when_fully_funded() -> Result<()> {
         ALICE_KEYPAIR.private_key(),
         &contract_address,
         "open_escrow",
-        Some(norito::json!({
-            "recipient": BOB_ID.to_string(),
-            "escrow_account": escrow_id.to_string(),
-            "asset_definition": asset_definition_id.to_string(),
-            "target_amount": 10
-        })),
+        Some(open_escrow_args(
+            &BOB_ID,
+            &escrow_id,
+            &asset_definition_id,
+            10,
+        )),
         "Rejected",
         "reopen_after_release",
     )
@@ -620,12 +646,12 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
         ALICE_KEYPAIR.private_key(),
         &contract_address,
         "open_escrow",
-        Some(norito::json!({
-            "recipient": BOB_ID.to_string(),
-            "escrow_account": escrow_id.to_string(),
-            "asset_definition": asset_definition_id.to_string(),
-            "target_amount": 9
-        })),
+        Some(open_escrow_args(
+            &BOB_ID,
+            &escrow_id,
+            &asset_definition_id,
+            9,
+        )),
         "Applied",
         "open_escrow",
     )
@@ -637,7 +663,7 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
         ALICE_KEYPAIR.private_key(),
         &contract_address,
         "deposit",
-        Some(norito::json!({ "amount": 3 })),
+        Some(amount_args(3)),
         "Applied",
         "deposit_partial",
     )
@@ -695,7 +721,7 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
         ALICE_KEYPAIR.private_key(),
         &contract_address,
         "deposit",
-        Some(norito::json!({ "amount": 1 })),
+        Some(amount_args(1)),
         "Rejected",
         "deposit_after_refund",
     )
@@ -731,12 +757,12 @@ async fn threshold_escrow_refunds_when_unresolved() -> Result<()> {
         ALICE_KEYPAIR.private_key(),
         &contract_address,
         "open_escrow",
-        Some(norito::json!({
-            "recipient": BOB_ID.to_string(),
-            "escrow_account": escrow_id.to_string(),
-            "asset_definition": asset_definition_id.to_string(),
-            "target_amount": 9
-        })),
+        Some(open_escrow_args(
+            &BOB_ID,
+            &escrow_id,
+            &asset_definition_id,
+            9,
+        )),
         "Rejected",
         "reopen_after_refund",
     )

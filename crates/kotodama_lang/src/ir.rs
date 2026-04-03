@@ -1128,8 +1128,9 @@ fn lower_function_named(
                     },
                 );
             }
+        } else {
+            vars.insert(param.name, tmp);
         }
-        vars.insert(param.name, tmp);
     }
 
     lower_block(&mut ctx, &func.body, &mut vars);

@@ -30,21 +30,41 @@ Last updated: 2026-04-03
     non-exhaustive `Builtin` match), so broad-workspace validation remains
     blocked outside this asset-ID slice.
 
-## 2026-04-03 Follow-up: Kotodama legacy helper aliases are now closed for devex
-- Finished the method-surface cleanup on top of the earlier `state Map<K, V>`
-  ergonomics tranche:
+## 2026-04-03 Follow-up: Kaigi localnet bootstrap now signs overlays with the real localnet genesis key
+- `crates/iroha_kagami/examples/taira_kaigi_localnet.rs` now accepts either the base localnet seed or an explicit genesis private key, derives the same signer contract as `kagami localnet`, and aborts if the derived signer does not match the expected genesis public key from `peer0.toml`.
+- `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` now reads `[genesis].public_key` from `peer0.toml`, picks up the recorded base seed from the generated localnet `README.md` or `IROHA_TAIRA_LOCALNET_SEED`, and passes `--expected-genesis-public-key` to the helper so stale or mismatched signers fail fast.
+- `crates/iroha_kagami/src/localnet.rs` now records the base seed in generated localnet `README.md` output so later Kaigi bootstrap runs can recover the signer deterministically.
+- Verification completed:
+  - `cargo fmt --all`
+  - `bash -n configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+  - `cargo test -p iroha_kagami --example taira_kaigi_localnet -- --nocapture`
+  - `cargo test -p iroha_kagami localnet_readme_records_base_seed_when_present -- --nocapture`
+  - `cargo test -p iroha_config survives_chain_override -- --nocapture`
+  - `cargo build --release -p iroha_kagami --example taira_kaigi_localnet`
+  - `IROHA_TAIRA_LOCALNET_SEED=Iroha bash configs/soranexus/taira/bootstrap_kaigi_localnet.sh` (pass; local `/v1/kaigi/relays` returned 3 healthy relays)
+
+## 2026-04-03 Follow-up: Kotodama `state Map` helper ergonomics and alias cleanup landed
+- Completed the first durable-handle ergonomics tranche and closed the
+  remaining legacy helper aliases:
+  - internal helper functions can now accept `state Map<K, V>` parameters,
+    preserving durable map roots across calls without falling back to forbidden
+    local state aliasing;
   - parser method-call sugar now rejects the remaining legacy spellings with
     migration hints (`map.has(...)`, `map.get_or_insert_default(...)`,
     `base.path_map_key(...)`, `base.path_map_key_norito(...)`, and
-    `json.json_get_* (...)`);
-  - semantic analysis no longer accepts or normalizes those legacy method names
-    or the stale `std::map::*` / `json::*` compatibility aliases; and
-  - public lowering still targets the same internal builtins/syscalls, so the
-    runtime behavior of `map.ensure(...)`, `base.path(...)`, and
-    `json.get_* (...)` stays unchanged.
-- Updated the remaining translated Kotodama example docs so the non-English
-  pointer-helper snippets now use `Owners.ensure(...)` instead of the removed
-  free helper spelling.
+    `json.json_get_* (...)`), and semantic analysis no longer normalizes the
+    stale `std::map::*` / `json::*` compatibility aliases; and
+  - lowering still targets the same internal builtins/syscalls, so the runtime
+    behavior of `map.ensure(...)`, `base.path(...)`, and `json.get_* (...)`
+    stays unchanged while new code is pinned to the method-first surface.
+- Updated the Kotodama tests, docs, and examples around that surface:
+  - `crates/kotodama_lang` parser/semantic/IR/compiler coverage now uses the
+    new method syntax and covers the parse-time rejection path;
+  - the durable `Map<Name, int>` runtime regression tests now exercise
+    `state Map` helper parameters and method-form map/path helpers; and
+  - the canonical English grammar/examples plus the translated snippets and
+    `crates/ivm/docs` now describe or use the method-first surface, including
+    `Owners.ensure(...)` in the translated pointer-helper samples.
 - Focused verification completed:
   - `cargo fmt --all`
   - `cargo test -p kotodama_lang`
@@ -116,7 +136,6 @@ Last updated: 2026-04-03
   `20260403T025927` rerun remains invalid test evidence and should not be used
   for product conclusions.
 
-<<<<<<< Updated upstream
 ## 2026-04-03 Follow-up: multisig executor-upgrade and pipeline event regressions are fixed
 - Closed the last two deterministic integration regressions from the broad
   replay and hardened one additional broad-run timing flake:
@@ -370,8 +389,6 @@ Last updated: 2026-04-03
   - `cargo fmt --all`
   - `CARGO_TARGET_DIR=$PWD/target_codex_hf_queue_fix cargo test -p integration_tests --test iroha_cli soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window -- --exact --nocapture --test-threads=1` (pass)
 
-=======
->>>>>>> Stashed changes
 ## 2026-04-03 Follow-up: maintained mobile SDKs now expose explicit Ed25519 / ML-DSA signing selection
 - Added a shared `SigningAlgorithm` selector across the maintained mobile SDKs
   so apps can choose `ED25519` (default) or `ML_DSA` for transaction and

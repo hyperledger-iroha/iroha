@@ -2010,15 +2010,10 @@ pub struct ViralIncentives {
 
 impl Default for ViralIncentives {
     fn default() -> Self {
+        let default_pool_account = defaults::governance::slash_receiver_account_id();
         Self {
-            incentive_pool_account: AccountId::parse_encoded(
-                &defaults::governance::viral_incentive_pool_account(),
-            )
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .expect("default viral incentive pool account"),
-            escrow_account: AccountId::parse_encoded(&defaults::governance::viral_escrow_account())
-                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                .expect("default viral escrow account"),
+            incentive_pool_account: default_pool_account.clone(),
+            escrow_account: default_pool_account,
             reward_asset_definition_id: defaults::governance::viral_reward_asset_id()
                 .parse()
                 .expect("default viral reward asset id"),
@@ -6565,10 +6560,24 @@ impl Default for SorafsTelemetryPolicy {
             reject_zero_capacity: defaults::governance::sorafs_telemetry::REJECT_ZERO_CAPACITY,
             submitters: defaults::governance::sorafs_telemetry::submitters()
                 .iter()
-                .map(|id| {
-                    AccountId::parse_encoded(id)
-                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-                        .expect("default SoraFS telemetry submitter account id")
+                .map(|id| match AccountId::parse_encoded(id) {
+                    Ok(parsed) => parsed.into_account_id(),
+                    Err(err)
+                        if err.reason()
+                            == iroha_data_model::account::address::AccountAddressErrorCode::UnexpectedNetworkPrefix
+                                .as_str()
+                            && iroha_data_model::account::address::chain_discriminant()
+                                != defaults::common::chain_discriminant() =>
+                    {
+                        let _fallback =
+                            iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                                defaults::common::chain_discriminant(),
+                            );
+                        AccountId::parse_encoded(id)
+                            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                            .expect("default SoraFS telemetry submitter account id")
+                    }
+                    Err(err) => panic!("default SoraFS telemetry submitter account id: {err}"),
                 })
                 .collect(),
             per_provider_submitters: BTreeMap::new(),
@@ -8884,5 +8893,43 @@ mod tests {
             ..SumeragiNposTimeoutOverrides::default()
         };
         assert!(!overrides.has_overrides());
+    }
+
+    #[test]
+    fn viral_incentives_default_survives_chain_override() {
+        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
+
+        let defaults = ViralIncentives::default();
+
+        assert_eq!(
+            defaults.incentive_pool_account,
+            crate::parameters::defaults::governance::slash_receiver_account_id()
+        );
+        assert_eq!(
+            defaults.escrow_account,
+            crate::parameters::defaults::governance::slash_receiver_account_id()
+        );
+    }
+
+    #[test]
+    fn sorafs_telemetry_policy_default_survives_chain_override() {
+        let _chain = iroha_data_model::account::address::ChainDiscriminantGuard::enter(777);
+
+        let defaults = SorafsTelemetryPolicy::default();
+        let expected: Vec<_> =
+            crate::parameters::defaults::governance::sorafs_telemetry::submitters()
+                .iter()
+                .map(|id| {
+                    let _fallback =
+                        iroha_data_model::account::address::ChainDiscriminantGuard::enter(
+                            crate::parameters::defaults::common::chain_discriminant(),
+                        );
+                    AccountId::parse_encoded(id)
+                        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                        .expect("default SoraFS telemetry submitter account id")
+                })
+                .collect();
+
+        assert_eq!(defaults.submitters, expected);
     }
 }

@@ -8,7 +8,7 @@ use color_eyre::{
     Result,
     eyre::{WrapErr, ensure},
 };
-use iroha_crypto::{Algorithm, KeyPair, PublicKey};
+use iroha_crypto::{Algorithm, KeyPair, PrivateKey, PublicKey};
 use iroha_data_model::{
     account::{Account, AccountId, ParsedAccountId, address::ChainDiscriminantGuard},
     asset::{AssetDefinitionId, AssetId},
@@ -25,6 +25,9 @@ use iroha_executor_data_model::permission::{
 };
 use iroha_genesis::RawGenesisTransaction;
 use iroha_primitives::json::Json;
+use iroha_test_samples::REAL_GENESIS_ACCOUNT_KEYPAIR;
+
+const LOCALNET_GENESIS_SEED_SUFFIX: &[u8] = b"genesis";
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -34,9 +37,17 @@ struct Args {
     /// Output path for the signed genesis `.nrt`.
     #[arg(long)]
     out_file: PathBuf,
-    /// Deterministic seed used for the genesis signing key.
+    /// Base seed passed to `kagami localnet --seed`; the helper derives the genesis key from
+    /// `<seed> + "genesis"` to match Kagami localnet output.
+    #[arg(long, conflicts_with = "genesis_private_key")]
+    seed: Option<String>,
+    /// Explicit genesis private key hex. Use this when the localnet seed is unavailable.
+    #[arg(long, conflicts_with = "seed")]
+    genesis_private_key: Option<String>,
+    /// Expected genesis public key from the peer config. The helper aborts if the derived signer
+    /// does not match, which prevents writing an unusable signed genesis.
     #[arg(long)]
-    seed: String,
+    expected_genesis_public_key: Option<String>,
     /// Public key of the account that will appear as the relay-health reporter.
     #[arg(long)]
     host_public_key: String,
@@ -252,6 +263,51 @@ fn append_bootstrap_authority_overlay(
         .build_raw()
 }
 
+fn derive_localnet_genesis_key_pair(base_seed: Option<&str>) -> Result<KeyPair> {
+    match base_seed {
+        Some(seed) => Ok(KeyPair::from_seed(
+            seed.bytes()
+                .chain(LOCALNET_GENESIS_SEED_SUFFIX.iter().copied())
+                .collect::<Vec<_>>(),
+            Algorithm::default(),
+        )),
+        None => Ok(KeyPair::from(
+            REAL_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
+        )),
+    }
+}
+
+fn load_genesis_key_pair(args: &Args) -> Result<KeyPair> {
+    match (&args.genesis_private_key, &args.seed) {
+        (Some(hex), None) => {
+            let private_key = PrivateKey::from_hex(Algorithm::default(), hex)
+                .wrap_err("failed to parse explicit genesis private key")?;
+            Ok(KeyPair::from(private_key))
+        }
+        (None, seed) => derive_localnet_genesis_key_pair(seed.as_deref()),
+        (Some(_), Some(_)) => unreachable!("clap enforces conflicts"),
+    }
+}
+
+fn ensure_expected_genesis_public_key(
+    key_pair: &KeyPair,
+    expected_public_key: Option<&str>,
+) -> Result<()> {
+    let Some(expected_public_key) = expected_public_key else {
+        return Ok(());
+    };
+
+    let expected = PublicKey::from_str(expected_public_key)
+        .wrap_err("failed to parse expected genesis public key")?;
+    ensure!(
+        *key_pair.public_key() == expected,
+        "derived genesis public key {} does not match expected {}; pass the same `--seed` used for `kagami localnet --seed`, or pass `--genesis-private-key` explicitly",
+        key_pair.public_key(),
+        expected
+    );
+    Ok(())
+}
+
 fn run(args: &Args) -> Result<()> {
     ensure!(
         !args.relay_specs.is_empty(),
@@ -288,11 +344,13 @@ fn run(args: &Args) -> Result<()> {
     } else {
         manifest
     };
+    let genesis_key_pair = load_genesis_key_pair(args)?;
+    ensure_expected_genesis_public_key(
+        &genesis_key_pair,
+        args.expected_genesis_public_key.as_deref(),
+    )?;
     let signed = manifest
-        .build_and_sign(&KeyPair::from_seed(
-            args.seed.as_bytes().to_vec(),
-            Algorithm::Ed25519,
-        ))
+        .build_and_sign(&genesis_key_pair)
         .wrap_err("failed to sign Kaigi overlay genesis")?;
 
     let framed = signed
@@ -302,9 +360,10 @@ fn run(args: &Args) -> Result<()> {
     fs::write(&args.out_file, framed).wrap_err("failed to write signed genesis output")?;
 
     println!(
-        "Wrote signed Taira Kaigi overlay with {} relays to {}",
+        "Wrote signed Taira Kaigi overlay with {} relays to {} using genesis public key {}",
         relay_specs.len(),
-        args.out_file.display()
+        args.out_file.display(),
+        genesis_key_pair.public_key()
     );
     Ok(())
 }
@@ -318,6 +377,7 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use iroha_genesis::GenesisBuilder;
+    use iroha_test_samples::REAL_GENESIS_ACCOUNT_KEYPAIR;
 
     #[test]
     fn relay_spec_parses_expected_fields() {
@@ -409,6 +469,22 @@ mod tests {
             overlaid.instructions().count(),
             5,
             "overlay should append register/mint/grant bootstrap instructions"
+        );
+    }
+
+    #[test]
+    fn localnet_seed_derives_same_genesis_key_contract_as_kagami_localnet() {
+        let derived = derive_localnet_genesis_key_pair(Some("Iroha")).expect("derive key");
+        let expected = KeyPair::from_seed(b"Irohagenesis".to_vec(), Algorithm::default());
+        assert_eq!(derived.public_key(), expected.public_key());
+    }
+
+    #[test]
+    fn missing_seed_uses_builtin_localnet_genesis_key() {
+        let derived = derive_localnet_genesis_key_pair(None).expect("derive default key");
+        assert_eq!(
+            derived.public_key(),
+            REAL_GENESIS_ACCOUNT_KEYPAIR.public_key()
         );
     }
 }
