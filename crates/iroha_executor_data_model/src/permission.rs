@@ -480,8 +480,8 @@ pub mod governance {
     permission! {
         /// Allow proposing deployment of a smart contract via governance
         pub struct CanProposeContractDeployment {
-            /// Target contract identifier (namespace-qualified string)
-            pub contract_id: String,
+            /// Canonical contract address targeted by the proposal.
+            pub contract_address: ContractAddress,
         }
     }
 

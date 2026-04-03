@@ -5,8 +5,7 @@ use std::{path::PathBuf, time::Duration};
 use error_stack::{Report, ResultExt};
 use iroha_config::parameters::{actual::SorafsRolloutPhase, defaults};
 use iroha_config_base::{
-    ParameterOrigin,
-    ReadConfig, WithOrigin,
+    ParameterOrigin, ReadConfig, WithOrigin,
     attach::ConfigValueAndOrigin,
     util::{DurationMs, Emitter, EmitterResultExt},
 };
@@ -526,7 +525,13 @@ mod tests {
                 domain: DomainId::from_str("wonderland").expect("domain id"),
                 public_key: WithOrigin::inline(key_pair.public_key().clone()),
                 private_key: WithOrigin::inline(key_pair.private_key().clone()),
-                chain_discriminant: WithOrigin::inline(defaults::common::chain_discriminant()),
+                chain_discriminant: WithOrigin::new(
+                    defaults::common::chain_discriminant(),
+                    ParameterOrigin::default(iroha_config_base::ParameterId::from([
+                        "account",
+                        "chain_discriminant",
+                    ])),
+                ),
             },
             transaction: Transaction {
                 time_to_live_ms: WithOrigin::inline(DurationMs::from(ttl)),

@@ -296,24 +296,6 @@ pub fn deploy_request_json(
     norito::json::to_json(&value).expect("serialize deploy request")
 }
 
-/// Build JSON string for activate-instance request body.
-pub fn activate_instance_request_json(
-    account: &AccountId,
-    private_key: &ExposedPrivateKey,
-    namespace: &str,
-    contract_id: &str,
-    code_hash_hex: &str,
-) -> String {
-    let value = crate::json_object(vec![
-        crate::json_entry("authority", account.clone()),
-        crate::json_entry("private_key", private_key.to_string()),
-        crate::json_entry("namespace", namespace),
-        crate::json_entry("contract_id", contract_id),
-        crate::json_entry("code_hash", code_hash_hex),
-    ]);
-    norito::json::to_json(&value).expect("serialize activate request")
-}
-
 /// Build JSON string for contract call request body.
 pub fn contract_call_request_json(
     account: &AccountId,
@@ -359,24 +341,6 @@ pub fn contract_view_request_json(
     entries.push(crate::json_entry("gas_limit", options.gas_limit));
     let value = crate::json_object(entries);
     norito::json::to_json(&value).expect("serialize contract view request")
-}
-
-/// Build JSON string for combined deploy+activate request body.
-pub fn deploy_and_activate_request_json(
-    account: &AccountId,
-    private_key: &ExposedPrivateKey,
-    namespace: &str,
-    contract_id: &str,
-    code_b64: &str,
-) -> String {
-    let value = crate::json_object(vec![
-        crate::json_entry("authority", account.clone()),
-        crate::json_entry("private_key", private_key.to_string()),
-        crate::json_entry("namespace", namespace),
-        crate::json_entry("contract_id", contract_id),
-        crate::json_entry("code_b64", code_b64),
-    ]);
-    norito::json::to_json(&value).expect("serialize deploy+activate request")
 }
 
 /// Build a minimal actual configuration root suitable for constructing Kiso and Torii in tests.

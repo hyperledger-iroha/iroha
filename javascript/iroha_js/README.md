@@ -3187,12 +3187,10 @@ for await (const balance of torii.iterateAccountAssetsQuery("sorauロ1Nタセhj�
   console.log("filtered holding", balance.asset_id, balance.quantity);
 }
 
-for await (const instance of torii.iterateGovernanceInstances("apps", {
-  pageSize: 25,
-  contains: "calc",
-})) {
-  console.log("governance instance:", instance.contract_id);
-}
+const governedContract = await torii.getGovernanceContract(
+  "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+);
+console.log("governed contract:", governedContract.contract_address, governedContract.code_hash_hex);
 
 for await (const trigger of torii.iterateTriggersQuery({
   pageSize: 50,
@@ -3334,18 +3332,12 @@ for await (const event of torii.streamEvents({
   break; // stop after the first event in this example
 }
 
-const governanceInstances = await torii.listGovernanceInstances("apps", {
-  contains: "ledger",
-  limit: 5,
-  hashPrefix: "deadbeef",
-  order: "hash_desc",
-});
-for (const instance of governanceInstances.instances) {
-  console.log(`${instance.contract_id} :: ${instance.code_hash_hex}`);
-}
-
-// `order` accepts "cid_asc" (default), "cid_desc", "hash_asc", or "hash_desc".
-// `hashPrefix` must be hexadecimal; it is lowercased automatically.
+const governanceBinding = await torii.getGovernanceContract(
+  "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+);
+console.log(
+  `${governanceBinding.contract_address} :: ${governanceBinding.code_hash_hex}`,
+);
 
 // Governance read helpers accept an AbortSignal so long-running requests can be cancelled.
 const controller = new AbortController();

@@ -3303,11 +3303,17 @@ export interface ToriiGovernanceStatusSnapshot {
 export type ToriiGovernanceProposalStatus = "Proposed" | "Approved" | "Rejected" | "Enacted";
 
 export interface ToriiGovernanceDeployContractProposal {
-  namespace: string;
-  contract_id: string;
+  contract_address: string;
   code_hash_hex: string;
   abi_hash_hex: string;
   abi_version: string;
+}
+
+export interface ToriiGovernanceContractResponse {
+  found: boolean;
+  contract_address: string;
+  dataspace: string | null;
+  code_hash_hex: string | null;
 }
 
 export interface ToriiGovernanceProposalKind {
@@ -7747,14 +7753,10 @@ export declare class ToriiClient {
     namespace: string,
     options?: ContractInstanceIteratorOptions,
   ): AsyncGenerator<ContractInstanceRecord, void, unknown>;
-  listGovernanceInstances(
-    namespace: string,
-    options?: ContractInstanceListOptions,
-  ): Promise<ContractInstanceListResponse>;
-  iterateGovernanceInstances(
-    namespace: string,
-    options?: ContractInstanceIteratorOptions,
-  ): AsyncGenerator<ContractInstanceRecord, void, unknown>;
+  getGovernanceContract(
+    contractAddress: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiGovernanceContractResponse>;
   listTriggers(options?: TriggerListOptions): Promise<ToriiTriggerListPage>;
   iterateTriggers(
     options?: TriggerIteratorOptions,

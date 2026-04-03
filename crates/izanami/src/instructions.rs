@@ -778,7 +778,6 @@ impl WorkloadEngine {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RecipeKind {
-    RegisterDomain,
     DuplicateDomain,
     RegisterAccount,
     DuplicateAccount,
@@ -829,7 +828,6 @@ pub(crate) enum RecipeKind {
 // Stable runs favor deterministic recipes; contract deployment can be enabled via
 // `allow_contract_deploy_in_stable`.
 const BASE_RECIPES_STABLE: &[RecipeKind] = &[
-    RecipeKind::RegisterDomain,
     RecipeKind::RegisterNft,
     RecipeKind::MintAsset,
     RecipeKind::TransferAsset,
@@ -851,7 +849,6 @@ const BASE_RECIPES_STABLE: &[RecipeKind] = &[
 ];
 
 const BASE_RECIPES_CHAOS: &[RecipeKind] = &[
-    RecipeKind::RegisterDomain,
     RecipeKind::RegisterAssetDefinition,
     RecipeKind::RegisterAccount,
     RecipeKind::RegisterUaidAccount,
@@ -975,7 +972,6 @@ pub(crate) enum RepeatableTriggerState {
 
 #[derive(Debug, Default, Clone)]
 struct ChaosCounters {
-    domain: u64,
     account: u64,
     uaid: u64,
     trigger: u64,
@@ -1161,7 +1157,6 @@ impl ChaosState {
 
     fn produce_plan(&mut self, kind: RecipeKind, rng: &mut StdRng) -> Result<TransactionPlan> {
         match kind {
-            RecipeKind::RegisterDomain => self.plan_register_domain(rng),
             RecipeKind::DuplicateDomain => Ok(self.plan_duplicate_domain()),
             RecipeKind::RegisterAccount => Ok(self.plan_register_account()),
             RecipeKind::DuplicateAccount => self.plan_duplicate_account(rng),
@@ -1211,20 +1206,9 @@ impl ChaosState {
     }
 
     fn plan_register_domain(&mut self, _rng: &mut StdRng) -> Result<TransactionPlan> {
-        let suffix = self.bump_domain();
-        let domain_id: DomainId = format!("chaos_child_{suffix}")
-            .parse()
-            .map_err(|_| eyre!("failed to build new domain id"))?;
-        self.created_domains.insert(domain_id.clone());
-        Ok(TransactionPlan {
-            state_updates: Vec::new(),
-            label: "register_domain",
-            instructions: vec![InstructionBox::from(Register::domain(Domain::new(
-                domain_id,
-            )))],
-            signer: self.treasury.clone(),
-            expect_success: true,
-        })
+        Err(eyre!(
+            "runtime domain registration requires an active SNS domain-name lease; Izanami does not synthesize leases"
+        ))
     }
 
     fn plan_duplicate_domain(&mut self) -> TransactionPlan {
@@ -2947,12 +2931,6 @@ impl ChaosState {
         }
     }
 
-    fn bump_domain(&mut self) -> u64 {
-        let value = self.counters.domain;
-        self.counters.domain += 1;
-        value
-    }
-
     fn bump_account(&mut self) -> u64 {
         let value = self.counters.account;
         self.counters.account += 1;
@@ -3462,6 +3440,19 @@ mod tests {
             BASE_RECIPES_CHAOS
                 .iter()
                 .any(|kind| matches!(kind, RecipeKind::DeployKotodamaContract))
+        );
+    }
+
+    #[test]
+    fn register_domain_plan_is_disabled_under_sns_domain_model() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let err = state
+            .plan_register_domain(&mut StdRng::seed_from_u64(7))
+            .expect_err("runtime domain registration should require an external SNS lease");
+        assert!(
+            err.to_string().contains("SNS domain-name lease"),
+            "unexpected error: {err}"
         );
     }
 

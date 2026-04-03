@@ -1981,28 +1981,6 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/contracts/instance".to_owned(),
-        Value::Object(json_post_operation(
-            "Contracts",
-            "Create a contract instance.",
-            "Create a contract instance from registered code.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/contracts/instance/activate".to_owned(),
-        Value::Object(json_post_operation(
-            "Contracts",
-            "Activate a contract instance.",
-            "Activate a previously created contract instance.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/v1/contracts/call".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
@@ -2068,16 +2046,6 @@ fn contracts_paths() -> Map {
                     Some("uint64"),
                 ),
             ],
-        )),
-    );
-    paths.insert(
-        "/v1/contracts/instances/{ns}".to_owned(),
-        Value::Object(json_get_operation(
-            "Contracts",
-            "List contract instances by dataspace.",
-            "Return active contract instances for a dataspace.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("ns", "Contract dataspace identifier.")],
         )),
     );
     paths
@@ -2622,13 +2590,16 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/instances/{ns}".to_owned(),
+        "/v1/gov/contracts/{contract_address}".to_owned(),
         Value::Object(json_get_operation(
             "Governance",
-            "List contract instances by namespace.",
-            "List governance contract instances for a namespace.",
+            "Fetch a governed contract binding.",
+            "Fetch the active governance binding for a canonical contract address.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("ns", "Namespace identifier.")],
+            vec![string_path_param(
+                "contract_address",
+                "Canonical Bech32m contract address.",
+            )],
         )),
     );
     paths.insert(
@@ -9937,15 +9908,15 @@ fn openapi_schemas() -> Map {
                 { "$ref": "#/components/schemas/MultisigAccountSelector" },
                 {
                     "type": "object",
-                    "required": ["signer_account_id", "namespace", "contract_id", "entrypoint"],
+                    "required": ["signer_account_id", "entrypoint"],
                     "additionalProperties": false,
                     "properties": {
                         "signer_account_id": { "type": "string" },
                         "public_key_hex": { "type": "string" },
                         "signature_b64": { "type": "string" },
                         "creation_time_ms": { "type": "integer", "format": "uint64" },
-                        "namespace": { "type": "string" },
-                        "contract_id": { "type": "string" },
+                        "contract_address": { "type": "string" },
+                        "contract_alias": { "type": "string" },
                         "entrypoint": { "type": "string" },
                         "payload": { "type": "object" },
                         "gas_asset_id": { "type": "string" },

@@ -6575,44 +6575,6 @@ export class ToriiClient {
   }
 
   /**
-   * Deploy and activate a contract instance atomically (`POST /v1/contracts/instance`).
-   * @param {DeployContractInstanceRequest} request
-   * @returns {Promise<DeployContractInstanceResponse | null>}
-   */
-  async deployContractInstance(request = {}) {
-    const payload = normalizeDeployContractInstanceRequest(request);
-    const response = await this._request("POST", "/v1/contracts/instance", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-    await this._expectStatus(response, [200, 202]);
-    const body = await this._maybeJson(response);
-    return body ? normalizeDeployContractInstanceResponse(body) : null;
-  }
-
-  /**
-   * Activate an existing contract instance (`POST /v1/contracts/instance/activate`).
-   * @param {ActivateContractInstanceRequest} request
-   * @returns {Promise<ActivateContractInstanceResponse | null>}
-   */
-  async activateContractInstance(request = {}) {
-    const payload = normalizeActivateContractInstanceRequest(request);
-    const response = await this._request("POST", "/v1/contracts/instance/activate", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-    await this._expectStatus(response, [200, 202]);
-    const body = await this._maybeJson(response);
-    return body ? normalizeActivateContractInstanceResponse(body) : null;
-  }
-
-  /**
    * Invoke a deployed contract instance (`POST /v1/contracts/call`).
    * @param {ContractCallRequest} request
    * @param {{signal?: AbortSignal}} [options]
@@ -6816,75 +6778,25 @@ export class ToriiClient {
   }
 
   /**
-   * List active contract instances for a namespace (`GET /v1/contracts/instances/{ns}`).
-   * @param {string} namespace
-   * @param {ContractInstanceListOptions} [options]
-   * @returns {Promise<ContractInstanceListResponse>}
+   * Read the governance binding for one contract address (`GET /v1/gov/contracts/{contract_address}`).
+   * @param {string} contractAddress
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiGovernanceContractResponse>}
    */
-  async listContractInstances(namespace, options = {}) {
-    const normalizedNamespace = requireNonEmptyString(namespace, "namespace");
-    const { signal, params } = buildContractInstanceListQuery(options);
+  async getGovernanceContract(contractAddress, options = {}) {
+    const normalizedAddress = requireNonEmptyString(contractAddress, "contractAddress");
+    const { signal } = normalizeSignalOnlyOption(options, "getGovernanceContract");
     const response = await this._request(
       "GET",
-      `/v1/contracts/instances/${encodeURIComponent(normalizedNamespace)}`,
+      `/v1/gov/contracts/${encodeURIComponent(normalizedAddress)}`,
       {
         headers: { Accept: "application/json" },
-        params: params ?? undefined,
         signal: signal ?? undefined,
       },
     );
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
-    return normalizeContractInstanceListResponse(payload);
-  }
-
-  /**
-   * Iterate contract instances for a namespace with automatic pagination.
-   * @param {string} namespace
-   * @param {ContractInstanceIteratorOptions} [options]
-   * @returns {AsyncGenerator<ContractInstanceRecord, void, unknown>}
-   */
-  iterateContractInstances(namespace, options = {}) {
-    const normalizedNamespace = requireNonEmptyString(namespace, "namespace");
-    const fetchPage = (pageOptions) =>
-      this.listContractInstances(normalizedNamespace, pageOptions);
-    return this._iterateContractInstancePages(fetchPage, options);
-  }
-
-  /**
-   * List governance-tracked contract instances for a namespace (`GET /v1/gov/instances/{ns}`).
-   * @param {string} namespace
-   * @param {ContractInstanceListOptions} [options]
-   * @returns {Promise<ContractInstanceListResponse>}
-   */
-  async listGovernanceInstances(namespace, options = {}) {
-    const normalizedNamespace = requireNonEmptyString(namespace, "namespace");
-    const { signal, params } = buildContractInstanceListQuery(options);
-    const response = await this._request(
-      "GET",
-      `/v1/gov/instances/${encodeURIComponent(normalizedNamespace)}`,
-      {
-        headers: { Accept: "application/json" },
-        params: params ?? undefined,
-        signal: signal ?? undefined,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeContractInstanceListResponse(payload);
-  }
-
-  /**
-   * Iterate governance-tracked contract instances for a namespace.
-   * @param {string} namespace
-   * @param {ContractInstanceIteratorOptions} [options]
-   * @returns {AsyncGenerator<ContractInstanceRecord, void, unknown>}
-   */
-  iterateGovernanceInstances(namespace, options = {}) {
-    const normalizedNamespace = requireNonEmptyString(namespace, "namespace");
-    const fetchPage = (pageOptions) =>
-      this.listGovernanceInstances(normalizedNamespace, pageOptions);
-    return this._iterateContractInstancePages(fetchPage, options);
+    return normalizeGovernanceContractResponse(payload);
   }
 
   /**
@@ -12521,8 +12433,10 @@ function parseGovernanceProposalKind(payload, context) {
 function parseGovernanceDeployContract(payload, context) {
   const record = ensureRecord(payload, context);
   return {
-    namespace: requireNonEmptyString(record.namespace, `${context}.namespace`),
-    contract_id: requireNonEmptyString(record.contract_id, `${context}.contract_id`),
+    contract_address: requireNonEmptyString(
+      record.contract_address,
+      `${context}.contract_address`,
+    ),
     code_hash_hex: requireNonEmptyString(record.code_hash_hex, `${context}.code_hash_hex`),
     abi_hash_hex: requireNonEmptyString(record.abi_hash_hex, `${context}.abi_hash_hex`),
     abi_version: requireNonEmptyString(record.abi_version, `${context}.abi_version`),
@@ -17391,32 +17305,6 @@ function normalizeDeployContractResponse(payload) {
   };
 }
 
-function normalizeDeployContractInstanceRequest(input) {
-  const record = ensureRecord(input, "deployContractInstance request");
-  const credentials = normalizeAuthorityCredentials(record, "deployContractInstance");
-  const codeB64 = record.code_b64 ?? record.codeB64;
-  const payload = {
-    ...credentials,
-    namespace: requireNonEmptyString(record.namespace, "deployContractInstance.namespace"),
-    contract_id: requireNonEmptyString(
-      record.contract_id ?? record.contractId,
-      "deployContractInstance.contractId",
-    ),
-    code_b64: normalizeRequiredBase64Payload(
-      codeB64,
-      "deployContractInstance.codeB64",
-    ),
-  };
-  const manifest = record.manifest;
-  if (manifest !== undefined && manifest !== null) {
-    payload.manifest = normalizeManifestPayload(
-      manifest,
-      "deployContractInstance.manifest",
-    );
-  }
-  return payload;
-}
-
 function normalizeGovernanceFinalizePayload(input) {
   const record = ensureRecord(input, "governanceFinalizeReferendum payload");
   const referendumId = record.referendum_id ?? record.referendumId;
@@ -17620,14 +17508,13 @@ function normalizeGovernanceBallotResponse(payload, context) {
 
 function normalizeGovernanceDeployContractProposalPayload(input) {
   const record = ensureRecord(input, "governanceProposeDeployContract payload");
-  const namespace = requireNonEmptyString(
-    record.namespace,
-    "governanceProposeDeployContract.namespace",
-  );
-  const contractId = requireNonEmptyString(
-    record.contract_id ?? record.contractId,
-    "governanceProposeDeployContract.contractId",
-  );
+  const contractAddressValue = record.contract_address ?? record.contractAddress ?? null;
+  const contractAliasValue = record.contract_alias ?? record.contractAlias ?? null;
+  if ((contractAddressValue == null) === (contractAliasValue == null)) {
+    throw new TypeError(
+      "governanceProposeDeployContract requires exactly one of contract_address or contract_alias",
+    );
+  }
   const abiVersion = requireNonEmptyString(
     record.abi_version ?? record.abiVersion ?? "1",
     "governanceProposeDeployContract.abiVersion",
@@ -17643,12 +17530,21 @@ function normalizeGovernanceDeployContractProposalPayload(input) {
     throw new TypeError("governanceProposeDeployContract.abi_hash is required");
   }
   const payload = {
-    namespace,
-    contract_id: contractId,
     abi_version: abiVersion,
     code_hash: normalizeHashLike32(codeHashValue, "governanceProposeDeployContract.code_hash"),
     abi_hash: normalizeHashLike32(abiHashValue, "governanceProposeDeployContract.abi_hash"),
   };
+  if (contractAddressValue != null) {
+    payload.contract_address = requireNonEmptyString(
+      contractAddressValue,
+      "governanceProposeDeployContract.contract_address",
+    );
+  } else {
+    payload.contract_alias = requireNonEmptyString(
+      contractAliasValue,
+      "governanceProposeDeployContract.contract_alias",
+    );
+  }
   const windowValue =
     record.window;
   if (windowValue !== undefined && windowValue !== null) {
@@ -18057,65 +17953,40 @@ function normalizeArbitraryHex(value, name) {
   return hex.toLowerCase();
 }
 
-function normalizeDeployContractInstanceResponse(payload) {
-  const record = ensureRecord(payload, "deployContractInstance response");
+function normalizeContractTargetSelector(record, context) {
+  const contractAddress = pickOverride(record, "contract_address", "contractAddress");
+  const contractAlias = pickOverride(record, "contract_alias", "contractAlias");
+  const hasContractAddress = contractAddress !== undefined && contractAddress !== null;
+  const hasContractAlias = contractAlias !== undefined && contractAlias !== null;
+  if (hasContractAddress === hasContractAlias) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} requires exactly one of contract_address or contract_alias`,
+      normalizeErrorPath(context),
+    );
+  }
+  if (hasContractAddress) {
+    return {
+      contract_address: requireNonEmptyString(
+        contractAddress,
+        `${context}.contract_address`,
+      ),
+    };
+  }
   return {
-    ok: Boolean(record.ok),
-    namespace: requireNonEmptyString(record.namespace, "deployContractInstance.namespace"),
-    contract_id: requireNonEmptyString(
-      record.contract_id,
-      "deployContractInstance.contractId",
+    contract_alias: requireNonEmptyString(
+      contractAlias,
+      `${context}.contract_alias`,
     ),
-    code_hash_hex: normalizeHex32String(
-      record.code_hash_hex,
-      "deployContractInstance.code_hash_hex",
-    ),
-    abi_hash_hex: normalizeHex32String(
-      record.abi_hash_hex,
-      "deployContractInstance.abi_hash_hex",
-    ),
-  };
-}
-
-function normalizeActivateContractInstanceRequest(input) {
-  const record = ensureRecord(input, "activateContractInstance request");
-  const credentials = normalizeAuthorityCredentials(record, "activateContractInstance");
-  return {
-    ...credentials,
-    namespace: requireNonEmptyString(
-      record.namespace,
-      "activateContractInstance.namespace",
-    ),
-    contract_id: requireNonEmptyString(
-      record.contract_id ?? record.contractId,
-      "activateContractInstance.contractId",
-    ),
-    code_hash: normalizeHex32String(
-      record.code_hash ?? record.codeHash,
-      "activateContractInstance.codeHash",
-    ),
-  };
-}
-
-function normalizeActivateContractInstanceResponse(payload) {
-  const record = ensureRecord(payload, "activateContractInstance response");
-  return {
-    ok: Boolean(record.ok),
   };
 }
 
 function normalizeContractCallRequest(input) {
   const record = ensureRecord(input, "contractCall request");
   const credentials = normalizeAuthorityCredentials(record, "contractCall");
-  const namespace = requireNonEmptyString(record.namespace, "contractCall.namespace");
-  const contractId = requireNonEmptyString(
-    record.contract_id ?? record.contractId,
-    "contractCall.contractId",
-  );
   const normalized = {
     ...credentials,
-    namespace,
-    contract_id: contractId,
+    ...normalizeContractTargetSelector(record, "contractCall"),
   };
   if (record.entrypoint !== undefined && record.entrypoint !== null) {
     normalized.entrypoint = requireNonEmptyString(
@@ -18144,11 +18015,12 @@ function normalizeContractCallRequest(input) {
 
 function normalizeContractCallResponse(payload) {
   const record = ensureRecord(payload, "contractCall response");
-  return {
+  const normalized = {
     ok: Boolean(record.ok),
-    namespace: requireNonEmptyString(
-      record.namespace,
-      "contractCall response.namespace",
+    submitted: Boolean(record.submitted),
+    dataspace: requireNonEmptyString(
+      record.dataspace,
+      "contractCall response.dataspace",
     ),
     contract_id: requireNonEmptyString(
       record.contract_id,
@@ -18162,18 +18034,55 @@ function normalizeContractCallResponse(payload) {
       record.abi_hash_hex,
       "contractCall response.abi_hash_hex",
     ),
-    tx_hash_hex: normalizeHex32String(
+    creation_time_ms: ToriiClient._normalizeUnsignedInteger(
+      record.creation_time_ms,
+      "contractCall response.creation_time_ms",
+      { allowZero: true },
+    ),
+  };
+  if (record.contract_address !== undefined && record.contract_address !== null) {
+    normalized.contract_address = requireNonEmptyString(
+      record.contract_address,
+      "contractCall response.contract_address",
+    );
+  }
+  if (record.tx_hash_hex !== undefined && record.tx_hash_hex !== null) {
+    normalized.tx_hash_hex = normalizeHex32String(
       record.tx_hash_hex,
       "contractCall response.tx_hash_hex",
-    ),
-    entrypoint:
-      record.entrypoint === undefined || record.entrypoint === null
-        ? null
-        : requireNonEmptyString(
-            record.entrypoint,
-            "contractCall response.entrypoint",
-          ),
-  };
+    );
+  } else {
+    normalized.tx_hash_hex = null;
+  }
+  normalized.entrypoint =
+    record.entrypoint === undefined || record.entrypoint === null
+      ? null
+      : requireNonEmptyString(
+          record.entrypoint,
+          "contractCall response.entrypoint",
+        );
+  normalized.transaction_scaffold_b64 =
+    record.transaction_scaffold_b64 === undefined || record.transaction_scaffold_b64 === null
+      ? null
+      : normalizeRequiredBase64Payload(
+          record.transaction_scaffold_b64,
+          "contractCall response.transaction_scaffold_b64",
+        );
+  normalized.signed_transaction_b64 =
+    record.signed_transaction_b64 === undefined || record.signed_transaction_b64 === null
+      ? null
+      : normalizeRequiredBase64Payload(
+          record.signed_transaction_b64,
+          "contractCall response.signed_transaction_b64",
+        );
+  normalized.signing_message_b64 =
+    record.signing_message_b64 === undefined || record.signing_message_b64 === null
+      ? null
+      : normalizeRequiredBase64Payload(
+          record.signing_message_b64,
+          "contractCall response.signing_message_b64",
+        );
+  return normalized;
 }
 
 function normalizeMultisigAccountSelector(input, context) {
@@ -18281,14 +18190,7 @@ function normalizeMultisigContractCallProposeRequest(input) {
       record.signer_account_id ?? record.signerAccountId,
       "proposeMultisigContractCall request.signer_account_id",
     ),
-    namespace: requireNonEmptyString(
-      record.namespace,
-      "proposeMultisigContractCall request.namespace",
-    ),
-    contract_id: requireNonEmptyString(
-      record.contract_id ?? record.contractId,
-      "proposeMultisigContractCall request.contract_id",
-    ),
+    ...normalizeContractTargetSelector(record, "proposeMultisigContractCall request"),
     entrypoint: requireNonEmptyString(
       record.entrypoint,
       "proposeMultisigContractCall request.entrypoint",
@@ -18669,98 +18571,25 @@ function normalizeManifestEntrypointKind(value, name) {
   return "value" in record ? { kind, value: record.value } : { kind };
 }
 
-const CONTRACT_INSTANCE_ORDER_VALUES = new Set(["cid_asc", "cid_desc", "hash_asc", "hash_desc"]);
-const CONTRACT_INSTANCE_OPTION_KEYS = new Set([
-  "contains",
-  "hash_prefix",
-  "hashPrefix",
-  "offset",
-  "limit",
-  "order",
-  "signal",
-]);
-const HEX_PREFIX_REGEX = /^[0-9a-f]+$/i;
-
-function buildContractInstanceListQuery(options = {}) {
-  const normalizedOptions =
-    options === undefined ? {} : ensureRecord(options, "contractInstances options");
-  assertSupportedOptionKeys(
-    normalizedOptions,
-    CONTRACT_INSTANCE_OPTION_KEYS,
-    "contractInstances options",
-  );
-  const { signal } = normalizeSignalOption(normalizedOptions, "contractInstances");
-  const params = {};
-  const contains = normalizedOptions.contains;
-  const hashPrefix = normalizedOptions.hash_prefix ?? normalizedOptions.hashPrefix;
-  const offset = normalizedOptions.offset;
-  const limit = normalizedOptions.limit;
-  const order = normalizedOptions.order;
-  if (contains !== undefined && contains !== null) {
-    params.contains = requireNonEmptyString(contains, "contractInstances.contains");
-  }
-  if (hashPrefix !== undefined && hashPrefix !== null) {
-    params.hash_prefix = normalizeHashPrefix(hashPrefix, "contractInstances.hashPrefix");
-  }
-  if (offset !== undefined && offset !== null) {
-    params.offset = ToriiClient._normalizeUnsignedInteger(
-      offset,
-      "contractInstances.offset",
-      { allowZero: true },
-    );
-  }
-  if (limit !== undefined && limit !== null) {
-    params.limit = ToriiClient._normalizeUnsignedInteger(
-      limit,
-      "contractInstances.limit",
-      { allowZero: false },
-    );
-  }
-  if (order !== undefined && order !== null) {
-    params.order = normalizeContractInstanceOrder(order, "contractInstances.order");
-  }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
-}
-
-function normalizeContractInstanceListResponse(payload) {
-  const record = ensureRecord(payload ?? {}, "contract instances response");
-  const rawInstances = record.instances ?? [];
-  if (!Array.isArray(rawInstances)) {
-    throw new TypeError("contract instances response.instances must be an array");
-  }
-  const instances = rawInstances.map((entry, index) => {
-    const item = ensureRecord(entry, `contract instances response.instances[${index}]`);
-    return {
-      contract_id: requireNonEmptyString(
-        item.contract_id,
-        `contractInstances.instances[${index}].contract_id`,
-      ),
-      code_hash_hex: normalizeHex32String(
-        item.code_hash_hex,
-        `contractInstances.instances[${index}].code_hash_hex`,
-      ),
-    };
-  });
-  const limitValue =
-    record.limit ?? instances.length ?? 0;
+function normalizeGovernanceContractResponse(payload) {
+  const record = ensureRecord(payload ?? {}, "governance contract response");
   return {
-    namespace: requireNonEmptyString(record.namespace ?? "", "contractInstances.namespace"),
-    total: ToriiClient._normalizeUnsignedInteger(
-      record.total ?? instances.length ?? 0,
-      "contractInstances.total",
-      { allowZero: true },
+    found: Boolean(record.found),
+    contract_address: requireNonEmptyString(
+      record.contract_address,
+      "governanceContract.contract_address",
     ),
-    offset: ToriiClient._normalizeUnsignedInteger(
-      record.offset ?? 0,
-      "contractInstances.offset",
-      { allowZero: true },
-    ),
-    limit: ToriiClient._normalizeUnsignedInteger(
-      limitValue,
-      "contractInstances.limit",
-      { allowZero: true },
-    ),
-    instances,
+    dataspace:
+      record.dataspace == null
+        ? null
+        : requireNonEmptyString(record.dataspace, "governanceContract.dataspace"),
+    code_hash_hex:
+      record.code_hash_hex == null
+        ? null
+        : normalizeHex32String(
+            record.code_hash_hex,
+            "governanceContract.code_hash_hex",
+          ),
   };
 }
 
@@ -23386,24 +23215,6 @@ function normalizeAccountAssetListItem(value, context) {
     asset_id: assetId,
     quantity,
   };
-  return normalized;
-}
-
-function normalizeHashPrefix(value, context) {
-  const normalized = requireNonEmptyString(value, context);
-  if (!HEX_PREFIX_REGEX.test(normalized)) {
-    throw new TypeError(`${context} must be a non-empty hexadecimal string`);
-  }
-  return normalized.toLowerCase();
-}
-
-function normalizeContractInstanceOrder(value, context) {
-  const normalized = requireNonEmptyString(value, context).toLowerCase();
-  if (!CONTRACT_INSTANCE_ORDER_VALUES.has(normalized)) {
-    throw new TypeError(
-      `${context} must be one of ${Array.from(CONTRACT_INSTANCE_ORDER_VALUES).join(", ")}`,
-    );
-  }
   return normalized;
 }
 

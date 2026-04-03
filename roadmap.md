@@ -2,6 +2,31 @@
 
 Last updated: 2026-04-03
 
+Latest sync (2026-04-03 Izanami domain-workload fix):
+Izanami no longer schedules raw runtime domain registration now that domains
+require an external SNS lease, but focused validation is blocked by unrelated
+existing `iroha_core` compile regressions in this tree.
+
+- shipped in `crates/izanami/src/instructions.rs`:
+  - removed `RecipeKind::RegisterDomain` from both stable and chaos runtime
+    recipe sets; and
+  - made `ChaosState::plan_register_domain()` fail closed with an explicit
+    SNS-lease error instead of emitting invalid `Register::domain` traffic.
+- added Izanami regression coverage for:
+  - recipe-set exclusion of `RegisterDomain`; and
+  - direct planner rejection under the SNS domain model.
+
+Open work for this slice now remains:
+- restore local `iroha_core` buildability by fixing the existing
+  `StorageReadOnly` import/inference regressions in
+  `/Users/mtakemiya/dev/iroha/crates/iroha_core/src/state/tiered.rs` and
+  `/Users/mtakemiya/dev/iroha/crates/iroha_core/src/tx.rs`;
+- rerun `cargo test -p izanami register_domain_plan_is_disabled_under_sns_domain_model -- --nocapture`
+  once the tree builds again; and
+- rerun the NPoS high-load smoke after that to confirm the old
+  `chaos_child_*` domain-registration failures are gone from retained peer
+  logs.
+
 Latest sync (2026-04-03 rebuilt midpoint retry still blocks before peer spawn):
 the current tree rebuilds cleanly, but a fresh midpoint load retry still does
 not reach actual `iroha3d` launch.

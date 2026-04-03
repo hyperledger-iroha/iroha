@@ -782,11 +782,8 @@ client = create_torii_client(
 
 client.set_protected_namespaces(["apps", "system"])
 protected = client.get_protected_namespaces()
-instances_page = client.list_governance_instances_typed(
-    "apps",
-    contains="calc",
-    hash_prefix="dead",
-    order="hash_desc",
+governed_contract = client.get_governance_contract_typed(
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
 )
 council = client.get_governance_council_current()
 audit = client.get_governance_council_audit(epoch=42)
@@ -801,7 +798,7 @@ print("Referendum found:", referendum.found)
 print("Aye votes:", tally.approve)
 print("Lock owners:", list(locks.locks))
 print("Expired locks:", unlock_stats_typed.expired_locks_now)
-print("Governance instances:", [inst.contract_id for inst in instances_page.instances])
+print("Governed contract:", governed_contract.contract_address, governed_contract.code_hash_hex)
 print("Protected namespaces:", protected)
 
 # VRF helpers (Torii must be built with `gov_vrf`)

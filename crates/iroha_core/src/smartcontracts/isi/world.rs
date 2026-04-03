@@ -1725,20 +1725,8 @@ pub mod isi {
                     "not permitted: CanProposeContractDeployment".into(),
                 ));
             }
-            let namespace_trimmed = self.namespace.trim();
-            if namespace_trimmed.is_empty() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract("namespace must not be empty".into()),
-                ));
-            }
-            let contract_trimmed = self.contract_id.trim();
-            if contract_trimmed.is_empty() {
-                return Err(InstructionExecutionError::InvalidParameter(
-                    InvalidParameterError::SmartContract("contract_id must not be empty".into()),
-                ));
-            }
-            let namespace = namespace_trimmed.to_string();
-            let contract_id = contract_trimmed.to_string();
+            let contract_address = self.contract_address.clone();
+            let contract_address_literal = contract_address.as_ref().to_owned();
 
             let (code_hash_hex_str, code_hash_bytes) =
                 canonical_hex32(&self.code_hash_hex, "code_hash")?;
@@ -1767,30 +1755,25 @@ pub mod isi {
             }
             let abi_version = AbiVersion::new(1);
 
-            let namespace_len: u32 = namespace.len().try_into().map_err(|_| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    "namespace length exceeds 2^32 bytes".into(),
-                ))
-            })?;
-            let contract_len: u32 = contract_id.len().try_into().map_err(|_| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    "contract_id length exceeds 2^32 bytes".into(),
-                ))
-            })?;
+            let contract_address_len: u32 =
+                contract_address_literal.len().try_into().map_err(|_| {
+                    InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "contract_address length exceeds 2^32 bytes".into(),
+                        ),
+                    )
+                })?;
 
             let mut id_input = Vec::with_capacity(
-                b"iroha:gov:proposal:v1|".len()
-                    + core::mem::size_of::<u32>() * 2
-                    + namespace.len()
-                    + contract_id.len()
+                b"iroha:gov:proposal:v2|".len()
+                    + core::mem::size_of::<u32>()
+                    + contract_address_literal.len()
                     + code_hash_bytes.len()
                     + abi_hash_bytes.len(),
             );
-            id_input.extend_from_slice(b"iroha:gov:proposal:v1|");
-            id_input.extend_from_slice(&namespace_len.to_le_bytes());
-            id_input.extend_from_slice(namespace.as_bytes());
-            id_input.extend_from_slice(&contract_len.to_le_bytes());
-            id_input.extend_from_slice(contract_id.as_bytes());
+            id_input.extend_from_slice(b"iroha:gov:proposal:v2|");
+            id_input.extend_from_slice(&contract_address_len.to_le_bytes());
+            id_input.extend_from_slice(contract_address_literal.as_bytes());
             id_input.extend_from_slice(&code_hash_bytes);
             id_input.extend_from_slice(&abi_hash_bytes);
             let id_bytes = Blake2b512::digest(&id_input);
@@ -1838,8 +1821,7 @@ pub mod isi {
             }
 
             let payload = DeployContractProposal {
-                namespace: namespace.clone(),
-                contract_id: contract_id.clone(),
+                contract_address: contract_address.clone(),
                 code_hash_hex,
                 abi_hash_hex,
                 abi_version,
@@ -1853,8 +1835,7 @@ pub mod isi {
                         "governance proposal id collision".into(),
                     ));
                 };
-                if existing_payload.namespace != payload.namespace
-                    || existing_payload.contract_id != payload.contract_id
+                if existing_payload.contract_address != payload.contract_address
                     || existing_payload.code_hash_hex != payload.code_hash_hex
                     || existing_payload.abi_hash_hex != payload.abi_hash_hex
                     || existing_payload.abi_version != payload.abi_version
@@ -1929,8 +1910,7 @@ pub mod isi {
                     iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
                         id,
                         proposer: authority.clone(),
-                        namespace: payload.namespace,
-                        contract_id: payload.contract_id,
+                        contract_address: Some(payload.contract_address),
                     },
                 ),
             ));
@@ -2106,14 +2086,12 @@ pub mod isi {
                 },
             );
 
-            let runtime_target = self.manifest.id();
             state_transaction.world.emit_events(Some(
                 iroha_data_model::events::data::governance::GovernanceEvent::ProposalSubmitted(
                     iroha_data_model::events::data::governance::GovernanceProposalSubmitted {
                         id,
                         proposer: authority.clone(),
-                        namespace: "runtime-upgrade".to_string(),
-                        contract_id: hex::encode(runtime_target.0),
+                        contract_address: None,
                     },
                 ),
             ));
@@ -3628,7 +3606,8 @@ pub mod isi {
         payload: &DeployContractProposal,
         key: iroha_crypto::Hash,
     ) -> Result<bool, Error> {
-        let ns_key = (payload.namespace.clone(), payload.contract_id.clone());
+        let ns_key =
+            contract_instance_binding_for_address(state_transaction, &payload.contract_address)?;
         if let Some(existing) = state_transaction.world.contract_instances.get(&ns_key) {
             if *existing != key {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -3659,11 +3638,16 @@ pub mod isi {
                 .record_manifest_activation(None, "manifest_inserted");
         }
         if instance_bound_new {
+            let Ok((namespace, contract_id)) =
+                contract_instance_binding_for_address(state_transaction, &payload.contract_address)
+            else {
+                return;
+            };
             let activated_at_ms_u128 = state_transaction._curr_block.creation_time().as_millis();
             let activated_at_ms = u64::try_from(activated_at_ms_u128).unwrap_or(u64::MAX);
             let activation = GovernanceManifestActivation {
-                namespace: payload.namespace.clone(),
-                contract_id: payload.contract_id.clone(),
+                namespace,
+                contract_id,
                 code_hash_hex: hex::encode(code_hash),
                 abi_hash_hex: Some(hex::encode(abi_hash)),
                 height: state_transaction._curr_block.height().get(),
@@ -3673,6 +3657,28 @@ pub mod isi {
                 .telemetry
                 .record_manifest_activation(Some(activation), "instance_bound");
         }
+    }
+
+    fn contract_instance_binding_for_address(
+        state_transaction: &StateTransaction<'_, '_>,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    ) -> Result<(String, String), Error> {
+        let dataspace_id = contract_address.dataspace_id().map_err(|err| {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                format!("invalid contract_address dataspace: {err}"),
+            ))
+        })?;
+        let namespace = state_transaction
+            .nexus
+            .dataspace_catalog
+            .by_id(dataspace_id)
+            .map(|entry| entry.alias.clone())
+            .ok_or_else(|| {
+                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                    "contract_address dataspace is unknown".into(),
+                ))
+            })?;
+        Ok((namespace, contract_address.to_string()))
     }
 
     fn close_referendum_if_open(state_transaction: &mut StateTransaction<'_, '_>, pid_hex: &str) {

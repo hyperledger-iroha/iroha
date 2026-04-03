@@ -98,7 +98,7 @@ class _MockState:
         self.gov_council_audit: Dict[str, Any] = {}
         self.gov_council_derive_result: Dict[str, Any] = {}
         self.gov_council_persist_result: Dict[str, Any] = {}
-        self.gov_instances: Dict[str, Dict[str, Any]] = {}
+        self.gov_contracts: Dict[str, Dict[str, Any]] = {}
         self.contract_manifests: Dict[str, Dict[str, Any]] = {}
         self.contract_code_bytes: Dict[str, Dict[str, Any]] = {}
         self.gov_proposals: Dict[str, Dict[str, Any]] = {}
@@ -161,9 +161,9 @@ class _MockState:
             return self._gov_protected_set(body)
         if method == "GET" and path == "/v1/gov/protected-namespaces":
             return self._gov_protected_get()
-        if method == "GET" and path.startswith("/v1/gov/instances/"):
-            namespace = path.split("/")[-1]
-            return self._gov_instances_get(namespace)
+        if method == "GET" and path.startswith("/v1/gov/contracts/"):
+            contract_address = unquote(path.rsplit("/", 1)[-1])
+            return self._gov_contract_get(contract_address)
         if method == "GET" and path.startswith("/v1/gov/locks/"):
             referendum_id = path.split("/")[-1]
             return self._gov_locks_get(referendum_id)
@@ -241,7 +241,7 @@ class _MockState:
             }
             self.gov_council_derive_result = {"ok": True, "epoch": 0, "members": []}
             self.gov_council_persist_result = {"ok": True, "epoch": 0, "members": []}
-            self.gov_instances.clear()
+            self.gov_contracts.clear()
             self.contract_manifests.clear()
             self.contract_code_bytes.clear()
             self.gov_proposals.clear()
@@ -334,18 +334,18 @@ class _MockState:
         else:
             self.gov_council_persist_result = {"ok": True, "epoch": 0, "members": []}
 
-        instances_payload = payload.get("instances")
-        if instances_payload is not None:
-            if not isinstance(instances_payload, dict):
-                raise ValueError("instances must be an object")
-            normalized_instances: Dict[str, Dict[str, Any]] = {}
-            for ns, page in instances_payload.items():
-                if not isinstance(page, dict):
-                    raise ValueError("instances entry must be an object")
-                normalized_instances[str(ns)] = page
-            self.gov_instances = normalized_instances
+        gov_contracts_payload = payload.get("gov_contracts")
+        if gov_contracts_payload is not None:
+            if not isinstance(gov_contracts_payload, dict):
+                raise ValueError("gov_contracts must be an object")
+            normalized_contracts: Dict[str, Dict[str, Any]] = {}
+            for contract_address, entry in gov_contracts_payload.items():
+                if not isinstance(entry, dict):
+                    raise ValueError("gov_contracts entry must be an object")
+                normalized_contracts[str(contract_address)] = entry
+            self.gov_contracts = normalized_contracts
         else:
-            self.gov_instances = {}
+            self.gov_contracts = {}
 
         manifests_payload = payload.get("manifests")
         if manifests_payload is not None:
@@ -505,7 +505,9 @@ class _MockState:
                 raise ValueError(f"invalid propose-deploy payload: {err}") from err
             if not isinstance(payload, dict):
                 raise ValueError("propose-deploy payload must be an object")
-            for key in ("namespace", "contract_id", "code_hash", "abi_hash"):
+            if ("contract_address" in payload) == ("contract_alias" in payload):
+                raise ValueError("propose-deploy payload must include exactly one of contract_address or contract_alias")
+            for key in ("code_hash", "abi_hash"):
                 if key not in payload:
                     raise ValueError(f"propose-deploy payload missing '{key}'")
         response = json.loads(json.dumps(self.gov_propose_deploy_response))
@@ -665,14 +667,17 @@ class _MockState:
             raise KeyError("governance zk ballot not configured")
         return _json_response(HTTPStatus.OK, entry["ballot_zk"])
 
-    def _gov_instances_get(self, namespace: str) -> _Response:
-        page = self.gov_instances.get(namespace)
-        if page is None:
+    def _gov_contract_get(self, contract_address: str) -> _Response:
+        entry = self.gov_contracts.get(contract_address)
+        if entry is None:
             return _json_response(
                 HTTPStatus.OK,
-                {"total": 0, "offset": 0, "limit": 0, "instances": []},
+                {"found": False, "contract_address": contract_address, "dataspace": None, "code_hash_hex": None},
             )
-        return _json_response(HTTPStatus.OK, page)
+        payload = dict(entry)
+        payload.setdefault("found", True)
+        payload.setdefault("contract_address", contract_address)
+        return _json_response(HTTPStatus.OK, payload)
 
     def _gov_council_audit(self, epoch: Optional[int]) -> _Response:
         payload = dict(self.gov_council_audit)

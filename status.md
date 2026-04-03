@@ -2,6 +2,27 @@
 
 Last updated: 2026-04-03
 
+## 2026-04-03 Follow-up: Izanami no longer emits obsolete runtime domain-registration traffic
+- Updated `crates/izanami/src/instructions.rs` so runtime workload recipes no
+  longer schedule `RecipeKind::RegisterDomain` under the SNS-backed domain
+  model.
+- `ChaosState::plan_register_domain()` now fails closed with an explicit error
+  instead of generating invalid `Register::domain("chaos_child_*")`
+  transactions that are rejected at runtime for lacking an active SNS
+  domain-name lease.
+- Added targeted Izanami regression coverage asserting:
+  - stable/chaos recipe sets exclude `RegisterDomain`; and
+  - the obsolete runtime planner returns an SNS-lease error if invoked
+    directly.
+- Local formatting completed:
+  - `cargo fmt --all`
+- Focused cargo validation is currently blocked by unrelated existing
+  `iroha_core` compile regressions already present in this tree, including:
+  - missing `mv::storage::StorageReadOnly` trait imports across
+    `crates/iroha_core/src/state/tiered.rs` and
+    `crates/iroha_core/src/tx.rs`; and
+  - follow-on type inference fallout in the same files.
+
 ## 2026-04-03 Follow-up: fresh rebuild succeeds, but the rebuilt midpoint retry still blocks before peer spawn
 - Rebuilt fresh release binaries from the current tree with:
   `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha_target_retry_20260403 cargo build --release -p izanami --bin izanami -p irohad --bin iroha3d`

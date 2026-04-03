@@ -9059,91 +9059,20 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
-    /// GET `/v1/gov/instances/{ns}`
+    /// GET `/v1/gov/contracts/{contract_address}`
     ///
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn get_gov_instances_by_ns_json(&self, ns: &str) -> Result<norito::json::Value> {
-        self.get_gov_instances_by_ns_filtered_json(ns, None, None, None, None, None)
-    }
-
-    /// GET `/v1/gov/instances/{ns}` with optional filters and pagination.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn get_gov_instances_by_ns_filtered_json(
+    pub fn get_gov_contract_json(
         &self,
-        ns: &str,
-        contains: Option<&str>,
-        hash_prefix: Option<&str>,
-        offset: Option<u32>,
-        limit: Option<u32>,
-        order: Option<&str>,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
     ) -> Result<norito::json::Value> {
-        let path = format!("v1/gov/instances/{ns}");
+        let path = format!("v1/gov/contracts/{contract_address}");
         let url = join_torii_url(&self.torii_url, &path);
-        let mut req = self.default_request(HttpMethod::GET, url);
-        if let Some(v) = contains {
-            req = req.param("contains", &v);
-        }
-        if let Some(v) = hash_prefix {
-            req = req.param("hash_prefix", &v);
-        }
-        if let Some(v) = offset {
-            req = req.param("offset", &v);
-        }
-        if let Some(v) = limit {
-            req = req.param("limit", &v);
-        }
-        if let Some(v) = order {
-            req = req.param("order", &v);
-        }
-        let resp = self.send_builder(req)?;
+        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
         if resp.status() != StatusCode::OK {
             return Err(eyre!(
-                "Failed to get instances: {} {}",
-                resp.status(),
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            ));
-        }
-        Ok(norito::json::from_slice(resp.body())?)
-    }
-
-    /// GET `/v1/contracts/instances/{ns}` with optional filters and pagination.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response is non-OK, or response JSON deserialization fails.
-    pub fn get_contracts_instances_by_ns_filtered_json(
-        &self,
-        ns: &str,
-        contains: Option<&str>,
-        hash_prefix: Option<&str>,
-        offset: Option<u32>,
-        limit: Option<u32>,
-        order: Option<&str>,
-    ) -> Result<norito::json::Value> {
-        let path = format!("v1/contracts/instances/{ns}");
-        let url = join_torii_url(&self.torii_url, &path);
-        let mut req = self.default_request(HttpMethod::GET, url);
-        if let Some(v) = contains {
-            req = req.param("contains", &v);
-        }
-        if let Some(v) = hash_prefix {
-            req = req.param("hash_prefix", &v);
-        }
-        if let Some(v) = offset {
-            req = req.param("offset", &v);
-        }
-        if let Some(v) = limit {
-            req = req.param("limit", &v);
-        }
-        if let Some(v) = order {
-            req = req.param("order", &v);
-        }
-        let resp = self.send_builder(req)?;
-        if resp.status() != StatusCode::OK {
-            return Err(eyre!(
-                "Failed to get contracts instances: {} {}",
+                "Failed to get governed contract: {} {}",
                 resp.status(),
                 std::str::from_utf8(resp.body()).unwrap_or("")
             ));

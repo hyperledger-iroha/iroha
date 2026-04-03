@@ -2946,11 +2946,7 @@ export function buildMultisigContractCallProposeRequest(options) {
       source.signerAccountId,
       "multisigContractCallPropose.signerAccountId",
     ),
-    namespace: assertString(source.namespace, "multisigContractCallPropose.namespace"),
-    contract_id: assertString(
-      source.contractId ?? source.contract_id,
-      "multisigContractCallPropose.contractId",
-    ),
+    ...normalizeContractTargetSelectorInput(source, "multisigContractCallPropose"),
     entrypoint: assertString(
       source.entrypoint,
       "multisigContractCallPropose.entrypoint",
@@ -3011,6 +3007,34 @@ export function buildMultisigContractCallProposeRequest(options) {
     payload.private_key = privateKey;
   }
   return payload;
+}
+
+function normalizeContractTargetSelectorInput(source, context) {
+  const contractAddress = source.contractAddress ?? source.contract_address;
+  const contractAlias = source.contractAlias ?? source.contract_alias;
+  const hasContractAddress = contractAddress !== undefined && contractAddress !== null;
+  const hasContractAlias = contractAlias !== undefined && contractAlias !== null;
+  if (hasContractAddress === hasContractAlias) {
+    fail(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} requires exactly one of contractAddress or contractAlias`,
+      context,
+    );
+  }
+  if (hasContractAddress) {
+    return {
+      contract_address: assertString(
+        contractAddress,
+        `${context}.contractAddress`,
+      ),
+    };
+  }
+  return {
+    contract_alias: assertString(
+      contractAlias,
+      `${context}.contractAlias`,
+    ),
+  };
 }
 
 /**
@@ -3189,11 +3213,7 @@ export function buildRegisterKaigiRelayInstruction(options) {
 export function buildProposeDeployContractInstruction(options) {
   const source = assertPlainObject(options, "proposeDeployContract");
   const payload = {
-    namespace: assertString(source.namespace, "namespace"),
-    contract_id: assertString(
-      source.contractId ?? source.contract_id,
-      "contractId",
-    ),
+    ...normalizeContractTargetSelectorInput(source, "proposeDeployContract"),
     code_hash_hex: normalizeHexHashString(
       source.codeHash ?? source.code_hash ?? source.codeHashHex,
       "codeHash",
@@ -3462,65 +3482,6 @@ export function buildRegisterSmartContractBytesInstruction(options) {
         "registerSmartContractBytes.codeHash",
       ),
       code,
-    },
-  };
-}
-
-/**
- * Build a `DeactivateContractInstance` instruction payload.
- * @param {{namespace: string, contractId: string, reason?: string | null}} options
- * @returns {{DeactivateContractInstance: {namespace: string, contract_id: string, reason?: string}}}
- */
-export function buildDeactivateContractInstanceInstruction(options) {
-  const source = assertPlainObject(options, "deactivateContractInstance");
-  const payload = {
-    namespace: assertString(
-      source.namespace,
-      "deactivateContractInstance.namespace",
-    ),
-    contract_id: assertString(
-      source.contractId ?? source.contract_id ?? source.contractID,
-      "deactivateContractInstance.contractId",
-    ),
-  };
-  const reason = source.reason ?? source.reasonText ?? source.reason_text;
-  if (reason !== undefined && reason !== null) {
-    payload.reason = assertString(
-      reason,
-      "deactivateContractInstance.reason",
-    );
-  }
-  return {
-    DeactivateContractInstance: payload,
-  };
-}
-
-/**
- * Build an `ActivateContractInstance` instruction payload.
- * @param {{namespace: string, contractId: string, codeHash: string|Buffer}} options
- * @returns {{ActivateContractInstance: {namespace: string, contract_id: string, code_hash: string}}}
- */
-export function buildActivateContractInstanceInstruction(options) {
-  if (!options || typeof options !== "object") {
-    fail(
-      ValidationErrorCode.INVALID_OBJECT,
-      "buildActivateContractInstanceInstruction options must be an object",
-    );
-  }
-  const namespace = assertString(options.namespace, "activateContractInstance.namespace");
-  const contractId =
-    options.contract_id ?? options.contractId ?? options.contractID ?? options.id;
-  return {
-    ActivateContractInstance: {
-      namespace,
-      contract_id: assertString(
-        contractId,
-        "activateContractInstance.contractId",
-      ),
-      code_hash: normalizeHash(
-        options.codeHash ?? options.code_hash,
-        "activateContractInstance.codeHash",
-      ),
     },
   };
 }

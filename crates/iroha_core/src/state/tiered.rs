@@ -3456,8 +3456,7 @@ mod measured_bytes_impls {
     impl MeasuredBytes for DeployContractProposal {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<DeployContractProposal>();
-            total = total.saturating_add(self.namespace.measured_bytes_extra());
-            total = total.saturating_add(self.contract_id.measured_bytes_extra());
+            total = total.saturating_add(self.contract_address.as_ref().len());
             total = total.saturating_add(self.code_hash_hex.measured_bytes_extra());
             total = total.saturating_add(self.abi_hash_hex.measured_bytes_extra());
             total = total.saturating_add(self.abi_version.measured_bytes_extra());

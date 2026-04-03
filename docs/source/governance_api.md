@@ -13,17 +13,16 @@ Overview
 - If `authority` and `private_key` are provided (or `private_key` on ballot DTOs), Torii signs and submits the transaction and still returns `tx_instructions`.
 - Otherwise, clients assemble a SignedTransaction using their authority and chain_id, then sign and POST to `/transaction`.
 - SDK coverage:
-- Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`, `ToriiClient.get_governance_unlock_stats_typed` returns `GovernanceUnlockStats`, and `ToriiClient.list_governance_instances_typed` returns `GovernanceInstancesPage`, enforcing typed access across the governance surface with README usage examples.
+- Python (`iroha_python`): `ToriiClient.get_governance_proposal_typed` returns `GovernanceProposalResult` (normalising status/kind fields), `ToriiClient.get_governance_referendum_typed` returns `GovernanceReferendumResult`, `ToriiClient.get_governance_tally_typed` returns `GovernanceTally`, and `ToriiClient.get_governance_locks_typed` returns `GovernanceLocksResult`.
 - Python lightweight client (`iroha_torii_client`): `ToriiClient.finalize_referendum` and `ToriiClient.enact_proposal` return typed `GovernanceInstructionDraft` bundles (wrapping the Torii skeleton `tx_instructions`), avoiding manual JSON parsing when scripts compose Finalize/Enact flows.
-- JavaScript (`@iroha/iroha-js`): `ToriiClient` surfaces typed helpers for proposals, referenda, tallies, locks, unlock stats, and now `listGovernanceInstances(namespace, options)` plus the council endpoints (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`) so Node.js clients can paginate `/v1/gov/instances/{ns}` and drive VRF-backed workflows alongside the existing contract-instance listing. `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` mirror the Python helpers by always returning a structured draft (synthesising the empty skeleton when Torii responds with `204 No Content`), which keeps automation from branching on `null` before queueing transactions or triggers. `getGovernanceLocksTyped` now normalises `404 Not Found` responses into `{found: false, locks: {}, referendum_id: <id>}` so JS callers get the same shaped result as the Python helper when a referendum has no locks.
+- JavaScript (`@iroha/iroha-js`): `ToriiClient` surfaces typed helpers for proposals, referenda, tallies, locks, unlock stats, and the council endpoints (`getGovernanceCouncilCurrent`, `governanceDeriveCouncilVrf`, `governancePersistCouncil`, `getGovernanceCouncilAudit`). `governanceFinalizeReferendumTyped` and `governanceEnactProposalTyped` mirror the Python helpers by always returning a structured draft (synthesising the empty skeleton when Torii responds with `204 No Content`), which keeps automation from branching on `null` before queueing transactions or triggers.
 
 Endpoints
 
 - POST `/v1/gov/proposals/deploy-contract`
   - Request (JSON):
     {
-      "namespace": "apps",
-      "contract_id": "my.contract.v1",
+      "contract_address": "tairac1...",
       "code_hash": "blake2b32:…" | "…64hex",
       "abi_hash": "blake2b32:…" | "…64hex",
       "abi_version": "1",
@@ -43,11 +42,6 @@ Contracts API (deploy)
   - Related:
     - GET `/v1/contracts/code/{code_hash}` → returns stored manifest
     - GET `/v1/contracts/code-bytes/{code_hash}` → returns `{ code_b64 }`
-- POST `/v1/contracts/instance`
-  - Request: { "authority": "<i105-account-id>", "private_key": "…", "namespace": "apps", "contract_id": "calc.v1", "code_b64": "…" }
-  - Behavior: Deploys the supplied bytecode and immediately activates the `(namespace, contract_id)` mapping via `ActivateContractInstance`.
-  - Response: { "ok": true, "namespace": "apps", "contract_id": "calc.v1", "code_hash_hex": "…", "abi_hash_hex": "…" }
-
 Alias Service
 - POST `/v1/aliases/voprf/evaluate`
   - Request: { "blinded_element_hex": "…" }
@@ -187,14 +181,12 @@ RBAC
 
 Protected Namespaces
 - Custom parameter `gov_protected_namespaces` (JSON array of strings) enables admission gating for deploys into listed namespaces.
-- Clients must include transaction metadata keys for deploys targeting protected namespaces:
-  - `gov_namespace`: the target namespace (e.g., `"apps"`)
-  - `gov_contract_id`: the logical contract id within the namespace
+- Clients must include transaction metadata key `gov_contract_address` for deploys targeting protected namespaces.
 - `gov_manifest_approvers`: optional JSON array of <i105-account-id> account IDs. When a lane manifest declares a quorum greater than one, admission requires the transaction authority plus the listed accounts to satisfy the manifest quorum.
 - Telemetry exposes holistic admission counters via `governance_manifest_admission_total{result}` so operators can distinguish successful admits from `missing_manifest`, `non_<i105-account-id>_authority`, `quorum_rejected`, `protected_namespace_rejected`, and `runtime_hook_rejected` paths.
 - Telemetry surfaces the enforcement path via `governance_manifest_quorum_total{outcome}` (values `satisfied` / `rejected`) so operators can audit missing approvals.
-- Lanes enforce the namespace allowlist published in their manifests. Any transaction that sets `gov_namespace` must provide `gov_contract_id`, and the namespace must appear in the manifest's `protected_namespaces` set. `RegisterSmartContractCode` submissions without this metadata are rejected when protection is enabled.
-- Admission enforces that an Enacted governance proposal exists for the tuple `(namespace, contract_id, code_hash, abi_hash)`; otherwise validation fails with a NotPermitted error.
+- Lanes enforce the namespace allowlist published in their manifests. Any transaction that sets `gov_contract_address` must resolve into a protected dataspace alias present in the manifest's `protected_namespaces` set. `RegisterSmartContractCode` submissions without this metadata are rejected when protection is enabled.
+- Admission enforces that an Enacted governance proposal exists for the tuple `(contract_address, code_hash, abi_hash)`; otherwise validation fails with a NotPermitted error.
 
 Runtime Upgrade Hooks
 - Lane manifests may declare `hooks.runtime_upgrade` to gate runtime upgrade instructions (`ProposeRuntimeUpgrade`, `ActivateRuntimeUpgrade`, `CancelRuntimeUpgrade`).
@@ -214,15 +206,13 @@ Convenience Endpoint
   - Notes: Intended for admin/testing; requires API token if configured. For production, prefer submitting a signed transaction with `SetParameter(Custom)`.
 
 CLI Helpers
-- `iroha --output-format text app gov deploy audit --namespace apps [--contains calc --hash-prefix deadbeef]`
-  - Fetches contract instances for the namespace and cross-checks that:
-    - Torii stores bytecode for each `code_hash`, and its Blake2b-32 digest matches the `code_hash`.
+- `iroha --output-format text app gov deploy audit --contract-address tairac1...`
+  - Fetches the active binding for the governed contract address and cross-checks that:
+    - Torii stores bytecode for the active `code_hash`, and its Blake2b-32 digest matches the `code_hash`.
     - The manifest stored under `/v1/contracts/code/{code_hash}` reports matching `code_hash` and `abi_hash` values.
-    - An enacted governance proposal exists for `(namespace, contract_id, code_hash, abi_hash)` as derived by the same proposal-id hashing the node uses.
-  - Outputs a JSON report with `results[]` per contract (issues, manifest/code/proposal summaries) plus a one-line summary unless suppressed (`--no-summary`).
-  - Useful for auditing protected namespaces or verifying governance-controlled deploy workflows.
-- `iroha app gov deploy meta --namespace apps --contract-id calc.v1 [--approver <i105-account-id> --approver <i105-account-id>]`
-  - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including optional `gov_manifest_approvers` for satisfying manifest quorum rules.
+    - An enacted governance proposal exists for `(contract_address, code_hash, abi_hash)` as derived by the same proposal-id hashing the node uses.
+- `iroha app gov deploy meta --contract-address tairac1... [--approver <i105-account-id> --approver <i105-account-id>]`
+  - Emits the JSON metadata skeleton used when submitting deployments into protected namespaces, including `gov_contract_address` and optional `gov_manifest_approvers` for satisfying manifest quorum rules.
 - `iroha app gov vote --mode zk --referendum-id <id> --proof-b64 <b64> [--owner <i105-account-id> --nullifier <32-byte-hex> --lock-amount <u128> --lock-duration-blocks <u64> --direction <Aye|Nay|Abstain>]`
   - Validates canonical I105 account ids, canonicalizes 32-byte nullifier hints, and merges the hints into `public_inputs_json` (with `--public <path>` for additional overrides).
   - The nullifier is derived from the proof commitment (public input) plus `domain_tag`, `chain_id`, and `election_id`; `--nullifier` is validated against the proof when supplied.
@@ -234,15 +224,9 @@ CLI Helpers
   - Aliases `--lock-amount`/`--lock-duration-blocks` mirror the ZK flag names for scripting parity.
   - Summary output mirrors `vote --mode zk` by including the encoded instruction fingerprint and human-readable ballot fields (`owner`, `amount`, `duration_blocks`, `direction`), providing quick confirmation before signing the skeleton.
 
-Instances Listing
-- GET `/v1/gov/instances/{ns}` — lists active contract instances for a namespace.
-  - Query params:
-    - `contains`: filter by substring of `contract_id` (case-sensitive)
-    - `hash_prefix`: filter by hex prefix of `code_hash_hex` (lowercase)
-    - `offset` (default 0), `limit` (default 100, max 10_000)
-    - `order`: one of `cid_asc` (default), `cid_desc`, `hash_asc`, `hash_desc`
-  - Response: { "namespace": "ns", "instances": [{ "contract_id": "…", "code_hash_hex": "…" }, …], "total": N, "offset": n, "limit": m }
-  - SDK helper: `ToriiClient.listGovernanceInstances("apps", { contains: "calc", limit: 5 })` (JavaScript) or `ToriiClient.list_governance_instances_typed("apps", ...)` (Python).
+Governed Contract Lookup
+- GET `/v1/gov/contracts/{contract_address}` — returns the active governance binding for a canonical contract address.
+  - Response: { "found": bool, "contract_address": "tairac1...", "dataspace": "universal", "code_hash_hex": "…" ? }
 
 Unlock Sweep (Operator/Audit)
 - GET `/v1/gov/unlocks/stats`

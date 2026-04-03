@@ -365,12 +365,11 @@ pub mod test_utils;
 // Governance selection
 #[cfg(feature = "app_api")]
 pub use gov::{
-    AtWindowDto, CouncilDeriveVrfRequest, EnactDto, InstancesByNamespaceResponse, InstancesQuery,
-    LocksGetResponse, ProposalGetResponse, ProtectedNamespacesDto, ReferendumGetResponse,
-    TallyGetResponse, handle_gov_council_current, handle_gov_enact, handle_gov_get_locks,
+    AtWindowDto, CouncilDeriveVrfRequest, EnactDto, GovernedContractResponse, LocksGetResponse,
+    ProposalGetResponse, ProtectedNamespacesDto, ReferendumGetResponse, TallyGetResponse,
+    handle_gov_contract_get, handle_gov_council_current, handle_gov_enact, handle_gov_get_locks,
     handle_gov_get_proposal, handle_gov_get_referendum, handle_gov_get_tally,
-    handle_gov_instances_by_ns, handle_gov_protected_get, handle_gov_protected_set,
-    handle_gov_unlock_stats,
+    handle_gov_protected_get, handle_gov_protected_set, handle_gov_unlock_stats,
 };
 #[cfg(all(feature = "app_api", feature = "gov_vrf"))]
 pub use gov::{CouncilPersistRequest, handle_gov_council_derive_vrf, handle_gov_council_persist};
@@ -382,23 +381,22 @@ pub use routing::event_to_json_value;
 pub use routing::handle_get_proof_tags;
 #[cfg(feature = "p2p_ws")]
 pub use routing::handle_p2p_ws;
+#[cfg(feature = "connect")]
+pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
 pub use routing::{
-    ActivateInstanceDto, ActivateInstanceResponseDto, ContractAliasResolveRequestDto,
-    ContractAliasResolveResponseDto, ContractCallDto, ContractCallResponseDto,
-    ContractCallSimulateDto, ContractCallSimulateResponseDto, ContractViewDto,
-    ContractViewResponseDto, DeployAndActivateInstanceDto, DeployAndActivateInstanceResponseDto,
-    DeployContractDto, DeployContractResponseDto, EvidenceListQuery, EvidenceSubmitRequestDto,
-    KaigiRelayDetailDto, KaigiRelayDomainMetricsDto, KaigiRelayHealthSnapshotDto,
-    KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry, MultisigAccountSelectorDto,
-    MultisigCancelRequestDto, MultisigProposalsGetRequestDto, MultisigProposalsListRequestDto,
-    PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto, ProofApiLimits, ProofFindByIdQueryDto,
-    ProofListQuery, QueryOptions, RegisterPinManifestDto, RegisterPinManifestResponseDto,
-    SpaceDirectoryManifestPublishDto, SpaceDirectoryManifestRevokeDto, VkListQuery,
-    ZkRootsGetRequestDto, ZkVkRegisterDto, ZkVkUpdateDto, ZkVoteGetTallyRequestDto,
-    handle_count_proofs, handle_get_contract_code_bytes, handle_get_proof, handle_get_vk,
-    handle_list_proofs, handle_list_vk, handle_post_contract_call,
-    handle_post_contract_call_simulate, handle_post_contract_deploy, handle_post_contract_instance,
-    handle_post_contract_instance_activate, handle_post_contract_view,
+    ContractAliasResolveRequestDto, ContractAliasResolveResponseDto, ContractCallDto,
+    ContractCallResponseDto, ContractCallSimulateDto, ContractCallSimulateResponseDto,
+    ContractViewDto, ContractViewResponseDto, DeployContractDto, DeployContractResponseDto,
+    EvidenceListQuery, EvidenceSubmitRequestDto, KaigiRelayDetailDto, KaigiRelayDomainMetricsDto,
+    KaigiRelayHealthSnapshotDto, KaigiRelaySummaryDto, KaigiRelaySummaryListDto, MaybeTelemetry,
+    MultisigAccountSelectorDto, MultisigCancelRequestDto, MultisigProposalsGetRequestDto,
+    MultisigProposalsListRequestDto, PinAliasDto, PinPolicyDto, PinPolicyStorageClassDto,
+    ProofApiLimits, ProofFindByIdQueryDto, ProofListQuery, QueryOptions, RegisterPinManifestDto,
+    RegisterPinManifestResponseDto, SpaceDirectoryManifestPublishDto,
+    SpaceDirectoryManifestRevokeDto, VkListQuery, ZkRootsGetRequestDto, ZkVkRegisterDto,
+    ZkVkUpdateDto, ZkVoteGetTallyRequestDto, handle_count_proofs, handle_get_contract_code_bytes,
+    handle_get_proof, handle_get_vk, handle_list_proofs, handle_list_vk, handle_post_contract_call,
+    handle_post_contract_call_simulate, handle_post_contract_deploy, handle_post_contract_view,
     handle_post_sorafs_register_manifest, handle_post_space_directory_manifest_publish,
     handle_post_space_directory_manifest_revoke, handle_post_sumeragi_evidence_submit,
     handle_post_vk_register, handle_post_vk_update, handle_queries_with_opts as handle_queries,
@@ -407,8 +405,6 @@ pub use routing::{
     handle_v1_sumeragi_vrf_penalties, handle_v1_zk_roots, handle_v1_zk_submit_proof,
     handle_v1_zk_verify, handle_v1_zk_vote_tally, signed_find_proof_by_id,
 };
-#[cfg(feature = "connect")]
-pub use routing::{ConnectSessionRequest, ConnectSessionResponse, ConnectWsQuery};
 #[cfg(feature = "telemetry")]
 pub use routing::{
     RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto, handle_metrics, handle_status,
@@ -2997,34 +2993,21 @@ use crate::NoritoQuery as AxQuery;
 #[cfg(feature = "app_api")]
 const OFFLINE_TRANSFER_PREFIX: &str = "wallet-offline-transfer:";
 
-async fn handler_contracts_instances_by_ns(
+async fn handler_gov_contract_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxPath(ns): AxPath<String>,
-    AxQuery(q): AxQuery<crate::gov::InstancesQuery>,
-) -> Result<JsonBody<crate::gov::InstancesByNamespaceResponse>, Error> {
+    contract_address: AxPath<String>,
+) -> Result<JsonBody<crate::gov::GovernedContractResponse>, Error> {
     let remote_ip = remote.ip();
     check_access(
         &app,
         &headers,
         Some(remote_ip),
-        "v1/contracts/instances/{ns}",
+        "v1/gov/contracts/{contract_address}",
     )
     .await?;
-    crate::gov::handle_gov_instances_by_ns(app.state.clone(), AxPath(ns), AxQuery(q)).await
-}
-
-async fn handler_gov_instances_ns(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    AxPath(ns): AxPath<String>,
-    AxQuery(q): AxQuery<crate::gov::InstancesQuery>,
-) -> Result<JsonBody<crate::gov::InstancesByNamespaceResponse>, Error> {
-    let remote_ip = remote.ip();
-    check_access(&app, &headers, Some(remote_ip), "v1/gov/instances/{ns}").await?;
-    crate::gov::handle_gov_instances_by_ns(app.state.clone(), AxPath(ns), AxQuery(q)).await
+    crate::gov::handle_gov_contract_get(app.state.clone(), contract_address).await
 }
 
 async fn handler_gov_enact(
@@ -17528,116 +17511,6 @@ async fn handler_post_contract_deploy(
 }
 
 #[cfg(feature = "app_api")]
-async fn handler_post_contract_instance(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::DeployAndActivateInstanceDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("instance"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/contracts/instance",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("instance"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::routing::handle_post_contract_instance(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        request,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("instance"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
-async fn handler_post_contract_instance_activate(
-    State(app): State<SharedAppState>,
-    headers: axum::http::HeaderMap,
-    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
-    request: NoritoJson<crate::routing::ActivateInstanceDto>,
-) -> Result<AxResponse, Error> {
-    let remote_ip = remote.ip();
-    let token_hdr = headers
-        .get("x-api-token")
-        .and_then(|v| v.to_str().ok())
-        .map(ToString::to_string);
-    if app.require_api_token && !app.api_tokens_set.is_empty() {
-        let ok = token_hdr
-            .as_ref()
-            .is_some_and(|t| app.api_tokens_set.contains(t));
-        if !ok {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("activate"));
-            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-            )));
-        }
-    }
-    let key = rate_limit_key(
-        &headers,
-        Some(remote_ip),
-        "v1/contracts/instance/activate",
-        app.api_token_enforced(),
-    );
-    if !app.deploy_rate_limiter.allow(&key).await {
-        app.telemetry
-            .with_metrics(|tel| tel.inc_torii_contract_throttle("activate"));
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
-        )));
-    }
-    match crate::routing::handle_post_contract_instance_activate(
-        app.chain_id.clone(),
-        app.queue.clone(),
-        app.state.clone(),
-        app.telemetry.clone(),
-        request,
-    )
-    .await
-    {
-        Ok(resp) => Ok(resp.into_response()),
-        Err(err) => {
-            app.telemetry
-                .with_metrics(|tel| tel.inc_torii_contract_error("activate"));
-            Err(err)
-        }
-    }
-}
-
-#[cfg(feature = "app_api")]
 async fn handler_post_contract_call(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -23645,14 +23518,6 @@ impl Torii {
                     "/v1/contracts/aliases/resolve",
                     post(handler_contract_alias_resolve),
                 )
-                .route(
-                    "/v1/contracts/instance",
-                    post(handler_post_contract_instance),
-                )
-                .route(
-                    "/v1/contracts/instance/activate",
-                    post(handler_post_contract_instance_activate),
-                )
                 .route("/v1/contracts/call", post(handler_post_contract_call))
                 .route(
                     "/v1/contracts/call/simulate",
@@ -24757,11 +24622,6 @@ impl Torii {
             }
 
             let mut router = router
-                // Contracts: instances listing by namespace
-                .route(
-                    "/v1/contracts/instances/{ns}",
-                    get(handler_contracts_instances_by_ns),
-                )
                 // Runtime ABI/upgrade endpoints
                 .route(
                     iroha_torii_shared::uri::RUNTIME_ABI_ACTIVE,
@@ -24850,8 +24710,8 @@ impl Torii {
                 .route("/v1/gov/stream", get(handler_gov_stream))
                 .route("/v1/gov/unlocks/stats", get(handler_gov_unlock_stats))
                 .route(
-                    iroha_torii_shared::uri::GOV_INSTANCES_BY_NS,
-                    get(handler_gov_instances_ns),
+                    iroha_torii_shared::uri::GOV_CONTRACT_GET,
+                    get(handler_gov_contract_get),
                 )
                 .route(iroha_torii_shared::uri::GOV_ENACT, post(handler_gov_enact))
                 .route(
@@ -27851,7 +27711,7 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(feature = "telemetry")]
     use crate::{RecordSoranetPrivacyEventDto, RecordSoranetPrivacyShareDto};
     use crate::{
-        routing::{ActivateInstanceDto, DeployContractDto, handle_v1_sumeragi_commit_qcs},
+        routing::{DeployContractDto, handle_v1_sumeragi_commit_qcs},
         utils::extractors::NoritoJson,
     };
 
@@ -34776,48 +34636,6 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn contract_activate_rate_limit_throttles_after_burst() {
-        let app = mk_app_state_for_tests_with_options(None, Some((1, 1)), None, None);
-        let headers = HeaderMap::new();
-        let remote_ip = std::net::IpAddr::from([127, 0, 0, 1]);
-        let creds = crate::test_utils::random_authority();
-        let code_hash = "ab".repeat(32);
-
-        let dto1 = ActivateInstanceDto {
-            authority: creds.account.clone(),
-            private_key: clone_private_key(&creds.private_key),
-            namespace: "ns".into(),
-            contract_id: "contract".into(),
-            code_hash: code_hash.clone(),
-        };
-
-        // Exhaust the exact handler key up front so this regression does not depend
-        // on how quickly the first activation request completes on the current host.
-        let key = super::rate_limit_key(
-            &headers,
-            Some(remote_ip),
-            "v1/contracts/instance/activate",
-            app.api_token_enforced(),
-        );
-        assert!(app.deploy_rate_limiter.allow(&key).await);
-        assert!(!app.deploy_rate_limiter.allow(&key).await);
-
-        let second = super::handler_post_contract_instance_activate(
-            State(app.clone()),
-            headers,
-            crate::loopback_connect_info(),
-            NoritoJson(dto1),
-        )
-        .await;
-        assert!(matches!(
-            second,
-            Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit
-            )))
-        ));
-    }
-
-    #[tokio::test]
     async fn openapi_enforces_token_policy() {
         let mut app = mk_app_state_for_tests();
         {
@@ -35693,32 +35511,6 @@ pub(crate) mod tests_runtime_handlers {
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
-    }
-
-    #[tokio::test]
-    async fn contracts_instance_activate_handler_ok() {
-        let app = mk_app_state_for_tests();
-        let headers = HeaderMap::new();
-
-        let creds = crate::test_utils::random_authority();
-        let dto = ActivateInstanceDto {
-            authority: creds.account,
-            private_key: clone_private_key(&creds.private_key),
-            namespace: "ns.demo".to_string(),
-            contract_id: "demo.contract".to_string(),
-            code_hash: "0000000000000000000000000000000000000000000000000000000000000000"
-                .to_string(),
-        };
-        let resp = super::handler_post_contract_instance_activate(
-            State(app),
-            headers,
-            crate::loopback_connect_info(),
-            NoritoJson(dto),
-        )
-        .await
-        .expect("ok")
-        .into_response();
-        assert_eq!(resp.status(), axum::http::StatusCode::OK);
     }
 
     #[test]

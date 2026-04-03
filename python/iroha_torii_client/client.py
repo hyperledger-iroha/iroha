@@ -4270,8 +4270,8 @@ class ToriiClient:
     def propose_contract_deploy(
         self,
         *,
-        contract_id: str,
-        namespace: str,
+        contract_address: Optional[str] = None,
+        contract_alias: Optional[str] = None,
         abi_version: str,
         code_hash: str,
         abi_hash: str,
@@ -4281,13 +4281,19 @@ class ToriiClient:
     ) -> GovernanceProposalDraft:
         """Draft a deploy-contract proposal via ``POST /v1/gov/proposals/deploy-contract``."""
 
+        if (contract_address is None) == (contract_alias is None):
+            raise ValueError(
+                "provide exactly one of contract_address or contract_alias",
+            )
         payload: Dict[str, Any] = {
-            "contract_id": contract_id,
-            "namespace": namespace,
             "abi_version": abi_version,
             "code_hash": code_hash,
             "abi_hash": abi_hash,
         }
+        if contract_address is not None:
+            payload["contract_address"] = contract_address
+        if contract_alias is not None:
+            payload["contract_alias"] = contract_alias
         if window is not None:
             payload["window"] = {"lower": int(window[0]), "upper": int(window[1])}
         if mode:

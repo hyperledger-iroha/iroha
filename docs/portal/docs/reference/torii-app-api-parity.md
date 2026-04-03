@@ -83,18 +83,15 @@ val headers = CanonicalRequestSigner.signingHeaders("<i105-account-id>", "get", 
 
 ### Contract lifecycle (`/v1/contracts/*`) — Covered
 - Handlers: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
-  `handle_post_contract_instance` (`crates/iroha_torii/src/routing.rs:3464-3512`),
-  `handle_post_contract_instance_activate` (`crates/iroha_torii/src/routing.rs:3408-3459`),
   `handle_post_contract_call` (`crates/iroha_torii/src/routing.rs:3534-3607`),
   `handle_get_contract_code_bytes` (`crates/iroha_torii/src/routing.rs:3237-3304`).
-- DTOs: `DeployContractDto`, `DeployAndActivateInstanceDto`, `ActivateInstanceDto`, `ContractCallDto`
+- DTOs: `DeployContractDto`, `ContractCallDto`
   (`crates/iroha_torii/src/routing.rs:3124-3463`).
 - Router binding: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
-- Tests: router/integration suites `contracts_deploy_integration.rs`, `contracts_activate_integration.rs`,
-  `contracts_instance_activate_integration.rs`, `contracts_call_integration.rs`,
+- Tests: router/integration suites `contracts_deploy_integration.rs`, `contracts_call_integration.rs`,
   `contracts_instances_list_router.rs`.
 - Owner: Smart Contract WG with Torii Platform.
-- Notes: Endpoints queue signed transactions and reuse shared telemetry metrics (`handle_transaction_with_metrics`).
+- Notes: Public contract lifecycle is address-first: deploy returns the canonical `contract_address`, and call/view flows accept only `contract_address` or `contract_alias`.
 
 ### Verifying key lifecycle (`/v1/zk/vk/*`) — Covered
 - Handlers: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`

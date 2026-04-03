@@ -33,8 +33,6 @@ import {
   buildRegisterKaigiRelayInstruction,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
-  buildDeactivateContractInstanceInstruction,
-  buildActivateContractInstanceInstruction,
   buildRemoveSmartContractBytesInstruction,
   buildProposeDeployContractInstruction,
   buildCastZkBallotInstruction,
@@ -2246,70 +2244,6 @@ export function buildRegisterSmartContractBytesTransaction({
   const instruction = buildRegisterSmartContractBytesInstruction({
     codeHash,
     code,
-  });
-  return buildTransaction({
-    chainId,
-    authority,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-  });
-}
-
-/**
- * Build a transaction containing a `DeactivateContractInstance` instruction.
- */
-export function buildDeactivateContractInstanceTransaction({
-  chainId,
-  authority,
-  namespace,
-  contractId,
-  reason = null,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-}) {
-  const instruction = buildDeactivateContractInstanceInstruction({
-    namespace,
-    contractId,
-    reason,
-  });
-  return buildTransaction({
-    chainId,
-    authority,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-  });
-}
-
-/**
- * Build a transaction containing an `ActivateContractInstance` instruction.
- */
-export function buildActivateContractInstanceTransaction({
-  chainId,
-  authority,
-  namespace,
-  contractId,
-  codeHash,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-}) {
-  const instruction = buildActivateContractInstanceInstruction({
-    namespace,
-    contractId,
-    codeHash,
   });
   return buildTransaction({
     chainId,

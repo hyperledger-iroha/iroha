@@ -101,13 +101,11 @@ static CONTRACT_MANIFEST_METADATA_NAME: LazyLock<iroha_data_model::name::Name> =
         iroha_data_model::name::Name::from_str(MANIFEST_METADATA_KEY)
             .expect("static contract manifest metadata key")
     });
-static GOV_NAMESPACE_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("gov_namespace").expect("static governance metadata key")
-});
-static GOV_CONTRACT_ID_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("gov_contract_id")
-        .expect("static governance metadata key")
-});
+static GOV_CONTRACT_ADDRESS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> =
+    LazyLock::new(|| {
+        iroha_data_model::name::Name::from_str("gov_contract_address")
+            .expect("static governance metadata key")
+    });
 static GOV_APPROVERS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
     iroha_data_model::name::Name::from_str("gov_manifest_approvers")
         .expect("static governance metadata key")
@@ -120,6 +118,11 @@ static CONTRACT_NAMESPACE_METADATA_KEY: LazyLock<iroha_data_model::name::Name> =
 static CONTRACT_ID_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
     iroha_data_model::name::Name::from_str("contract_id").expect("static contract id metadata key")
 });
+static CONTRACT_ADDRESS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> =
+    LazyLock::new(|| {
+        iroha_data_model::name::Name::from_str("contract_address")
+            .expect("static contract address metadata key")
+    });
 static HEARTBEAT_METADATA_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
     iroha_data_model::name::Name::from_str("sumeragi_heartbeat")
         .expect("static heartbeat metadata key")
@@ -2294,26 +2297,28 @@ impl StateBlock<'_> {
             .get(&*CONTRACT_MANIFEST_METADATA_NAME)
             .and_then(|json| json.clone().try_into_any_norito::<ContractManifest>().ok());
 
-        // Extract optional governance deployment metadata for protected-namespaces gating
-        let (ns_meta, cid_meta) = {
-            use core::str::FromStr as _;
-            let md = tx.as_ref().metadata();
-            let ns_key = iroha_data_model::name::Name::from_str("gov_namespace");
-            let cid_key = iroha_data_model::name::Name::from_str("gov_contract_id");
-            let ns = ns_key
-                .ok()
-                .and_then(|k| md.get(&k))
-                .and_then(|j| j.try_into_any_norito::<String>().ok())
-                .map(|raw| raw.trim().to_owned())
-                .filter(|raw| !raw.is_empty());
-            let cid = cid_key
-                .ok()
-                .and_then(|k| md.get(&k))
-                .and_then(|j| j.try_into_any_norito::<String>().ok())
-                .map(|raw| raw.trim().to_owned())
-                .filter(|raw| !raw.is_empty());
-            (ns, cid)
-        };
+        // Extract optional governance deployment metadata for protected-dataspace gating.
+        let gov_contract_address_meta = tx
+            .as_ref()
+            .metadata()
+            .get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY)
+            .map(|value| {
+                let raw = value.try_into_any_norito::<String>().map_err(|_| {
+                    reject_not_permitted("`gov_contract_address` metadata must be a string value")
+                })?;
+                let trimmed = raw.trim();
+                if trimmed.is_empty() {
+                    return Err(reject_not_permitted(
+                        "`gov_contract_address` metadata must not be blank",
+                    ));
+                }
+                trimmed.parse().map_err(|err| {
+                    reject_not_permitted(format!(
+                        "`gov_contract_address` metadata `{trimmed}` is not a valid contract address: {err}"
+                    ))
+                })
+            })
+            .transpose()?;
 
         if let Executable::Ivm(bytes) = tx.as_ref().instructions() {
             let gas_limit = crate::executor::parse_gas_limit(tx.as_ref().metadata())
@@ -2330,7 +2335,7 @@ impl StateBlock<'_> {
                 state_transaction,
                 bytes.clone(),
                 manifest_metadata.clone(),
-                ns_meta.clone().zip(cid_meta.clone()),
+                gov_contract_address_meta.clone(),
                 ivm_cache,
             )?;
         }
@@ -2389,7 +2394,7 @@ impl StateBlock<'_> {
         state_transaction: &mut StateTransaction<'_, '_>,
         contract: IvmBytecode,
         manifest_metadata: Option<ContractManifest>,
-        deploy_target: Option<(String, String)>,
+        deploy_target: Option<iroha_data_model::smart_contract::ContractAddress>,
         ivm_cache: &mut IvmCache,
     ) -> Result<(), TransactionRejectionReason> {
         use ivm::ivm_mode as mode;
@@ -2664,7 +2669,7 @@ impl StateBlock<'_> {
         }
 
         // Protected namespaces admission (governance gating)
-        if let Some((ns, cid)) = deploy_target {
+        if let Some(contract_address) = deploy_target {
             // Read protected namespaces from on-chain custom parameter `gov_protected_namespaces`
             let mut protected: Vec<String> = Vec::new();
             if let Ok(name) = core::str::FromStr::from_str("gov_protected_namespaces") {
@@ -2676,8 +2681,24 @@ impl StateBlock<'_> {
                     protected = v;
                 }
             }
-            if protected.iter().any(|p| p == &ns) {
-                // Require an enacted proposal matching (ns, cid, code_hash, abi_hash)
+            let dataspace_id = contract_address.dataspace_id().map_err(|err| {
+                TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                    "invalid `gov_contract_address` dataspace: {err}"
+                )))
+            })?;
+            let namespace = state_transaction
+                .nexus
+                .dataspace_catalog
+                .by_id(dataspace_id)
+                .ok_or_else(|| {
+                    TransactionRejectionReason::Validation(ValidationFail::NotPermitted(format!(
+                        "`gov_contract_address` dataspace `{dataspace_id}` is not present in the catalog"
+                    )))
+                })?
+                .alias
+                .clone();
+            if protected.iter().any(|p| p == &namespace) {
+                // Require an enacted proposal matching (contract_address, code_hash, abi_hash)
                 let want_code = hex::encode(<[u8; 32]>::from(code_hash));
                 let want_abi = hex::encode(<[u8; 32]>::from(abi_hash));
                 let mut ok = false;
@@ -2685,8 +2706,7 @@ impl StateBlock<'_> {
                     let Some(payload) = rec.as_deploy_contract() else {
                         continue;
                     };
-                    if payload.namespace == ns
-                        && payload.contract_id == cid
+                    if payload.contract_address == contract_address
                         && payload.code_hash_hex.to_hex() == want_code
                         && payload.abi_hash_hex.to_hex() == want_abi
                         && matches!(rec.status, crate::state::GovernanceProposalStatus::Enacted)
@@ -2702,7 +2722,7 @@ impl StateBlock<'_> {
                         .record_protected_namespace_enforcement("rejected");
                     return Err(TransactionRejectionReason::Validation(
                         ValidationFail::NotPermitted(
-                            "deployment into protected namespace requires enacted governance proposal"
+                            "deployment into a protected dataspace requires an enacted governance proposal"
                                 .to_owned(),
                         ),
                     ));
@@ -2918,49 +2938,62 @@ fn enforce_manifest_protected_namespaces(
     alias: &str,
     rules: &GovernanceRules,
     tx: &SignedTransaction,
-    world: &impl WorldReadOnly,
+    _world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
 ) -> Result<(), TransactionRejectionReason> {
     if rules.protected_namespaces.is_empty() {
         return Ok(());
     }
 
     let metadata = tx.metadata();
-    let metadata_namespace = metadata
-        .get(&*GOV_NAMESPACE_METADATA_KEY)
+    let metadata_gov_contract_address: Option<
+        iroha_data_model::smart_contract::ContractAddress,
+    > = metadata
+        .get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY)
         .map(|value| {
             let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                reject_lane_policy(alias, "`gov_namespace` metadata must be a string value")
+                reject_lane_policy(alias, "`gov_contract_address` metadata must be a string value")
             })?;
             let trimmed = raw.trim();
             if trimmed.is_empty() {
                 return Err(reject_lane_policy(
                     alias,
-                    "`gov_namespace` metadata must not be blank",
+                    "`gov_contract_address` metadata must not be blank",
                 ));
             }
-            Name::from_str(trimmed).map_err(|err| {
+            trimmed.parse().map_err(|err| {
                 reject_lane_policy(
                     alias,
-                    format!("`gov_namespace` metadata `{trimmed}` is not a valid Name: {err}"),
+                    format!(
+                        "`gov_contract_address` metadata `{trimmed}` is not a valid contract address: {err}"
+                    ),
                 )
             })
         })
         .transpose()?;
 
-    let metadata_contract_id = metadata
-        .get(&*GOV_CONTRACT_ID_METADATA_KEY)
+    let metadata_contract_address_hint: Option<iroha_data_model::smart_contract::ContractAddress> =
+        metadata
+        .get(&*CONTRACT_ADDRESS_METADATA_KEY)
         .map(|value| {
             let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                reject_lane_policy(alias, "`gov_contract_id` metadata must be a string value")
+                reject_lane_policy(alias, "`contract_address` metadata must be a string value")
             })?;
             let trimmed = raw.trim();
             if trimmed.is_empty() {
                 return Err(reject_lane_policy(
                     alias,
-                    "`gov_contract_id` metadata must not be blank",
+                    "`contract_address` metadata must not be blank",
                 ));
             }
-            Ok(trimmed.to_string())
+            trimmed.parse().map_err(|err| {
+                reject_lane_policy(
+                    alias,
+                    format!(
+                        "`contract_address` metadata `{trimmed}` is not a valid contract address: {err}"
+                    ),
+                )
+            })
         })
         .transpose()?;
 
@@ -3069,15 +3102,7 @@ fn enforce_manifest_protected_namespaces(
         }
     }
 
-    if let Some(ns) = metadata_namespace.clone() {
-        if let Some(cid) = metadata_contract_id
-            .clone()
-            .or_else(|| metadata_contract_id_hint.clone())
-        {
-            namespaces_from_instructions.insert(ns.clone());
-            contract_bindings.insert((ns, cid));
-        }
-    } else if let Some(ns) = metadata_contract_namespace.clone() {
+    if let Some(ns) = metadata_contract_namespace.clone() {
         if let Some(cid) = metadata_contract_id_hint.clone() {
             namespaces_from_instructions.insert(ns.clone());
             contract_bindings.insert((ns, cid));
@@ -3085,76 +3110,94 @@ fn enforce_manifest_protected_namespaces(
     }
 
     let ivm_with_contract_metadata = matches!(tx.instructions(), Executable::Ivm(_))
-        && (metadata_namespace.is_some()
+        && (metadata_gov_contract_address.is_some()
+            || metadata_contract_address_hint.is_some()
             || metadata_contract_namespace.is_some()
             || metadata_contract_id_hint.is_some());
 
     let contract_instr_seen =
         register_code_seen || !contract_bindings.is_empty() || ivm_with_contract_metadata;
 
-    if contract_instr_seen && metadata_namespace.is_none() {
+    if contract_instr_seen && metadata_gov_contract_address.is_none() {
         return Err(reject_lane_policy(
             alias,
-            "transactions with contract namespace operations must set `gov_namespace` metadata when lane governance protects namespaces",
+            "transactions with contract operations must set `gov_contract_address` metadata when lane governance protects namespaces",
         ));
     }
 
-    if (contract_instr_seen || metadata_namespace.is_some()) && metadata_contract_id.is_none() {
-        return Err(reject_lane_policy(
-            alias,
-            "metadata key `gov_contract_id` is required when `gov_namespace` is provided",
-        ));
-    }
-
-    if let (Some(ns_hint), Some(ns_meta)) = (
-        metadata_contract_namespace.as_ref(),
-        metadata_namespace.as_ref(),
-    ) {
-        if ns_hint != ns_meta {
-            return Err(reject_lane_policy(
+    let Some(metadata_gov_contract_address) = metadata_gov_contract_address else {
+        return Ok(());
+    };
+    let dataspace_id = metadata_gov_contract_address
+        .dataspace_id()
+        .map_err(|err| {
+            reject_lane_policy(
                 alias,
-                "`contract_namespace` metadata must match `gov_namespace` for protected operations",
-            ));
-        }
-    }
-
-    if let (Some(cid_hint), Some(cid_meta)) = (
-        metadata_contract_id_hint.as_ref(),
-        metadata_contract_id.as_ref(),
-    ) {
-        if cid_hint != cid_meta {
-            return Err(reject_lane_policy(
-                alias,
-                "`contract_id` metadata must match `gov_contract_id` for protected operations",
-            ));
-        }
-    }
-
-    if let Some(meta_cid) = metadata_contract_id.as_ref()
-        && let Some(target_ns) = metadata_namespace
-            .clone()
-            .or_else(|| namespaces_from_instructions.iter().next().cloned())
-    {
-        let cross_namespace = world
-            .contract_instances()
-            .iter()
-            .filter(|((_ns, cid), _)| cid == meta_cid)
-            .filter_map(|((ns, _), _)| Name::from_str(ns).ok())
-            .any(|existing_ns| existing_ns != target_ns);
-        if cross_namespace {
-            return Err(reject_lane_policy(
+                format!("`gov_contract_address` metadata carries an invalid dataspace: {err}"),
+            )
+        })?;
+    let target_namespace = dataspace_catalog
+        .by_id(dataspace_id)
+        .ok_or_else(|| {
+            reject_lane_policy(
                 alias,
                 format!(
-                    "contract `{meta_cid}` is already bound to a different namespace; cross-namespace rebinding is not allowed"
+                    "`gov_contract_address` dataspace `{dataspace_id}` is not present in the catalog"
                 ),
-            ));
-        }
+            )
+        })?
+        .alias
+        .clone();
+    let target_namespace = Name::from_str(&target_namespace).map_err(|err| {
+        reject_lane_policy(
+            alias,
+            format!(
+                "dataspace alias derived from `gov_contract_address` is not a valid Name: {err}"
+            ),
+        )
+    })?;
+    let target_contract_id = metadata_gov_contract_address.to_string();
+
+    if let Some(contract_address_hint) = metadata_contract_address_hint.as_ref()
+        && contract_address_hint != &metadata_gov_contract_address
+    {
+        return Err(reject_lane_policy(
+            alias,
+            "`contract_address` metadata must match `gov_contract_address` for protected operations",
+        ));
+    }
+
+    if let Some(ns_hint) = metadata_contract_namespace.as_ref()
+        && ns_hint != &target_namespace
+    {
+        return Err(reject_lane_policy(
+            alias,
+            "`contract_namespace` metadata must match the dataspace derived from `gov_contract_address` for protected operations",
+        ));
+    }
+
+    if let Some(cid_hint) = metadata_contract_id_hint.as_ref()
+        && cid_hint != &target_contract_id
+    {
+        return Err(reject_lane_policy(
+            alias,
+            "`contract_id` metadata must match `gov_contract_address` for protected operations",
+        ));
+    }
+
+    if !contract_bindings.is_empty()
+        && contract_bindings.iter().any(|(namespace, contract_id)| {
+            namespace != &target_namespace || contract_id != &target_contract_id
+        })
+    {
+        return Err(reject_lane_policy(
+            alias,
+            "contract instructions must target the dataspace alias and address encoded by `gov_contract_address`",
+        ));
     }
 
     let mut namespaces_to_check = namespaces_from_instructions.clone();
-    if let Some(ns) = metadata_namespace.clone() {
-        namespaces_to_check.insert(ns);
-    }
+    namespaces_to_check.insert(target_namespace.clone());
     if let Some(ns) = metadata_contract_namespace.clone() {
         namespaces_to_check.insert(ns);
     }
@@ -3166,30 +3209,6 @@ fn enforce_manifest_protected_namespaces(
                 format!("namespace `{namespace}` is not declared in lane governance protected set"),
             ));
         }
-    }
-
-    if let Some(ns) = metadata_namespace
-        && !namespaces_from_instructions.is_empty()
-        && namespaces_from_instructions
-            .iter()
-            .any(|other| other != &ns)
-    {
-        return Err(reject_lane_policy(
-            alias,
-            "`gov_namespace` metadata does not match namespaces referenced by contract instructions",
-        ));
-    }
-
-    if let Some(meta_contract_id) = metadata_contract_id
-        && !contract_bindings.is_empty()
-        && contract_bindings
-            .iter()
-            .any(|(_, cid)| cid != &meta_contract_id)
-    {
-        return Err(reject_lane_policy(
-            alias,
-            "`gov_contract_id` metadata does not match contract ids referenced by contract instructions",
-        ));
     }
 
     Ok(())
@@ -3405,6 +3424,7 @@ fn enforce_lane_policies(
                 rules,
                 tx,
                 &state_transaction.world,
+                &state_transaction.nexus.dataspace_catalog,
             )?;
 
             runtime_upgrade_present = enforce_runtime_upgrade_hook(&lane_alias, rules, tx)?;

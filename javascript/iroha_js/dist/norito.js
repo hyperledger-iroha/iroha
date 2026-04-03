@@ -948,8 +948,7 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
   switch (wireId) {
     case "iroha_data_model::isi::governance::ProposeDeployContract": {
       const fields = decodeStructFields(payload, "ProposeDeployContract", [
-        "namespace",
-        "contract_id",
+        "contract_address",
         "code_hash_hex",
         "abi_hash_hex",
         "abi_version",
@@ -958,8 +957,10 @@ function decodeGovernanceInstructionPayload(wireId, payload) {
         "limits",
       ]);
       const decoded = {
-        namespace: decodeStringValue(fields.namespace, "ProposeDeployContract.namespace"),
-        contract_id: decodeStringValue(fields.contract_id, "ProposeDeployContract.contract_id"),
+        contract_address: decodeStringValue(
+          fields.contract_address,
+          "ProposeDeployContract.contract_address",
+        ),
         code_hash_hex: decodeStringValue(fields.code_hash_hex, "ProposeDeployContract.code_hash_hex"),
         abi_hash_hex: decodeStringValue(fields.abi_hash_hex, "ProposeDeployContract.abi_hash_hex"),
         abi_version: decodeStringValue(fields.abi_version, "ProposeDeployContract.abi_version"),
@@ -2415,8 +2416,7 @@ function encodeSmartContractInstruction(instruction) {
 
 function encodeProposeDeployContractPayload(value) {
   return encodeStructValue([
-    [encodeNoritoStringValue(assertNonEmptyString(value.namespace, "ProposeDeployContract.namespace"))],
-    [encodeNoritoStringValue(assertNonEmptyString(value.contract_id, "ProposeDeployContract.contract_id"))],
+    [encodeNoritoStringValue(assertNonEmptyString(value.contract_address, "ProposeDeployContract.contract_address"))],
     [encodeNoritoStringValue(assertNonEmptyString(value.code_hash_hex, "ProposeDeployContract.code_hash_hex"))],
     [encodeNoritoStringValue(assertNonEmptyString(value.abi_hash_hex, "ProposeDeployContract.abi_hash_hex"))],
     [encodeNoritoStringValue(assertNonEmptyString(value.abi_version, "ProposeDeployContract.abi_version"))],

@@ -6177,14 +6177,20 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
             }
 
             if let Some(json::Value::Object(mut fields)) = map.remove("ProposeDeployContract") {
-                let namespace = parse_string_value(
-                    required_value(&mut fields, "namespace", "ProposeDeployContract")?,
-                    "ProposeDeployContract.namespace",
-                )?;
-                let contract_id = parse_string_value(
-                    required_value(&mut fields, "contract_id", "ProposeDeployContract")?,
-                    "ProposeDeployContract.contract_id",
-                )?;
+                let contract_address: iroha_data_model::smart_contract::ContractAddress =
+                    parse_string_value(
+                        required_value(&mut fields, "contract_address", "ProposeDeployContract")?,
+                        "ProposeDeployContract.contract_address",
+                    )?
+                    .parse()
+                    .map_err(|err| {
+                        napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "invalid ProposeDeployContract.contract_address literal: {err}"
+                            ),
+                        )
+                    })?;
                 let code_hash_hex = parse_string_value(
                     required_value(&mut fields, "code_hash_hex", "ProposeDeployContract")?,
                     "ProposeDeployContract.code_hash_hex",
@@ -6208,8 +6214,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
                 };
                 let instruction = ProposeDeployContract {
-                    namespace,
-                    contract_id,
+                    contract_address,
                     code_hash_hex,
                     abi_hash_hex,
                     abi_version,
@@ -7104,12 +7109,8 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
     {
         let mut inner = json::Map::new();
         inner.insert(
-            "namespace".to_owned(),
-            json::Value::String(propose.namespace.clone()),
-        );
-        inner.insert(
-            "contract_id".to_owned(),
-            json::Value::String(propose.contract_id.clone()),
+            "contract_address".to_owned(),
+            json::Value::String(propose.contract_address.to_string()),
         );
         inner.insert(
             "code_hash_hex".to_owned(),
@@ -10487,8 +10488,9 @@ mod tests {
     #[test]
     fn governance_propose_deploy_contract_instruction_json_roundtrip() {
         let instruction: InstructionBox = Box::new(ProposeDeployContract {
-            namespace: "apps".to_owned(),
-            contract_id: "ledger".to_owned(),
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address"),
             code_hash_hex: "aa".repeat(32),
             abi_hash_hex: "bb".repeat(32),
             abi_version: "1".to_owned(),

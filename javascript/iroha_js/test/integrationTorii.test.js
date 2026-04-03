@@ -2633,15 +2633,25 @@ test(
       return;
     }
 
-    const namespace = (CONTRACT_CALL_OPTIONS.namespace ?? "").trim();
-    const contractId = (
-      CONTRACT_CALL_OPTIONS.contractId ??
-      CONTRACT_CALL_OPTIONS.contract_id ??
+    const contractAddress = (
+      CONTRACT_CALL_OPTIONS.contractAddress ??
+      CONTRACT_CALL_OPTIONS.contract_address ??
       ""
     ).trim();
-    if (!namespace || !contractId) {
+    const contractAlias = (
+      CONTRACT_CALL_OPTIONS.contractAlias ??
+      CONTRACT_CALL_OPTIONS.contract_alias ??
+      ""
+    ).trim();
+    if (!contractAddress && !contractAlias) {
       t.diagnostic(
-        "contract call payload must include non-empty `namespace` and `contractId` fields",
+        "contract call payload must include non-empty `contractAddress`/`contract_address` or `contractAlias`/`contract_alias`",
+      );
+      return;
+    }
+    if (contractAddress && contractAlias) {
+      t.diagnostic(
+        "contract call payload must not set both contractAddress and contractAlias",
       );
       return;
     }
@@ -2658,9 +2668,12 @@ test(
     const request = {
       authority,
       privateKey: privateKeyHex,
-      namespace,
-      contractId,
     };
+    if (contractAddress) {
+      request.contractAddress = contractAddress;
+    } else {
+      request.contractAlias = contractAlias;
+    }
 
     const entrypoint =
       CONTRACT_CALL_OPTIONS.entrypoint ?? CONTRACT_CALL_OPTIONS.entryPoint ?? null;
@@ -2713,16 +2726,18 @@ test(
       throw error;
     }
     assert.ok(response, "contract call should return a response payload");
-    assert.equal(
-      response.namespace,
-      namespace,
-      "contract call response must echo namespace",
-    );
-    assert.equal(
-      response.contract_id,
-      contractId,
-      "contract call response must echo contract id",
-    );
+    if (contractAddress) {
+      assert.equal(
+        response.contract_address,
+        contractAddress,
+        "contract call response must echo contract address",
+      );
+      assert.equal(
+        response.contract_id,
+        contractAddress,
+        "contract call response contract_id must normalize to the canonical address string",
+      );
+    }
     assertHexString(response.tx_hash_hex, "contract call response.tx_hash_hex");
     assertHexString(response.code_hash_hex, "contract call response.code_hash_hex");
     assertHexString(response.abi_hash_hex, "contract call response.abi_hash_hex");
@@ -4511,154 +4526,6 @@ test(
       confirmation.namespaces,
       baseline.namespaces,
       "protected namespaces apply should preserve the namespace snapshot",
-    );
-  },
-);
-
-test(
-  "governance instances listing responds for protected namespace",
-  {
-    skip: !!SKIP_REASON,
-    timeout: 60_000,
-  },
-  async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-    let namespacesResponse;
-    try {
-      namespacesResponse = await client.getProtectedNamespaces();
-    } catch (error) {
-      t.diagnostic(
-        `protected namespaces endpoint unavailable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return;
-    }
-    const targetNamespace = namespacesResponse.namespaces?.[0];
-    if (!targetNamespace) {
-      t.diagnostic("protected namespaces list is empty; skipping governance instance assertions");
-      return;
-    }
-    let instancePage;
-    try {
-      instancePage = await client.listGovernanceInstances(targetNamespace, { limit: 5 });
-    } catch (error) {
-      t.diagnostic(
-        `governance instances endpoint unavailable for namespace ${targetNamespace}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return;
-    }
-    assert.equal(
-      instancePage.namespace,
-      targetNamespace,
-      "governance instance page should echo namespace",
-    );
-    assertNonNegativeInteger(instancePage.total, "governance instance page total");
-    assertNonNegativeInteger(instancePage.offset, "governance instance page offset");
-    assertNonNegativeInteger(instancePage.limit, "governance instance page limit");
-    assert.ok(
-      Array.isArray(instancePage.instances),
-      "governance instance page must include instances array",
-    );
-    if (instancePage.instances.length === 0) {
-      t.diagnostic(`no governance instances returned for namespace ${targetNamespace}`);
-      return;
-    }
-    instancePage.instances.forEach((instance, index) => {
-      assert.equal(
-        typeof instance.contract_id,
-        "string",
-        `governance instance ${index} contract_id must be a string`,
-      );
-      assert.notEqual(
-        instance.contract_id.length,
-        0,
-        `governance instance ${index} contract_id must not be empty`,
-      );
-      assertHexString(instance.code_hash_hex, `governance instance ${index} code_hash_hex`);
-    });
-    const firstInstance = instancePage.instances[0];
-    const iteratorHit = await iteratorIncludes(
-      client.iterateGovernanceInstances(targetNamespace, { pageSize: 2, maxItems: 10 }),
-      (entry) => entry?.contract_id === firstInstance.contract_id,
-    );
-    assert.ok(
-      iteratorHit,
-      "governance instance iterator should surface the listed contract id at least once",
-    );
-  },
-);
-
-test(
-  "contract instances listing responds for protected namespace",
-  {
-    skip: !!SKIP_REASON,
-    timeout: 60_000,
-  },
-  async (t) => {
-    if (SKIP_REASON) {
-      t.diagnostic(SKIP_REASON);
-      return;
-    }
-    const client = new ToriiClient(BASE_URL, {
-      authToken: AUTH_TOKEN,
-      apiToken: API_TOKEN,
-    });
-
-    let namespacesResponse;
-    try {
-      namespacesResponse = await client.getProtectedNamespaces();
-    } catch (error) {
-      t.diagnostic(
-        `protected namespaces endpoint unavailable: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return;
-    }
-
-    const targetNamespace = namespacesResponse.namespaces?.[0];
-    if (!targetNamespace) {
-      t.diagnostic("protected namespaces list is empty; skipping contract instance assertions");
-      return;
-    }
-
-    let instancePage;
-    try {
-      instancePage = await client.listContractInstances(targetNamespace, { limit: 5 });
-    } catch (error) {
-      t.diagnostic(
-        `contract instances endpoint unavailable for namespace ${targetNamespace}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
-      );
-      return;
-    }
-
-    assertContractInstanceListResponse(instancePage, targetNamespace);
-
-    if (instancePage.instances.length === 0) {
-      t.diagnostic(`no contract instances returned for namespace ${targetNamespace}`);
-      return;
-    }
-
-    const firstInstance = instancePage.instances[0];
-    const iteratorHit = await iteratorIncludes(
-      client.iterateContractInstances(targetNamespace, { pageSize: 2, maxItems: 10 }),
-      (entry) => entry?.contract_id === firstInstance.contract_id,
-    );
-    assert.ok(
-      iteratorHit,
-      "contract instance iterator should surface the listed contract id at least once",
     );
   },
 );

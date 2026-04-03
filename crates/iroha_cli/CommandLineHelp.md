@@ -5,6 +5,31 @@ This document contains the help content for the `iroha` command-line program.
 **Command Overview:**
 
 * [`iroha`↴](#iroha)
+* [`iroha account`↴](#iroha-account)
+* [`iroha account role`↴](#iroha-account-role)
+* [`iroha account role list`↴](#iroha-account-role-list)
+* [`iroha account role grant`↴](#iroha-account-role-grant)
+* [`iroha account role revoke`↴](#iroha-account-role-revoke)
+* [`iroha account permission`↴](#iroha-account-permission)
+* [`iroha account permission list`↴](#iroha-account-permission-list)
+* [`iroha account permission grant`↴](#iroha-account-permission-grant)
+* [`iroha account permission revoke`↴](#iroha-account-permission-revoke)
+* [`iroha account list`↴](#iroha-account-list)
+* [`iroha account list all`↴](#iroha-account-list-all)
+* [`iroha account list filter`↴](#iroha-account-list-filter)
+* [`iroha account get`↴](#iroha-account-get)
+* [`iroha account register`↴](#iroha-account-register)
+* [`iroha account unregister`↴](#iroha-account-unregister)
+* [`iroha account meta`↴](#iroha-account-meta)
+* [`iroha account meta get`↴](#iroha-account-meta-get)
+* [`iroha account meta set`↴](#iroha-account-meta-set)
+* [`iroha account meta remove`↴](#iroha-account-meta-remove)
+* [`iroha tx`↴](#iroha-tx)
+* [`iroha tx status`↴](#iroha-tx-status)
+* [`iroha tx get`↴](#iroha-tx-get)
+* [`iroha tx ping`↴](#iroha-tx-ping)
+* [`iroha tx ivm`↴](#iroha-tx-ivm)
+* [`iroha tx stdin`↴](#iroha-tx-stdin)
 * [`iroha ledger`↴](#iroha-ledger)
 * [`iroha ledger domain`↴](#iroha-ledger-domain)
 * [`iroha ledger domain list`↴](#iroha-ledger-domain-list)
@@ -122,6 +147,7 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha ledger query stdin`↴](#iroha-ledger-query-stdin)
 * [`iroha ledger query stdin-raw`↴](#iroha-ledger-query-stdin-raw)
 * [`iroha ledger transaction`↴](#iroha-ledger-transaction)
+* [`iroha ledger transaction status`↴](#iroha-ledger-transaction-status)
 * [`iroha ledger transaction get`↴](#iroha-ledger-transaction-get)
 * [`iroha ledger transaction ping`↴](#iroha-ledger-transaction-ping)
 * [`iroha ledger transaction ivm`↴](#iroha-ledger-transaction-ivm)
@@ -280,7 +306,6 @@ This document contains the help content for the `iroha` command-line program.
 * [`iroha app contracts view`↴](#iroha-app-contracts-view)
 * [`iroha app contracts debug-view`↴](#iroha-app-contracts-debug-view)
 * [`iroha app contracts debug-call`↴](#iroha-app-contracts-debug-call)
-* [`iroha app contracts deploy-activate`↴](#iroha-app-contracts-deploy-activate)
 * [`iroha app contracts manifest`↴](#iroha-app-contracts-manifest)
 * [`iroha app contracts manifest get`↴](#iroha-app-contracts-manifest-get)
 * [`iroha app contracts manifest build`↴](#iroha-app-contracts-manifest-build)
@@ -616,6 +641,8 @@ Iroha Client CLI provides a simple way to interact with the Iroha Web API
 
 ###### **Subcommands:**
 
+* `account` — Canonical account reads and account mutations
+* `tx` — Typed transaction status and transaction helpers
 * `ledger` — Ledger data and transaction helpers
 * `ops` — Node and operator helpers
 * `offline` — Inspect offline allowances and offline-to-online bundles
@@ -651,6 +678,385 @@ Iroha Client CLI provides a simple way to interact with the Iroha Web API
 
 * `--language <LANG>` — Language code for messages, overrides system language
 * `--machine` — Enable deterministic machine mode (no startup chatter, strict config loading)
+
+
+
+## `iroha account`
+
+Canonical account reads and account mutations
+
+**Usage:** `iroha account <COMMAND>`
+
+###### **Subcommands:**
+
+* `role` — Read and write account roles
+* `permission` — Read and write account permissions
+* `list` — List accounts
+* `get` — Retrieve details of a specific account
+* `register` — Register an account
+* `unregister` — Unregister an account
+* `meta` — Read and write metadata
+
+
+
+## `iroha account role`
+
+Read and write account roles
+
+**Usage:** `iroha account role <COMMAND>`
+
+###### **Subcommands:**
+
+* `list` — List account role IDs
+* `grant` — Grant a role to an account
+* `revoke` — Revoke a role from an account
+
+
+
+## `iroha account role list`
+
+List account role IDs
+
+**Usage:** `iroha account role list [OPTIONS] --id <ID>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
+* `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
+* `--offset <OFFSET>` — Offset into the result set (server-side offset)
+
+  Default value: `0`
+* `--fetch-size <FETCH_SIZE>` — Batch fetch size for iterable queries
+
+
+
+## `iroha account role grant`
+
+Grant a role to an account
+
+**Usage:** `iroha account role grant --id <ID> --role <ROLE>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
+* `-r`, `--role <ROLE>` — Role name
+
+
+
+## `iroha account role revoke`
+
+Revoke a role from an account
+
+**Usage:** `iroha account role revoke --id <ID> --role <ROLE>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
+* `-r`, `--role <ROLE>` — Role name
+
+
+
+## `iroha account permission`
+
+Read and write account permissions
+
+**Usage:** `iroha account permission <COMMAND>`
+
+###### **Subcommands:**
+
+* `list` — List account permissions
+* `grant` — Grant an account permission using JSON input from stdin
+* `revoke` — Revoke an account permission using JSON input from stdin
+
+
+
+## `iroha account permission list`
+
+List account permissions
+
+**Usage:** `iroha account permission list [OPTIONS] --id <ID>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
+* `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
+* `--offset <OFFSET>` — Offset into the result set (server-side offset)
+
+  Default value: `0`
+* `--fetch-size <FETCH_SIZE>` — Batch fetch size for iterable queries
+
+
+
+## `iroha account permission grant`
+
+Grant an account permission using JSON input from stdin
+
+**Usage:** `iroha account permission grant --id <ID>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
+
+
+
+## `iroha account permission revoke`
+
+Revoke an account permission using JSON input from stdin
+
+**Usage:** `iroha account permission revoke --id <ID>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
+
+
+
+## `iroha account list`
+
+List accounts
+
+**Usage:** `iroha account list <COMMAND>`
+
+###### **Subcommands:**
+
+* `all` — List all IDs, or full entries when `--verbose` is specified
+* `filter` — Filter by a given predicate
+
+
+
+## `iroha account list all`
+
+List all IDs, or full entries when `--verbose` is specified
+
+**Usage:** `iroha account list all [OPTIONS]`
+
+###### **Options:**
+
+* `-v`, `--verbose` — Display detailed entry information instead of just IDs (when supported)
+* `--sort-by-metadata-key <SORT_BY_METADATA_KEY>` — Sort by metadata key
+* `--order <ORDER>` — Sort order (asc or desc)
+
+  Possible values: `asc`, `desc`
+
+* `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
+* `--offset <OFFSET>` — Offset into the result set (server-side offset)
+
+  Default value: `0`
+* `--fetch-size <FETCH_SIZE>` — Batch fetch size for iterable queries
+* `--select <SELECT>` — Experimental selector (JSON). Currently ignored; reserved for future server-side projection
+
+
+
+## `iroha account list filter`
+
+Filter by a given predicate
+
+**Usage:** `iroha account list filter [OPTIONS] <PREDICATE>`
+
+###### **Arguments:**
+
+* `<PREDICATE>` — Filtering condition specified as a JSON string
+
+###### **Options:**
+
+* `--sort-by-metadata-key <SORT_BY_METADATA_KEY>` — Sort by metadata key
+* `--order <ORDER>` — Sort order (asc or desc)
+
+  Possible values: `asc`, `desc`
+
+* `--limit <LIMIT>` — Maximum number of items to return (server-side limit)
+* `--offset <OFFSET>` — Offset into the result set (server-side offset)
+
+  Default value: `0`
+* `--fetch-size <FETCH_SIZE>` — Batch fetch size for iterable queries
+* `--select <SELECT>` — Experimental selector (JSON). Currently ignored; reserved for future server-side projection
+
+
+
+## `iroha account get`
+
+Retrieve details of a specific account
+
+**Usage:** `iroha account get --id <ID>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
+
+
+
+## `iroha account register`
+
+Register an account
+
+**Usage:** `iroha account register [OPTIONS] --id <ID>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — Canonical global account identifier for registration (canonical I105 literal)
+* `--no-wait` — Submit without waiting for confirmation
+
+
+
+## `iroha account unregister`
+
+Unregister an account
+
+**Usage:** `iroha account unregister --id <ID>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>` — Account identifier (canonical I105 literal)
+
+
+
+## `iroha account meta`
+
+Read and write metadata
+
+**Usage:** `iroha account meta <COMMAND>`
+
+###### **Subcommands:**
+
+* `get` — Retrieve a value from the key-value store
+* `set` — Create or update an entry in the key-value store using JSON input from stdin
+* `remove` — Delete an entry from the key-value store
+
+
+
+## `iroha account meta get`
+
+Retrieve a value from the key-value store
+
+**Usage:** `iroha account meta get --id <ID> --key <KEY>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>`
+* `-k`, `--key <KEY>`
+
+
+
+## `iroha account meta set`
+
+Create or update an entry in the key-value store using JSON input from stdin
+
+**Usage:** `iroha account meta set --id <ID> --key <KEY>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>`
+* `-k`, `--key <KEY>`
+
+
+
+## `iroha account meta remove`
+
+Delete an entry from the key-value store
+
+**Usage:** `iroha account meta remove --id <ID> --key <KEY>`
+
+###### **Options:**
+
+* `-i`, `--id <ID>`
+* `-k`, `--key <KEY>`
+
+
+
+## `iroha tx`
+
+Typed transaction status and transaction helpers
+
+**Usage:** `iroha tx <COMMAND>`
+
+###### **Subcommands:**
+
+* `status` — Read the typed pipeline status of a submitted transaction
+* `get` — Retrieve details of a specific transaction
+* `ping` — Send an empty transaction that logs a message
+* `ivm` — Send a transaction using IVM bytecode
+* `stdin` — Send a transaction using JSON input from stdin
+
+
+
+## `iroha tx status`
+
+Read the typed pipeline status of a submitted transaction
+
+**Usage:** `iroha tx status [OPTIONS] --hash <HASH>`
+
+###### **Options:**
+
+* `-H`, `--hash <HASH>` — Hash of the signed transaction to inspect
+* `--wait` — Poll `/v1/pipeline/transactions/status` until the transaction reaches a stop state
+* `--timeout-ms <TIMEOUT_MS>` — Maximum time to wait before failing
+
+  Default value: `30000`
+* `--poll-interval-ms <POLL_INTERVAL_MS>` — Poll interval used while waiting
+
+  Default value: `500`
+* `--terminal-status <TERMINAL_STATUSES>` — Stop when the pipeline reaches any of these statuses. Applied, rejected, and expired always stop
+
+  Possible values: `queued`, `approved`, `committed`, `applied`, `rejected`, `expired`
+
+
+
+
+## `iroha tx get`
+
+Retrieve details of a specific transaction
+
+**Usage:** `iroha tx get --hash <HASH>`
+
+###### **Options:**
+
+* `-H`, `--hash <HASH>` — Hash of the transaction to retrieve
+
+
+
+## `iroha tx ping`
+
+Send an empty transaction that logs a message
+
+**Usage:** `iroha tx ping [OPTIONS] --msg <MSG>`
+
+###### **Options:**
+
+* `-l`, `--log-level <LOG_LEVEL>` — Log levels: TRACE, DEBUG, INFO, WARN, ERROR (in increasing order of visibility)
+
+  Default value: `DEBUG`
+* `-m`, `--msg <MSG>` — Log message
+* `--count <COUNT>` — Number of ping transactions to send
+
+  Default value: `1`
+* `--parallel <PARALLEL>` — Number of parallel workers to use when sending multiple pings
+
+  Default value: `1`
+* `--parallel-cap <PARALLEL_CAP>` — Maximum number of parallel workers (0 disables the cap)
+
+  Default value: `1024`
+* `--no-wait` — Submit without waiting for confirmation
+* `--no-index` — Do not suffix message with "-<index>" when count > 1
+
+
+
+## `iroha tx ivm`
+
+Send a transaction using IVM bytecode
+
+**Usage:** `iroha tx ivm [OPTIONS]`
+
+###### **Options:**
+
+* `-p`, `--path <PATH>` — Path to the IVM bytecode file. If omitted, reads from stdin
+
+
+
+## `iroha tx stdin`
+
+Send a transaction using JSON input from stdin
+
+**Usage:** `iroha tx stdin`
 
 
 
@@ -2422,10 +2828,34 @@ Read transactions and write various data
 
 ###### **Subcommands:**
 
+* `status` — Read the typed pipeline status of a submitted transaction
 * `get` — Retrieve details of a specific transaction
 * `ping` — Send an empty transaction that logs a message
 * `ivm` — Send a transaction using IVM bytecode
 * `stdin` — Send a transaction using JSON input from stdin
+
+
+
+## `iroha ledger transaction status`
+
+Read the typed pipeline status of a submitted transaction
+
+**Usage:** `iroha ledger transaction status [OPTIONS] --hash <HASH>`
+
+###### **Options:**
+
+* `-H`, `--hash <HASH>` — Hash of the signed transaction to inspect
+* `--wait` — Poll `/v1/pipeline/transactions/status` until the transaction reaches a stop state
+* `--timeout-ms <TIMEOUT_MS>` — Maximum time to wait before failing
+
+  Default value: `30000`
+* `--poll-interval-ms <POLL_INTERVAL_MS>` — Poll interval used while waiting
+
+  Default value: `500`
+* `--terminal-status <TERMINAL_STATUSES>` — Stop when the pipeline reaches any of these statuses. Applied, rejected, and expired always stop
+
+  Possible values: `queued`, `approved`, `committed`, `applied`, `rejected`, `expired`
+
 
 
 
@@ -5048,7 +5478,6 @@ Contracts helpers (code storage)
 * `view` — Execute a read-only contract view through Torii (POST /v1/contracts/view)
 * `debug-view` — Execute a read-only contract view locally against compiled bytecode and optional fixtures
 * `debug-call` — Execute a public contract entrypoint locally against compiled bytecode and optional fixtures
-* `deploy-activate` — Deploy bytecode, register manifest, and activate a namespace binding in one transaction
 * `manifest` — Contract manifest helpers
 * `simulate` — Run an offline simulation of IVM bytecode to see the queued ISIs and header metadata
 * `instances` — List active contract instances in a dataspace (supports filters and pagination)
@@ -5145,6 +5574,17 @@ Deploy compiled `.to` code via Torii (POST /v1/contracts/deploy)
 * `--private-key <HEX>` — Hex-encoded private key for signing
 * `--code-file <CODE_FILE>` — Path to compiled `.to` file (mutually exclusive with --code-b64)
 * `--code-b64 <CODE_B64>` — Base64-encoded code (mutually exclusive with --code-file)
+* `--wait` — Poll `/v1/pipeline/transactions/status` until the transaction reaches a stop state
+* `--timeout-ms <TIMEOUT_MS>` — Maximum time to wait before failing
+
+  Default value: `30000`
+* `--poll-interval-ms <POLL_INTERVAL_MS>` — Poll interval used while waiting
+
+  Default value: `500`
+* `--terminal-status <TERMINAL_STATUSES>` — Stop when the pipeline reaches any of these statuses. Applied, rejected, and expired always stop
+
+  Possible values: `queued`, `approved`, `committed`, `applied`, `rejected`, `expired`
+
 
 
 
@@ -5170,17 +5610,14 @@ Derive a canonical contract address locally from authority, deploy nonce, and da
 
 Submit a contract call through Torii (POST /v1/contracts/call)
 
-**Usage:** `iroha app contracts call [OPTIONS] [SELECTOR]`
-
-###### **Arguments:**
-
-* `<SELECTOR>` — Optional shorthand selector. Supports `entrypoint:alias`, plain alias, or contract address
+**Usage:** `iroha app contracts call [OPTIONS]`
 
 ###### **Options:**
 
 * `--authority <AUTHORITY>` — Authority account identifier. Defaults to the configured client authority
 * `--private-key <HEX>` — Hex-encoded private key override used to sign and submit the call directly
 * `--scaffold-only` — Request an unsigned transaction scaffold instead of direct submission
+* `--simulate` — Simulate the contract call locally on Torii without submitting a transaction
 * `--entrypoint <ENTRYPOINT>` — Optional contract entrypoint selector (defaults to `main`)
 * `--gas-asset-id <GAS_ASSET_ID>` — Optional gas asset id forwarded to transaction metadata
 * `--fee-sponsor <FEE_SPONSOR>` — Optional fee sponsor account charged for gas/fees when supported
@@ -5191,6 +5628,17 @@ Submit a contract call through Torii (POST /v1/contracts/call)
 * `--contract-alias <CONTRACT_ALIAS>` — On-chain contract alias (`name::domain.dataspace` or `name::dataspace`)
 * `--payload-json <JSON>` — Inline Norito JSON payload object or value
 * `--payload-file <PATH>` — File containing a Norito JSON payload object or value
+* `--wait` — Poll `/v1/pipeline/transactions/status` until the transaction reaches a stop state
+* `--timeout-ms <TIMEOUT_MS>` — Maximum time to wait before failing
+
+  Default value: `30000`
+* `--poll-interval-ms <POLL_INTERVAL_MS>` — Poll interval used while waiting
+
+  Default value: `500`
+* `--terminal-status <TERMINAL_STATUSES>` — Stop when the pipeline reaches any of these statuses. Applied, rejected, and expired always stop
+
+  Possible values: `queued`, `approved`, `committed`, `applied`, `rejected`, `expired`
+
 
 
 
@@ -5198,11 +5646,7 @@ Submit a contract call through Torii (POST /v1/contracts/call)
 
 Execute a read-only contract view through Torii (POST /v1/contracts/view)
 
-**Usage:** `iroha app contracts view [OPTIONS] [SELECTOR]`
-
-###### **Arguments:**
-
-* `<SELECTOR>` — Optional shorthand selector. Supports `entrypoint:alias`, plain alias, or contract address
+**Usage:** `iroha app contracts view [OPTIONS]`
 
 ###### **Options:**
 
@@ -5265,24 +5709,6 @@ Execute a public contract entrypoint locally against compiled bytecode and optio
 * `--durable-state-file <PATH>` — File containing a JSON object mapping durable state keys to encoded values (`0x...` hex or base64)
 * `--payload-json <JSON>` — Inline Norito JSON payload object or value
 * `--payload-file <PATH>` — File containing a Norito JSON payload object or value
-
-
-
-## `iroha app contracts deploy-activate`
-
-Deploy bytecode, register manifest, and activate a namespace binding in one transaction
-
-**Usage:** `iroha app contracts deploy-activate [OPTIONS] --authority <AUTHORITY> --namespace <NAMESPACE> --contract-id <ID>`
-
-###### **Options:**
-
-* `--authority <AUTHORITY>` — Authority account identifier (canonical I105 account literal)
-* `--namespace <NAMESPACE>` — Governance namespace to bind (e.g., apps)
-* `--contract-id <ID>` — Contract identifier within the namespace
-* `--code-file <CODE_FILE>` — Path to compiled `.to` file (mutually exclusive with --code-b64)
-* `--code-b64 <CODE_B64>` — Base64-encoded code (mutually exclusive with --code-file)
-* `--manifest-out <PATH>` — Optional path to write the manifest JSON used in the transaction
-* `--dry-run` — Preview transaction contents without submitting
 
 
 
@@ -10651,7 +11077,7 @@ List aliases bound to a canonical account id
 ###### **Options:**
 
 * `--account-id <ACCOUNT_ID>` — Canonical I105 account id
-* `--dataspace <DATASPACE>` — Optional dataspace alias filter such as `sbp`
+* `--dataspace <DATASPACE>` — Optional dataspace alias filter such as `centralbank`
 * `--domain <DOMAIN>` — Optional exact domain filter such as `banka`
 
 
