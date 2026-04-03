@@ -736,7 +736,7 @@ pub mod domain {
     use iroha_executor_data_model::permission::domain::{
         CanModifyDomainMetadata, CanRegisterDomain, CanUnregisterDomain,
     };
-    use iroha_smart_contract::data_model::domain::DomainId;
+    use iroha_smart_contract::data_model::{asset::AssetDefinitionId, domain::DomainId};
 
     use super::*;
     use crate::permission::{
@@ -885,9 +885,7 @@ pub mod domain {
             return false;
         };
         let asset_definition_matches_domain =
-            |definition: &iroha_data_model::asset::AssetDefinitionId| {
-                definition.try_domain() == Some(domain_id)
-            };
+            |definition: &AssetDefinitionId| definition.try_domain() == Some(domain_id);
         match permission {
             AnyPermission::CanUnregisterDomain(permission) => &permission.domain == domain_id,
             AnyPermission::CanModifyDomainMetadata(permission) => &permission.domain == domain_id,

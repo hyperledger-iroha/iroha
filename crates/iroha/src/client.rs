@@ -4997,7 +4997,6 @@ mod evidence_http_tests {
             label: None,
             uaid: None,
             opaque_ids: Vec::new(),
-            linked_domains: Vec::new(),
         };
         let body = norito::json::to_string(
             &norito::json::to_value(&payload).expect("account payload value"),

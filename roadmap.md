@@ -3159,7 +3159,10 @@ surface and alias instructions.
 - the stale singular query surfaces `FindDomainsByAccountId` and
   `FindAccountIdsByDomainId` have been removed from the public
   data-model/runtime path so account-domain membership stays an internal
-  index/detail instead of a first-class account identity API.
+  index/detail instead of a first-class account identity API; and
+- Torii transaction-history auth no longer synthesizes `name@dataspace` from a
+  bare JWT subject, and `GET /v1/accounts/{account_id}` no longer exposes the
+  derived `linked_domains` field in its public payload or OpenAPI schema.
 
 Open work from this slice:
 - finish the broader `ScopedAccountId` / domain-linked account registration
@@ -3168,9 +3171,8 @@ Open work from this slice:
 - remove the remaining `ScopedAccountId` compatibility builders/views from the
   data model (`new_in_domain`)
   once downstream consumers stop depending on them;
-- decide whether `linked_domains` remains a transient internal projection only
-  or is removed entirely from stored account records once the remaining
-  link-index consumers are migrated; and
+- decide whether the remaining internal domain projections can be retired from
+  helper/index-only call sites once their consumers are migrated; and
 - update the translated/public account-structure docs once the broader
   `ScopedAccountId` removal lands, so the multilingual docs do not need a
   second churn pass.

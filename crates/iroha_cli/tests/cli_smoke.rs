@@ -4410,8 +4410,7 @@ fn account_get_command_against_torii_mock() {
                     "account_id": account_id,
                     "label": null,
                     "uaid": null,
-                    "opaque_ids": [],
-                    "linked_domains": ["centralbank"]
+                    "opaque_ids": []
                 }
             ]
         }),
@@ -4435,12 +4434,9 @@ fn account_get_command_against_torii_mock() {
         Some(account_id),
         "canonical account id mismatch"
     );
-    assert_eq!(
-        payload["linked_domains"]
-            .as_array()
-            .and_then(|items| items.first())
-            .and_then(json::Value::as_str),
-        Some("centralbank")
+    assert!(
+        payload.get("linked_domains").is_none(),
+        "account get should not expose linked_domains"
     );
 
     let missing = command()

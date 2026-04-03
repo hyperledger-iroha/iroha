@@ -3124,6 +3124,7 @@ mod tests {
         let domain_id: DomainId = "label.world".parse().expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
 
         let account_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let keypair = KeyPair::random();
@@ -3238,6 +3239,7 @@ mod tests {
         let domain_id: DomainId = "label.world".parse().expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
         seed_account(&mut state, &authority, &domain_id);
 
         let account_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
@@ -3476,6 +3478,7 @@ mod tests {
         let domain_id: DomainId = "label.world".parse().expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
 
         let member_a = MultisigMember::new(KeyPair::random().public_key().clone(), 1)
             .expect("multisig member");
@@ -3488,6 +3491,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register unlabeled multisig account");
@@ -3698,6 +3702,7 @@ mod tests {
         let domain_id: DomainId = "label.world".parse().expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
 
         let member_a = MultisigMember::new(KeyPair::random().public_key().clone(), 1)
             .expect("multisig member");
@@ -3711,6 +3716,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register unlabeled multisig account");

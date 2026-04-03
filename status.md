@@ -12169,6 +12169,25 @@ Last updated: 2026-04-03
     VM/Kotodama permission-denial mapping are not implemented yet;
   - SNS-backed ownership/lease enforcement for full alias keys, domain names,
     and dataspace aliases is still pending;
+
+## 2026-04-03 Follow-up: Torii tx-history subjects are canonical-only and account reads drop `linked_domains`
+- Tightened Torii tx-history bearer auth so JWT `sub` must already be a
+  canonical account id or canonical account alias literal; the runtime no
+  longer fabricates `name@dataspace` from a bare subject before alias
+  resolution.
+- Removed `linked_domains` from the public `GET /v1/accounts/{account_id}`
+  payload, the shared `AccountReadResponse` type, and the generated OpenAPI
+  schema. The route now returns only canonical account id, label, UAID, and
+  opaque ids.
+- Validation:
+  - `cargo fmt --all` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-torii-cut cargo test -p iroha_torii --lib tx_history_ -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-torii-cut cargo test -p iroha_torii account_get_handler_supports_json_and_norito --lib -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-torii-shared-cut cargo test -p iroha_torii_shared account_read_response_roundtrip_preserves_subject_metadata --lib -- --nocapture` (pass)
+  - `CARGO_TARGET_DIR=/tmp/iroha-client-read-cut cargo test -p iroha get_account_read_requests_json_and_decodes_typed_payload --lib -- --nocapture` (pass)
+- Remaining implementation gap:
+  - internal domain projections still exist for non-public aggregate/index
+    helpers, but the public account-read surface no longer exposes them.
   - multisig home-domain optionality and domainless multisig onboarding remain
     follow-up work; and
   - Torii onboarding config still needs the broader cleanup that removes the
