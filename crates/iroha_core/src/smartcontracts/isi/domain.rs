@@ -3124,6 +3124,7 @@ mod tests {
         let domain_id: DomainId = "label.world".parse().expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
 
         let account_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let keypair = KeyPair::random();
@@ -3238,6 +3239,7 @@ mod tests {
         let domain_id: DomainId = "label.world".parse().expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
         seed_account(&mut state, &authority, &domain_id);
 
         let account_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
@@ -3476,6 +3478,7 @@ mod tests {
         let domain_id: DomainId = "label.world".parse().expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
 
         let member_a = MultisigMember::new(KeyPair::random().public_key().clone(), 1)
             .expect("multisig member");
@@ -3699,6 +3702,7 @@ mod tests {
         let domain_id: DomainId = "label.world".parse().expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
 
         let member_a = MultisigMember::new(KeyPair::random().public_key().clone(), 1)
             .expect("multisig member");

@@ -38196,8 +38196,8 @@ mod tests {
         assert!(
             stx.world
                 .domain_asset_definitions
-                .values()
-                .all(|definitions| !definitions.contains(&opaque_id)),
+                .iter()
+                .all(|(_, definitions)| !definitions.contains(&opaque_id)),
             "opaque asset definitions must not create internal domain index entries"
         );
 

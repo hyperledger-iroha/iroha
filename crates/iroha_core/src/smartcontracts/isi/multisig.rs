@@ -3389,9 +3389,12 @@ mod tests {
 
         let owner = KeyPair::random();
         let owner_id = new_account_id(&owner);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3448,9 +3451,12 @@ mod tests {
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3566,9 +3572,12 @@ mod tests {
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3697,9 +3706,12 @@ mod tests {
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3772,9 +3784,12 @@ mod tests {
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3885,9 +3900,12 @@ mod tests {
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -4016,9 +4034,12 @@ mod tests {
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -4903,9 +4924,12 @@ mod tests {
         let signer2_id = new_account_id(&signer2);
         let signer3_id = new_account_id(&signer3);
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            "domain registration",
+        );
         for (account_id, label) in [
             (&signer1_id, "register signer1"),
             (&signer2_id, "register signer2"),
@@ -5152,9 +5176,12 @@ seiyaku TriggerDispatch {
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &signer1_id,
@@ -5256,7 +5283,7 @@ seiyaku TriggerDispatch {
             )
             .expect("initial propose");
 
-            drop(state_transaction);
+            state_transaction.apply();
             block.commit().expect("commit first block");
             multisig_id
         };
@@ -5547,9 +5574,7 @@ seiyaku TriggerDispatch {
         assert!(
             matches!(
                 proposal_value(&state_transaction, &multisig_account, &instructions_hash),
-                Err(ValidationFail::QueryFailed(QueryExecutionFail::Find(
-                    FindError::MetadataKey(_)
-                )))
+                Err(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))
             ),
             "proposal should be pruned after quorum is reached by distinct subjects"
         );
@@ -5670,7 +5695,7 @@ seiyaku TriggerDispatch {
         let err = multisig_spec(&state_transaction, &owner_id)
             .expect_err("missing multisig spec should error");
         match err {
-            ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::MetadataKey(_))) => {}
+            ValidationFail::QueryFailed(QueryExecutionFail::NotFound) => {}
             other => panic!("unexpected error for missing multisig spec: {other:?}"),
         }
     }
