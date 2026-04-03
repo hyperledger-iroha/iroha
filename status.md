@@ -18662,3 +18662,12 @@ Last updated: 2026-04-03
 - The direct cause of that peer death is `irohad`'s supervisor unexpected-exit path: `iroha_futures::supervisor::SupervisorLoop::handle_child_exit` (`crates/iroha_futures/src/supervisor.rs:302-312`) treats any non-shutdown `ChildExitResult::Ok|Cancel` as fatal, and `crates/irohad/src/main.rs:8631-8635` propagates that as `MainError::IrohaRun`, exiting the validator with status `1`.
 - Supporting trace from a preserved NPoS repro on the last available soak binary pair (`/private/tmp/iroha-npos-rootcause-repro-fix16/irohad_test_network_oxW85Q`): the same validator public key `ea013088...` that later fell to height `0` in the fresh full soak maps to peer dir `cerebral_otter`, and that peer repeatedly stalls in the NPoS consensus path with `deferring RBC DELIVER: READY quorum not yet satisfied`, `missing_qc`, and `no proposal observed for view before changing view` while block sync samples only `online=3` peers. This localizes the upstream failure to the validator-internal NPoS Sumeragi/RBC/proposal path rather than Nexus routing or the Izanami harness.
 - Remaining evidence gap: because the fresh full-soak peer dirs were not retained and the current dirty tree no longer rebuilds cleanly due unrelated `iroha_data_model` errors, this investigation did not uniquely name which supervised child inside `irohad` exited first on the fresh failing binary; it did trace the failure to the validator-internal supervisor path and tie the dead validator to the NPoS RBC/proposal instability.
+
+## 2026-04-03 Mochi Torii Account Event Summary Fix
+- Updated `mochi/mochi-core/src/torii.rs` so `account_event_summary` now handles the newer `AccountEvent::ControllerReplaced` and `AccountEvent::Recovery` variants instead of failing the build with a non-exhaustive match.
+- Added dedicated Torii summary formatting for account-controller replacement and account-recovery lifecycle events, including alias, quorum, timelock, and actor details for recovery-policy updates.
+- Added focused regression coverage in `mochi/mochi-core/src/torii.rs` for the new controller-replaced and recovery-policy summary paths.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `cargo test -p mochi-core account_controller_replaced_summary_mentions_old_and_new_controllers -- --nocapture`
+  - `cargo test -p mochi-core account_recovery_policy_summary_mentions_alias_and_quorum -- --nocapture`
