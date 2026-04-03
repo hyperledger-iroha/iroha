@@ -1,6 +1,36 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-02
+Last updated: 2026-04-03
+
+Latest sync (2026-04-03 JS package + integration regression closure):
+the remaining runnable `javascript/iroha_js` package failures are fixed, and
+the last two broad Rust integration regressions from the prior workspace replay
+(`query_basic_scenarios` and `connected_peers_with_f_1_0_1`) are green again.
+
+- shipped in `javascript/iroha_js` / `iroha_js_host` / `integration_tests`:
+  - native confidential-keyset field-name normalization in `src/crypto.js`;
+  - mint destination normalization and compatibility-message repair in
+    `src/transaction.js`;
+  - camelCase/snake_case binding normalization for SoraDNS/SoraFS helpers plus
+    pure-JS fallback for padded / intentionally-mutated replication-order
+    fixtures in `src/soradns.js` and `src/sorafs.js`;
+  - framed-or-bare signed transaction fixture decoding in
+    `crates/iroha_js_host/src/lib.rs`;
+  - timeout/TTL scaling in `integration_tests/tests/queries/mod.rs`; and
+  - blocking roster-change submission in
+    `integration_tests/tests/extra_functional/connected_peers.rs`.
+- focused verification is green, including:
+  - `cargo test -p iroha_js_host decode_signed_transaction_accepts_supported_norito_rpc_fixture_subset -- --nocapture`
+  - `cargo test -p integration_tests --test mod queries::query_basic_scenarios -- --exact --nocapture`
+  - `cargo test -p integration_tests --test mod extra_functional::connected_peers::connected_peers_with_f_1_0_1 -- --exact --nocapture`
+  - `cd javascript/iroha_js && npm run lint:test`
+
+Open work for this slice now remains:
+- let the already-started `cargo test --workspace` replay finish in a clean
+  slot and fix anything else it exposes; the previously failing integration
+  paths are already green inside the in-flight run; and
+- run `cargo clippy --workspace --all-targets -- -D warnings` after the
+  workspace test slot is free.
 
 Latest sync (2026-04-02 JS manifest metadata / curve parity closure):
 the JS SDK now round-trips full `RegisterSmartContractCode.manifest` metadata

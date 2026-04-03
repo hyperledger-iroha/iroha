@@ -27,10 +27,7 @@ test("canonical request signing: headers include a verifiable signature", () => 
   const { privateKey, publicKey } = generateKeyPair({
     seed: Buffer.alloc(32, 7),
   });
-  const accountId = AccountAddress.fromAccount({
-    domain: "wonderland",
-    publicKey,
-  }).toI105();
+  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
   const body = Buffer.from('{"foo":1}');
   const path = `/v1/accounts/${accountId}/assets`;
   const timestampMs = 1_717_171_717_000;

@@ -21,7 +21,17 @@ fn query_network_builder() -> NetworkBuilder {
 
 fn query_client(network: &Network) -> Client {
     let mut client = network.client();
-    client.transaction_status_timeout = QUERY_TX_STATUS_TIMEOUT;
+    let status_timeout = client
+        .transaction_status_timeout
+        .max(QUERY_TX_STATUS_TIMEOUT)
+        .max(network.sync_timeout());
+    client.transaction_status_timeout = status_timeout;
+    let min_ttl = status_timeout.saturating_add(Duration::from_secs(120));
+    match client.transaction_ttl {
+        Some(ttl) if ttl < min_ttl => client.transaction_ttl = Some(min_ttl),
+        None => client.transaction_ttl = Some(min_ttl),
+        _ => {}
+    }
     client
 }
 

@@ -359,7 +359,7 @@ export function deriveConfidentialKeyset(spendKey) {
     deriveConfidentialKeysetFallback(seed);
 
   const keyset = {
-    skSpend: toBufferField(raw, "sk_spend"),
+    skSpend: toBufferField(raw, "sk_spend", "skSpend"),
     nk: toBufferField(raw, "nk"),
     ivk: toBufferField(raw, "ivk"),
     ovk: toBufferField(raw, "ovk"),
@@ -488,12 +488,18 @@ function toBuffer(value, name) {
   throw new TypeError(`${name} must be a Buffer, string, or ArrayBuffer view`);
 }
 
-function toBufferField(payload, snake) {
-  const value = payload && snake ? payload[snake] : null;
-  if (value === null || value === undefined) {
-    throw new Error(`native binding returned missing \`${snake}\``);
+function toBufferField(payload, ...fieldNames) {
+  for (const fieldName of fieldNames) {
+    if (!payload || !fieldName) {
+      continue;
+    }
+    const value = payload[fieldName];
+    if (value !== null && value !== undefined) {
+      return toBuffer(value, String(fieldName));
+    }
   }
-  return toBuffer(value, String(snake));
+  const rendered = fieldNames.map((fieldName) => `\`${fieldName}\``).join(" or ");
+  throw new Error(`native binding returned missing ${rendered}`);
 }
 
 function wrapConfidentialKeyset(keys) {

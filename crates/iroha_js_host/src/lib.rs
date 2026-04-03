@@ -142,7 +142,7 @@ use napi::{
 };
 use napi_derive::napi;
 use norito::{
-    codec::{Decode, DecodeAll, Encode},
+    codec::{DecodeAll, Encode},
     core::{self, DecodeFromSlice},
     decode_from_bytes,
     json::{self, JsonDeserialize, Map, Value},
@@ -7723,8 +7723,18 @@ fn zk_json_value(tag: &str, payload: json::Value) -> json::Value {
 }
 
 fn decode_signed_transaction(bytes: &[u8]) -> napi::Result<SignedTransaction> {
-    let mut cursor = bytes;
-    SignedTransaction::decode(&mut cursor).map_err(norito_to_napi)
+    match norito::decode_from_bytes::<SignedTransaction>(bytes) {
+        Ok(decoded) => Ok(decoded),
+        Err(norito::core::Error::InvalidMagic) => {
+            let (decoded, used) =
+                SignedTransaction::decode_from_slice(bytes).map_err(norito_to_napi)?;
+            if used != bytes.len() {
+                return Err(norito_to_napi(norito::core::Error::LengthMismatch));
+            }
+            Ok(decoded)
+        }
+        Err(err) => Err(norito_to_napi(err)),
+    }
 }
 
 #[allow(clippy::too_many_arguments)] // mirrors TransactionBuilder inputs for clarity
@@ -8512,7 +8522,7 @@ pub fn build_precommit_trigger_action(
 mod tests {
     use std::{fs, io::Cursor, path::PathBuf, str::FromStr, sync::Arc};
 
-    use base64::engine::general_purpose::STANDARD as BASE64;
+    use base64::{Engine as _, engine::general_purpose::STANDARD as BASE64};
     use iroha_crypto::{Algorithm, Hash, HashOf, KeyPair};
     use iroha_data_model::{
         HasMetadata,
@@ -10927,6 +10937,46 @@ mod tests {
         let reconstructed = value_to_instruction(json_value.clone())
             .expect("deserialize RegisterSmartContractCode");
         assert_eq!(reconstructed, instruction);
+    }
+
+    #[test]
+    fn decode_signed_transaction_accepts_supported_norito_rpc_fixture_subset() {
+        let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("../../fixtures/norito_rpc/transaction_fixtures.manifest.json");
+        let manifest_bytes = fs::read(&manifest_path)
+            .unwrap_or_else(|err| panic!("failed to read {}: {err}", manifest_path.display()));
+        let manifest: Value = json::from_slice(&manifest_bytes)
+            .unwrap_or_else(|err| panic!("failed to parse {}: {err}", manifest_path.display()));
+        let names = [
+            "ivm_transfer",
+            "grant_revoke_role_permission",
+            "set_parameter_next_mode",
+            "executor_upgrade_demo",
+            "register_peer_with_pop_demo",
+            "register_nft_demo",
+            "trigger_repetitions_demo",
+        ];
+
+        for name in names {
+            let fixture = manifest
+                .get("fixtures")
+                .and_then(Value::as_array)
+                .and_then(|fixtures| {
+                    fixtures
+                        .iter()
+                        .find(|fixture| fixture.get("name").and_then(Value::as_str) == Some(name))
+                })
+                .unwrap_or_else(|| panic!("fixture {name} missing from norito fixture manifest"));
+            let signed_base64 = fixture
+                .get("signed_base64")
+                .and_then(Value::as_str)
+                .expect("fixture signed_base64");
+            let signed_bytes = BASE64
+                .decode(signed_base64)
+                .unwrap_or_else(|err| panic!("failed to decode {name} signed payload: {err}"));
+            decode_signed_transaction(&signed_bytes)
+                .unwrap_or_else(|err| panic!("failed to decode fixture {name}: {err}"));
+        }
     }
 
     #[test]

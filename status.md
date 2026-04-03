@@ -1,6 +1,49 @@
 # Status
 
-Last updated: 2026-04-02
+Last updated: 2026-04-03
+
+## 2026-04-03 Follow-up: JS package failures cleared and the remaining integration regressions are green again
+- Closed the remaining `javascript/iroha_js` package-test regressions that
+  surfaced once `npm run lint:test` became runnable:
+  - `src/crypto.js` now accepts both camelCase and snake_case native binding
+    field names for confidential keyset derivation, which restores the
+    native-backed `deriveConfidentialKeyset(...)` path;
+  - `src/transaction.js` now validates mint destinations as asset-holding ids
+    instead of asset-definition ids and preserves the public alias error
+    messages for `assetId` / `sourceAssetId` compatibility;
+  - `src/soradns.js` and `src/sorafs.js` now normalize both camelCase and
+    snake_case native binding payloads, and the SoraFS replication-order helper
+    falls back to the pure-JS decoder when the native path rejects padded or
+    intentionally-corrupted fixtures too early;
+  - `crates/iroha_js_host/src/lib.rs` now accepts both framed and bare signed
+    transaction fixtures in `decode_signed_transaction(...)`; and
+  - the stale JS tests for canonical account ids, connect launch URIs, and the
+    signed-transaction fixture parity slice were updated to match the current
+    canonical API/wire behavior.
+- Fixed the two remaining broad Rust integration failures reported by the last
+  workspace run:
+  - `integration_tests/tests/queries/mod.rs::query_basic_scenarios` no longer
+    shrinks the client confirmation timeout below the network sync budget and
+    now raises TTL when needed, which removes the `transaction queued for too long`
+    failure on slower hosts; and
+  - `integration_tests/tests/extra_functional/connected_peers.rs` now submits
+    roster-change instructions through the blocking client path, so the
+    re-registration loop cannot silently spin on queued-or-later-rejected peer
+    registration transactions.
+- Verification completed:
+  - `node --test javascript/iroha_js/test/canonicalRequest.test.js javascript/iroha_js/test/connectSession.test.js javascript/iroha_js/test/crypto.test.js javascript/iroha_js/test/transportSecurity.test.js javascript/iroha_js/test/transaction.test.js javascript/iroha_js/test/transactionBuilder.test.js javascript/iroha_js/test/transactionFixturesParity.test.js`
+  - `cargo test -p iroha_js_host decode_signed_transaction_accepts_supported_norito_rpc_fixture_subset -- --nocapture`
+  - `cargo test -p integration_tests --test mod queries::query_basic_scenarios -- --exact --nocapture`
+  - `cargo test -p integration_tests --test mod extra_functional::connected_peers::connected_peers_with_f_1_0_1 -- --exact --nocapture`
+  - `cargo fmt --all`
+  - `cd javascript/iroha_js && npm run lint:test`
+- Verification update:
+  - the new broad `cargo test --workspace` replay is in flight as this status
+    entry is written, but the previously failing paths are already green inside
+    that run:
+    `queries::query_basic_scenarios`,
+    `extra_functional::connected_peers::connected_peers_with_f_1_0_1`, and
+    `extra_functional::connected_peers::connected_peers_with_f_2_1_2`.
 
 ## 2026-04-02 Follow-up: JS SDK manifest metadata parity now covers full manifest payloads and broader curve fixtures
 - Closed the remaining `javascript/iroha_js` manifest parity gaps:
