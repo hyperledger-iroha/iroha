@@ -1281,8 +1281,7 @@ mod tests {
         state: &State,
         authority: &AccountId,
         authority_keypair: &KeyPair,
-        namespace: &str,
-        contract_id: &str,
+        contract_address: &dm::ContractAddress,
         code: Vec<u8>,
     ) -> Hash {
         let mut block = state.block(dm::BlockHeader::new(
@@ -1310,7 +1309,7 @@ mod tests {
             register_code_bytes(authority, code, &mut stx).expect("register contract bytes");
         let manifest = verified.manifest.signed(authority_keypair);
         register_manifest(authority, manifest, &mut stx).expect("register manifest");
-        activate_instance(authority, namespace, contract_id, code_hash, &mut stx)
+        activate_instance(authority, contract_address.clone(), code_hash, &mut stx)
             .expect("activate instance");
 
         stx.apply();
@@ -1358,12 +1357,13 @@ mod tests {
         ));
 
         let code = crate::test_utils::minimal_ivm_program(1);
+        let contract_address = dm::ContractAddress::derive(0, &authority, 0, dm::DataSpaceId::GLOBAL)
+            .expect("contract address");
         let code_hash = install_contract_instance(
             state.as_ref(),
             &authority,
             &authority_keypair,
-            "apps",
-            "demo",
+            &contract_address,
             code,
         );
         let code_hash_hex = hash_hex(&code_hash);

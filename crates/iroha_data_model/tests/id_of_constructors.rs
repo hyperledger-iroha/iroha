@@ -42,8 +42,8 @@ fn nft_id_of_matches_parse() {
     let domain: DomainId = DomainId::try_new("art", "universal").unwrap();
     let name: Name = "mona_lisa".parse().unwrap();
 
-    let parsed: NftId = "mona_lisa$art".parse().unwrap();
     let via_of = NftId::of(domain, name);
+    let parsed: NftId = via_of.to_string().parse().unwrap();
 
     assert_eq!(parsed, via_of);
     assert_eq!(format!("{parsed}"), format!("{via_of}"));

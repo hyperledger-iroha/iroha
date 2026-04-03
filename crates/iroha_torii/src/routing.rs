@@ -11001,13 +11001,19 @@ mod multisig_contract_call_tests {
         let multisig = sample_account_id();
         let code_hash = Hash::new(b"code-hash".to_vec());
         let payload = IrohaJson::new(norito::json!({ "n": 1 }));
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &multisig,
+            0,
+            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
         let asset_definition =
             test_asset_definition_literal_from_hex("550e8400e29b41d4a7164466554400aa");
 
         let first = derive_multisig_contract_call_trigger_id(
             &multisig,
-            "apps",
-            "calc.v1",
+            &contract_address,
             "main",
             Some(&payload),
             Some(asset_definition.as_str()),
@@ -11018,8 +11024,7 @@ mod multisig_contract_call_tests {
         .expect("trigger id");
         let second = derive_multisig_contract_call_trigger_id(
             &multisig,
-            "apps",
-            "calc.v1",
+            &contract_address,
             "main",
             Some(&payload),
             Some(asset_definition.as_str()),
@@ -11032,8 +11037,7 @@ mod multisig_contract_call_tests {
 
         let changed = derive_multisig_contract_call_trigger_id(
             &multisig,
-            "apps",
-            "calc.v1",
+            &contract_address,
             "alternate",
             Some(&payload),
             Some(asset_definition.as_str()),
@@ -11048,6 +11052,13 @@ mod multisig_contract_call_tests {
     #[test]
     fn multisig_contract_call_instruction_envelope_hashes_deterministically() {
         let multisig = sample_account_id();
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &multisig,
+            0,
+            iroha_data_model::nexus::DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
         let manifest = manifest::ContractManifest {
             code_hash: None,
             abi_hash: None,
@@ -11065,8 +11076,8 @@ mod multisig_contract_call_tests {
 
         let (instructions, instructions_hash) = build_multisig_contract_call_instructions(
             &multisig,
-            "apps",
-            "calc.v1",
+            &contract_address,
+            None,
             "main",
             Some(&payload),
             Some(asset_definition.as_str()),
@@ -11094,16 +11105,15 @@ mod multisig_contract_call_tests {
             kotoba: None,
             provenance: None,
         };
+        let contract_address: iroha_data_model::smart_contract::ContractAddress =
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address");
 
         let metadata = build_contract_call_metadata(
             &manifest,
-            "universal",
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
-            Some(
-                &"tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
-                    .parse()
-                    .expect("contract address"),
-            ),
+            &contract_address,
+            None,
             Some("create_mint_request"),
             None,
             None,
@@ -11674,15 +11684,13 @@ mod multisig_selector_tests {
         state: &State,
         authority: &dm::AccountId,
         authority_keypair: &KeyPair,
-        namespace: &str,
-        contract_id: &str,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
     ) {
         install_contract_instance_with_code(
             state,
             authority,
             authority_keypair,
-            namespace,
-            contract_id,
+            contract_address,
             minimal_ivm_program(1),
         );
     }
@@ -11704,8 +11712,7 @@ mod multisig_selector_tests {
         state: &State,
         authority: &dm::AccountId,
         authority_keypair: &KeyPair,
-        namespace: &str,
-        contract_id: &str,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
         code: Vec<u8>,
     ) {
         let mut block = state.block(dm::BlockHeader::new(
@@ -11737,7 +11744,7 @@ mod multisig_selector_tests {
         );
         let manifest = verified.manifest.signed(authority_keypair);
         register_manifest(authority, manifest, &mut stx).expect("register manifest");
-        activate_instance(authority, namespace, contract_id, code_hash, &mut stx)
+        activate_instance(authority, contract_address.clone(), code_hash, &mut stx)
             .expect("activate instance");
 
         stx.apply();
@@ -11887,8 +11894,7 @@ mod multisig_selector_tests {
             state.as_ref(),
             &authority,
             &authority_keypair,
-            "universal",
-            contract_address.as_ref(),
+            &contract_address,
         );
 
         let response = handle_post_contract_call(
@@ -11977,8 +11983,7 @@ mod multisig_selector_tests {
             state.as_ref(),
             &authority_account_id,
             &authority_keypair,
-            "universal",
-            derived_universal_contract_address(&authority_account_id, 1).as_ref(),
+            &derived_universal_contract_address(&authority_account_id, 1),
         );
         let contract_address = derived_universal_contract_address(&authority_account_id, 1);
         let outsider = dm::AccountId::new(KeyPair::random().public_key().clone());
@@ -12474,6 +12479,11 @@ mod multisig_selector_tests {
             provenance: None,
         };
         let asset_definition = test_asset_definition_id().to_string();
+        let contract_address = derived_universal_contract_address(&multisig_account_id, 2);
+        let contract_alias: iroha_data_model::smart_contract::ContractAlias =
+            "mint_request::universal"
+                .parse()
+                .expect("mint request alias");
         let contract_payload = IrohaJson::new(
             norito::json::parse_value(&format!(
                 r#"{{
@@ -12498,8 +12508,8 @@ mod multisig_selector_tests {
         );
         let (contract_mint_request_instructions, _) = build_multisig_contract_call_instructions(
             &multisig_account_id,
-            "apps",
-            "mint_request",
+            &contract_address,
+            Some(&contract_alias),
             "create_mint_request",
             Some(&contract_payload),
             None,
@@ -13309,8 +13319,7 @@ mod multisig_selector_tests {
             state.as_ref(),
             &authority_account_id,
             &authority_keypair,
-            "universal",
-            derived_universal_contract_address(&authority_account_id, 1).as_ref(),
+            &derived_universal_contract_address(&authority_account_id, 1),
         );
         let contract_address = derived_universal_contract_address(&authority_account_id, 1);
 
@@ -13383,8 +13392,7 @@ seiyaku BlobPayloadNormalizeTest {
             state.as_ref(),
             &authority_account_id,
             &authority_keypair,
-            "universal",
-            derived_universal_contract_address(&authority_account_id, 1).as_ref(),
+            &derived_universal_contract_address(&authority_account_id, 1),
             code,
         );
         let contract_address = derived_universal_contract_address(&authority_account_id, 1);
@@ -13426,7 +13434,7 @@ seiyaku BlobPayloadNormalizeTest {
             code_hash,
             manifest,
             ..
-        } = prepare_contract_call(state.as_ref(), "universal", contract_address.as_ref())
+        } = prepare_contract_call(state.as_ref(), &contract_address, None)
             .expect("prepared contract call");
         let entrypoint = ensure_public_contract_entrypoint(&manifest, "create")
             .expect("blob entrypoint descriptor");
@@ -13435,8 +13443,8 @@ seiyaku BlobPayloadNormalizeTest {
             .expect("normalized payload");
         let (_, expected_hash) = build_multisig_contract_call_instructions(
             &multisig_account_id,
-            "universal",
-            contract_address.as_ref(),
+            &contract_address,
+            None,
             "create",
             Some(&normalized_payload),
             None,

@@ -298,6 +298,14 @@ fn normalize_contract_alias_segment(
     if value.is_empty() {
         return Err(ParseError::new("contract alias segments must not be empty"));
     }
+    if value.contains(':') {
+        return Err(ParseError::new(match segment {
+            "contract alias name" => "contract alias name segment must not contain `:`",
+            "contract alias domain" => "contract alias domain segment must not contain `:`",
+            "contract alias dataspace" => "contract alias dataspace segment must not contain `:`",
+            _ => "contract alias segment must not contain `:`",
+        }));
+    }
     if matches!(
         segment,
         "contract alias domain" | "contract alias dataspace"

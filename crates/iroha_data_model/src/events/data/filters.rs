@@ -2025,7 +2025,7 @@ mod tests {
     #[cfg(feature = "transparent_api")]
     fn nft_filter_matches_nested_events() {
         let domain_id: DomainId = DomainId::try_new("genesis", "universal").unwrap();
-        let domain_label = domain_id.name().as_ref();
+        let domain_label = domain_id.to_string();
         let nft_id: NftId = format!("dragon${domain_label}").parse().unwrap();
         let other_nft_id: NftId = format!("phoenix${domain_label}").parse().unwrap();
 

@@ -271,10 +271,13 @@ mod tests {
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_def.clone(), alice.clone());
-        let nft_id: NftId = "nft0$wonderland".parse().unwrap();
-        let rwa_id: RwaId = format!("{}$wonderland", Hash::prehashed([3; Hash::LENGTH]))
-            .parse()
-            .unwrap();
+        let nft_id: NftId = "nft0$wonderland.universal".parse().unwrap();
+        let rwa_id: RwaId = format!(
+            "{}$wonderland.universal",
+            Hash::prehashed([3; Hash::LENGTH])
+        )
+        .parse()
+        .unwrap();
         let trig_id: TriggerId = "trigger0".parse().unwrap();
         let key: Name = "color".parse().unwrap();
         let role_id: RoleId = "auditor".parse().unwrap();

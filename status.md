@@ -66,6 +66,64 @@ Last updated: 2026-04-03
   - the sweep therefore proves the domain-workload and startup blockers are
     gone, but it does not yet prove NPoS teardown is fully clean.
 
+## 2026-04-03 Follow-up: `address_canonicalisation` runtime slice is green after client-config fix
+- `iroha::config::user::Root::parse()` no longer panics on invalid
+  `account.domain` literals. It now emits `ParseError::InvalidAccountDomain`
+  through the existing config emitter, so bad client config is reported as a
+  structured error instead of tripping the drop-bomb guard.
+- `iroha_test_network::Peer::client_for()` now writes the default account
+  domain as a canonical fully qualified literal (`domain.universal`) rather
+  than the old bare default-domain label.
+- The `integration_tests/tests/address_canonicalisation.rs` expectations were
+  aligned with the current account-alias model: account query filters accept
+  alias literals and still return canonical account ids, while non-canonical
+  dotted I105 literals remain rejected.
+- Verification completed in this follow-up:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha --lib config::user::tests::parse_rejects_bare_account_domain_without_panicking -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test address_canonicalisation offline_allowances_ -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test address_canonicalisation accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test address_canonicalisation -- --nocapture`
+
+## 2026-04-03 Follow-up: full `iroha_data_model --tests` is green after fixture refresh sweep
+- `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_data_model --tests`
+  now completes successfully.
+- The remaining fallout after the earlier `DomainId` and account-address
+  cleanup was fixture drift rather than live runtime logic. The refresh sweep
+  fixed:
+  - `NewAccount` JSON decoding defaults/unknown-field handling in
+    `crates/iroha_data_model/src/account.rs`;
+  - stale I105 error vectors and NFT/domain-qualified fixture expectations;
+  - regenerated confidential wallet, offline allowance, oracle reference,
+    AXT, Norito golden, and Soracloud manifest fixtures; and
+  - replacement of one stale legacy account literal in sample configs and
+    offline allowance fixture inputs with a current canonical I105 account id.
+- Verification completed in this follow-up:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_data_model --test confidential_wallet_fixtures -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_data_model --test offline_fixtures -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_data_model --test oracle_reference_fixtures -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_data_model --test soracloud_manifest_fixtures -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_data_model --tests`
+
+## 2026-04-03 Follow-up: targeted runtime checks and docs cleanup are green
+- The lingering portal/i18n Norito walkthrough examples that still serialized
+  a bare domain JSON payload (`{"domain":"wonderland"}`) were updated to the
+  canonical dataspace-qualified form
+  (`{"domain":"wonderland.universal"}`) across the translated
+  `docs/portal/**/norito/ledger-walkthrough*.md` files.
+- A focused grep over executable Rust code remains clean for removed
+  `DomainId::from_str(...)`, `.parse::<DomainId>()`, and bare parsed
+  `DomainId` constructions; the only remaining `"domain": "wonderland"` hit
+  is a generic JSON canonicalization fixture in `crates/iroha_core/src/state/tiered.rs`,
+  not a `DomainId` example.
+- Focused runtime verification passed for the dataspace/domain hierarchy and
+  explicit domain serialization paths:
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_core account_scope_hierarchy_tracks_dataspaces_and_domains -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_core unregister_domain_keeps_aliases_in_same_named_foreign_dataspace -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_core multisig_home_domain_inference_resolves_qualified_alias_domains -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_executor_data_model can_register_account_serializes_as_json_string_field -- --nocapture`
+
 ## 2026-04-03 Follow-up: workspace-wide test compilation is green after full `DomainId` tail sweep
 - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test --workspace --no-run`
   now completes successfully.

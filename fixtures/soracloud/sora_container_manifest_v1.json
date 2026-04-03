@@ -15,9 +15,15 @@
     "APP_ENV": "production",
     "LOG_LEVEL": "info"
   },
-  "required_config_names": [],
-  "required_secret_names": [],
-  "config_exports": [],
+  "required_config_names": [
+    
+  ],
+  "required_secret_names": [
+    
+  ],
+  "config_exports": [
+    
+  ],
   "capabilities": {
     "network": {
       "mode": "Allowlist",
@@ -28,6 +34,7 @@
     },
     "allow_wallet_signing": true,
     "allow_state_writes": true,
+    "allow_model_inference": true,
     "allow_model_training": false
   },
   "resources": {

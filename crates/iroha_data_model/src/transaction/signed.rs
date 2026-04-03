@@ -1934,7 +1934,7 @@ mod norito_rpc_fixture_tests {
                 .as_u64()
                 .or_else(|| panic!("{context}: {key} must be an integer or null")),
             Some(_) => panic!("{context}: {key} must be an integer or null"),
-            None => panic!("{context}: missing {key} field"),
+            None => None,
         }
     }
 

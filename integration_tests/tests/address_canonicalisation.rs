@@ -2109,7 +2109,7 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn accounts_query_rejects_alias_and_dotted_i105_filter_literals() -> Result<()> {
+async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() -> Result<()> {
     let domain_id: DomainId = DomainId::try_new("aliases", "universal")?;
     let label = AccountAlias::new(
         "primary".parse()?,
@@ -2127,7 +2127,7 @@ async fn accounts_query_rejects_alias_and_dotted_i105_filter_literals() -> Resul
         .with_genesis_instruction(Register::account(account));
     let Some(network) = start_network_async_or_skip(
         builder,
-        stringify!(accounts_query_rejects_alias_and_dotted_i105_filter_literals),
+        stringify!(accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals),
     )
     .await?
     else {
@@ -2157,10 +2157,22 @@ async fn accounts_query_rejects_alias_and_dotted_i105_filter_literals() -> Resul
         .body(alias_body)
         .send()
         .await?;
+    let alias_status = alias_resp.status();
+    let alias_body = alias_resp.text().await?;
     assert_eq!(
-        alias_resp.status(),
-        reqwest::StatusCode::BAD_REQUEST,
-        "alias literal should be rejected"
+        alias_status,
+        reqwest::StatusCode::OK,
+        "alias literal should resolve to the canonical account id, got {alias_status} body={alias_body}"
+    );
+    let alias_doc: norito::json::Value = norito::json::from_str(&alias_body)?;
+    let alias_ids = extract_account_ids(&alias_doc);
+    assert!(
+        alias_ids.iter().any(|id| id == &expected),
+        "alias literal should resolve to canonical account id {expected}, got {alias_ids:?}"
+    );
+    assert!(
+        alias_ids.iter().all(|id| !id.contains('@')),
+        "alias query should still return canonical ids, got {alias_ids:?}"
     );
 
     let body = format!(

@@ -3745,11 +3745,10 @@ mod tests {
 
         let view = harness.state.view();
         let code_hash = iroha_crypto::Hash::prehashed(code_hash_bytes);
-        let instance_key = ("universal".to_string(), contract_address.to_string());
         let bound_hash = view
             .world()
             .contract_instances()
-            .get(&instance_key)
+            .get(&contract_address)
             .copied()
             .expect("instance bound");
         assert_eq!(bound_hash, code_hash);

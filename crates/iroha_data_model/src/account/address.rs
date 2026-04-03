@@ -1554,7 +1554,7 @@ static I105_DIGIT_TABLE: LazyLock<Vec<(&'static str, u8)>> = LazyLock::new(|| {
 
 #[cfg(test)]
 mod tests {
-    use std::{collections::BTreeSet, str::FromStr, sync::Arc};
+    use std::{collections::BTreeSet, sync::Arc};
 
     use iroha_crypto::{Algorithm, KeyPair, PublicKey};
     use proptest::prelude::*;
@@ -2246,7 +2246,7 @@ mod tests {
         assert_eq!((canonical[0] >> 3) & 0b11, 1, "multisig class tag");
 
         let i105 = address.to_i105_for_discriminant(42).expect("i105");
-        let parsed = AccountAddress::from_str(&i105).expect("parse i105");
+        let parsed = AccountAddress::parse_encoded(&i105, Some(42)).expect("parse i105");
         let decoded = parsed.to_account_controller().expect("controller");
         assert_eq!(decoded.multisig_policy().expect("multisig"), &policy);
     }

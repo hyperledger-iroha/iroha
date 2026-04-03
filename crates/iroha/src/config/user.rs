@@ -283,11 +283,11 @@ impl Root {
 
         let (public_key, public_key_origin) = public_key.into_tuple();
         let (private_key, private_key_origin) = private_key.into_tuple();
-        let _domain_id = DomainId::parse_fully_qualified(&domain_literal).map_err(|_| {
-            Report::new(ParseError::InvalidAccountDomain {
+        if DomainId::parse_fully_qualified(&domain_literal).is_err() {
+            emitter.emit(Report::new(ParseError::InvalidAccountDomain {
                 value: domain_literal.clone(),
-            })
-        })?;
+            }));
+        }
         let key_pair = KeyPair::new(public_key.clone(), private_key)
             .attach(ConfigValueAndOrigin::new("[REDACTED]", public_key_origin))
             .attach(ConfigValueAndOrigin::new("[REDACTED]", private_key_origin))
@@ -644,6 +644,26 @@ mod tests {
                 .iter()
                 .any(|error| matches!(error, ParseError::EmptyConnectQueueRoot)),
             "expected `ParseError::EmptyConnectQueueRoot`, found {parse_errors:?}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_bare_account_domain_without_panicking() {
+        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
+        root.account.domain = "wonderland".to_owned();
+
+        let err = root
+            .parse()
+            .expect_err("bare account domain should be rejected");
+        let parse_errors: Vec<_> = err
+            .frames()
+            .filter_map(|frame| frame.downcast_ref::<ParseError>())
+            .collect();
+        assert!(
+            parse_errors
+                .iter()
+                .any(|error| matches!(error, ParseError::InvalidAccountDomain { value } if value == "wonderland")),
+            "expected `ParseError::InvalidAccountDomain`, found {parse_errors:?}"
         );
     }
 }
