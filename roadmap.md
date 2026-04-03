@@ -30,6 +30,7 @@ Open work for this slice now remains:
 - otherwise, no current stable-soak blocker remains for the permissioned / NPoS
   acceptance slice on this patch set.
 
+<<<<<<< Updated upstream
 Latest sync (2026-04-03 multisig + pipeline-event closure):
 the executor-upgrade multisig registration regressions are fixed, and the
 later broad-run `events::pipeline::pipeline_event_scenarios` timeout flake is
@@ -252,6 +253,8 @@ Open work for this slice now remains:
 - none for this specific CLI timing fix; broader repo-wide gates remain tracked
   in the older roadmap entries below.
 
+=======
+>>>>>>> Stashed changes
 Latest sync (2026-04-03 maintained mobile SDK signing selection):
 the Kotlin, Java Android, and Swift SDKs now let apps choose `ED25519` or
 `ML_DSA` for transaction/offline-wallet signing while keeping existing wire

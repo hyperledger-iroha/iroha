@@ -35,6 +35,7 @@ Last updated: 2026-04-03
   `20260403T025927` rerun remains invalid test evidence and should not be used
   for product conclusions.
 
+<<<<<<< Updated upstream
 ## 2026-04-03 Follow-up: multisig executor-upgrade and pipeline event regressions are fixed
 - Closed the last two deterministic integration regressions from the broad
   replay and hardened one additional broad-run timing flake:
@@ -288,6 +289,8 @@ Last updated: 2026-04-03
   - `cargo fmt --all`
   - `CARGO_TARGET_DIR=$PWD/target_codex_hf_queue_fix cargo test -p integration_tests --test iroha_cli soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window -- --exact --nocapture --test-threads=1` (pass)
 
+=======
+>>>>>>> Stashed changes
 ## 2026-04-03 Follow-up: maintained mobile SDKs now expose explicit Ed25519 / ML-DSA signing selection
 - Added a shared `SigningAlgorithm` selector across the maintained mobile SDKs
   so apps can choose `ED25519` (default) or `ML_DSA` for transaction and
