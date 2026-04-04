@@ -1,6 +1,6 @@
 ---
 name: sora-taira-testnet
-description: "Work against the SORA Taira testnet through its deployed Torii MCP endpoint for live account, asset, alias, contract, governance, and transaction workflows. Use when Codex needs to inspect or mutate the Taira testnet, verify or add the `https://taira.sora.org/v1/mcp` MCP server, prefer the curated `iroha.*` tool surface, or handle runtime-only signing inputs such as `authority` and `private_key`."
+description: "Work against the SORA Taira testnet through a deployed Torii MCP endpoint for live account, asset, alias, contract, governance, and transaction workflows. Use when Codex needs to inspect or mutate the Taira testnet, verify or add an explicit `https://<taira-node>/v1/mcp` MCP server, prefer the curated `iroha.*` tool surface, or handle runtime-only signing inputs such as `authority` and `private_key`."
 ---
 
 # SORA Taira Testnet
@@ -16,12 +16,15 @@ Use the Taira testnet through native Torii MCP.
 
 ## MCP Endpoint
 
-The Taira MCP endpoint is:
+Use an explicit public-node MCP endpoint:
 
-- `https://taira.sora.org/v1/mcp`
+- `https://<taira-node>/v1/mcp`
 
 If the endpoint is not configured locally, instruct the user to add a user-local
 MCP entry that points at that URL.
+
+`https://taira.sora.org/v1/mcp` may still exist as a convenience endpoint, but
+it is not the canonical API target for rollout or validation.
 
 If the endpoint returns `404`, report that native Torii MCP is not enabled on
 the deployment yet and stop before attempting live-network actions.
@@ -29,7 +32,7 @@ the deployment yet and stop before attempting live-network actions.
 If reads work but live writes fail with `route_unavailable`, report that the
 public ingress still cannot reach authoritative peers for the target lane and
 point operators at
-`configs/soranexus/taira/check_mcp_rollout.sh --write-config <runtime-only client.toml>`.
+`configs/soranexus/taira/check_mcp_rollout.sh --public-root https://<taira-node> --write-config <runtime-only client.toml>`.
 For that runtime-only signer config, prefer
 `configs/soranexus/taira/taira-canary-client.example.toml`; the generic
 `defaults/client.toml` targets the zero chain id and is not valid for Taira.

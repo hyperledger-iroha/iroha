@@ -11,7 +11,6 @@ from typing import Any
 
 DEFAULT_NETWORK_ADDRESS = "0.0.0.0:1337"
 DEFAULT_TORII_ADDRESS = "0.0.0.0:18080"
-DEFAULT_TORII_PUBLIC_ADDRESS = "https://taira.sora.org"
 MIN_VALIDATORS = 4
 
 
@@ -35,7 +34,7 @@ class RosterDefaults:
 
     network_address: str
     torii_address: str
-    torii_public_address: str
+    torii_public_address: str | None
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -84,17 +83,24 @@ def _load_defaults(payload: dict[str, Any]) -> RosterDefaults:
     values = {
         "network_address": payload.get("network_address", DEFAULT_NETWORK_ADDRESS),
         "torii_address": payload.get("torii_address", DEFAULT_TORII_ADDRESS),
-        "torii_public_address": payload.get(
-            "torii_public_address", DEFAULT_TORII_PUBLIC_ADDRESS
-        ),
     }
     for key, value in values.items():
         if not isinstance(value, str) or not value.strip():
             raise ValueError(f"roster default `{key}` must be a non-empty string")
+    torii_public_address = payload.get("torii_public_address")
+    if torii_public_address is not None:
+        if (
+            not isinstance(torii_public_address, str)
+            or not torii_public_address.strip()
+        ):
+            raise ValueError(
+                "roster default `torii_public_address` must be a non-empty string"
+            )
+        torii_public_address = torii_public_address.strip()
     return RosterDefaults(
         network_address=values["network_address"].strip(),
         torii_address=values["torii_address"].strip(),
-        torii_public_address=values["torii_public_address"].strip(),
+        torii_public_address=torii_public_address,
     )
 
 
@@ -151,6 +157,7 @@ def load_roster(path: Path, secrets_path: Path | None = None) -> list[ValidatorE
     seen_slugs: set[str] = set()
     seen_public_keys: set[str] = set()
     seen_public_addresses: set[str] = set()
+    seen_torii_public_addresses: set[str] = set()
     for index, raw in enumerate(validators_raw, start=1):
         if not isinstance(raw, dict):
             raise ValueError(f"validator entry #{index} must be a TOML table")
@@ -175,7 +182,8 @@ def load_roster(path: Path, secrets_path: Path | None = None) -> list[ValidatorE
             raise ValueError(f"validator `{slug}` field `torii_address` is invalid")
         if not isinstance(torii_public_address, str) or not torii_public_address.strip():
             raise ValueError(
-                f"validator `{slug}` field `torii_public_address` is invalid"
+                f"validator `{slug}` must set `torii_public_address` explicitly; "
+                "public Taira deploys use direct per-node Torii hostnames"
             )
         if slug in seen_slugs:
             raise ValueError(f"validator slug `{slug}` is duplicated")
@@ -183,9 +191,15 @@ def load_roster(path: Path, secrets_path: Path | None = None) -> list[ValidatorE
             raise ValueError(f"validator public_key `{public_key}` is duplicated")
         if public_address in seen_public_addresses:
             raise ValueError(f"validator public_address `{public_address}` is duplicated")
+        if torii_public_address.strip() in seen_torii_public_addresses:
+            raise ValueError(
+                f"validator torii_public_address `{torii_public_address.strip()}` is duplicated; "
+                "each public validator must expose its own direct Torii hostname"
+            )
         seen_slugs.add(slug)
         seen_public_keys.add(public_key)
         seen_public_addresses.add(public_address)
+        seen_torii_public_addresses.add(torii_public_address.strip())
         validators.append(
             ValidatorEntry(
                 slug=slug,

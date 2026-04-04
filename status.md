@@ -2,6 +2,100 @@
 
 Last updated: 2026-04-04
 
+## 2026-04-04 Follow-up: Taira hardening now targets direct public nodes and stake-driven validator admission
+- Reworked the checked-in Taira rollout/docs surface away from treating
+  `https://taira.sora.org` as the canonical API:
+  - `configs/soranexus/taira/check_mcp_rollout.sh` now accepts explicit
+    `--local-root` / `--public-root` Torii URLs and no longer assumes a
+    default public host;
+  - the rollout smoke now fails unless the same direct node also serves
+    `/v1/sccp/capabilities`, `/v1/sccp/manifests`, `/v1/zk/proofs/count`,
+    `/v1/sumeragi/validator-sets`,
+    `/v1/nexus/public_lanes/0/{validators,stake}`,
+    `/v1/bridge/messages`, and the contract deploy/view/list routes; and
+  - public rollout docs now use explicit node roots first and describe
+    `https://taira.sora.org` as convenience-only.
+- Made the validator bundle render path require explicit per-node public Torii
+  URLs instead of a hidden shared-edge default:
+  - `scripts/render_taira_validator_bundle.py` no longer hard-codes
+    `https://taira.sora.org`;
+  - the public roster now requires each validator's own
+    `torii_public_address`; and
+  - focused script tests now cover the new explicit-host requirement.
+- Aligned the checked-in Taira baseline config with the public NPoS model:
+  - `configs/soranexus/taira/config.toml` now advertises
+    `https://taira-validator-1.sora.org` as the peer-1 direct Torii URL;
+  - it explicitly enables `sumeragi.npos.use_stake_snapshot_roster = true`; and
+  - it pins `nexus.staking.public_validator_mode = "stake_elected"` with
+    `stake_asset_id = "xor#universal"` so the checked operator bundle states
+    the intended validator-admission model directly.
+- Updated the repo-side operator surfaces outside the Taira bundle too:
+  - `plugins/iroha/.mcp.json`, `plugins/iroha/README.md`,
+    `skills/sora-taira-testnet/SKILL.md`,
+    `plugins/iroha/skills/iroha-live-network/SKILL.md`, and `AGENTS.md` now
+    describe explicit per-node MCP URLs as canonical and keep
+    `taira.sora.org` only as an optional convenience endpoint.
+- Focused validation completed:
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh`
+  - `python3 -m py_compile scripts/render_taira_validator_bundle.py scripts/tests/render_taira_validator_bundle_test.py`
+  - `python3 scripts/render_taira_validator_bundle.py --base-config configs/soranexus/taira/config.toml --roster configs/soranexus/taira/validator_roster.example.toml --secrets configs/soranexus/taira/validator_secrets.example.toml --output-dir /tmp/taira-render-test-hardening`
+  - `python3 -m pytest scripts/tests/render_taira_validator_bundle_test.py` could not run because `pytest` is not installed in this environment
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:29080 --skip-write-canary` (expected failure: `/v1/sccp/capabilities` still returns `404` on the served node)
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary` (expected failure: public convenience ingress still returns `404` for `/v1/sccp/capabilities`)
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira-validator-1.sora.org --skip-write-canary` (expected failure: direct validator hostname is not yet resolvable from this machine)
+- Current verification boundary:
+  - the repo-side hardening contract is now encoded in scripts, configs, and
+    docs; but
+  - the live deployment is not yet at the new target because SCCP route parity
+    is still missing on the served node and direct per-validator DNS/TLS
+    publication is not in place yet.
+
+## 2026-04-04 Follow-up: Taira reset + explorer redeploy are green again after the repo update
+- Reset the local/public Taira bundle from scratch:
+  - stopped and removed the old `dist/taira-localnet`;
+  - regenerated it with the current `kagami` and the Taira chain id
+    `809574f5-fee7-5e69-bfcf-52451e42d50f`; and
+  - re-ran `configs/soranexus/taira/bootstrap_kaigi_localnet.sh`.
+- Rebuilt the static explorer in the sibling checkout
+  `/Users/administrator/dev/iroha2-block-explorer-web` against the refreshed
+  runtime config, and the public explorer is serving the updated build again.
+- Fixed the config/domain fallout that blocked post-reset rollout:
+  - `crates/iroha_kagami/src/localnet.rs` now emits
+    `wonderland.universal` in generated localnet `client.toml`;
+  - `crates/iroha_kagami/src/client_configs.rs` now defaults generated client
+    configs to fully qualified domains (`acme.universal`);
+  - `defaults/client.toml`, `defaults/nexus/client.toml`, and
+    `configs/soranexus/taira/taira-canary-client.example.toml` now use
+    `wonderland.universal`; and
+  - `configs/soranexus/taira/check_mcp_rollout.sh` no longer scrapes the CLI
+    error text for faucet bootstrap. It derives the canary account id from the
+    write config plus chain discriminant and uses
+    `iroha tools address convert`.
+- The Kaigi bootstrap wrapper was also aligned with the updated fully
+  qualified domain model:
+  - `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` now defaults call
+    and relay domains to `wonderland.universal` / `nexus.universal`; and
+  - it passes an explicit bootstrap-authority domain instead of reusing the
+    relay-domain variable.
+- Validation completed:
+  - `cargo fmt --all`
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh`
+  - `bash -n configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+  - `cargo test -p iroha_kagami client_config_is_written_and_parsable -- --nocapture`
+  - `cargo test -p iroha_kagami render_client_config_contains_expected_fields -- --nocapture`
+  - `cargo test -p iroha_kagami run_writes_client_configs -- --nocapture`
+  - `LOCAL_MCP_URL=http://127.0.0.1:29080/v1/mcp PUBLIC_MCP_URL=https://taira.sora.org/v1/mcp bash configs/soranexus/taira/check_mcp_rollout.sh --skip-write-canary`
+  - `LOCAL_MCP_URL=http://127.0.0.1:29080/v1/mcp bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --write-config dist/taira-localnet/client.toml --write-target local --iroha-bin ./target/release/iroha`
+  - `curl -sf https://taira.sora.org/status`
+  - `curl -sf https://taira.sora.org/v1/mcp`
+  - `curl -sf https://taira-explorer.sora.org/`
+  - `curl -sf https://taira-explorer.sora.org/config.json`
+- Live state after the reset:
+  - local and public `/status` are back on the same chain head and report
+    `commit_qc_validator_set_len=4`;
+  - the local signed write canary succeeds again after the reset; and
+  - the public explorer serves the rebuilt static bundle with
+    `toriiBaseUrl = "https://taira.sora.org"`.
 ## 2026-04-04 Follow-up: Rust SCCP discovery helpers and bridge CLI commands now exist
 - Added first-class Rust client helpers for the SCCP discovery routes in
   `crates/iroha/src/client.rs` instead of leaving Rust relayers to construct

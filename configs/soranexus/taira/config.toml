@@ -29,7 +29,7 @@ max_frame_bytes_tx_gossip = 1048576
 
 [torii]
 address = "0.0.0.0:18080"
-public_address = "https://taira.sora.org"
+public_address = "https://taira-validator-1.sora.org"
 max_content_len = 64_000_000
 
 [torii.mcp]
@@ -93,6 +93,9 @@ pre_admission_sweep = true
 [sumeragi.da]
 enabled = true
 
+[sumeragi.npos]
+use_stake_snapshot_roster = true
+
 [genesis]
 public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
 
@@ -103,6 +106,13 @@ feature_bits = 0b11
 
 [nexus]
 lane_count = 3
+
+[nexus.staking]
+public_validator_mode = "stake_elected"
+restricted_validator_mode = "admin_managed"
+min_validator_stake = 1
+stake_asset_id = "xor#universal"
+stake_escrow_account_id = "testuロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB"
 
 [nexus.fees]
 fee_asset_id = "xor#universal"

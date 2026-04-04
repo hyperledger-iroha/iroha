@@ -14,13 +14,18 @@ future Nexus deployments, not contributor-local repo workflows.
 
 ## Built-in preset
 
-The bundled MCP preset targets:
+The bundled MCP preset is intentionally a placeholder:
 
-- `https://taira.sora.org/v1/mcp`
+- `https://<taira-node-hostname>/v1/mcp`
+
+Replace `<taira-node-hostname>` with the direct Torii hostname of the public
+node you want to use. `https://taira.sora.org/v1/mcp` can still exist as a
+convenience endpoint, but the repo no longer treats it as the canonical API
+target.
 
 That endpoint must be enabled by the deployed validator config before the
-plugin can be used. If it returns `404`, the network has not been redeployed
-with native Torii MCP yet.
+plugin can be used. If it returns `404`, the node has not been redeployed with
+native Torii MCP yet.
 
 For public write readiness, MCP discovery is not enough. A healthy rollout also
 needs a signed canary write to succeed; otherwise public reads can work while
@@ -31,8 +36,8 @@ transactions still fail with `route_unavailable`.
 Use the repo-local marketplace entry in `.agents/plugins/marketplace.json` and
 install the `iroha` plugin through Codex.
 
-The plugin assumes the repo is the source of truth and keeps only the Taira
-preset committed.
+The plugin assumes the repo is the source of truth but keeps only a direct-node
+placeholder committed. Real public node URLs should stay user-local.
 
 ## Standalone Codex skill
 
@@ -52,8 +57,9 @@ Restart Codex after installation so the skill appears in the Skills tab.
 
 ## Add a custom Torii endpoint
 
-Custom Nexus/Torii networks are intentionally user-local rather than committed
-to the repo. Add them with a local MCP entry, for example:
+Public Taira nodes and custom Nexus/Torii networks are intentionally user-local
+rather than committed to the repo. Add them with a local MCP entry, for
+example:
 
 ```bash
 codex mcp add iroha-custom --url https://<torii>/v1/mcp
@@ -89,7 +95,7 @@ Those values are runtime-only inputs:
 
 When live Taira writes fail with `route_unavailable`, treat that as an ingress
 or authoritative-peer deployment issue and rerun
-`configs/soranexus/taira/check_mcp_rollout.sh --write-config <runtime-only client.toml>`
+`configs/soranexus/taira/check_mcp_rollout.sh --public-root https://<taira-node> --write-config <runtime-only client.toml>`
 rather than debugging the plugin surface first. If the deploy still relies on
 hand-edited validator configs, rebuild them from
 `configs/soranexus/taira/validator_roster.example.toml` plus

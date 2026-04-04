@@ -2,6 +2,72 @@
 
 Last updated: 2026-04-04
 
+Latest sync (2026-04-04 Taira public-node hardening landed in repo tooling/docs):
+the repo-side Taira rollout contract no longer treats
+`https://taira.sora.org` as the canonical public API. The rollout smoke now
+requires an explicit direct node URL and fails on missing SCCP, ZK, bridge,
+validator-set, public-lane, and contract routes; the validator bundle renderer
+now requires per-validator `torii_public_address` values; the checked-in Taira
+config now declares stake-snapshot roster mode plus explicit public-lane XOR
+staking config; and the repo plugin/skill/operator guidance now treats
+`taira.sora.org` as convenience-only instead of the default committed MCP host.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/check_mcp_rollout.sh`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/config.toml`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/validator_roster.example.toml`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/README.md`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/explorer.runtime-config.json`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-irohad.service`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/render_taira_validator_bundle.py`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/tests/render_taira_validator_bundle_test.py`
+  - `/Users/takemiyamakoto/dev/iroha/plugins/iroha/.mcp.json`
+  - `/Users/takemiyamakoto/dev/iroha/plugins/iroha/README.md`
+  - `/Users/takemiyamakoto/dev/iroha/plugins/iroha/skills/iroha-live-network/SKILL.md`
+  - `/Users/takemiyamakoto/dev/iroha/skills/sora-taira-testnet/SKILL.md`
+  - `/Users/takemiyamakoto/dev/iroha/AGENTS.md`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh`
+  - `python3 -m py_compile scripts/render_taira_validator_bundle.py scripts/tests/render_taira_validator_bundle_test.py`
+  - `python3 scripts/render_taira_validator_bundle.py --base-config configs/soranexus/taira/config.toml --roster configs/soranexus/taira/validator_roster.example.toml --secrets configs/soranexus/taira/validator_secrets.example.toml --output-dir /tmp/taira-render-test-hardening`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:29080 --skip-write-canary` (expected failure: local `/v1/sccp/capabilities` still `404`)
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary` (expected failure: public convenience ingress still `404` on `/v1/sccp/capabilities`)
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira-validator-1.sora.org --skip-write-canary` (expected failure: direct validator hostname does not resolve yet)
+- open work for this slice now remains:
+  - publish real per-validator DNS/TLS hostnames and make at least one direct
+    public node resolvable from outside the operator host;
+  - redeploy the public node binaries/configs so the stronger route-parity
+    contract passes on direct ingress, especially `/v1/sccp/capabilities`,
+    `/v1/sccp/manifests`, `/v1/bridge/messages`, and the contract routes; and
+  - once direct ingress is live, rerun the strengthened public canary with
+    `--public-root https://<taira-node> --write-config /run/secrets/taira-canary-client.toml`
+    plus follow-up app smokes (`deploy_testnet.sh`, `smoke_testnet.sh`,
+    wallet, and SoraSwap bridge) against that same per-node hostname.
+
+Latest sync (2026-04-04 Taira reset + explorer redeploy after repo update):
+the Taira/testnet reset slice is green again after refreshing the local/public
+bundle, rebuilding the explorer, and fixing the updated fully qualified
+domain/config expectations in the rollout helpers and generated client configs.
+
+- verified in this slice:
+  - `cargo fmt --all`
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh`
+  - `bash -n configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+  - `cargo test -p iroha_kagami client_config_is_written_and_parsable -- --nocapture`
+  - `cargo test -p iroha_kagami render_client_config_contains_expected_fields -- --nocapture`
+  - `cargo test -p iroha_kagami run_writes_client_configs -- --nocapture`
+  - `LOCAL_MCP_URL=http://127.0.0.1:29080/v1/mcp PUBLIC_MCP_URL=https://taira.sora.org/v1/mcp bash configs/soranexus/taira/check_mcp_rollout.sh --skip-write-canary`
+  - `LOCAL_MCP_URL=http://127.0.0.1:29080/v1/mcp bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --write-config dist/taira-localnet/client.toml --write-target local --iroha-bin ./target/release/iroha`
+- open work for this slice now remains:
+  - reconcile the checked-in explorer/nginx template with the actual host-local
+    Homebrew nginx deployment so future redeploys do not depend on manual
+    drift between `configs/soranexus/taira/taira-explorer.nginx.conf` and the
+    live server config; and
+  - rerun broader workspace validation (`cargo test --workspace`,
+    `cargo clippy --workspace --all-targets -- -D warnings`) once the current
+    Taira/runtime slice is otherwise quiet.
 Latest sync (2026-04-04 Rust SCCP discovery helpers and bridge CLI commands):
 the Rust client no longer stops at typed SCCP message artifacts. It now also
 fetches `/v1/sccp/capabilities` and `/v1/sccp/manifests` through first-class
