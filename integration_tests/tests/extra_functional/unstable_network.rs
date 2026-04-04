@@ -477,6 +477,15 @@ fn is_submission_accepted_duplicate(err: &eyre::Report) -> bool {
     })
 }
 
+fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        text.contains("tx confirmation timed out")
+            || text.contains("haven't got tx confirmation within")
+            || text.contains("transaction queued for too long")
+    })
+}
+
 fn allow_supply_resubmit(faulty_peers: usize, force_soft_fork: bool) -> bool {
     faulty_peers > 0 || force_soft_fork
 }
@@ -1157,8 +1166,46 @@ impl UnstableNetwork {
             AssetDefinition::numeric(__asset_definition_id.clone())
                 .with_name(__asset_definition_id.name().to_string())
         });
-        spawn_blocking(move || client.submit_blocking(isi)).await??;
-        Ok(())
+        let submit_res = spawn_blocking(move || client.submit_blocking(isi)).await?;
+        match submit_res {
+            Ok(_) => Ok(()),
+            Err(err) if is_tx_confirmation_timeout(&err) => {
+                let mut query_client = network.client();
+                if query_client.transaction_status_timeout < status_timeout {
+                    query_client.transaction_status_timeout = status_timeout;
+                }
+                let deadline = Instant::now() + status_timeout;
+                loop {
+                    let client = query_client.clone();
+                    let asset_definition_id = asset_definition_id.clone();
+                    match spawn_blocking(move || client.query(FindAssetsDefinitions::new()).execute_all())
+                        .await
+                    {
+                        Ok(Ok(definitions))
+                            if definitions
+                                .into_iter()
+                                .any(|definition| definition.id() == &asset_definition_id) =>
+                        {
+                            iroha_logger::warn!(
+                                ?asset_definition_id,
+                                "asset definition registration confirmed via query after tx confirmation timeout"
+                            );
+                            return Ok(());
+                        }
+                        Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {}
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(err.wrap_err_with(|| {
+                            format!(
+                                "asset definition {asset_definition_id} stayed absent after tx confirmation timeout"
+                            )
+                        }));
+                    }
+                    sleep(Duration::from_millis(200)).await;
+                }
+            }
+            Err(err) => Err(err),
+        }
     }
 
     async fn execute_round(
