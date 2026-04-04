@@ -2,6 +2,45 @@
 
 Last updated: 2026-04-04
 
+Latest sync (2026-04-04 Nexus fee admission hardening):
+fee-insolvent external transactions are now rejected at shared queue ingress,
+so obvious unfunded Nexus-fee submissions no longer get enqueued or carried into
+blocks as later execution-time fee rejections. The follow-up gaps from the first
+cut are also closed now: sponsor permission parsing is shared with execution,
+fee asset aliases are validated against the tx deadline bound, queue selection
+rechecks fee solvency before proposal assembly, gossip records the new drop
+reasons in metrics, and Torii has a regression proving fee-insolvent txs do not
+reach explorer / committed history.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/executor.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/queue.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/gossiper.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/state.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/bridge.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs`
+- verified with:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib push_with_lane_with_state_accepts_authorized_fee_sponsor_after_committed_grant -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib push_with_lane_with_state_rejects_fee_alias_that_expires_before_tx_deadline -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib get_transactions_for_block_with_state_drops_transaction_that_loses_fee_balance -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib push_with_gossip_payload_with_state_and_routing_rejects_fee_insolvent_transaction -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib handler_post_transaction_uses_tx_rate_limiter -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib handler_policy_reports_tx_rate_limit_as_always_enforced -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib bridge_message_submit_ -- --nocapture`
+
+Open work for this slice now remains:
+- run a fresh broader runtime sweep on the patched tree, starting with
+  `cargo test --workspace --no-run` and then the full `cargo test --workspace`
+  if the compile-only pass stays green;
+- rerun strict linting after the broader runtime pass:
+  `cargo clippy --workspace --all-targets -- -D warnings`; and
+- decide whether to keep using the isolated `CARGO_TARGET_DIR=/tmp/iroha-codex-target`
+  workflow for focused reruns while other long-running local Cargo jobs remain
+  active in the default target directories.
+
 Latest sync (2026-04-04 unstable-network timeout fallback + clap compile fix):
 the latest dataspace/domain cleanup fallout is narrowed to verification work.
 The patched tree is compile-clean again, and the two runtime failures from the

@@ -5,6 +5,7 @@ const encoder = new TextEncoder();
 const SID_PREFIX = encoder.encode("iroha-connect|sid|");
 const CONNECT_URI_VERSION = "1";
 const CONNECT_URI_SCHEME = "iroha://connect";
+const DEFAULT_CONNECT_LAUNCH_PROTOCOL = "irohaconnect";
 const DEFAULT_TORII_BASE_URL = "https://taira.sora.org";
 
 function requireNonEmptyString(value, name) {
@@ -115,6 +116,11 @@ function normalizeConnectRole(role, name = "role") {
 function normalizeOptionalString(value) {
   const trimmed = value?.trim();
   return trimmed ? trimmed : null;
+}
+
+function normalizeConnectProtocol(value, name = "protocol") {
+  const normalized = requireNonEmptyString(value, name);
+  return normalized.endsWith(":") ? normalized.slice(0, -1) : normalized;
 }
 
 function buildConnectUri(sidBase64Url, chainId, node, role, token = null) {
@@ -261,6 +267,28 @@ export function resolveConnectLaunchUri(role, preview = null, session = null) {
   return normalizedRole === "wallet"
     ? normalizeOptionalString(preview?.walletUri) ?? ""
     : normalizeOptionalString(preview?.appUri) ?? "";
+}
+
+export function rewriteConnectUriProtocol(
+  uri,
+  protocol = DEFAULT_CONNECT_LAUNCH_PROTOCOL,
+) {
+  const parsed = new URL(requireNonEmptyString(uri, "uri"));
+  parsed.protocol = `${normalizeConnectProtocol(protocol)}:`;
+  return parsed.toString();
+}
+
+export function resolveConnectLaunchUriForProtocol(
+  role,
+  preview = null,
+  session = null,
+  protocol = DEFAULT_CONNECT_LAUNCH_PROTOCOL,
+) {
+  const launchUri = resolveConnectLaunchUri(role, preview, session);
+  if (!launchUri) {
+    return "";
+  }
+  return rewriteConnectUriProtocol(launchUri, protocol);
 }
 
 function mergeConnectProtocols(protocols, tokenProtocol) {

@@ -465,6 +465,43 @@ fn parse_account_id_literal(
     crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum NexusFeeAdmissionError {
+    Rejected(String),
+    ConfigInvalid(String),
+}
+
+fn validation_fail_to_nexus_fee_admission_error(err: ValidationFail) -> NexusFeeAdmissionError {
+    match err {
+        ValidationFail::InternalError(reason) => NexusFeeAdmissionError::ConfigInvalid(reason),
+        other => NexusFeeAdmissionError::Rejected(other.to_string()),
+    }
+}
+
+pub(crate) fn can_use_fee_sponsor_read_only(
+    world: &impl WorldReadOnly,
+    caller: &AccountId,
+    sponsor: &AccountId,
+) -> bool {
+    let dataspace_catalog = world.dataspace_catalog();
+    let permission_allows_sponsor = |permission: &Permission| {
+        crate::state::permission_allows_fee_sponsor(world, dataspace_catalog, permission, sponsor)
+    };
+
+    if world
+        .account_permissions()
+        .get(caller)
+        .is_some_and(|permissions| permissions.iter().any(permission_allows_sponsor))
+    {
+        return true;
+    }
+
+    world
+        .account_roles_iter(caller)
+        .filter_map(|role_id| world.roles().get(role_id))
+        .any(|role| role.permissions.iter().any(permission_allows_sponsor))
+}
+
 /// Parse optional `gas_limit` from transaction metadata.
 pub(crate) fn parse_gas_limit(metadata: &Metadata) -> Result<Option<u64>, ValidationFail> {
     let Some(raw) = metadata.get("gas_limit") else {
@@ -648,6 +685,157 @@ fn parse_executor_additional_fuel(metadata: &Metadata) -> Result<u64, Validation
     raw.try_into_any_norito::<u64>().map_err(|err| {
         ValidationFail::NotPermitted(format!("invalid additional_fuel metadata: {err}"))
     })
+}
+
+pub(crate) fn compute_nexus_fee_amount(
+    cfg: &iroha_config::parameters::actual::NexusFees,
+    tx_bytes_len: usize,
+    instruction_count: usize,
+    gas_used: u64,
+) -> Result<Numeric, ValidationFail> {
+    let tx_bytes_u64 = u64::try_from(tx_bytes_len).map_err(|_| {
+        ValidationFail::InternalError("transaction too large for fee accounting".to_owned())
+    })?;
+    let instr_u64 = u64::try_from(instruction_count).map_err(|_| {
+        ValidationFail::InternalError("instruction count too large for fee accounting".to_owned())
+    })?;
+    let mut fee = cfg.base_fee.clone();
+    fee = Executor::checked_numeric_add(
+        fee,
+        Executor::checked_numeric_mul_u64(&cfg.per_byte_fee, tx_bytes_u64, "fee amount")?,
+        "fee amount",
+    )?;
+    fee = Executor::checked_numeric_add(
+        fee,
+        Executor::checked_numeric_mul_u64(&cfg.per_instruction_fee, instr_u64, "fee amount")?,
+        "fee amount",
+    )?;
+    Executor::checked_numeric_add(
+        fee,
+        Executor::checked_numeric_mul_u64(&cfg.per_gas_unit_fee, gas_used, "fee amount")?,
+        "fee amount",
+    )
+    .map(Numeric::trim_trailing_zeros)
+}
+
+fn fee_bound_for_admission(
+    transaction: &SignedTransaction,
+) -> Result<(usize, usize, u64), NexusFeeAdmissionError> {
+    let tx_bytes_len = to_bytes(transaction)
+        .map(|bytes| bytes.len())
+        .map_err(|err| {
+            NexusFeeAdmissionError::ConfigInvalid(format!(
+                "failed to encode transaction for fee metering: {err}"
+            ))
+        })?;
+
+    let metadata = transaction.metadata();
+    let (instruction_count, gas_used) = match transaction.instructions() {
+        Executable::Instructions(instructions) => (
+            instructions.len(),
+            isi_gas::meter_instructions(instructions.as_ref()),
+        ),
+        Executable::IvmProved(proved) => (
+            proved.overlay.len(),
+            isi_gas::meter_instructions(proved.overlay.as_ref()),
+        ),
+        Executable::Ivm(_) => {
+            let gas_limit = parse_gas_limit(metadata)
+                .map_err(validation_fail_to_nexus_fee_admission_error)?
+                .ok_or_else(|| {
+                    NexusFeeAdmissionError::Rejected(
+                        "missing gas_limit in transaction metadata".to_owned(),
+                    )
+                })?;
+            (0, gas_limit)
+        }
+    };
+
+    Ok((tx_bytes_len, instruction_count, gas_used))
+}
+
+pub(crate) fn check_external_nexus_fee_admission(
+    world: &impl WorldReadOnly,
+    nexus: &iroha_config::parameters::actual::Nexus,
+    transaction: &SignedTransaction,
+    observation_time_ms: u64,
+) -> Result<(), NexusFeeAdmissionError> {
+    if !nexus.enabled {
+        return Ok(());
+    }
+
+    let metadata = transaction.metadata();
+    let fee_sponsor = parse_fee_sponsor(world, world.dataspace_catalog(), metadata)
+        .map_err(validation_fail_to_nexus_fee_admission_error)?;
+    let (tx_bytes_len, instruction_count, gas_used) = fee_bound_for_admission(transaction)?;
+    let fee = compute_nexus_fee_amount(&nexus.fees, tx_bytes_len, instruction_count, gas_used)
+        .map_err(validation_fail_to_nexus_fee_admission_error)?;
+
+    if fee <= Numeric::zero() {
+        return Ok(());
+    }
+
+    let payer = if let Some(sponsor) = fee_sponsor {
+        if !nexus.fees.sponsorship_enabled {
+            return Err(NexusFeeAdmissionError::Rejected(
+                "fee sponsorship is disabled".to_owned(),
+            ));
+        }
+        if !can_use_fee_sponsor_read_only(world, transaction.authority(), &sponsor) {
+            return Err(NexusFeeAdmissionError::Rejected(
+                "fee sponsor is not authorized".to_owned(),
+            ));
+        }
+        if nexus.fees.sponsor_max_fee > Numeric::zero() && fee > nexus.fees.sponsor_max_fee {
+            return Err(NexusFeeAdmissionError::Rejected(
+                "fee exceeds sponsor_max_fee".to_owned(),
+            ));
+        }
+        sponsor
+    } else {
+        transaction.authority().clone()
+    };
+
+    crate::block::parse_account_literal_with_world(
+        world,
+        world.dataspace_catalog(),
+        &nexus.fees.fee_sink_account_id,
+    )
+    .ok_or_else(|| {
+        NexusFeeAdmissionError::ConfigInvalid(
+            "invalid nexus fee sink account id; expected canonical I105 account id or on-chain alias"
+                .to_owned(),
+        )
+    })?;
+
+    let asset_def = crate::block::parse_asset_definition_literal_with_world(
+        world,
+        &nexus.fees.fee_asset_id,
+        observation_time_ms,
+    )
+    .ok_or_else(|| {
+        NexusFeeAdmissionError::ConfigInvalid(
+            "invalid nexus fee asset id; expected canonical Base58 asset definition id or active asset alias"
+                .to_owned(),
+        )
+    })?;
+
+    let payer_asset = AssetId::new(asset_def, payer.clone());
+    let Some(balance) = world.assets().get(&payer_asset) else {
+        return Err(NexusFeeAdmissionError::Rejected(format!(
+            "fee asset `{}` is missing for payer `{payer}`",
+            payer_asset.definition()
+        )));
+    };
+
+    let available = (**balance).clone();
+    if available < fee {
+        return Err(NexusFeeAdmissionError::Rejected(format!(
+            "fee balance for payer `{payer}` is insufficient: requires {fee}, available {available}"
+        )));
+    }
+
+    Ok(())
 }
 
 pub(crate) fn configure_executor_fuel_budget(
@@ -988,31 +1176,7 @@ impl Executor {
             return Ok(());
         }
         let cfg = state_transaction.nexus.fees.clone();
-        let tx_bytes_u64 = u64::try_from(tx_bytes_len).map_err(|_| {
-            ValidationFail::InternalError("transaction too large for fee accounting".to_owned())
-        })?;
-        let instr_u64 = u64::try_from(instruction_count).map_err(|_| {
-            ValidationFail::InternalError(
-                "instruction count too large for fee accounting".to_owned(),
-            )
-        })?;
-        let mut fee = cfg.base_fee.clone();
-        fee = Self::checked_numeric_add(
-            fee,
-            Self::checked_numeric_mul_u64(&cfg.per_byte_fee, tx_bytes_u64, "fee amount")?,
-            "fee amount",
-        )?;
-        fee = Self::checked_numeric_add(
-            fee,
-            Self::checked_numeric_mul_u64(&cfg.per_instruction_fee, instr_u64, "fee amount")?,
-            "fee amount",
-        )?;
-        fee = Self::checked_numeric_add(
-            fee,
-            Self::checked_numeric_mul_u64(&cfg.per_gas_unit_fee, gas_used, "fee amount")?,
-            "fee amount",
-        )?
-        .trim_trailing_zeros();
+        let fee = compute_nexus_fee_amount(&cfg, tx_bytes_len, instruction_count, gas_used)?;
 
         if fee <= Numeric::zero() {
             return Ok(());

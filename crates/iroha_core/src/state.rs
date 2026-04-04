@@ -924,7 +924,7 @@ struct AccountPermissionSummary {
     fee_sponsors: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
 }
 
-fn parse_permission_account_field(
+pub(crate) fn parse_permission_account_field(
     world: &impl WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     payload: &iroha_primitives::json::Json,
@@ -942,6 +942,33 @@ fn parse_permission_account_field(
     };
     crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
         .map(Into::into)
+}
+
+pub(crate) fn fee_sponsor_from_permission(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    permission: &Permission,
+) -> Option<iroha_data_model::account::AccountId> {
+    (permission.name() == "CanUseFeeSponsor")
+        .then(|| {
+            parse_permission_account_field(
+                world,
+                dataspace_catalog,
+                permission.payload(),
+                "sponsor",
+            )
+        })
+        .flatten()
+}
+
+pub(crate) fn permission_allows_fee_sponsor(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    permission: &Permission,
+    sponsor: &iroha_data_model::account::AccountId,
+) -> bool {
+    fee_sponsor_from_permission(world, dataspace_catalog, permission)
+        .is_some_and(|allowed| allowed.subject_id() == sponsor.subject_id())
 }
 
 impl AccountPermissionSummary {
@@ -978,12 +1005,9 @@ impl AccountPermissionSummary {
                 }
             }
             "CanUseFeeSponsor" => {
-                if let Some(sponsor) = parse_permission_account_field(
-                    world,
-                    dataspace_catalog,
-                    permission.payload(),
-                    "sponsor",
-                ) {
+                if let Some(sponsor) =
+                    fee_sponsor_from_permission(world, dataspace_catalog, permission)
+                {
                     self.fee_sponsors.insert(sponsor);
                 }
             }

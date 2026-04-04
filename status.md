@@ -2,6 +2,73 @@
 
 Last updated: 2026-04-04
 
+## 2026-04-04 Follow-up: Nexus fee admission regressions are closed
+- Closed the public-network spam gap where fee-insolvent external transactions
+  could still be enqueued, proposed, and persisted on chain as rejected block
+  entries without ever paying the Nexus fee.
+- `crates/iroha_core/src/executor.rs` now exposes shared Nexus fee admission
+  helpers so queue ingress can reuse the same fee arithmetic and the same
+  sponsor-authorization semantics used by execution:
+  - exact fee math is shared via `compute_nexus_fee_amount(...)`;
+  - read-only sponsor authorization mirrors runtime permission summary logic;
+    and
+  - raw `Executable::Ivm` admission uses `gas_limit` as the fee bound, while
+    `Instructions` and `IvmProved` use exact metered gas.
+- `crates/iroha_core/src/queue.rs` now rejects fee-insolvent external
+  transactions before governance/compliance/privacy admission work and before
+  enqueueing:
+  - new queue rejections distinguish user/state failures from broken Nexus fee
+    config;
+  - the shared queue path covers both Torii ingress and gossiped external
+    transactions;
+  - queue selection now rechecks external Nexus fee solvency before proposal
+    assembly, so obvious post-admission balance races are dropped before block
+    creation; and
+  - obvious pre-funding cases no longer make it into the queue or onto chain as
+    later execution-time fee failures.
+- `crates/iroha_core/src/gossiper.rs` now treats the new fee-admission
+  rejections as intentional drops instead of generic enqueue failures and tags
+  those drops in the gossip metrics stream.
+- `crates/iroha_core/src/state.rs` now exposes shared fee-sponsor permission
+  parsing so read-only admission checks and execution-time permission summaries
+  cannot drift on `CanUseFeeSponsor` semantics.
+- `crates/iroha_torii/src/lib.rs` now:
+  - enforces the transaction-submission rate limiter unconditionally for
+    `POST /transaction`;
+  - reports transaction `rate_limit_enforced=true` in `/v1/policy`; and
+  - maps the new queue fee-admission rejections to stable `403` / `500` HTTP
+    surfaces with explicit rejection metadata.
+- The admission window now resolves fee asset aliases against the transaction
+  deadline bound instead of local wall-clock queue time, which removes the
+  alias-expiry mismatch between queue admission and later execution.
+- A focused Torii regression now proves that a fee-insolvent external
+  transaction is rejected at ingress and does not appear in explorer /
+  committed transaction history.
+- Supporting compile-only cleanup landed alongside the verification run:
+  - `crates/iroha_core/src/bridge.rs` now has the required missing docs again,
+    which restores docs-clean `iroha_core` test builds; and
+  - the bridge-message submit helpers in
+    `crates/iroha_torii/src/routing.rs` and
+    `crates/iroha_torii/src/lib.rs` now use the current
+    `MaybeTelemetry` / `handle_transaction_with_metrics(...)` signatures.
+- Focused validation completed on the patched tree:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib push_with_lane_with_state_accepts_authorized_fee_sponsor_after_committed_grant -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib push_with_lane_with_state_rejects_fee_alias_that_expires_before_tx_deadline -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib get_transactions_for_block_with_state_drops_transaction_that_loses_fee_balance -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core --lib push_with_gossip_payload_with_state_and_routing_rejects_fee_insolvent_transaction -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib handler_post_transaction_uses_tx_rate_limiter -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib handler_policy_reports_tx_rate_limit_as_always_enforced -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib bridge_message_submit_ -- --nocapture`
+- Current verification boundary:
+  - the queue/gossip/Torii regression coverage for the new admission path is
+    green, including the explorer-history guardrail;
+  - execution-time fee charging remains unchanged as the final defense for
+    true late races after proposal selection; and
+  - a fresh full `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings`
+    sweep has not yet been rerun on this patched tree.
+
 ## 2026-04-04 Follow-up: workspace compile sweep is green and the broad-run regression pair is patched
 - Finished the remaining compile/runtime fallout around the dataspace-domain
   cleanup in the current tree:

@@ -2,10 +2,16 @@
 //! Integration tests of the Iroha Client CLI
 
 use std::{
+    collections::BTreeMap,
+    net::{TcpListener, TcpStream},
     num::NonZeroU32,
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
-    sync::Once,
+    sync::{
+        Arc, Once,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -33,6 +39,10 @@ use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, sample_ivm_path};
 use norito::json::{self, Value};
 use reqwest::Url;
+
+const SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS: &str = "60";
+const SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION: &str = "main";
+const SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES: usize = 4_096;
 
 fn program() -> PathBuf {
     prepare_iroha_cli_test_environment();
@@ -552,14 +562,246 @@ async fn run_soracloud_command(
     config: &ProgramConfig,
     args: &[&str],
 ) -> eyre::Result<std::process::Output> {
+    let effective_args = soracloud_command_args(args);
     Ok(tokio::process::Command::new(program())
         .current_dir(cwd)
         .arg("app")
         .arg("soracloud")
-        .args(args)
+        .args(&effective_args)
         .envs(config.envs())
         .output()
         .await?)
+}
+
+fn soracloud_command_args(args: &[&str]) -> Vec<String> {
+    let mut effective_args = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+    if !args.contains(&"--timeout-secs") {
+        effective_args.push("--timeout-secs".to_owned());
+        effective_args.push(SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS.to_owned());
+    }
+    effective_args
+}
+
+#[test]
+fn soracloud_command_args_append_timeout_once() {
+    assert_eq!(
+        soracloud_command_args(&["hf-deploy", "--repo-id", "openai/gpt-oss"]),
+        vec![
+            "hf-deploy".to_owned(),
+            "--repo-id".to_owned(),
+            "openai/gpt-oss".to_owned(),
+            "--timeout-secs".to_owned(),
+            SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS.to_owned(),
+        ]
+    );
+    assert_eq!(
+        soracloud_command_args(&[
+            "hf-status",
+            "--repo-id",
+            "openai/gpt-oss",
+            "--timeout-secs",
+            "15",
+        ]),
+        vec![
+            "hf-status".to_owned(),
+            "--repo-id".to_owned(),
+            "openai/gpt-oss".to_owned(),
+            "--timeout-secs".to_owned(),
+            "15".to_owned(),
+        ]
+    );
+}
+
+#[derive(Clone)]
+struct MockHttpResponse {
+    content_type: &'static str,
+    body: Vec<u8>,
+}
+
+struct MockHttpServer {
+    base_url: String,
+    address: String,
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl MockHttpServer {
+    fn start(routes: BTreeMap<String, MockHttpResponse>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock HTTP server");
+        listener
+            .set_nonblocking(true)
+            .expect("set mock listener nonblocking");
+        let address = listener
+            .local_addr()
+            .expect("mock listener address")
+            .to_string();
+        let base_url = format!("http://{address}");
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::clone(&stop);
+        let handle = thread::spawn(move || {
+            while !stop_flag.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                        let path = read_mock_http_request_path(&mut stream);
+                        if stop_flag.load(Ordering::SeqCst) && path.is_empty() {
+                            continue;
+                        }
+                        let response = routes.get(&path).cloned().unwrap_or(MockHttpResponse {
+                            content_type: "text/plain",
+                            body: b"not found".to_vec(),
+                        });
+                        let status = if routes.contains_key(&path) {
+                            "200 OK"
+                        } else {
+                            "404 Not Found"
+                        };
+                        let headers = format!(
+                            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
+                            response.body.len(),
+                            response.content_type
+                        );
+                        std::io::Write::write_all(&mut stream, headers.as_bytes())
+                            .expect("write mock HTTP headers");
+                        std::io::Write::write_all(&mut stream, &response.body)
+                            .expect("write mock HTTP body");
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error) => panic!("mock HTTP server accept failed: {error}"),
+                }
+            }
+        });
+        Self {
+            base_url,
+            address,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn api_base_url(&self) -> String {
+        format!("{}/api", self.base_url)
+    }
+}
+
+impl Drop for MockHttpServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(&self.address);
+        if let Some(handle) = self.handle.take() {
+            handle.join().expect("join mock HTTP server");
+        }
+    }
+}
+
+fn read_mock_http_request_path(stream: &mut TcpStream) -> String {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    loop {
+        match std::io::Read::read(stream, &mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                break;
+            }
+            Err(error) => panic!("read mock HTTP request failed: {error}"),
+        }
+    }
+
+    String::from_utf8_lossy(&request)
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or_default()
+        .to_owned()
+}
+
+fn start_mock_hf_source_server() -> MockHttpServer {
+    let repo_id = SORACLOUD_LIVE_HF_TEST_REPO_ID;
+    let revision = SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION;
+    let weight_path = format!("/{repo_id}/resolve/{revision}/model.safetensors");
+    let info_path = format!("/api/models/{repo_id}/revision/{revision}");
+    let model_info = norito::json!({
+        "siblings": [
+            { "rfilename": "model.safetensors" }
+        ]
+    });
+    MockHttpServer::start(BTreeMap::from([
+        (
+            info_path,
+            MockHttpResponse {
+                content_type: "application/json",
+                body: json::to_vec(&model_info).expect("encode mock HF model info"),
+            },
+        ),
+        (
+            weight_path,
+            MockHttpResponse {
+                content_type: "application/octet-stream",
+                body: vec![7_u8; SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES],
+            },
+        ),
+    ]))
+}
+
+#[tokio::test]
+async fn mock_hf_source_server_serves_profile_routes() -> eyre::Result<()> {
+    let server = start_mock_hf_source_server();
+    let client = reqwest::Client::new();
+
+    let info = client
+        .get(format!(
+            "{}/api/models/{}/revision/{}",
+            server.base_url,
+            SORACLOUD_LIVE_HF_TEST_REPO_ID,
+            SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION
+        ))
+        .send()
+        .await?;
+    assert!(info.status().is_success());
+    let info_payload: Value = json::from_slice(&info.bytes().await?)?;
+    assert_eq!(
+        info_payload
+            .get("siblings")
+            .and_then(Value::as_array)
+            .and_then(|siblings| siblings.first())
+            .and_then(Value::as_object)
+            .and_then(|entry| entry.get("rfilename"))
+            .and_then(Value::as_str),
+        Some("model.safetensors")
+    );
+
+    let weights = client
+        .head(format!(
+            "{}/{}/resolve/{}/model.safetensors",
+            server.base_url,
+            SORACLOUD_LIVE_HF_TEST_REPO_ID,
+            SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION
+        ))
+        .send()
+        .await?;
+    assert!(weights.status().is_success());
+    assert_eq!(
+        weights
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok()),
+        Some("4096")
+    );
+
+    Ok(())
 }
 
 fn validator_program_config(
@@ -1836,9 +2078,12 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
+    let hf_source_server = start_mock_hf_source_server();
+    let hf_hub_base_url = hf_source_server.base_url.clone();
+    let hf_api_base_url = hf_source_server.api_base_url();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
-        .with_config_layer(|layer| {
+        .with_config_layer(move |layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
@@ -1846,7 +2091,15 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
                 )
-                .write(["sumeragi", "consensus_mode"], "npos");
+                .write(["sumeragi", "consensus_mode"], "npos")
+                .write(
+                    ["soracloud_runtime", "hf", "hub_base_url"],
+                    hf_hub_base_url.clone(),
+                )
+                .write(
+                    ["soracloud_runtime", "hf", "api_base_url"],
+                    hf_api_base_url.clone(),
+                );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -2266,9 +2519,12 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
 async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
+    let hf_source_server = start_mock_hf_source_server();
+    let hf_hub_base_url = hf_source_server.base_url.clone();
+    let hf_api_base_url = hf_source_server.api_base_url();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
-        .with_config_layer(|layer| {
+        .with_config_layer(move |layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
@@ -2276,7 +2532,15 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
                 )
-                .write(["sumeragi", "consensus_mode"], "npos");
+                .write(["sumeragi", "consensus_mode"], "npos")
+                .write(
+                    ["soracloud_runtime", "hf", "hub_base_url"],
+                    hf_hub_base_url.clone(),
+                )
+                .write(
+                    ["soracloud_runtime", "hf", "api_base_url"],
+                    hf_api_base_url.clone(),
+                );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -2306,7 +2570,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     let queued_service_name = "hf_queue_next";
     let promoted_service_name = "hf_queue_promoted";
     let renewed_model_name = "tiny-random-gpt2-renewed";
-    let lease_term_ms_value = 10_000_u64;
+    let lease_term_ms_value = 30_000_u64;
     let lease_term_ms = lease_term_ms_value.to_string();
     let base_fee_nanos = "10000".to_string();
     let renewed_fee_nanos = "12000".to_string();
@@ -2590,9 +2854,12 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
 async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
+    let hf_source_server = start_mock_hf_source_server();
+    let hf_hub_base_url = hf_source_server.base_url.clone();
+    let hf_api_base_url = hf_source_server.api_base_url();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
-        .with_config_layer(|layer| {
+        .with_config_layer(move |layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
@@ -2600,7 +2867,15 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
                 )
-                .write(["sumeragi", "consensus_mode"], "npos");
+                .write(["sumeragi", "consensus_mode"], "npos")
+                .write(
+                    ["soracloud_runtime", "hf", "hub_base_url"],
+                    hf_hub_base_url.clone(),
+                )
+                .write(
+                    ["soracloud_runtime", "hf", "api_base_url"],
+                    hf_api_base_url.clone(),
+                );
         })
         .with_genesis_instruction(Grant::account_permission(
             Permission::new("CanManageSoracloud".into(), Json::new(())),

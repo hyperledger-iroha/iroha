@@ -143,10 +143,12 @@ use iroha_sccp::{
     BurnPayloadV1, GovernancePayloadV1, NexusBridgeFinalityProofV1, NexusCommitQcV1,
     NexusConsensusPhaseV1, NexusParliamentCertificateV1, NexusParliamentRosterMemberV1,
     NexusParliamentSignatureSchemeV1, NexusParliamentSignatureV1, NexusSccpBurnProofV1,
-    NexusSccpGovernanceProofV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
-    burn_message_id, canonical_burn_payload_bytes, canonical_governance_payload_bytes,
-    commitment_leaf_hash, decode_nexus_bridge_finality_proof, parliament_certificate_hash,
-    payload_hash, verify_burn_bundle_structure, verify_governance_bundle_structure,
+    NexusSccpGovernanceProofV1, NexusSccpMessageProofV1, SccpHubCommitmentV1, SccpHubMessageKind,
+    SccpMerkleProofV1, SccpPayloadV1, burn_message_id, canonical_burn_payload_bytes,
+    canonical_governance_payload_bytes, canonical_sccp_payload_bytes, commitment_leaf_hash,
+    decode_nexus_bridge_finality_proof, parliament_certificate_hash, payload_hash, sccp_message_id,
+    sccp_message_kind, sccp_message_target_domain, verify_burn_bundle_structure,
+    verify_governance_bundle_structure, verify_message_bundle_structure,
 };
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
@@ -4401,6 +4403,8 @@ static SCCP_BURN_BUNDLES: LazyLock<RwLock<BTreeMap<[u8; 32], NexusSccpBurnProofV
     LazyLock::new(|| RwLock::new(BTreeMap::new()));
 static SCCP_GOVERNANCE_BUNDLES: LazyLock<RwLock<BTreeMap<[u8; 32], NexusSccpGovernanceProofV1>>> =
     LazyLock::new(|| RwLock::new(BTreeMap::new()));
+static SCCP_MESSAGE_BUNDLES: LazyLock<RwLock<BTreeMap<[u8; 32], NexusSccpMessageProofV1>>> =
+    LazyLock::new(|| RwLock::new(BTreeMap::new()));
 
 fn map_bridge_finality_error(err: iroha_core::bridge::BridgeFinalityError) -> Error {
     match err {
@@ -4575,6 +4579,79 @@ fn bridge_proof_from_sccp_governance_bundle(
     })
 }
 
+#[cfg(feature = "app_api")]
+fn bridge_proof_from_sccp_message_bundle(
+    bundle: &NexusSccpMessageProofV1,
+) -> Result<iroha_data_model::bridge::BridgeProof> {
+    if !verify_message_bundle_structure(bundle) {
+        return Err(conversion_error(
+            "SCCP message bundle failed structural verification".to_owned(),
+        ));
+    }
+    let finality = decode_nexus_bridge_finality_proof(&bundle.finality_proof).ok_or_else(|| {
+        conversion_error("SCCP message bundle finality proof could not be decoded".to_owned())
+    })?;
+    let proof_bytes = to_bytes(bundle)
+        .map_err(|err| conversion_error(format!("failed to encode SCCP message bundle: {err}")))?;
+    Ok(iroha_data_model::bridge::BridgeProof {
+        range: iroha_data_model::bridge::BridgeProofRange {
+            start_height: finality.height,
+            end_height: finality.height,
+        },
+        manifest_hash: bridge_manifest_hash_for_seed(
+            "iroha:sccp:bridge-proof:message:stark-fri:v1",
+        ),
+        payload: iroha_data_model::bridge::BridgeProofPayload::TransparentZk(
+            iroha_data_model::bridge::BridgeTransparentProof {
+                proof: iroha_data_model::proof::ProofBox::new(
+                    "sccp/stark-fri-v1".into(),
+                    proof_bytes,
+                ),
+                recursion_depth: None,
+            },
+        ),
+        pinned: false,
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn hash_bridge_proof_payload(backend: &str, payload: &[u8]) -> [u8; 32] {
+    let mut h = Sha256::new();
+    h.update(backend.as_bytes());
+    h.update(payload);
+    h.finalize().into()
+}
+
+#[cfg(feature = "app_api")]
+fn bridge_receipt_from_message_bundle(
+    bundle: &NexusSccpMessageProofV1,
+    bridge_proof: &iroha_data_model::bridge::BridgeProof,
+    lane: LaneId,
+) -> Result<Option<iroha_data_model::bridge::BridgeReceipt>> {
+    let SccpPayloadV1::Transfer(payload) = &bundle.payload else {
+        return Ok(None);
+    };
+    let encoded = norito::to_bytes(bridge_proof).map_err(|err| {
+        conversion_error(format!("failed to encode SCCP message bridge proof: {err}"))
+    })?;
+    let proof_hash = hash_bridge_proof_payload(&bridge_proof.backend_label(), &encoded);
+    let direction = if payload.asset_home_domain == iroha_sccp::SCCP_DOMAIN_SORA {
+        b"release".to_vec()
+    } else {
+        b"mint".to_vec()
+    };
+    Ok(Some(iroha_data_model::bridge::BridgeReceipt {
+        lane,
+        direction,
+        source_tx: bundle.commitment.message_id,
+        dest_tx: None,
+        proof_hash,
+        amount: payload.amount,
+        asset_id: payload.asset_id.clone(),
+        recipient: payload.recipient.clone(),
+    }))
+}
+
 fn sccp_governance_message_kind(payload: &GovernancePayloadV1) -> SccpHubMessageKind {
     match payload {
         GovernancePayloadV1::Add(_) => SccpHubMessageKind::TokenAdd,
@@ -4655,6 +4732,90 @@ fn build_sccp_finality_proof_bytes(
             "failed to encode Nexus SCCP finality proof payload: {err}"
         ))
     })
+}
+
+fn reconstruct_sccp_message_bundle_from_block(
+    state: &CoreState,
+    height: u64,
+    block: &iroha_data_model::block::SignedBlock,
+    message_id: [u8; 32],
+) -> Result<Option<NexusSccpMessageProofV1>> {
+    let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(block);
+    let Some(index) = messages
+        .iter()
+        .position(|message| message.commitment.message_id == message_id)
+    else {
+        return Ok(None);
+    };
+
+    let Some(commitment_root) = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
+    else {
+        return Ok(None);
+    };
+    let Some(anchored_root) = block.header().sccp_commitment_root() else {
+        return Err(sccp_internal_error(format!(
+            "SCCP message {} is present in block {height}, but the finalized block header does not anchor an SCCP commitment root",
+            hex::encode(message_id)
+        )));
+    };
+    if anchored_root != commitment_root {
+        return Err(sccp_internal_error(format!(
+            "finalized block {height} anchors SCCP root 0x{}, but committed SCCP messages reconstruct to 0x{}",
+            hex::encode(anchored_root),
+            hex::encode(commitment_root)
+        )));
+    }
+
+    let commitments: Vec<_> = messages
+        .iter()
+        .map(|message| message.commitment.clone())
+        .collect();
+    let merkle_proof =
+        iroha_sccp::commitment_merkle_proof(&commitments, index).ok_or_else(|| {
+            sccp_internal_error(format!(
+                "failed to derive SCCP Merkle proof for message {} in block {height}",
+                hex::encode(message_id)
+            ))
+        })?;
+    let finality_proof = iroha_core::bridge::build_finality_proof(state, height)
+        .map_err(map_bridge_finality_error)?;
+
+    Ok(Some(NexusSccpMessageProofV1 {
+        version: 1,
+        commitment_root,
+        commitment: messages[index].commitment.clone(),
+        merkle_proof,
+        payload: messages[index].payload.clone(),
+        finality_proof: build_sccp_finality_proof_bytes(&finality_proof, commitment_root)?,
+    }))
+}
+
+fn reconstruct_sccp_message_bundle_from_committed_blocks(
+    state: &CoreState,
+    message_id: [u8; 32],
+) -> Result<Option<NexusSccpMessageProofV1>> {
+    let max_height = state
+        .committed_height()
+        .max(state.view().kura().blocks_count());
+    for height in (1..=max_height).rev() {
+        let Some(height_nz) = NonZeroUsize::new(height) else {
+            continue;
+        };
+        let Some(block) = state.block_by_height(height_nz) else {
+            continue;
+        };
+        let height_u64 = u64::try_from(height).unwrap_or(u64::MAX);
+        if let Some(bundle) = reconstruct_sccp_message_bundle_from_block(
+            state,
+            height_u64,
+            block.as_ref(),
+            message_id,
+        )? {
+            return Ok(Some(bundle));
+        }
+    }
+
+    Ok(None)
 }
 
 fn min_votes_for_len(len: usize) -> u16 {
@@ -4886,6 +5047,37 @@ pub fn publish_sccp_governance_bundle(
     Ok(bundle)
 }
 
+pub fn publish_sccp_message_bundle(
+    state: &CoreState,
+    height: u64,
+    payload: SccpPayloadV1,
+) -> Result<NexusSccpMessageProofV1> {
+    let bridge_finality_proof = iroha_core::bridge::build_finality_proof(state, height)
+        .map_err(map_bridge_finality_error)?;
+    let commitment = SccpHubCommitmentV1 {
+        version: 1,
+        kind: sccp_message_kind(&payload),
+        target_domain: sccp_message_target_domain(&payload),
+        message_id: sccp_message_id(&payload),
+        payload_hash: payload_hash(&canonical_sccp_payload_bytes(&payload)),
+        parliament_certificate_hash: None,
+    };
+    let commitment_root = commitment_leaf_hash(&commitment);
+    let bundle = NexusSccpMessageProofV1 {
+        version: 1,
+        commitment_root,
+        commitment,
+        merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
+        payload,
+        finality_proof: build_sccp_finality_proof_bytes(&bridge_finality_proof, commitment_root)?,
+    };
+    SCCP_MESSAGE_BUNDLES
+        .write()
+        .expect("SCCP message bundle registry poisoned")
+        .insert(bundle.commitment.message_id, bundle.clone());
+    Ok(bundle)
+}
+
 #[cfg(test)]
 pub(crate) fn clear_sccp_bundles_for_tests() {
     SCCP_BURN_BUNDLES
@@ -4895,6 +5087,10 @@ pub(crate) fn clear_sccp_bundles_for_tests() {
     SCCP_GOVERNANCE_BUNDLES
         .write()
         .expect("SCCP governance bundle registry poisoned")
+        .clear();
+    SCCP_MESSAGE_BUNDLES
+        .write()
+        .expect("SCCP message bundle registry poisoned")
         .clear();
 }
 
@@ -4926,6 +5122,26 @@ pub async fn handle_v1_sccp_governance_bundle(
         .expect("SCCP governance bundle registry poisoned")
         .get(&message_id)
         .cloned()
+        .ok_or_else(sccp_not_found)?;
+    sccp_bundle_response(&bundle, accept.as_ref())
+}
+
+/// GET /v1/sccp/proofs/message/{message_id} — Nexus SCCP message bundle keyed by canonical message id.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sccp_message_bundle(
+    state: &CoreState,
+    message_id_hex: String,
+    accept: Option<axum::http::HeaderValue>,
+) -> Result<Response> {
+    let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
+    let bundle = reconstruct_sccp_message_bundle_from_committed_blocks(state, message_id)?
+        .or_else(|| {
+            SCCP_MESSAGE_BUNDLES
+                .read()
+                .expect("SCCP message bundle registry poisoned")
+                .get(&message_id)
+                .cloned()
+        })
         .ok_or_else(sccp_not_found)?;
     sccp_bundle_response(&bundle, accept.as_ref())
 }
@@ -8614,6 +8830,7 @@ pub async fn handle_post_bridge_proof_submit(
         signature_b64,
         burn_bundle,
         governance_bundle,
+        message_bundle,
         creation_time_ms,
     } = req;
 
@@ -8633,23 +8850,36 @@ pub async fn handle_post_bridge_proof_submit(
                 .map_err(|err| conversion_error(format!("invalid governance_bundle: {err}")))
         })
         .transpose()?;
+    let message_bundle = message_bundle
+        .map(|value| {
+            let raw = json::to_string(&value)
+                .map_err(|err| conversion_error(format!("invalid message_bundle: {err}")))?;
+            serde_json::from_str::<NexusSccpMessageProofV1>(&raw)
+                .map_err(|err| conversion_error(format!("invalid message_bundle: {err}")))
+        })
+        .transpose()?;
 
-    let (proof_kind, bridge_proof) = match (burn_bundle.as_ref(), governance_bundle.as_ref()) {
-        (Some(_), Some(_)) => {
-            return Err(conversion_error(
-                "provide exactly one of burn_bundle or governance_bundle".to_owned(),
-            ));
-        }
-        (Some(bundle), None) => ("burn", bridge_proof_from_sccp_burn_bundle(bundle)?),
-        (None, Some(bundle)) => (
+    let bundle_count = usize::from(burn_bundle.is_some())
+        + usize::from(governance_bundle.is_some())
+        + usize::from(message_bundle.is_some());
+    if bundle_count != 1 {
+        return Err(conversion_error(
+            "provide exactly one of burn_bundle, governance_bundle, or message_bundle".to_owned(),
+        ));
+    }
+
+    let (proof_kind, bridge_proof) = match (
+        burn_bundle.as_ref(),
+        governance_bundle.as_ref(),
+        message_bundle.as_ref(),
+    ) {
+        (Some(bundle), None, None) => ("burn", bridge_proof_from_sccp_burn_bundle(bundle)?),
+        (None, Some(bundle), None) => (
             "governance",
             bridge_proof_from_sccp_governance_bundle(bundle)?,
         ),
-        (None, None) => {
-            return Err(conversion_error(
-                "provide exactly one of burn_bundle or governance_bundle".to_owned(),
-            ));
-        }
+        (None, None, Some(bundle)) => ("message", bridge_proof_from_sccp_message_bundle(bundle)?),
+        _ => unreachable!("bundle_count enforces exactly one populated SCCP bundle"),
     };
 
     let range_start_height = bridge_proof.range.start_height;
@@ -8779,6 +9009,209 @@ pub async fn handle_post_bridge_proof_submit(
                 range_start_height,
                 range_end_height,
                 creation_time_ms,
+                tx_hash_hex: None,
+                transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
+                signed_transaction_b64: Some(signed_transaction_b64),
+                signing_message_b64: Some(signing_message_b64),
+            }
+        };
+
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+/// POST /v1/bridge/messages — ingest a verified inbound SCCP message proof and emit a typed bridge receipt for transfer settlements.
+#[cfg(feature = "app_api")]
+#[iroha_futures::telemetry_future]
+pub async fn handle_post_bridge_message_submit(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    JsonOnly(req): JsonOnly<BridgeMessageSubmitDto>,
+) -> Result<impl IntoResponse> {
+    use base64::Engine as _;
+    use iroha_data_model::prelude as dm;
+    use iroha_primitives::const_vec::ConstVec;
+
+    let BridgeMessageSubmitDto {
+        authority,
+        private_key,
+        public_key_hex,
+        signature_b64,
+        message_bundle,
+        receipt_lane,
+        creation_time_ms,
+    } = req;
+
+    let raw = json::to_string(&message_bundle)
+        .map_err(|err| conversion_error(format!("invalid message_bundle: {err}")))?;
+    let message_bundle = serde_json::from_str::<NexusSccpMessageProofV1>(&raw)
+        .map_err(|err| conversion_error(format!("invalid message_bundle: {err}")))?;
+    let target_domain = sccp_message_target_domain(&message_bundle.payload);
+    if target_domain != iroha_sccp::SCCP_DOMAIN_SORA {
+        return Err(conversion_error(format!(
+            "message_bundle targets SCCP domain {target_domain}, but this endpoint only accepts inbound messages for SORA"
+        )));
+    }
+
+    let proof_kind = match &message_bundle.payload {
+        SccpPayloadV1::AssetRegister(_) => "asset_register",
+        SccpPayloadV1::RouteActivate(_) => "route_activate",
+        SccpPayloadV1::Transfer(_) => "transfer",
+    };
+    let message_id_hex = hex::encode(message_bundle.commitment.message_id);
+    let bridge_proof = bridge_proof_from_sccp_message_bundle(&message_bundle)?;
+    let range_start_height = bridge_proof.range.start_height;
+    let range_end_height = bridge_proof.range.end_height;
+    let manifest_hash_hex = hex::encode(bridge_proof.manifest_hash);
+    let backend = bridge_proof.backend_label();
+    let lane = LaneId::new(receipt_lane.unwrap_or(LaneId::SINGLE.as_u32()));
+    let receipt = bridge_receipt_from_message_bundle(&message_bundle, &bridge_proof, lane)?;
+    let receipt_lane = receipt.as_ref().map(|receipt| receipt.lane.as_u32());
+    let receipt_direction = receipt
+        .as_ref()
+        .map(|receipt| String::from_utf8_lossy(&receipt.direction).into_owned());
+
+    let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
+    let mut instructions: Vec<dm::InstructionBox> =
+        vec![dm::SubmitBridgeProof::new(bridge_proof).into()];
+    if let Some(receipt) = receipt {
+        instructions.push(dm::RecordBridgeReceipt::new(receipt).into());
+    }
+    let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
+    builder.set_creation_time(Duration::from_millis(creation_time_ms));
+    let builder =
+        builder.with_executable(dm::Executable::Instructions(ConstVec::from(instructions)));
+
+    let response =
+        if let Some(private_key) = private_key {
+            let tx = builder.sign(&private_key.0);
+            let tx_hash_hex = hex::encode(tx.hash().as_ref());
+            handle_transaction_with_metrics(
+                chain_id.clone(),
+                queue.clone(),
+                state.clone(),
+                tx,
+                telemetry.clone(),
+                "/v1/bridge/messages",
+            )
+            .await?;
+            BridgeMessageSubmitResponseDto {
+                ok: true,
+                submitted: true,
+                message_kind: proof_kind.to_owned(),
+                message_id_hex,
+                backend,
+                manifest_hash_hex,
+                range_start_height,
+                range_end_height,
+                creation_time_ms,
+                receipt_lane,
+                receipt_direction,
+                tx_hash_hex: Some(tx_hash_hex),
+                transaction_scaffold_b64: None,
+                signed_transaction_b64: None,
+                signing_message_b64: None,
+            }
+        } else if public_key_hex.is_some() || signature_b64.is_some() {
+            let public_key_hex = public_key_hex
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
+            let signature_b64 = signature_b64
+                .as_deref()
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
+            let public_key_bytes = hex::decode(public_key_hex)
+                .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+            let public_key = iroha_crypto::PublicKey::from_bytes(
+                iroha_crypto::Algorithm::Ed25519,
+                &public_key_bytes,
+            )
+            .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+            let expected_authority = dm::AccountId::new(public_key.clone());
+            if authority != expected_authority {
+                return Err(conversion_error(
+                    "public_key_hex does not match authority".to_owned(),
+                ));
+            }
+            let signature_bytes = base64::engine::general_purpose::STANDARD
+                .decode(signature_b64.as_bytes())
+                .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+            let mut tx = builder
+                .sign(
+                    iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+                        .private_key(),
+                )
+                .with_authority(authority.clone().into());
+            let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
+            tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
+                iroha_crypto::SignatureOf::<
+                    iroha_data_model::transaction::signed::TransactionPayload,
+                >::from_signature(signature),
+            ));
+            tx.verify_signature().map_err(|err| {
+                conversion_error(format!(
+                    "bridge message detached signature verification failed: {err}"
+                ))
+            })?;
+            let tx_hash_hex = hex::encode(tx.hash().as_ref());
+            handle_transaction_with_metrics(
+                chain_id.clone(),
+                queue.clone(),
+                state.clone(),
+                tx,
+                telemetry.clone(),
+                "/v1/bridge/messages",
+            )
+            .await?;
+            BridgeMessageSubmitResponseDto {
+                ok: true,
+                submitted: true,
+                message_kind: proof_kind.to_owned(),
+                message_id_hex,
+                backend,
+                manifest_hash_hex,
+                range_start_height,
+                range_end_height,
+                creation_time_ms,
+                receipt_lane,
+                receipt_direction,
+                tx_hash_hex: Some(tx_hash_hex),
+                transaction_scaffold_b64: None,
+                signed_transaction_b64: None,
+                signing_message_b64: None,
+            }
+        } else {
+            let scaffold_key =
+                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+            let tx = builder
+                .sign(scaffold_key.private_key())
+                .with_authority(authority.clone().into());
+            let signed_transaction_b64 = base64::engine::general_purpose::STANDARD
+                .encode(norito::codec::Encode::encode(&tx));
+            let signing_message_b64 = base64::engine::general_purpose::STANDARD
+                .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
+            BridgeMessageSubmitResponseDto {
+                ok: true,
+                submitted: false,
+                message_kind: proof_kind.to_owned(),
+                message_id_hex,
+                backend,
+                manifest_hash_hex,
+                range_start_height,
+                range_end_height,
+                creation_time_ms,
+                receipt_lane,
+                receipt_direction,
                 tx_hash_hex: None,
                 transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
                 signed_transaction_b64: Some(signed_transaction_b64),
@@ -16115,6 +16548,9 @@ pub struct BridgeProofSubmitDto {
     /// Optional live governance bundle fetched from `/v1/sccp/proofs/governance/{message_id}`.
     #[norito(default)]
     pub governance_bundle: Option<Value>,
+    /// Optional live generic message bundle fetched from `/v1/sccp/proofs/message/{message_id}`.
+    #[norito(default)]
+    pub message_bundle: Option<Value>,
     /// Optional fixed transaction creation timestamp used to keep detached-sign flows deterministic.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
@@ -16140,6 +16576,73 @@ pub struct BridgeProofSubmitResponseDto {
     pub range_end_height: u64,
     /// Creation timestamp used for the transaction payload.
     pub creation_time_ms: u64,
+    /// Hex-encoded transaction hash submitted to the queue.
+    #[norito(default)]
+    pub tx_hash_hex: Option<String>,
+    /// Base64-encoded transaction scaffold for wallet `SIGN_REQUEST_TX` flows.
+    #[norito(default)]
+    pub transaction_scaffold_b64: Option<String>,
+    /// Base64-encoded transaction scaffold for client-side re-signing and submission.
+    #[norito(default)]
+    pub signed_transaction_b64: Option<String>,
+    /// Base64-encoded message bytes the caller must sign for detached submit flows.
+    #[norito(default)]
+    pub signing_message_b64: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
+/// Request payload for ingesting an inbound SCCP message proof and preparing a settlement transaction.
+pub struct BridgeMessageSubmitDto {
+    /// Account authorizing the bridge-message submission.
+    pub authority: iroha_data_model::account::AccountId,
+    /// Optional private key used to sign and submit the transaction directly.
+    #[norito(default)]
+    pub private_key: Option<iroha_data_model::prelude::ExposedPrivateKey>,
+    /// Optional Ed25519 public key (hex) used with a detached signature submit flow.
+    #[norito(default)]
+    pub public_key_hex: Option<String>,
+    /// Optional detached Ed25519 signature (base64) over `signing_message_b64`.
+    #[norito(default)]
+    pub signature_b64: Option<String>,
+    /// Live generic SCCP message bundle fetched from `/v1/sccp/proofs/message/{message_id}`.
+    pub message_bundle: Value,
+    /// Optional lane id used when emitting a bridge receipt for transfer payloads.
+    #[norito(default)]
+    pub receipt_lane: Option<u32>,
+    /// Optional fixed transaction creation timestamp used to keep detached-sign flows deterministic.
+    #[norito(default)]
+    pub creation_time_ms: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, crate::json_macros::JsonSerialize, norito::derive::NoritoSerialize)]
+/// Response payload returned after preparing or submitting an inbound SCCP message settlement transaction.
+pub struct BridgeMessageSubmitResponseDto {
+    /// Whether preparation or submission succeeded.
+    pub ok: bool,
+    /// Whether Torii submitted the transaction to the pipeline.
+    pub submitted: bool,
+    /// SCCP payload family being ingested.
+    pub message_kind: String,
+    /// Hex-encoded canonical SCCP message id.
+    pub message_id_hex: String,
+    /// Bridge proof backend label that will be stored in the registry.
+    pub backend: String,
+    /// Hex-encoded manifest hash bound into the bridge proof artifact.
+    pub manifest_hash_hex: String,
+    /// Inclusive start height covered by the bridge proof.
+    pub range_start_height: u64,
+    /// Inclusive end height covered by the bridge proof.
+    pub range_end_height: u64,
+    /// Creation timestamp used for the transaction payload.
+    pub creation_time_ms: u64,
+    /// Optional bridge lane id used for the emitted receipt.
+    #[norito(default)]
+    pub receipt_lane: Option<u32>,
+    /// Optional receipt direction emitted for transfer payloads.
+    #[norito(default)]
+    pub receipt_direction: Option<String>,
     /// Hex-encoded transaction hash submitted to the queue.
     #[norito(default)]
     pub tx_hash_hex: Option<String>,

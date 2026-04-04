@@ -889,6 +889,12 @@ where
     if any.downcast_ref::<Log>().is_some() {
         return set;
     }
+    if any
+        .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
+        .is_some()
+    {
+        return set;
+    }
 
     // Transfers
     if let Some(tb) = any.downcast_ref::<TransferBox>() {

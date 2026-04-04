@@ -20,8 +20,9 @@ pub const SCCP_DOMAIN_TON: u32 = 4;
 pub const SCCP_DOMAIN_TRON: u32 = 5;
 pub const SCCP_DOMAIN_SORA_KUSAMA: u32 = 6;
 pub const SCCP_DOMAIN_SORA_POLKADOT: u32 = 7;
+pub const SCCP_DOMAIN_SORA2: u32 = 8;
 
-pub const SCCP_CORE_REMOTE_DOMAINS: [u32; 7] = [
+pub const SCCP_CORE_REMOTE_DOMAINS: [u32; 8] = [
     SCCP_DOMAIN_ETH,
     SCCP_DOMAIN_BSC,
     SCCP_DOMAIN_SOL,
@@ -29,12 +30,16 @@ pub const SCCP_CORE_REMOTE_DOMAINS: [u32; 7] = [
     SCCP_DOMAIN_TRON,
     SCCP_DOMAIN_SORA_KUSAMA,
     SCCP_DOMAIN_SORA_POLKADOT,
+    SCCP_DOMAIN_SORA2,
 ];
 
 pub const SCCP_MSG_PREFIX_BURN_V1: &[u8] = b"sccp:burn:v1";
 pub const SCCP_MSG_PREFIX_TOKEN_ADD_V1: &[u8] = b"sccp:token:add:v1";
 pub const SCCP_MSG_PREFIX_TOKEN_PAUSE_V1: &[u8] = b"sccp:token:pause:v1";
 pub const SCCP_MSG_PREFIX_TOKEN_RESUME_V1: &[u8] = b"sccp:token:resume:v1";
+pub const SCCP_MSG_PREFIX_ASSET_REGISTER_V1: &[u8] = b"sccp:asset:register:v1";
+pub const SCCP_MSG_PREFIX_ROUTE_ACTIVATE_V1: &[u8] = b"sccp:route:activate:v1";
+pub const SCCP_MSG_PREFIX_TRANSFER_V1: &[u8] = b"sccp:transfer:v1";
 pub const IROHA_CONSENSUS_PROTO_VERSION_V1: u32 = 1;
 
 const SCCP_HUB_LEAF_PREFIX_V1: &[u8] = b"sccp:hub:leaf:v1";
@@ -426,6 +431,91 @@ impl GovernancePayloadV1 {
     const RESUME_DISCRIMINANT: u8 = 2;
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub struct AssetRegisterPayloadV1 {
+    pub version: u8,
+    pub target_domain: u32,
+    pub home_domain: u32,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    pub nonce: u64,
+    pub asset_id_codec: u8,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    pub asset_id: Vec<u8>,
+    pub decimals: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub struct RouteActivatePayloadV1 {
+    pub version: u8,
+    pub source_domain: u32,
+    pub target_domain: u32,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    pub nonce: u64,
+    pub asset_id_codec: u8,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    pub asset_id: Vec<u8>,
+    pub route_id_codec: u8,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    pub route_id: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub struct TransferPayloadV1 {
+    pub version: u8,
+    pub source_domain: u32,
+    pub dest_domain: u32,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u64_string"))]
+    pub nonce: u64,
+    pub asset_home_domain: u32,
+    pub asset_id_codec: u8,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    pub asset_id: Vec<u8>,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::u128_string"))]
+    pub amount: u128,
+    pub sender_codec: u8,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    pub sender: Vec<u8>,
+    pub recipient_codec: u8,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    pub recipient: Vec<u8>,
+    pub route_id_codec: u8,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    pub route_id: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub enum SccpPayloadV1 {
+    AssetRegister(AssetRegisterPayloadV1),
+    RouteActivate(RouteActivatePayloadV1),
+    Transfer(TransferPayloadV1),
+}
+
+impl SccpPayloadV1 {
+    const ASSET_REGISTER_DISCRIMINANT: u8 = 0;
+    const ROUTE_ACTIVATE_DISCRIMINANT: u8 = 1;
+    const TRANSFER_DISCRIMINANT: u8 = 2;
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
@@ -437,6 +527,9 @@ pub enum SccpHubMessageKind {
     TokenAdd,
     TokenPause,
     TokenResume,
+    AssetRegister,
+    RouteActivate,
+    Transfer,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -633,6 +726,23 @@ pub struct NexusSccpGovernanceProofV1 {
     pub finality_proof: Vec<u8>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub struct NexusSccpMessageProofV1 {
+    pub version: u8,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
+    pub commitment_root: H256,
+    pub commitment: SccpHubCommitmentV1,
+    pub merkle_proof: SccpMerkleProofV1,
+    pub payload: SccpPayloadV1,
+    #[cfg_attr(feature = "serde", serde(with = "serde_utils::bytes_hex"))]
+    pub finality_proof: Vec<u8>,
+}
+
 pub fn is_supported_domain(domain_id: u32) -> bool {
     matches!(
         domain_id,
@@ -644,6 +754,7 @@ pub fn is_supported_domain(domain_id: u32) -> bool {
             | SCCP_DOMAIN_TRON
             | SCCP_DOMAIN_SORA_KUSAMA
             | SCCP_DOMAIN_SORA_POLKADOT
+            | SCCP_DOMAIN_SORA2
     )
 }
 
@@ -661,6 +772,11 @@ fn push_u64(out: &mut Vec<u8>, value: u64) {
 
 fn push_u128(out: &mut Vec<u8>, value: u128) {
     out.extend_from_slice(&value.to_le_bytes());
+}
+
+fn push_vec(out: &mut Vec<u8>, value: &[u8]) {
+    push_u32(out, value.len() as u32);
+    out.extend_from_slice(value);
 }
 
 fn push_option_h256(out: &mut Vec<u8>, value: Option<&H256>) {
@@ -725,6 +841,217 @@ pub fn canonical_governance_payload_bytes(payload: &GovernancePayloadV1) -> Vec<
     out
 }
 
+pub fn canonical_asset_register_payload_bytes(payload: &AssetRegisterPayloadV1) -> Vec<u8> {
+    let mut out = Vec::new();
+    push_u8(&mut out, payload.version);
+    push_u32(&mut out, payload.target_domain);
+    push_u32(&mut out, payload.home_domain);
+    push_u64(&mut out, payload.nonce);
+    push_u8(&mut out, payload.asset_id_codec);
+    push_vec(&mut out, &payload.asset_id);
+    push_u8(&mut out, payload.decimals);
+    out
+}
+
+pub fn canonical_route_activate_payload_bytes(payload: &RouteActivatePayloadV1) -> Vec<u8> {
+    let mut out = Vec::new();
+    push_u8(&mut out, payload.version);
+    push_u32(&mut out, payload.source_domain);
+    push_u32(&mut out, payload.target_domain);
+    push_u64(&mut out, payload.nonce);
+    push_u8(&mut out, payload.asset_id_codec);
+    push_vec(&mut out, &payload.asset_id);
+    push_u8(&mut out, payload.route_id_codec);
+    push_vec(&mut out, &payload.route_id);
+    out
+}
+
+pub fn canonical_transfer_payload_bytes(payload: &TransferPayloadV1) -> Vec<u8> {
+    let mut out = Vec::new();
+    push_u8(&mut out, payload.version);
+    push_u32(&mut out, payload.source_domain);
+    push_u32(&mut out, payload.dest_domain);
+    push_u64(&mut out, payload.nonce);
+    push_u32(&mut out, payload.asset_home_domain);
+    push_u8(&mut out, payload.asset_id_codec);
+    push_vec(&mut out, &payload.asset_id);
+    push_u128(&mut out, payload.amount);
+    push_u8(&mut out, payload.sender_codec);
+    push_vec(&mut out, &payload.sender);
+    push_u8(&mut out, payload.recipient_codec);
+    push_vec(&mut out, &payload.recipient);
+    push_u8(&mut out, payload.route_id_codec);
+    push_vec(&mut out, &payload.route_id);
+    out
+}
+
+pub fn canonical_sccp_payload_bytes(payload: &SccpPayloadV1) -> Vec<u8> {
+    let mut out = Vec::new();
+    match payload {
+        SccpPayloadV1::AssetRegister(payload) => {
+            push_u8(&mut out, SccpPayloadV1::ASSET_REGISTER_DISCRIMINANT);
+            out.extend_from_slice(&canonical_asset_register_payload_bytes(payload));
+        }
+        SccpPayloadV1::RouteActivate(payload) => {
+            push_u8(&mut out, SccpPayloadV1::ROUTE_ACTIVATE_DISCRIMINANT);
+            out.extend_from_slice(&canonical_route_activate_payload_bytes(payload));
+        }
+        SccpPayloadV1::Transfer(payload) => {
+            push_u8(&mut out, SccpPayloadV1::TRANSFER_DISCRIMINANT);
+            out.extend_from_slice(&canonical_transfer_payload_bytes(payload));
+        }
+    }
+    out
+}
+
+struct PayloadCursor<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> PayloadCursor<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn take_exact(&mut self, len: usize) -> Option<&'a [u8]> {
+        let end = self.offset.checked_add(len)?;
+        let slice = self.bytes.get(self.offset..end)?;
+        self.offset = end;
+        Some(slice)
+    }
+
+    fn take_u8(&mut self) -> Option<u8> {
+        self.take_exact(1).map(|bytes| bytes[0])
+    }
+
+    fn take_u32(&mut self) -> Option<u32> {
+        let mut out = [0u8; 4];
+        out.copy_from_slice(self.take_exact(4)?);
+        Some(u32::from_le_bytes(out))
+    }
+
+    fn take_u64(&mut self) -> Option<u64> {
+        let mut out = [0u8; 8];
+        out.copy_from_slice(self.take_exact(8)?);
+        Some(u64::from_le_bytes(out))
+    }
+
+    fn take_u128(&mut self) -> Option<u128> {
+        let mut out = [0u8; 16];
+        out.copy_from_slice(self.take_exact(16)?);
+        Some(u128::from_le_bytes(out))
+    }
+
+    fn take_vec(&mut self) -> Option<Vec<u8>> {
+        let len = usize::try_from(self.take_u32()?).ok()?;
+        Some(self.take_exact(len)?.to_vec())
+    }
+
+    fn is_finished(&self) -> bool {
+        self.offset == self.bytes.len()
+    }
+}
+
+pub fn decode_canonical_sccp_payload_bytes(payload_bytes: &[u8]) -> Option<SccpPayloadV1> {
+    let mut cursor = PayloadCursor::new(payload_bytes);
+    let discriminant = cursor.take_u8()?;
+    let payload = match discriminant {
+        SccpPayloadV1::ASSET_REGISTER_DISCRIMINANT => {
+            SccpPayloadV1::AssetRegister(AssetRegisterPayloadV1 {
+                version: cursor.take_u8()?,
+                target_domain: cursor.take_u32()?,
+                home_domain: cursor.take_u32()?,
+                nonce: cursor.take_u64()?,
+                asset_id_codec: cursor.take_u8()?,
+                asset_id: cursor.take_vec()?,
+                decimals: cursor.take_u8()?,
+            })
+        }
+        SccpPayloadV1::ROUTE_ACTIVATE_DISCRIMINANT => {
+            SccpPayloadV1::RouteActivate(RouteActivatePayloadV1 {
+                version: cursor.take_u8()?,
+                source_domain: cursor.take_u32()?,
+                target_domain: cursor.take_u32()?,
+                nonce: cursor.take_u64()?,
+                asset_id_codec: cursor.take_u8()?,
+                asset_id: cursor.take_vec()?,
+                route_id_codec: cursor.take_u8()?,
+                route_id: cursor.take_vec()?,
+            })
+        }
+        SccpPayloadV1::TRANSFER_DISCRIMINANT => SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: cursor.take_u8()?,
+            source_domain: cursor.take_u32()?,
+            dest_domain: cursor.take_u32()?,
+            nonce: cursor.take_u64()?,
+            asset_home_domain: cursor.take_u32()?,
+            asset_id_codec: cursor.take_u8()?,
+            asset_id: cursor.take_vec()?,
+            amount: cursor.take_u128()?,
+            sender_codec: cursor.take_u8()?,
+            sender: cursor.take_vec()?,
+            recipient_codec: cursor.take_u8()?,
+            recipient: cursor.take_vec()?,
+            route_id_codec: cursor.take_u8()?,
+            route_id: cursor.take_vec()?,
+        }),
+        _ => return None,
+    };
+    cursor.is_finished().then_some(payload)
+}
+
+pub fn verify_sccp_payload_structure(payload: &SccpPayloadV1) -> bool {
+    let target_domain = sccp_message_target_domain(payload);
+    if !is_supported_domain(target_domain) {
+        return false;
+    }
+
+    match payload {
+        SccpPayloadV1::AssetRegister(payload) => {
+            payload.version == 1
+                && is_supported_domain(payload.home_domain)
+                && payload.asset_id_codec != 0
+                && !payload.asset_id.is_empty()
+        }
+        SccpPayloadV1::RouteActivate(payload) => {
+            payload.version == 1
+                && is_supported_domain(payload.source_domain)
+                && payload.source_domain != payload.target_domain
+                && payload.asset_id_codec != 0
+                && !payload.asset_id.is_empty()
+                && payload.route_id_codec != 0
+                && !payload.route_id.is_empty()
+        }
+        SccpPayloadV1::Transfer(payload) => {
+            payload.version == 1
+                && is_supported_domain(payload.source_domain)
+                && is_supported_domain(payload.asset_home_domain)
+                && payload.source_domain != payload.dest_domain
+                && payload.asset_id_codec != 0
+                && !payload.asset_id.is_empty()
+                && payload.amount != 0
+                && payload.sender_codec != 0
+                && !payload.sender.is_empty()
+                && payload.recipient_codec != 0
+                && !payload.recipient.is_empty()
+                && payload.route_id_codec != 0
+                && !payload.route_id.is_empty()
+        }
+    }
+}
+
+pub fn hub_commitment_from_sccp_payload(payload: &SccpPayloadV1) -> SccpHubCommitmentV1 {
+    SccpHubCommitmentV1 {
+        version: 1,
+        kind: sccp_message_kind(payload),
+        target_domain: sccp_message_target_domain(payload),
+        message_id: sccp_message_id(payload),
+        payload_hash: payload_hash(&canonical_sccp_payload_bytes(payload)),
+        parliament_certificate_hash: None,
+    }
+}
+
 pub fn canonical_commitment_bytes(commitment: &SccpHubCommitmentV1) -> Vec<u8> {
     let mut out = Vec::with_capacity(1 + 1 + 4 + 32 + 32 + 1 + 32);
     push_u8(&mut out, commitment.version);
@@ -735,6 +1062,9 @@ pub fn canonical_commitment_bytes(commitment: &SccpHubCommitmentV1) -> Vec<u8> {
             SccpHubMessageKind::TokenAdd => 1,
             SccpHubMessageKind::TokenPause => 2,
             SccpHubMessageKind::TokenResume => 3,
+            SccpHubMessageKind::AssetRegister => 4,
+            SccpHubMessageKind::RouteActivate => 5,
+            SccpHubMessageKind::Transfer => 6,
         },
     );
     push_u32(&mut out, commitment.target_domain);
@@ -789,6 +1119,51 @@ pub fn governance_target_domain(payload: &GovernancePayloadV1) -> u32 {
     }
 }
 
+pub fn asset_register_message_id(payload: &AssetRegisterPayloadV1) -> H256 {
+    prefixed_keccak(
+        SCCP_MSG_PREFIX_ASSET_REGISTER_V1,
+        &canonical_asset_register_payload_bytes(payload),
+    )
+}
+
+pub fn route_activate_message_id(payload: &RouteActivatePayloadV1) -> H256 {
+    prefixed_keccak(
+        SCCP_MSG_PREFIX_ROUTE_ACTIVATE_V1,
+        &canonical_route_activate_payload_bytes(payload),
+    )
+}
+
+pub fn transfer_message_id(payload: &TransferPayloadV1) -> H256 {
+    prefixed_keccak(
+        SCCP_MSG_PREFIX_TRANSFER_V1,
+        &canonical_transfer_payload_bytes(payload),
+    )
+}
+
+pub fn sccp_message_id(payload: &SccpPayloadV1) -> H256 {
+    match payload {
+        SccpPayloadV1::AssetRegister(payload) => asset_register_message_id(payload),
+        SccpPayloadV1::RouteActivate(payload) => route_activate_message_id(payload),
+        SccpPayloadV1::Transfer(payload) => transfer_message_id(payload),
+    }
+}
+
+pub fn sccp_message_kind(payload: &SccpPayloadV1) -> SccpHubMessageKind {
+    match payload {
+        SccpPayloadV1::AssetRegister(_) => SccpHubMessageKind::AssetRegister,
+        SccpPayloadV1::RouteActivate(_) => SccpHubMessageKind::RouteActivate,
+        SccpPayloadV1::Transfer(_) => SccpHubMessageKind::Transfer,
+    }
+}
+
+pub fn sccp_message_target_domain(payload: &SccpPayloadV1) -> u32 {
+    match payload {
+        SccpPayloadV1::AssetRegister(payload) => payload.target_domain,
+        SccpPayloadV1::RouteActivate(payload) => payload.target_domain,
+        SccpPayloadV1::Transfer(payload) => payload.dest_domain,
+    }
+}
+
 pub fn payload_hash(payload: &[u8]) -> H256 {
     prefixed_blake2b(SCCP_PAYLOAD_HASH_PREFIX_V1, payload)
 }
@@ -817,6 +1192,75 @@ pub fn merkle_root_from_commitment(
         };
     }
     current
+}
+
+pub fn commitment_merkle_root(commitments: &[SccpHubCommitmentV1]) -> Option<H256> {
+    let mut level: Vec<H256> = commitments.iter().map(commitment_leaf_hash).collect();
+    if level.is_empty() {
+        return None;
+    }
+
+    while level.len() > 1 {
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut idx = 0usize;
+        while idx < level.len() {
+            let left = level[idx];
+            if let Some(right) = level.get(idx + 1) {
+                next.push(hash_merkle_node(&left, right));
+            } else {
+                next.push(left);
+            }
+            idx += 2;
+        }
+        level = next;
+    }
+
+    level.first().copied()
+}
+
+pub fn commitment_merkle_proof(
+    commitments: &[SccpHubCommitmentV1],
+    index: usize,
+) -> Option<SccpMerkleProofV1> {
+    if index >= commitments.len() {
+        return None;
+    }
+
+    let mut level: Vec<H256> = commitments.iter().map(commitment_leaf_hash).collect();
+    let mut current_index = index;
+    let mut steps = Vec::new();
+
+    while level.len() > 1 {
+        if current_index.is_multiple_of(2) {
+            if let Some(sibling_hash) = level.get(current_index + 1) {
+                steps.push(SccpMerkleStepV1 {
+                    sibling_hash: *sibling_hash,
+                    sibling_is_left: false,
+                });
+            }
+        } else if let Some(sibling_hash) = level.get(current_index - 1) {
+            steps.push(SccpMerkleStepV1 {
+                sibling_hash: *sibling_hash,
+                sibling_is_left: true,
+            });
+        }
+
+        let mut next = Vec::with_capacity(level.len().div_ceil(2));
+        let mut idx = 0usize;
+        while idx < level.len() {
+            let left = level[idx];
+            if let Some(right) = level.get(idx + 1) {
+                next.push(hash_merkle_node(&left, right));
+            } else {
+                next.push(left);
+            }
+            idx += 2;
+        }
+        level = next;
+        current_index /= 2;
+    }
+
+    Some(SccpMerkleProofV1 { steps })
 }
 
 #[cfg(feature = "std")]
@@ -871,6 +1315,17 @@ pub fn decode_nexus_sccp_governance_proof(
 pub fn decode_nexus_sccp_governance_proof(
     proof_bytes: &[u8],
 ) -> Option<NexusSccpGovernanceProofV1> {
+    let _ = proof_bytes;
+    None
+}
+
+#[cfg(feature = "std")]
+pub fn decode_nexus_sccp_message_proof(proof_bytes: &[u8]) -> Option<NexusSccpMessageProofV1> {
+    norito::decode_from_bytes(proof_bytes).ok()
+}
+
+#[cfg(not(feature = "std"))]
+pub fn decode_nexus_sccp_message_proof(proof_bytes: &[u8]) -> Option<NexusSccpMessageProofV1> {
     let _ = proof_bytes;
     None
 }
@@ -1071,6 +1526,34 @@ pub fn verify_governance_bundle_structure(bundle: &NexusSccpGovernanceProofV1) -
             != payload_hash(&canonical_governance_payload_bytes(&bundle.payload))
         || bundle.commitment.parliament_certificate_hash
             != Some(parliament_certificate_hash(&bundle.parliament_certificate))
+    {
+        return false;
+    }
+
+    merkle_root_from_commitment(&bundle.commitment, &bundle.merkle_proof) == bundle.commitment_root
+}
+
+pub fn verify_message_bundle_structure(bundle: &NexusSccpMessageProofV1) -> bool {
+    if bundle.version != 1 || bundle.commitment.version != 1 {
+        return false;
+    }
+    let Some(finality_proof) = decode_nexus_bridge_finality_proof(&bundle.finality_proof) else {
+        return false;
+    };
+    if !verify_nexus_bridge_finality_proof_structure(&finality_proof)
+        || finality_proof.commitment_root != bundle.commitment_root
+    {
+        return false;
+    }
+
+    let target_domain = sccp_message_target_domain(&bundle.payload);
+    let payload_bytes = canonical_sccp_payload_bytes(&bundle.payload);
+    if !verify_sccp_payload_structure(&bundle.payload)
+        || bundle.commitment.kind != sccp_message_kind(&bundle.payload)
+        || bundle.commitment.target_domain != target_domain
+        || bundle.commitment.message_id != sccp_message_id(&bundle.payload)
+        || bundle.commitment.payload_hash != payload_hash(&payload_bytes)
+        || bundle.commitment.parliament_certificate_hash.is_some()
     {
         return false;
     }
@@ -1344,5 +1827,110 @@ mod tests {
             finality_proof: sample_finality_proof([0xabu8; 32]),
         };
         assert!(!verify_burn_bundle_structure(&bundle));
+    }
+
+    #[test]
+    fn message_bundle_roundtrip_structure_verifies() {
+        let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_SORA2,
+            nonce: 11,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: 1,
+            asset_id: vec![0x11, 0x22, 0x33],
+            amount: 55,
+            sender_codec: 1,
+            sender: vec![0x44, 0x55],
+            recipient_codec: 2,
+            recipient: vec![0x66, 0x77, 0x88],
+            route_id_codec: 1,
+            route_id: b"nexus:sora2:xor".to_vec(),
+        });
+        let commitment = SccpHubCommitmentV1 {
+            version: 1,
+            kind: sccp_message_kind(&payload),
+            target_domain: sccp_message_target_domain(&payload),
+            message_id: sccp_message_id(&payload),
+            payload_hash: payload_hash(&canonical_sccp_payload_bytes(&payload)),
+            parliament_certificate_hash: None,
+        };
+        let commitment_root = commitment_leaf_hash(&commitment);
+        let bundle = NexusSccpMessageProofV1 {
+            version: 1,
+            commitment_root,
+            commitment,
+            merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
+            payload,
+            finality_proof: sample_finality_proof(commitment_root),
+        };
+        assert!(verify_message_bundle_structure(&bundle));
+    }
+
+    #[test]
+    fn canonical_message_payload_roundtrips() {
+        let payload = SccpPayloadV1::RouteActivate(RouteActivatePayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            target_domain: SCCP_DOMAIN_TON,
+            nonce: 9,
+            asset_id_codec: 1,
+            asset_id: b"xor#universal".to_vec(),
+            route_id_codec: 1,
+            route_id: b"nexus:ton:xor".to_vec(),
+        });
+        let encoded = canonical_sccp_payload_bytes(&payload);
+        let decoded = decode_canonical_sccp_payload_bytes(&encoded).expect("decode payload");
+        assert_eq!(decoded, payload);
+        assert!(verify_sccp_payload_structure(&decoded));
+    }
+
+    #[test]
+    fn commitment_merkle_helpers_support_multi_message_blocks() {
+        let payloads = vec![
+            SccpPayloadV1::AssetRegister(AssetRegisterPayloadV1 {
+                version: 1,
+                target_domain: SCCP_DOMAIN_ETH,
+                home_domain: SCCP_DOMAIN_SORA,
+                nonce: 1,
+                asset_id_codec: 1,
+                asset_id: b"xor#universal".to_vec(),
+                decimals: 18,
+            }),
+            SccpPayloadV1::RouteActivate(RouteActivatePayloadV1 {
+                version: 1,
+                source_domain: SCCP_DOMAIN_SORA,
+                target_domain: SCCP_DOMAIN_ETH,
+                nonce: 2,
+                asset_id_codec: 1,
+                asset_id: b"xor#universal".to_vec(),
+                route_id_codec: 1,
+                route_id: b"nexus:eth:xor".to_vec(),
+            }),
+            SccpPayloadV1::Transfer(TransferPayloadV1 {
+                version: 1,
+                source_domain: SCCP_DOMAIN_SORA,
+                dest_domain: SCCP_DOMAIN_ETH,
+                nonce: 3,
+                asset_home_domain: SCCP_DOMAIN_SORA,
+                asset_id_codec: 1,
+                asset_id: b"xor#universal".to_vec(),
+                amount: 77,
+                sender_codec: 1,
+                sender: b"sora:bridge".to_vec(),
+                recipient_codec: 2,
+                recipient: b"0xfeedface".to_vec(),
+                route_id_codec: 1,
+                route_id: b"nexus:eth:xor".to_vec(),
+            }),
+        ];
+        let commitments: Vec<_> = payloads
+            .iter()
+            .map(hub_commitment_from_sccp_payload)
+            .collect();
+        let root = commitment_merkle_root(&commitments).expect("non-empty root");
+        let proof = commitment_merkle_proof(&commitments, 1).expect("proof for middle message");
+
+        assert_eq!(merkle_root_from_commitment(&commitments[1], &proof), root);
     }
 }

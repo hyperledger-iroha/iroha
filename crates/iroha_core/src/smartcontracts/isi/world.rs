@@ -6543,6 +6543,32 @@ pub mod isi {
         }
     }
 
+    impl Execute for bridge::RecordSccpMessage {
+        fn execute(
+            self,
+            _authority: &AccountId,
+            _state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let Some(payload) =
+                iroha_sccp::decode_canonical_sccp_payload_bytes(&self.payload_bytes)
+            else {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP payload bytes could not be decoded".into(),
+                    ),
+                ));
+            };
+            if !iroha_sccp::verify_sccp_payload_structure(&payload) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP payload bytes failed structural verification".into(),
+                    ),
+                ));
+            }
+            Ok(())
+        }
+    }
+
     fn resolve_vk_commitment(
         attachment: &iroha_data_model::proof::ProofAttachment,
         envelope: Option<&ZkOpenVerifyEnvelope>,

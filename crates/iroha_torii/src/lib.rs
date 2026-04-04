@@ -1307,6 +1307,7 @@ struct AppState {
     vpn_receipts: Arc<DashMap<String, Vec<vpn::VpnReceiptRecord>>>,
     vpn_state_lock: Arc<tokio::sync::Mutex<()>>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
+    soracloud_hf_config: iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
     #[cfg(feature = "app_api")]
     soracloud_proxy_pending: Arc<tokio::sync::Mutex<BTreeMap<Hash, PendingSoracloudProxyRequest>>>,
     #[cfg(feature = "app_api")]
@@ -17242,6 +17243,50 @@ async fn handler_sccp_governance_proof(
     )
 }
 
+async fn handler_sccp_message_proof(
+    State(app): State<SharedAppState>,
+    axum::extract::Path(message_id): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/proofs/message/{message_id}",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests(&app, &key).await?;
+    #[cfg(feature = "telemetry")]
+    if let Some(api_token) = token_hdr {
+        crate::telemetry::report_torii_api_hit(
+            &app.telemetry,
+            &api_token,
+            "v1/sccp/proofs/message",
+        );
+    }
+    let accept = headers.get(axum::http::header::ACCEPT).cloned();
+    Ok(
+        routing::handle_v1_sccp_message_bundle(app.state.as_ref(), message_id, accept)
+            .await?
+            .into_response(),
+    )
+}
+
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_validator_sets(
     State(app): State<SharedAppState>,
@@ -17661,6 +17706,61 @@ async fn handler_post_bridge_proof_submit(
         Err(err) => {
             app.telemetry
                 .with_metrics(|tel| tel.inc_torii_contract_error("bridge_proof"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_bridge_message_submit(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: crate::utils::extractors::JsonOnly<crate::routing::BridgeMessageSubmitDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("bridge_message"));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/bridge/messages",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("bridge_message"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_bridge_message_submit(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        request,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("bridge_message"));
             Err(err)
         }
     }
@@ -20203,9 +20303,7 @@ async fn handler_post_transaction(
         }
     }
     let key = token_hdr.unwrap_or_else(|| transaction.authority().to_string());
-    let enforce =
-        app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
-    if !limits::allow_conditionally(&app.tx_rate_limiter, &key, enforce).await {
+    if !app.tx_rate_limiter.allow(&key).await {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
         )));
@@ -20721,7 +20819,7 @@ async fn handler_policy(
             norito::json::Value::from(sub_th as u64),
         );
         let fees_enabled = fee_policy.is_enabled();
-        let enforced = fees_enabled || (queue_len as usize) >= normal_th;
+        let enforced = true;
         let stream_enforced = fees_enabled || (queue_len as usize) >= stream_th;
         let sub_enforced = fees_enabled || (queue_len as usize) >= sub_th;
         obj.insert(
@@ -20737,7 +20835,7 @@ async fn handler_policy(
             norito::json::Value::from(sub_enforced),
         );
         let explain = format!(
-            "fees_enabled={}, queue_len={}, thresholds(normal={}, stream={}, subscription={})",
+            "tx_rate_limit_always_on=true, fees_enabled={}, queue_len={}, thresholds(normal={}, stream={}, subscription={})",
             fees_enabled, queue_len, normal_th, stream_th, sub_th
         );
         obj.insert("explain".into(), norito::json::Value::from(explain));
@@ -22906,6 +23004,7 @@ pub struct Torii {
     uaid_onboarding: Option<AccountOnboardingSigner>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
+    soracloud_hf_config: Option<iroha_config::parameters::actual::SoracloudRuntimeHuggingFace>,
 }
 
 /// Optional runtime-owned Torii dependencies that are not present in all embeddings.
@@ -22925,6 +23024,7 @@ impl ToriiRuntimeDeps {
         Self {
             telemetry,
             soracloud_runtime: None,
+            soracloud_hf_config: None,
             sorafs_node: None,
             sorafs_cache: None,
             vpn_helper_ticket_secret: None,
@@ -22935,6 +23035,16 @@ impl ToriiRuntimeDeps {
     #[must_use]
     pub fn with_soracloud_runtime(mut self, runtime: SharedSoracloudRuntime) -> Self {
         self.soracloud_runtime = Some(runtime);
+        self
+    }
+
+    /// Attach the resolved Soracloud Hugging Face runtime config.
+    #[must_use]
+    pub fn with_soracloud_hf_config(
+        mut self,
+        config: iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+    ) -> Self {
+        self.soracloud_hf_config = Some(config);
         self
     }
 
@@ -23207,6 +23317,10 @@ impl Torii {
                 .route(
                     "/v1/sccp/proofs/governance/{message_id}",
                     get(handler_sccp_governance_proof),
+                )
+                .route(
+                    "/v1/sccp/proofs/message/{message_id}",
+                    get(handler_sccp_message_proof),
                 );
 
             #[cfg(feature = "telemetry")]
@@ -23525,6 +23639,10 @@ impl Torii {
                 .route(
                     "/v1/bridge/proofs/submit",
                     post(handler_post_bridge_proof_submit),
+                )
+                .route(
+                    "/v1/bridge/messages",
+                    post(handler_post_bridge_message_submit),
                 )
                 .route("/v1/contracts/view", post(handler_post_contract_view))
                 .route(
@@ -24837,6 +24955,7 @@ impl Torii {
         let runtime_deps = runtime_deps.into();
         let telemetry = runtime_deps.telemetry.clone();
         let soracloud_runtime = runtime_deps.soracloud_runtime.clone();
+        let soracloud_hf_config = runtime_deps.soracloud_hf_config.clone().unwrap_or_default();
         let shared_sorafs_node = runtime_deps.sorafs_node.clone();
         let shared_sorafs_cache = runtime_deps.sorafs_cache.clone();
         let vpn_helper_ticket_secret = runtime_deps.vpn_helper_ticket_secret;
@@ -25378,6 +25497,7 @@ impl Torii {
             uaid_onboarding,
             vpn_helper_ticket_secret,
             soracloud_runtime,
+            soracloud_hf_config,
         }
     }
 
@@ -27774,6 +27894,27 @@ pub(crate) mod tests_runtime_handlers {
         World::with([domain], [account], [])
     }
 
+    fn configure_nexus_fee_admission_for_test(
+        app: &mut SharedAppState,
+        fee_asset_id: &iroha_data_model::asset::AssetDefinitionId,
+        fee_sink_account_id: &AccountId,
+    ) {
+        let mut nexus = iroha_config::parameters::actual::Nexus::default();
+        nexus.enabled = true;
+        nexus.fees.base_fee = Numeric::from(1_u32);
+        nexus.fees.per_byte_fee = Numeric::zero();
+        nexus.fees.per_instruction_fee = Numeric::zero();
+        nexus.fees.per_gas_unit_fee = Numeric::zero();
+        nexus.fees.fee_asset_id = fee_asset_id.to_string();
+        nexus.fees.fee_sink_account_id = fee_sink_account_id.to_string();
+
+        let app_state = Arc::get_mut(app).expect("unique app state");
+        let state = Arc::get_mut(&mut app_state.state).expect("unique state");
+        state.set_nexus(nexus.clone()).expect("apply nexus config");
+        let state_view = app_state.state.view();
+        app_state.queue.reconfigure_nexus(&nexus, &state_view, None);
+    }
+
     fn configure_multiple_dataspace_routes_for_test(app: &mut SharedAppState) {
         let secondary_dataspace = DataSpaceId::new(1);
         let secondary_lane = LaneId::new(1);
@@ -28831,11 +28972,7 @@ pub(crate) mod tests_runtime_handlers {
             let app_mut = Arc::get_mut(&mut app).expect("unique app state");
             app_mut.high_load_tx_threshold = usize::MAX;
             app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
-            app_mut.fee_policy = FeePolicy::Manual {
-                asset_id: "xor#wonderland".to_string(),
-                amount: 1,
-                receiver: "receiver".to_string(),
-            };
+            app_mut.fee_policy = FeePolicy::Disabled;
         }
 
         let keypair = KeyPair::random();
@@ -28884,6 +29021,94 @@ pub(crate) mod tests_runtime_handlers {
             Err(err) => err,
         };
         assert_eq!(err.into_response().status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn handler_post_transaction_rejects_unfunded_nexus_fee_tx_before_history() {
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let fee_asset_id = iroha_data_model::asset::AssetDefinitionId::new(
+            domain_id.clone(),
+            "xor".parse().expect("asset name"),
+        );
+        let domain = Domain::new(domain_id).build(&authority);
+        let account = Account::new(authority.clone()).build(&authority);
+        let fee_asset_definition =
+            iroha_data_model::asset::AssetDefinition::numeric(fee_asset_id.clone())
+                .with_name("xor".to_owned())
+                .build(&authority);
+        let world = World::with([domain], [account], [fee_asset_definition]);
+        let mut app = mk_app_state_for_tests_with_world(world);
+        configure_nexus_fee_admission_for_test(&mut app, &fee_asset_id, &authority);
+
+        let tx = TransactionBuilder::new((*app.chain_id).clone(), authority.clone())
+            .with_instructions([Log::new(Level::INFO, "fee-insolvent".to_owned())])
+            .sign(keypair.private_key());
+        let tx_hash = tx.hash();
+        let tx_hash_hex = tx_hash.to_string();
+
+        let response = match super::handler_post_transaction(
+            State(app.clone()),
+            HeaderMap::new(),
+            NoritoVersioned(tx),
+        )
+        .await
+        {
+            Ok(_) => panic!("expected Nexus fee admission rejection"),
+            Err(err) => err.into_response(),
+        };
+
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("PRTRY:NEXUS_FEE_ADMISSION_REJECTED")
+        );
+        assert_eq!(app.queue.active_len(), 0);
+        assert!(
+            !app.state.has_committed_transaction(tx_hash),
+            "ingress rejection should not create committed history"
+        );
+
+        let explorer = super::handler_explorer_transaction_detail(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            axum::extract::Path(tx_hash_hex),
+        )
+        .await
+        .expect("explorer detail response");
+        assert_eq!(explorer.status(), StatusCode::NOT_FOUND);
+    }
+
+    #[tokio::test]
+    async fn handler_policy_reports_tx_rate_limit_as_always_enforced() {
+        let mut app = mk_app_state_for_tests();
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.fee_policy = FeePolicy::Disabled;
+            app_mut.high_load_tx_threshold = usize::MAX;
+        }
+
+        let response =
+            super::handler_policy(State(app), HeaderMap::new(), crate::loopback_connect_info())
+                .await
+                .expect("policy response")
+                .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("policy body");
+        let json: norito::json::Value = norito::json::from_slice(&body).expect("valid policy json");
+        assert_eq!(
+            json.get("rate_limit_enforced"),
+            Some(&norito::json::Value::Bool(true))
+        );
     }
 
     #[tokio::test]
@@ -31216,6 +31441,74 @@ pub(crate) mod tests_runtime_handlers {
         app
     }
 
+    fn app_with_recorded_sccp_message_for_test(
+        height: u64,
+        payload: iroha_sccp::SccpPayloadV1,
+    ) -> (SharedAppState, [u8; 32]) {
+        let app = mk_app_state_for_tests();
+        let keypair = KeyPair::random();
+        let chain: ChainId = "sccp-message-tests".parse().expect("chain id");
+        let authority = AccountId::new(keypair.public_key().clone());
+        let tx = TransactionBuilder::new(chain, authority)
+            .with_instructions([iroha_data_model::isi::bridge::RecordSccpMessage::new(
+                iroha_sccp::canonical_sccp_payload_bytes(&payload),
+            )])
+            .sign(keypair.private_key());
+        let entry_hash = tx.hash_as_entrypoint();
+        let header = BlockHeader::new(
+            std::num::NonZeroU64::new(height).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let signature = BlockSignature::new(
+            0,
+            SignatureOf::from_hash(keypair.private_key(), header.hash()),
+        );
+        let mut block = SignedBlock::presigned(signature, header, vec![tx]);
+        block.set_transaction_results(
+            Vec::new(),
+            &[entry_hash],
+            vec![TransactionResultInner::Ok(DataTriggerSequence::default())],
+        );
+        let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(&block);
+        let commitment_root =
+            iroha_core::bridge::sccp_commitment_root_from_messages(&messages).expect("root");
+        block.set_sccp_commitment_root(Some(commitment_root));
+        let expected_root = block
+            .header()
+            .result_merkle_root()
+            .map(|hash| iroha_crypto::Hash::prehashed(*hash.as_ref()))
+            .expect("result root");
+        let block_hash = block.hash();
+        let message_id = messages
+            .first()
+            .expect("recorded message")
+            .commitment
+            .message_id;
+        store_block(&app, block);
+
+        let (qc, validator_pop) = sample_commit_qc(
+            block_hash,
+            expected_root,
+            height,
+            height.saturating_add(1),
+            0,
+        );
+        record_commit_qc(qc.clone());
+        let mut app = app;
+        let app_mut = Arc::get_mut(&mut app).expect("unique app state for test");
+        let state = Arc::get_mut(&mut app_mut.state).expect("unique core state for test");
+        state.world.register_validator_pop_for_testing(
+            qc.validator_set[0].public_key().clone(),
+            validator_pop,
+        );
+        state.insert_commit_qc_for_testing(block_hash, qc);
+        (app, message_id)
+    }
+
     #[tokio::test]
     async fn sccp_burn_bundle_endpoint_roundtrips_json_and_norito() {
         routing::clear_sccp_bundles_for_tests();
@@ -31413,6 +31706,220 @@ pub(crate) mod tests_runtime_handlers {
         let decoded: iroha_sccp::NexusSccpGovernanceProofV1 =
             serde_json::from_slice(&bytes).expect("decode json bundle");
         assert_eq!(decoded, bundle);
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn sccp_message_bundle_endpoint_roundtrips_json() {
+        routing::clear_sccp_bundles_for_tests();
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA2,
+            nonce: 12,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: 1,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: 1,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: 2,
+            recipient: b"sora2:alice".to_vec(),
+            route_id_codec: 1,
+            route_id: b"nexus:sora2:xor".to_vec(),
+        });
+        let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload.clone());
+
+        let response = routing::handle_v1_sccp_message_bundle(
+            app.state.as_ref(),
+            hex::encode(message_id),
+            None,
+        )
+        .await
+        .expect("json response");
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/json".as_slice())
+        );
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let decoded: iroha_sccp::NexusSccpMessageProofV1 =
+            serde_json::from_slice(&bytes).expect("decode json bundle");
+        assert_eq!(decoded.payload, payload);
+        assert_eq!(decoded.commitment.message_id, message_id);
+        assert!(iroha_sccp::verify_message_bundle_structure(&decoded));
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn bridge_message_submit_prepares_inbound_transfer_receipt() {
+        routing::clear_sccp_bundles_for_tests();
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            nonce: 9,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            asset_id_codec: 1,
+            asset_id: b"weth#eth".to_vec(),
+            amount: 123,
+            sender_codec: 1,
+            sender: b"eth:bridge".to_vec(),
+            recipient_codec: 1,
+            recipient: b"alice@universal".to_vec(),
+            route_id_codec: 1,
+            route_id: b"eth:sora:weth".to_vec(),
+        });
+        let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let bundle_response = routing::handle_v1_sccp_message_bundle(
+            app.state.as_ref(),
+            hex::encode(message_id),
+            None,
+        )
+        .await
+        .expect("bundle response");
+        let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
+            .await
+            .expect("bundle body");
+        let bundle_value = norito::json::from_str::<norito::json::Value>(
+            std::str::from_utf8(&bundle_bytes).expect("bundle utf8"),
+        )
+        .expect("bundle value");
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let response = routing::handle_post_bridge_message_submit(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            app.telemetry.clone(),
+            crate::utils::extractors::JsonOnly(crate::routing::BridgeMessageSubmitDto {
+                authority,
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                message_bundle: bundle_value,
+                receipt_lane: Some(7),
+                creation_time_ms: Some(42),
+            }),
+        )
+        .await
+        .expect("message submit response")
+        .into_response();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let decoded = norito::json::from_str::<norito::json::Value>(
+            std::str::from_utf8(&body).expect("response utf8"),
+        )
+        .expect("response json");
+        let object = decoded.as_object().expect("response object");
+        let message_id_hex = hex::encode(message_id);
+        assert_eq!(
+            object
+                .get("submitted")
+                .and_then(norito::json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            object
+                .get("message_kind")
+                .and_then(norito::json::Value::as_str),
+            Some("transfer")
+        );
+        assert_eq!(
+            object
+                .get("message_id_hex")
+                .and_then(norito::json::Value::as_str),
+            Some(message_id_hex.as_str())
+        );
+        assert_eq!(
+            object
+                .get("receipt_lane")
+                .and_then(norito::json::Value::as_u64),
+            Some(7)
+        );
+        assert_eq!(
+            object
+                .get("receipt_direction")
+                .and_then(norito::json::Value::as_str),
+            Some("mint")
+        );
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn bridge_message_submit_rejects_non_sora_target_domain() {
+        routing::clear_sccp_bundles_for_tests();
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA2,
+            nonce: 11,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: 1,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 5,
+            sender_codec: 1,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: 1,
+            recipient: b"sora2:alice".to_vec(),
+            route_id_codec: 1,
+            route_id: b"sora:sora2:xor".to_vec(),
+        });
+        let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let bundle_response = routing::handle_v1_sccp_message_bundle(
+            app.state.as_ref(),
+            hex::encode(message_id),
+            None,
+        )
+        .await
+        .expect("bundle response");
+        let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
+            .await
+            .expect("bundle body");
+        let bundle_value = norito::json::from_str::<norito::json::Value>(
+            std::str::from_utf8(&bundle_bytes).expect("bundle utf8"),
+        )
+        .expect("bundle value");
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let err = match routing::handle_post_bridge_message_submit(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            app.telemetry.clone(),
+            crate::utils::extractors::JsonOnly(crate::routing::BridgeMessageSubmitDto {
+                authority,
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                message_bundle: bundle_value,
+                receipt_lane: None,
+                creation_time_ms: Some(77),
+            }),
+        )
+        .await
+        {
+            Ok(_) => panic!("non-SORA target must be rejected"),
+            Err(err) => err,
+        };
+        let Error::Query(ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+        )) = err
+        else {
+            panic!("unexpected error: {err}");
+        };
+        assert!(
+            message.contains("only accepts inbound messages for SORA"),
+            "unexpected error: {message}"
+        );
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -35991,6 +36498,10 @@ impl Error {
             queue::Error::GovernanceNotPermitted { .. } => StatusCode::FORBIDDEN,
             queue::Error::LaneComplianceDenied { .. } => StatusCode::FORBIDDEN,
             queue::Error::LanePrivacyProofRejected { .. } => StatusCode::FORBIDDEN,
+            queue::Error::NexusFeeAdmissionRejected { .. } => StatusCode::FORBIDDEN,
+            queue::Error::NexusFeeAdmissionConfigInvalid { .. } => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         }
     }
 
@@ -36032,6 +36543,14 @@ impl Error {
             queue::Error::LanePrivacyProofRejected { .. } => (
                 "queue_lane_privacy_proof_rejected",
                 "lane privacy proof rejected the transaction",
+            ),
+            queue::Error::NexusFeeAdmissionRejected { .. } => (
+                "queue_nexus_fee_rejected",
+                "transaction cannot cover the Nexus fee admission bound",
+            ),
+            queue::Error::NexusFeeAdmissionConfigInvalid { .. } => (
+                "queue_nexus_fee_config_invalid",
+                "node Nexus fee configuration is invalid",
             ),
         }
     }
@@ -36132,6 +36651,14 @@ fn queue_rejection_metadata(err: &queue::Error) -> (&'static str, String) {
         queue::Error::LanePrivacyProofRejected { alias, reason } => (
             "PRTRY:QUEUE_LANE_PRIVACY_PROOF_REJECTED",
             format!("lane privacy proof rejected transaction for alias '{alias}': {reason}"),
+        ),
+        queue::Error::NexusFeeAdmissionRejected { reason } => (
+            "PRTRY:NEXUS_FEE_ADMISSION_REJECTED",
+            format!("transaction rejected by Nexus fee admission: {reason}"),
+        ),
+        queue::Error::NexusFeeAdmissionConfigInvalid { reason } => (
+            "PRTRY:NEXUS_FEE_ADMISSION_CONFIG_INVALID",
+            format!("invalid Nexus fee admission configuration: {reason}"),
         ),
     }
 }

@@ -229,6 +229,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<zk::FinalizeElection>,
     InstructionRegistry::register::<bridge::SubmitBridgeProof>,
     InstructionRegistry::register::<bridge::RecordBridgeReceipt>,
+    InstructionRegistry::register::<bridge::RecordSccpMessage>,
     #[cfg(feature = "governance")]
     InstructionRegistry::register::<governance::ProposeDeployContract>,
     #[cfg(feature = "governance")]
