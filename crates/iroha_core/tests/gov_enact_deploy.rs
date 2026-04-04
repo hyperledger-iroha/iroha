@@ -52,13 +52,13 @@ fn compute_proposal_id(
         .try_into()
         .expect("contract address length fits u32");
     let mut input = Vec::with_capacity(
-        b"iroha:gov:proposal:v2|".len()
+        b"iroha:gov:proposal:v1|".len()
             + core::mem::size_of::<u32>()
             + contract_address.len()
             + code.len()
             + abi.len(),
     );
-    input.extend_from_slice(b"iroha:gov:proposal:v2|");
+    input.extend_from_slice(b"iroha:gov:proposal:v1|");
     input.extend_from_slice(&contract_address_len.to_le_bytes());
     input.extend_from_slice(contract_address.as_bytes());
     input.extend_from_slice(&code);

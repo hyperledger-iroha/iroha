@@ -2,6 +2,34 @@
 
 Last updated: 2026-04-04
 
+## 2026-04-04 Follow-up: SCCP message artifacts now carry typed inner proof transcripts
+- Tightened the SCCP transparent proof artifact format in `crates/iroha_sccp`:
+  - new message artifacts no longer store an opaque placeholder digest in
+    `proof_bytes`;
+  - `proof_bytes` now encode a canonical inner proof envelope bound to the
+    shared manifest, chain family, chain key, counterparty codec, payload
+    kind, SCCP public inputs, statement hash, and placeholder proof hash; and
+  - the verifier still accepts the legacy raw 32-byte placeholder digest so
+    previously recorded SCCP transparent artifacts remain structurally valid.
+- Added canonical inner-proof encode/decode helpers plus verifier coverage in
+  `crates/iroha_sccp/src/lib.rs`.
+- Extended the operator surfaces that read SCCP artifacts:
+  - the bridge CLI artifact summary now decodes the inner proof envelope when
+    present; and
+  - Torii bridge-proof JSON summaries now expose `inner_chain_family`,
+    `inner_payload_kind`, and `inner_statement_hash` for typed SCCP artifacts.
+- Updated the SCCP bridge-proof docs to describe the stronger `proof_bytes`
+  contract.
+- Focused validation completed:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `rustfmt --edition 2024 crates/iroha_cli/src/bridge.rs`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-sccp-lib-target cargo test --offline -p iroha_sccp message_transparent_ --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-sccp-lib-target cargo test --offline -p iroha_sccp --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-core-bridgeproofs-target cargo test --offline -p iroha_core --test bridge_proofs -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-torii-sccp-target cargo test --offline -p iroha_torii sccp_message_artifact_endpoint_roundtrips_json_and_norito --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-torii-sccp-target cargo test --offline -p iroha_torii bridge_record_to_json_includes_sccp_ --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-cli-bridge-target cargo test --offline -p iroha_cli --features bridge --bin iroha bridge::tests::sccp_artifact_text_command_prints_summary -- --nocapture`
+
 ## 2026-04-04 Follow-up: Taira hardening now targets direct public nodes and stake-driven validator admission
 - Reworked the checked-in Taira rollout/docs surface away from treating
   `https://taira.sora.org` as the canonical API:
@@ -242,7 +270,13 @@ Last updated: 2026-04-04
     same alias-centric deploy DTO, contract-address-or-alias call selector,
     compact call response, multisig contract-call request shape, and
     governance deploy-contract proposal selector/decoder instead of the stale
-    `namespace` / `contract_id` contract payloads.
+    `namespace` / `contract_id` contract payloads; and
+  - the canonical English docs now match the implemented API surface across
+    `docs/source/governance_api.md`,
+    `docs/source/torii/norito_rpc.md`,
+    `docs/source/torii/contract_lifecycle_app_api.md`, and
+    `docs/source/telemetry.md`, removing the stale public
+    `/v1/contracts/instance*` lifecycle from the primary English references.
 - Focused validation completed on the patched tree:
   - `cargo fmt --all`
   - `cargo check -p iroha_data_model`
@@ -264,15 +298,20 @@ Last updated: 2026-04-04
   - `swift test --filter 'ToriiClientTests/testGetGovernanceProposalDecodesRecord'` (from `IrohaSwift`)
   - `cargo test -p iroha_torii transaction_detail_includes_contract_call_payload --lib -- --nocapture`
   - `cargo test -p iroha_torii transaction_detail_includes_rejection_reason --lib -- --nocapture`
+  - `rg -n 'DeployAndActivateInstanceDto|ActivateInstanceDto|/v1/contracts/\\{deploy,instance|Request body: \`ActivateInstanceDto\`|Accepts \`DeployAndActivateInstanceDto\`' docs/source/governance_api.md docs/source/torii/norito_rpc.md docs/source/torii/contract_lifecycle_app_api.md docs/source/telemetry.md docs/source/torii_contracts_api.md` (no matches)
 - Current verification boundary:
   - focused contract-call/deploy redesign checks are green, including real
     Torii handler integration coverage for alias upgrades and public calls plus
     the updated Swift DTO/response tests; and
+  - the primary English docs now match the deployed alias-first/by-reference
+    lifecycle; but
   - the full `IrohaSwift` suite still has unrelated pre-existing failures
     outside the edited contract tests (for example fixture/parsing assertions in
     `AccountAddressFixtureTests` and multiple older `ToriiClientTests` cases); and
   - a fresh full `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings`
-    sweep has not been rerun end-to-end after this protocol/API change.
+    sweep has not been rerun end-to-end after this protocol/API change; and
+  - many translated docs and portal/i18n mirrors still describe the retired
+    `/v1/contracts/instance*` workflow and need a follow-up parity sweep.
 
 ## 2026-04-04 Follow-up: Torii now exposes typed SCCP proof manifests
 - Added shared SCCP proof-manifest helpers in

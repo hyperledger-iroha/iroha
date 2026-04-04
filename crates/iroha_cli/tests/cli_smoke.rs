@@ -295,13 +295,13 @@ fn proposal_id_hex(contract_address: &str, code: &[u8; 32], abi: &[u8; 32]) -> S
     let contract_address_len =
         u32::try_from(contract_address.len()).expect("contract address length fits into u32");
     let mut input = Vec::with_capacity(
-        b"iroha:gov:proposal:v2|".len()
+        b"iroha:gov:proposal:v1|".len()
             + std::mem::size_of::<u32>()
             + contract_address.len()
             + code.len()
             + abi.len(),
     );
-    input.extend_from_slice(b"iroha:gov:proposal:v2|");
+    input.extend_from_slice(b"iroha:gov:proposal:v1|");
     input.extend_from_slice(&contract_address_len.to_le_bytes());
     input.extend_from_slice(contract_address.as_bytes());
     input.extend_from_slice(code);

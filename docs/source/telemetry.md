@@ -312,7 +312,7 @@ deploys flowed through the protected gate.
 When the alert triggers:
 1. Inspect `histogram_quantile(0.5/0.95/0.99, sum by (lane_id,endpoint,le)(rate(torii_lane_admission_latency_seconds_bucket[5m])))`
    to confirm whether the regression is confined to a single endpoint (e.g.
-   `/transaction` vs `/v1/contracts/instance/activate`).
+   `/transaction` vs `/v1/contracts/call`).
 2. Pull `/v1/sumeragi/status` and review `lane_activity` for the affected lane.
    A spike in `tx_vertices`, `overlay_bytes_total`, or `rbc_bytes_total` hints at
    admission pressure rather than infrastructure issues.
