@@ -11924,9 +11924,9 @@ mod multisig_selector_tests {
         assert_eq!(payload["ok"].as_bool(), Some(true));
         assert_eq!(payload["submitted"].as_bool(), Some(false));
         assert_eq!(payload["dataspace"].as_str(), Some("universal"));
-        assert_eq!(
-            payload["contract_id"].as_str(),
-            Some(contract_address.as_ref())
+        assert!(
+            payload.get("contract_id").is_none() || payload["contract_id"].is_null(),
+            "legacy contract_id field must be absent"
         );
         assert_eq!(
             payload["contract_address"].as_str(),

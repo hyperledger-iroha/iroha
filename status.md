@@ -1,19 +1,74 @@
 # Status
 
-Last updated: 2026-04-03
+Last updated: 2026-04-04
+
+## 2026-04-04 Follow-up: aggressive stepped sweep to 1000 TPS still shows early single-host knees
+- Ran a fresh sequential aggressive stepped sweep on the patched release
+  binaries in `/tmp/iroha_target_tieredfix/release` using:
+  - `4` peers, `0` faulty peers;
+  - `8` submitters;
+  - `max_inflight=8192`;
+  - `duration=60s`;
+  - `target_blocks=30`;
+  - `progress_interval=5s`;
+  - `progress_timeout=45s`; and
+  - offered load `10/25/50/75/100/150/250/500/750/1000 TPS`.
+- Artifacts:
+  - summary:
+    `/tmp/izanami_stepsweep1000_agg_20260404T000647/summary.tsv`
+  - per-rate logs:
+    `/tmp/izanami_stepsweep1000_agg_20260404T000647/*.log`
+- Permissioned results:
+  - `rc=0` at `10`, `25`, `50`, `75 TPS`;
+  - `rc=1` at `100 TPS`; and
+  - `rc=124` timeout-bucket failures at `150`, `250`, `500`, `750`,
+    `1000 TPS`.
+- NPoS results:
+  - `rc=0` at `10`, `25 TPS`;
+  - `rc=1` at `50`, `75`, `100 TPS`; and
+  - `rc=124` timeout-bucket failures at `150`, `250`, `500`, `750`,
+    `1000 TPS`.
+- Failure signatures on this sweep:
+  - no `route_unavailable`;
+  - no `opaque canonical asset definition ids do not carry a domain projection`;
+  - no top-level `missing_qc`; and
+  - no `no proposal observed for view before changing view`.
+- The dominant failure mode is single-host ingress/backpressure collapse:
+  - permissioned `100 TPS`:
+    `offered=6000`, `ingress_accepted=3287`, `inflight_peak=2297`,
+    `backlog_peak=2532`,
+    `izanami_ingress_failover_total=1108`,
+    `izanami_ingress_endpoint_unhealthy_total=953`;
+  - NPoS `50 TPS`:
+    `offered=2245`, `ingress_accepted=944`, `inflight_peak=379`,
+    `backlog_peak=380`,
+    `izanami_ingress_failover_total=420`,
+    `izanami_ingress_endpoint_unhealthy_total=132`;
+  - NPoS `100 TPS`:
+    `offered=6000`, `ingress_accepted=3194`, `inflight_peak=2445`,
+    `backlog_peak=2667`,
+    `izanami_ingress_failover_total=1097`,
+    `izanami_ingress_endpoint_unhealthy_total=834`.
+- Interpretation:
+  - on this aggressive shared-host harness, permissioned still has more
+    headroom than NPoS, but both modes fail from ingress/backlog pressure
+    long before `1000 TPS`; and
+  - the old NPoS commit panic is absent on this sweep, so the current limiter
+    is load-path saturation rather than the earlier opaque-asset-id crash.
 
 ## 2026-04-03 Follow-up: opaque asset-definition snapshot sizing no longer panics Soracloud commits
-- Patched hot-tier snapshot sizing so opaque canonical
-  `AssetDefinitionId` values are measured without forcing a synthetic
-  `(domain, name)` projection.
+- Patched hot-tier snapshot sizing after a fresh NPoS backtrace showed the
+  remaining commit-time crash came from
+  `iroha_core::state::tiered::MeasuredBytes for AssetDefinitionId` during
+  `StateBlock::commit`.
 - `crates/iroha_core/src/state/tiered.rs` now:
   - measures `AssetDefinitionId` domain/name overhead only when a real
     projection is present via `try_domain()` / `try_name()`;
   - preserves the base-size accounting for opaque canonical ids; and
-  - includes a regression test covering an opaque UUID-backed asset
-    definition id.
-- This clears the remaining Soracloud commit-time peer crash that was still
-  surfacing as:
+  - includes regression coverage in
+    `measured_bytes_cover_opaque_asset_definition_id`.
+- This clears the remaining Soracloud / NPoS commit-time peer crash that was
+  still surfacing as:
   `opaque canonical asset definition ids do not carry a domain projection`.
 - Focused validation completed:
   - `cargo fmt --all`
@@ -22,6 +77,11 @@ Last updated: 2026-04-03
   - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_commands_use_live_torii_control_plane -- --nocapture`
   - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts -- --nocapture`
   - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test iroha_cli soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane -- --nocapture`
+- Live smoke follow-up:
+  - fresh NPoS/backtrace reruns no longer show the old `asset/id.rs:332` /
+    `sumeragi-commit` panic in retained peer logs; and
+  - the remaining tiny-smoke issue is an external fatal-signal shutdown, not
+    the old opaque-id crash.
 
 ## 2026-04-03 Follow-up: transaction confirmation now fails fast on dead Torii sockets
 - Hardened the `iroha` client confirmation path so `submit_blocking` no

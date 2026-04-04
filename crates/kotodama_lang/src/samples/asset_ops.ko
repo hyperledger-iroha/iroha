@@ -3,7 +3,7 @@ seiyaku AssetOps {
     // Typed pointer‑ABI arguments via constructors
     let alice = authority();
     let bob = authority();
-    let coin = asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM");
+    let coin = asset_definition!("6pEP9RjNoZ7beWkT3pLfKoM1dyfi");
     mint_asset(
       alice,
       coin,

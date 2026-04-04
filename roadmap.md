@@ -1,11 +1,52 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-03
+Last updated: 2026-04-04
+
+Latest sync (2026-04-04 aggressive stepped sweep to `1000 TPS`):
+the current patched tree no longer dies on the old NPoS opaque-asset-id panic,
+but the aggressive single-host load knee is still low and mode-dependent.
+
+- fresh sweep artifacts:
+  - `/tmp/izanami_stepsweep1000_agg_20260404T000647/summary.tsv`
+  - `/tmp/izanami_stepsweep1000_agg_20260404T000647/*.log`
+- matrix outcome:
+  - permissioned: green through `75 TPS`, red at `100 TPS`, timeout-bucket
+    failures from `150 TPS` upward;
+  - NPoS: green through `25 TPS`, red at `50/75/100 TPS`, timeout-bucket
+    failures from `150 TPS` upward.
+- the dominant high-load signature is ingress/backpressure collapse, not a
+  return of the older consensus bugs:
+  - no `route_unavailable`;
+  - no opaque-asset-id commit panic;
+  - no top-level `missing_qc`; and
+  - no `no proposal observed for view before changing view`.
+- representative failure metrics:
+  - permissioned `100 TPS`:
+    `offered=6000`, `ingress_accepted=3287`, `inflight_peak=2297`,
+    `backlog_peak=2532`;
+  - NPoS `50 TPS`:
+    `offered=2245`, `ingress_accepted=944`, `inflight_peak=379`,
+    `backlog_peak=380`; and
+  - NPoS `100 TPS`:
+    `offered=6000`, `ingress_accepted=3194`, `inflight_peak=2445`,
+    `backlog_peak=2667`.
+
+Open work for this slice now remains:
+- separate teardown noise from genuine throughput ceilings for the green
+  low-rate points, since the successful logs still end in post-shutdown
+  connection-refused polling and do not emit clean summary lines;
+- rerun the same stepped matrix with a less aggressive ingress shape
+  (`submitters` / `max_inflight`) to distinguish client-side saturation from
+  Sumeragi’s actual consensus knee; and
+- if high-load NPoS still bends materially earlier than permissioned under a
+  fairer ingress profile, trace the first NPoS-specific queueing bottleneck
+  beyond the already-fixed opaque-asset-id crash.
 
 Latest sync (2026-04-03 opaque asset-definition snapshot sizing fix):
-the remaining Soracloud commit-time peer crash from the `DomainId` cleanup is
-patched. Hot-tier snapshot measurement no longer calls `AssetDefinitionId::domain()`
-for opaque canonical asset-definition ids.
+the remaining Soracloud / NPoS commit-time peer crash from the `DomainId`
+cleanup was traced to `iroha_core::state::tiered::MeasuredBytes for
+AssetDefinitionId` and is now patched. Hot-tier snapshot measurement no longer
+calls `AssetDefinitionId::domain()` for opaque canonical asset-definition ids.
 
 - shipped in:
   - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/state/tiered.rs`
@@ -78,6 +119,7 @@ Open work for this slice now remains:
   model changes; and
 - after runtime validation is stable, do a strict lint pass with
   `cargo clippy --workspace --all-targets -- -D warnings`.
+
 
 Latest sync (2026-04-03 opaque asset-definition event routing fix):
 the remaining NPoS `sumeragi-commit` panic is now patched at the event-model

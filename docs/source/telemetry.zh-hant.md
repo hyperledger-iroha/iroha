@@ -263,7 +263,7 @@ Example `governance` excerpt from `/status`:
 "recent_manifest_activations": [
     {
       "namespace": "apps",
-      "contract_id": "demo.contract",
+      "contract_address": "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
       "code_hash_hex": "deadbeef",
       "abi_hash_hex": "cafebabe",
       "height": 42,

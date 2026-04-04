@@ -106,9 +106,10 @@ fn stake_asset_id_literal() -> String {
 }
 
 fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
-    iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
-        .parse()
-        .expect("default nexus fee asset id")
+    AssetDefinitionId::new(
+        DomainId::try_new("universal", "universal").expect("fee asset domain"),
+        "xor".parse().expect("fee asset name"),
+    )
 }
 
 enum RouteProbeOutcome {

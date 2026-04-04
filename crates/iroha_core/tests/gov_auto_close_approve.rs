@@ -19,6 +19,16 @@ fn canonical_abi_hex() -> String {
     hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
 }
 
+fn proposal_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
+    iroha_data_model::smart_contract::ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &iroha_test_samples::ALICE_ID,
+        0,
+        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+    )
+    .expect("proposal contract address")
+}
+
 #[test]
 fn auto_close_emits_approved() {
     use core::num::NonZeroU64;
@@ -69,9 +79,7 @@ fn auto_close_emits_approved() {
         let mut sblock1 = state.block(block1);
         let mut stx1 = sblock1.transaction();
         let p1: Permission = CanProposeContractDeployment {
-            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
-                .parse()
-                .expect("contract address"),
+            contract_address: proposal_contract_address(),
         }
         .into();
         Grant::account_permission(p1, ALICE_ID.clone())
@@ -88,9 +96,7 @@ fn auto_close_emits_approved() {
             .execute(&BOB_ID, &mut stx1)
             .expect("grant ballot B");
         ProposeDeployContract {
-            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
-                .parse()
-                .expect("contract address"),
+            contract_address: proposal_contract_address(),
             code_hash_hex: "aa".repeat(32),
             abi_hash_hex: canonical_abi_hex(),
             abi_version: "1".into(),

@@ -6594,8 +6594,16 @@ function assertContractInstanceListResponse(page, expectedNamespace = null) {
 
 function assertContractInstanceRecord(record, label = "contract instance record") {
   assert.ok(record && typeof record === "object", `${label} must be an object`);
-  assert.equal(typeof record.contract_id, "string", `${label}.contract_id must be a string`);
-  assert.notEqual(record.contract_id.length, 0, `${label}.contract_id must not be empty`);
+  assert.equal(
+    typeof record.contract_address,
+    "string",
+    `${label}.contract_address must be a string`,
+  );
+  assert.notEqual(
+    record.contract_address.length,
+    0,
+    `${label}.contract_address must not be empty`,
+  );
   assertHexString(record.code_hash_hex, `${label}.code_hash_hex`);
 }
 

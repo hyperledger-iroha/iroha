@@ -152,7 +152,7 @@ const instances = await torii.listGovernanceInstances("apps", {
   limit: 5,
 });
 for (const entry of instances.instances) {
-  console.log(`${entry.contract_id} :: ${entry.code_hash_hex}`);
+  console.log(`${entry.contract_address} :: ${entry.code_hash_hex}`);
 }
 
 const controller = new AbortController();

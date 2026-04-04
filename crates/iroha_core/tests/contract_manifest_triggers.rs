@@ -70,10 +70,17 @@ fn opaque_asset_definition_id() -> AssetDefinitionId {
     .expect("opaque asset definition id")
 }
 
-fn sample_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
-    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
-        .parse()
-        .expect("contract address")
+fn contract_address(
+    authority: &AccountId,
+    deploy_nonce: u64,
+) -> iroha_data_model::smart_contract::ContractAddress {
+    iroha_data_model::smart_contract::ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        authority,
+        deploy_nonce,
+        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+    )
+    .expect("contract address")
 }
 
 fn assert_contract_trigger_metadata(
@@ -91,7 +98,21 @@ fn assert_contract_trigger_metadata(
     let key_trigger: Name = "contract_trigger_id".parse().expect("trigger id key");
     assert_eq!(
         metadata.get(&key_address),
-        Some(&Json::from(contract_address.as_str()))
+        Some(&Json::from(contract_address.to_string().as_str()))
+    );
+    assert!(
+        metadata
+            .get(
+                &"contract_namespace"
+                    .parse::<Name>()
+                    .expect("legacy namespace key")
+            )
+            .is_none()
+    );
+    assert!(
+        metadata
+            .get(&"contract_id".parse::<Name>().expect("legacy contract key"))
+            .is_none()
     );
     assert_eq!(metadata.get(&key_entrypoint), Some(&Json::from(entrypoint)));
     let code_hash_json = Json::from(code_hash.to_string().as_str());
@@ -106,6 +127,7 @@ fn assert_contract_trigger_metadata(
 #[allow(clippy::too_many_lines)]
 fn activate_registers_manifest_triggers_and_deactivate_removes() {
     let (state, authority, kp) = setup_state();
+    let contract_address = contract_address(&authority, 0);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -174,7 +196,6 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
         .execute(&authority, &mut stx)
         .expect("register manifest");
 
-    let contract_address = sample_contract_address();
     ActivateContractInstance {
         contract_address: contract_address.clone(),
         code_hash,
@@ -195,7 +216,21 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     let key_trigger: Name = "contract_trigger_id".parse().expect("trigger id key");
     assert_eq!(
         metadata.get(&key_address),
-        Some(&Json::from(contract_address.as_str()))
+        Some(&Json::from(contract_address.to_string().as_str()))
+    );
+    assert!(
+        metadata
+            .get(
+                &"contract_namespace"
+                    .parse::<Name>()
+                    .expect("legacy namespace key")
+            )
+            .is_none()
+    );
+    assert!(
+        metadata
+            .get(&"contract_id".parse::<Name>().expect("legacy contract key"))
+            .is_none()
     );
     assert_eq!(metadata.get(&key_entrypoint), Some(&Json::from("run")));
     let code_hash_json = Json::from(code_hash.to_string().as_str());
@@ -206,7 +241,7 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     assert_eq!(metadata.get(&tag_key), Some(&Json::from("alpha")));
 
     DeactivateContractInstance {
-        contract_address,
+        contract_address: contract_address.clone(),
         reason: None,
     }
     .execute(&authority, &mut stx)
@@ -219,6 +254,7 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
 #[allow(clippy::too_many_lines)]
 fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes_them() {
     let (state, authority, kp) = setup_state();
+    let contract_address = contract_address(&authority, 0);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -314,7 +350,6 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
         .execute(&authority, &mut stx)
         .expect("register manifest");
 
-    let contract_address = sample_contract_address();
     ActivateContractInstance {
         contract_address: contract_address.clone(),
         code_hash,
@@ -367,7 +402,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     );
 
     DeactivateContractInstance {
-        contract_address,
+        contract_address: contract_address.clone(),
         reason: None,
     }
     .execute(&authority, &mut stx)
@@ -447,6 +482,7 @@ seiyaku Test {{
         .expect("compile source with manifest");
     let parsed = ivm::ProgramMetadata::parse(&program).expect("ivm header");
     let code_hash = iroha_crypto::Hash::new(&program[parsed.header_len..]);
+    let contract_address = contract_address(&authority, 0);
 
     RegisterSmartContractBytes {
         code_hash,
@@ -461,7 +497,6 @@ seiyaku Test {{
     .execute(&authority, &mut stx)
     .expect("register manifest");
 
-    let contract_address = sample_contract_address();
     ActivateContractInstance {
         contract_address: contract_address.clone(),
         code_hash,

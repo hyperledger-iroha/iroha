@@ -35,8 +35,6 @@ use iroha_data_model::{
 use iroha_primitives::json::Json;
 use nonzero_ext::nonzero;
 
-const CONTRACT_NAMESPACE: &str = "apps";
-const CONTRACT_ID: &str = "demo.contract";
 const BALLOT_SCOPE_ANY: &str = "any";
 const DEFAULT_ABI_VERSION: &str = "1";
 
@@ -59,6 +57,12 @@ fn block_header(height: u64) -> BlockHeader {
     BlockHeader::new(nonzero!(height), None, None, None, 0, 0)
 }
 
+fn contract_address() -> iroha_data_model::smart_contract::ContractAddress {
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        .parse()
+        .expect("contract address")
+}
+
 fn grant_permission(
     stx: &mut StateTransaction<'_, '_>,
     authority: &iroha_data_model::account::AccountId,
@@ -73,8 +77,7 @@ fn grant_permission(
 
 fn contract_proposal(mode: VotingMode) -> ProposeDeployContract {
     ProposeDeployContract {
-        namespace: CONTRACT_NAMESPACE.into(),
-        contract_id: CONTRACT_ID.into(),
+        contract_address: contract_address(),
         code_hash_hex: "aa".repeat(32),
         abi_hash_hex: "bb".repeat(32),
         abi_version: DEFAULT_ABI_VERSION.into(),
@@ -89,7 +92,7 @@ fn can_propose_contract_permission() -> Permission {
         "CanProposeContractDeployment"
             .parse()
             .expect("valid permission"),
-        Json::from(CONTRACT_ID),
+        Json::new(norito::json!({ "contract_address": contract_address().to_string() })),
     )
 }
 

@@ -4119,6 +4119,7 @@ impl Actor {
         }
         if let Some(lock) = self.locked_qc {
             if !self.block_known_for_lock(lock.subject_block_hash) {
+                let _ = self.request_missing_locked_qc_payload("emit_precommit_vote");
                 warn!(
                     height,
                     view,

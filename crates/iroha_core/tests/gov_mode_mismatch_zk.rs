@@ -23,6 +23,16 @@ fn canonical_abi_hex() -> String {
     hex::encode(ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1))
 }
 
+fn proposal_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
+    iroha_data_model::smart_contract::ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &iroha_test_samples::ALICE_ID,
+        0,
+        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+    )
+    .expect("proposal contract address")
+}
+
 #[test]
 fn zk_ballot_rejected_on_plain_referendum() {
     use core::num::NonZeroU64;
@@ -76,9 +86,7 @@ fn zk_ballot_rejected_on_plain_referendum() {
     let mut stx = sblock.transaction();
     // Grant permissions to ALICE to propose and submit ballots
     let p1: Permission = CanProposeContractDeployment {
-        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
-            .parse()
-            .expect("contract address"),
+        contract_address: proposal_contract_address(),
     }
     .into();
     Grant::account_permission(p1, ALICE_ID.clone())
@@ -103,9 +111,7 @@ fn zk_ballot_rejected_on_plain_referendum() {
     .expect("register vk");
     // Propose a Plain-mode referendum; record any created rid
     let prop = ProposeDeployContract {
-        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
-            .parse()
-            .expect("contract address"),
+        contract_address: proposal_contract_address(),
         code_hash_hex: "aa".repeat(32),
         abi_hash_hex: canonical_abi_hex(),
         abi_version: "1".to_string(),

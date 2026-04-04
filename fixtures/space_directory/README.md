@@ -21,10 +21,10 @@ This directory hosts canonical samples for the Nexus **Space Directory**:
 
   | Manifest | Norito file | BLAKE3 |
   |----------|-------------|--------|
-  | `capability/cbdc_wholesale.manifest.json` | `capability/cbdc_wholesale.manifest.to` | `11a47182ab51e845d53f40f12387caef1e609585a824c0a4feab38f0922859fe` |
+  | `capability/cbdc_wholesale.manifest.json` | `capability/cbdc_wholesale.manifest.to` | `53b71f61ed1b52e80fd5d6455a31e73d6b9885082636f6f27453bb8a42ba74d4` |
   | `capability/retail_dapp_access.manifest.json` | `capability/retail_dapp_access.manifest.to` | `d293a8dea5f227d5350c4502044e97e4c60017d22d6e853c4d0846e8d778145c` |
   | `capability/eu_regulator_audit.manifest.json` | `capability/eu_regulator_audit.manifest.to` | `53193a5e9ddb1c0634de1c14fae1f828dcc42118c3c0d1615777f025623bc42f` |
-  | `capability/jp_regulator_supervision.manifest.json` | `capability/jp_regulator_supervision.manifest.to` | `d797a1683f5c8771d69528425018cd72427be732d4251da9b2b9ca54b2e845a4` |
+  | `capability/jp_regulator_supervision.manifest.json` | `capability/jp_regulator_supervision.manifest.to` | `7ec08d8c4c5807e24e4841268e59bfea288e80344a5833448db6aeb6cb02638d` |
 
 The fixtures are referenced by docs (`docs/space-directory.md`) and will back
 upcoming integration tests once the Space Directory contract lands.

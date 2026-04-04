@@ -23041,6 +23041,58 @@ async fn emit_precommit_vote_rejects_higher_view_different_block_same_height_eve
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn emit_precommit_vote_requests_missing_locked_payload_before_skipping() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let locked_hash =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xC4; Hash::LENGTH]));
+    assert!(
+        !actor.block_known_for_lock(locked_hash),
+        "test lock should be missing locally"
+    );
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 2, 0, Some(locked_hash));
+    insert_validated_pending(actor, block.clone());
+
+    let lock_epoch = actor.epoch_for_height(1);
+    actor.locked_qc = Some(QcHeaderRef {
+        phase: Phase::Commit,
+        subject_block_hash: locked_hash,
+        height: 1,
+        view: 0,
+        epoch: lock_epoch,
+    });
+    super::status::set_locked_qc(1, 0, Some(locked_hash));
+
+    let emitted = actor.emit_precommit_vote(
+        block.hash(),
+        2,
+        0,
+        actor.epoch_for_height(2),
+        ValidationStatus::Valid,
+        &topology,
+        block.header().prev_block_hash(),
+        Some((Hash::new([]), Hash::new([]))),
+    );
+
+    assert!(
+        !emitted,
+        "precommit should still be gated while the locked payload is missing"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_block_requests
+            .contains_key(&locked_hash),
+        "missing locked payload should be requested before skipping the precommit vote"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn precommit_vote_rejects_older_view_after_newer_conflict() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;

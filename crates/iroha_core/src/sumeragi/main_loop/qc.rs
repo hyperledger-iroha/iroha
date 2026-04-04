@@ -4089,6 +4089,105 @@ impl Actor {
         })
     }
 
+    pub(super) fn request_missing_locked_qc_payload(&mut self, context: &'static str) -> bool {
+        let Some(lock) = self.locked_qc else {
+            return false;
+        };
+        if self.block_known_locally(lock.subject_block_hash) {
+            return false;
+        }
+
+        info!(
+            context,
+            locked_height = lock.height,
+            locked_view = lock.view,
+            locked_hash = %lock.subject_block_hash,
+            "locked QC payload missing locally; requesting payload"
+        );
+
+        let retry_window = self.rebroadcast_cooldown();
+        let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
+        let (consensus_mode, _mode_tag, _prf_seed) = self.consensus_context_for_height(lock.height);
+        let mut roster = self.roster_for_vote_with_mode_observing_sidecar(
+            lock.subject_block_hash,
+            lock.height,
+            lock.view,
+            consensus_mode,
+            context,
+        );
+        if roster.is_empty() {
+            roster = self.effective_commit_topology();
+        }
+        if roster.is_empty() {
+            return false;
+        }
+
+        let topology = super::network_topology::Topology::new(roster);
+        let signers = BTreeSet::new();
+        let peer_id = self.common_config.peer.id.clone();
+        let network = self.network.clone();
+        let locked_hash = lock.subject_block_hash;
+        let requester_roster_proof_known =
+            self.requester_has_local_roster_proof(locked_hash, lock.height, lock.view);
+        match self.missing_block_ingress_fetch_gate(
+            locked_hash,
+            lock.height,
+            lock.view,
+            lock.phase,
+            super::MissingBlockPriority::Consensus,
+            Instant::now(),
+            retry_window,
+            view_change_window,
+        ) {
+            super::MissingBlockIngressFetchGate::Hold => {
+                debug!(
+                    context,
+                    height = lock.height,
+                    view = lock.view,
+                    block = %locked_hash,
+                    grace_ms = self.authoritative_body_ingress_fetch_grace().as_millis(),
+                    "holding locked-QC missing payload recovery within authoritative body ingress grace"
+                );
+            }
+            super::MissingBlockIngressFetchGate::Fetch { force_retry_now } => {
+                let now = Instant::now();
+                let mut requests = core::mem::take(&mut self.pending.missing_block_requests);
+                let _ = super::defer_qc_for_missing_block_with_mode(
+                    false,
+                    retry_window,
+                    view_change_window,
+                    now,
+                    locked_hash,
+                    lock.height,
+                    lock.view,
+                    lock.phase,
+                    &signers,
+                    &topology,
+                    self.recovery_signer_fallback_attempts(),
+                    &mut requests,
+                    self.telemetry_handle(),
+                    super::MissingBlockFetchMode::Default,
+                    force_retry_now,
+                    move |targets| {
+                        send_missing_block_request(
+                            &network,
+                            &peer_id,
+                            locked_hash,
+                            lock.height,
+                            lock.view,
+                            super::MissingBlockPriority::Consensus,
+                            requester_roster_proof_known,
+                            targets,
+                        )
+                    },
+                );
+                self.pending.missing_block_requests = requests;
+            }
+        }
+
+        true
+    }
+
     pub(super) fn drop_missing_lock_if_unknown(&mut self, qc: &crate::sumeragi::consensus::Qc) {
         if let Some(lock) = self.locked_qc {
             if !self.block_known_locally(lock.subject_block_hash) {
@@ -4169,82 +4268,7 @@ impl Actor {
                     incoming_view = qc.view,
                     "locked QC payload missing locally; requesting payload before processing incoming QC"
                 );
-                let retry_window = self.rebroadcast_cooldown();
-                let view_change_window = Some(self.quorum_timeout(self.runtime_da_enabled()));
-                let (consensus_mode, _mode_tag, _prf_seed) =
-                    self.consensus_context_for_height(lock.height);
-                let mut roster = self.roster_for_vote_with_mode_observing_sidecar(
-                    locked_hash,
-                    lock.height,
-                    lock.view,
-                    consensus_mode,
-                    "qc_drop_missing_lock",
-                );
-                if roster.is_empty() {
-                    roster = self.effective_commit_topology();
-                }
-                if !roster.is_empty() {
-                    let topology = super::network_topology::Topology::new(roster);
-                    let signers = BTreeSet::new();
-                    let peer_id = self.common_config.peer.id.clone();
-                    let network = self.network.clone();
-                    let requester_roster_proof_known =
-                        self.requester_has_local_roster_proof(locked_hash, lock.height, lock.view);
-                    match self.missing_block_ingress_fetch_gate(
-                        locked_hash,
-                        lock.height,
-                        lock.view,
-                        lock.phase,
-                        super::MissingBlockPriority::Consensus,
-                        now,
-                        retry_window,
-                        view_change_window,
-                    ) {
-                        super::MissingBlockIngressFetchGate::Hold => {
-                            debug!(
-                                height = lock.height,
-                                view = lock.view,
-                                block = %locked_hash,
-                                grace_ms = self.authoritative_body_ingress_fetch_grace().as_millis(),
-                                "holding locked-QC missing payload recovery within authoritative body ingress grace"
-                            );
-                        }
-                        super::MissingBlockIngressFetchGate::Fetch { force_retry_now } => {
-                            let mut requests =
-                                core::mem::take(&mut self.pending.missing_block_requests);
-                            let _ = super::defer_qc_for_missing_block_with_mode(
-                                false,
-                                retry_window,
-                                view_change_window,
-                                now,
-                                locked_hash,
-                                lock.height,
-                                lock.view,
-                                lock.phase,
-                                &signers,
-                                &topology,
-                                self.recovery_signer_fallback_attempts(),
-                                &mut requests,
-                                self.telemetry_handle(),
-                                super::MissingBlockFetchMode::Default,
-                                force_retry_now,
-                                move |targets| {
-                                    send_missing_block_request(
-                                        &network,
-                                        &peer_id,
-                                        locked_hash,
-                                        lock.height,
-                                        lock.view,
-                                        super::MissingBlockPriority::Consensus,
-                                        requester_roster_proof_known,
-                                        targets,
-                                    )
-                                },
-                            );
-                            self.pending.missing_block_requests = requests;
-                        }
-                    }
-                }
+                let _ = self.request_missing_locked_qc_payload("qc_drop_missing_lock");
                 return;
             }
         }
