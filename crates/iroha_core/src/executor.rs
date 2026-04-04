@@ -34,7 +34,7 @@ use iroha_data_model::{
     query::{AnyQueryBox, QueryRequest},
     role::{Role, RoleId},
     smart_contract::payloads::{ExecutorContext, Validate as ValidatePayload},
-    transaction::{Executable, SignedTransaction},
+    transaction::{Executable, SignedTransaction, executable::ContractInvocation},
 };
 use iroha_executor_data_model::{
     isi::multisig::MultisigInstructionBox, permission as executor_permission,
@@ -60,7 +60,7 @@ use crate::zk::PreverifyResult;
 use crate::{
     gas as isi_gas,
     settlement::{PendingSettlement, QuoteError, VolatilityBucket},
-    smartcontracts::{Execute as _, ivm::cache::IvmCache},
+    smartcontracts::{Execute as _, code, ivm::cache::IvmCache},
     state::{StateReadOnly, StateTransaction, WorldReadOnly},
     sumeragi::status::{self as sumeragi_status, NexusFeeEvent, NexusFeePayer},
 };
@@ -678,6 +678,54 @@ pub(crate) fn parse_contract_call_execution_context(
     }))
 }
 
+pub(crate) fn parse_contract_invocation_execution_context(
+    invocation: &ContractInvocation,
+    bytecode: &[u8],
+    contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+) -> Result<ContractCallExecutionContext, ValidationFail> {
+    let selector = invocation.entrypoint.trim();
+    if selector.is_empty() {
+        return Err(ValidationFail::NotPermitted(
+            "contract entrypoint must not be empty".to_owned(),
+        ));
+    }
+
+    let parsed = ivm::ProgramMetadata::parse(bytecode).map_err(|err| {
+        ValidationFail::NotPermitted(format!(
+            "invalid contract artifact for contract call dispatch: {err}"
+        ))
+    })?;
+    let prefix_len = parsed.prefix_len() as u64;
+    let contract_interface = parsed.contract_interface.as_ref().ok_or_else(|| {
+        ValidationFail::NotPermitted(
+            "contract call requires a self-describing contract artifact".to_owned(),
+        )
+    })?;
+    let descriptor = contract_interface
+        .entrypoints
+        .iter()
+        .find(|candidate| candidate.name == selector)
+        .ok_or_else(|| {
+            ValidationFail::NotPermitted(format!("unknown contract entrypoint `{selector}`"))
+        })?;
+    if !matches!(
+        descriptor.kind,
+        iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+    ) {
+        return Err(ValidationFail::NotPermitted(format!(
+            "contract entrypoint `{selector}` is not public"
+        )));
+    }
+
+    Ok(ContractCallExecutionContext {
+        contract_address: Some(invocation.contract_address.clone()),
+        contract_alias,
+        entrypoint: Some(selector.to_owned()),
+        entrypoint_pc: Some(prefix_len + descriptor.entry_pc),
+        args: invocation.payload.clone().unwrap_or_default(),
+    })
+}
+
 fn parse_executor_additional_fuel(metadata: &Metadata) -> Result<u64, ValidationFail> {
     let Some(raw) = metadata.get(EXECUTOR_ADDITIONAL_FUEL_KEY) else {
         return Ok(0);
@@ -735,11 +783,7 @@ fn fee_bound_for_admission(
             instructions.len(),
             isi_gas::meter_instructions(instructions.as_ref()),
         ),
-        Executable::IvmProved(proved) => (
-            proved.overlay.len(),
-            isi_gas::meter_instructions(proved.overlay.as_ref()),
-        ),
-        Executable::Ivm(_) => {
+        Executable::ContractCall(_) | Executable::Ivm(_) => {
             let gas_limit = parse_gas_limit(metadata)
                 .map_err(validation_fail_to_nexus_fee_admission_error)?
                 .ok_or_else(|| {
@@ -749,6 +793,10 @@ fn fee_bound_for_admission(
                 })?;
             (0, gas_limit)
         }
+        Executable::IvmProved(proved) => (
+            proved.overlay.len(),
+            isi_gas::meter_instructions(proved.overlay.as_ref()),
+        ),
     };
 
     Ok((tx_bytes_len, instruction_count, gas_used))
@@ -911,7 +959,7 @@ pub(crate) fn charge_fees_for_applied_overlay(
     }
 
     let (gas_used, instruction_count, require_gas_limit) = match transaction.instructions() {
-        Executable::Ivm(_) => (
+        Executable::ContractCall(_) | Executable::Ivm(_) => (
             overlay.ivm_gas_used().ok_or_else(|| {
                 ValidationFail::InternalError(
                     "missing IVM gas usage metadata for overlay-applied transaction".to_owned(),
@@ -2001,6 +2049,243 @@ impl Executor {
                     gas_asset_opt,
                     fee_sponsor,
                 )
+            }
+            (Self::Initial | Self::UserProvided(_), Executable::ContractCall(call)) => {
+                use crate::smartcontracts::ivm::host::CoreHostImpl as CoreCoreHost;
+
+                let gas_limit_md = gas_limit_md.ok_or_else(|| {
+                    ValidationFail::NotPermitted(
+                        "missing gas_limit in transaction metadata".to_owned(),
+                    )
+                })?;
+                let block_remaining = if state_transaction.gas_limit_per_block == 0 {
+                    u64::MAX
+                } else {
+                    state_transaction
+                        .gas_limit_per_block
+                        .saturating_sub(state_transaction.gas_used_in_block_so_far)
+                };
+                let effective_limit = gas_limit_md.min(block_remaining);
+                let record =
+                    code::fetch_bound_contract_record(state_transaction, &call.contract_address)
+                        .ok_or_else(|| {
+                            ValidationFail::NotPermitted(format!(
+                                "contract instance `{}` not found in WSV",
+                                call.contract_address
+                            ))
+                        })?;
+                let mut runtime = ivm_cache
+                    .take_or_create_cached_runtime(record.code_bytes.as_ref(), effective_limit)
+                    .map_err(|e| ValidationFail::InternalError(e.to_string()))?;
+                let contract_call_context = parse_contract_invocation_execution_context(
+                    &call,
+                    record.code_bytes.as_ref(),
+                    record.contract_alias.clone(),
+                )?;
+                if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc {
+                    runtime.vm.set_register(1, runtime.vm.memory.code_len());
+                    runtime
+                        .vm
+                        .set_program_counter(entrypoint_pc)
+                        .map_err(|err| {
+                            let selector = contract_call_context
+                                .entrypoint
+                                .as_deref()
+                                .unwrap_or("main");
+                            ValidationFail::NotPermitted(format!(
+                                "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                            ))
+                        })?;
+                }
+                let contract_runtime_context = contract_call_context.runtime_context();
+                let accounts = Arc::new(
+                    state_transaction
+                        .world
+                        .accounts
+                        .iter()
+                        .map(|(id, _)| id.clone())
+                        .collect::<Vec<_>>(),
+                );
+                let mut host = CoreCoreHost::with_accounts_and_args(
+                    authority.clone(),
+                    Arc::clone(&accounts),
+                    contract_call_context.args,
+                );
+                host.set_crypto_config(Arc::clone(&state_transaction.crypto));
+                host.set_halo2_config(&state_transaction.zk.halo2);
+                host.set_durable_state_snapshot_from_world(&state_transaction.world);
+                host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
+                host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
+                host.set_query_state(state_transaction);
+                host.set_chain_id(&state_transaction.chain_id);
+                #[cfg(feature = "telemetry")]
+                host.set_telemetry(state_transaction.telemetry.clone());
+                host.set_zk_snapshots_from_world(&state_transaction.world, &state_transaction.zk)
+                    .map_err(|err| {
+                        ValidationFail::InternalError(format!("invalid ZK snapshot state: {err}"))
+                    })?;
+                runtime.vm.set_gas_limit(effective_limit);
+                if let Err(err) = runtime.vm.run_with_host(&mut host) {
+                    return Err(
+                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                            &runtime.vm,
+                            &err,
+                        ),
+                    );
+                }
+                let gas_used = effective_limit.saturating_sub(runtime.vm.remaining_gas());
+                let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
+                let _executed = artifacts.apply_to_transaction(state_transaction, authority)?;
+                state_transaction.last_tx_gas_used = gas_used;
+
+                if let Some(gas_asset_id_str) = gas_asset_opt {
+                    let gas_rate = state_transaction
+                        .pipeline
+                        .gas
+                        .units_per_gas
+                        .iter()
+                        .find(|r| r.asset == gas_asset_id_str)
+                        .ok_or_else(|| {
+                            ValidationFail::NotPermitted(format!(
+                                "missing units_per_gas mapping for `{gas_asset_id_str}`"
+                            ))
+                        })?;
+                    let rate = gas_rate.units_per_gas;
+                    let twap_local_per_xor = gas_rate.twap_local_per_xor;
+                    let volatility_bucket = convert_volatility_bucket(gas_rate.volatility);
+                    let liquidity_profile = match gas_rate.liquidity {
+                        GasLiquidity::Tier1 => LiquidityProfile::Tier1,
+                        GasLiquidity::Tier2 => LiquidityProfile::Tier2,
+                        GasLiquidity::Tier3 => LiquidityProfile::Tier3,
+                    };
+                    let tech_account: AccountId = parse_account_id_literal(
+                        &state_transaction.world,
+                        &state_transaction.nexus.dataspace_catalog,
+                        &state_transaction.pipeline.gas.tech_account_id,
+                    )
+                    .ok_or_else(|| {
+                        ValidationFail::InternalError(
+                            "invalid pipeline.gas.tech_account_id; expected canonical I105 account id or on-chain alias"
+                                .to_owned(),
+                        )
+                    })?;
+                    let asset_def =
+                        AssetDefinitionId::parse_address_literal(&gas_asset_id_str).map_err(|_| {
+                            ValidationFail::NotPermitted(
+                                "invalid gas_asset_id; expected an unprefixed Base58 asset definition id"
+                                    .to_owned(),
+                            )
+                        })?;
+                    if gas_used > 0 && rate > 0 {
+                        let fee_u128 = u128::from(gas_used).saturating_mul(u128::from(rate));
+                        if fee_u128 > 0 {
+                            let payer = if let Some(sponsor) =
+                                fee_sponsor.as_ref().filter(|sponsor| *sponsor != authority)
+                            {
+                                if !state_transaction.nexus.fees.sponsorship_enabled {
+                                    return Err(ValidationFail::NotPermitted(
+                                        "fee sponsorship is disabled".to_owned(),
+                                    ));
+                                }
+                                if !state_transaction.can_use_fee_sponsor(authority, sponsor) {
+                                    return Err(ValidationFail::NotPermitted(
+                                        "fee sponsor is not authorized".to_owned(),
+                                    ));
+                                }
+                                sponsor.clone()
+                            } else {
+                                authority.clone()
+                            };
+                            let payer_asset = AssetId::new(asset_def.clone(), payer);
+                            let qty = Numeric::try_new(fee_u128, 0).map_err(|_| {
+                                ValidationFail::NotPermitted(
+                                    "fee amount exceeds supported numeric bounds".to_owned(),
+                                )
+                            })?;
+                            let transfer = iroha_data_model::isi::Transfer::<
+                                Asset,
+                                Numeric,
+                                iroha_data_model::account::Account,
+                            >::asset_numeric(
+                                payer_asset, qty, tech_account
+                            );
+                            let instr: DMInstructionBox = transfer.into();
+                            instr.execute(authority, state_transaction).map_err(|err| {
+                                iroha_logger::debug!(
+                                    ?err,
+                                    authority = %authority,
+                                    "gas fee transfer failed to apply"
+                                );
+                                ValidationFail::from(err)
+                            })?;
+                            #[cfg(feature = "telemetry")]
+                            {
+                                let delta = u64::try_from(fee_u128.min(u128::from(u64::MAX)))
+                                    .unwrap_or(u64::MAX);
+                                state_transaction.stage_block_fee_amount(Numeric::from(delta));
+                            }
+
+                            let source_id = settlement_source_id;
+                            let block_timestamp_ms_u128 =
+                                state_transaction._curr_block.creation_time().as_millis();
+                            let block_timestamp_ms =
+                                u64::try_from(block_timestamp_ms_u128).unwrap_or(u64::MAX);
+                            let quote = state_transaction
+                                .settlement_engine()
+                                .quote(
+                                    source_id,
+                                    fee_u128,
+                                    twap_local_per_xor,
+                                    liquidity_profile,
+                                    volatility_bucket,
+                                    block_timestamp_ms,
+                                )
+                                .map_err(|err| match err {
+                                    QuoteError::LocalAmountOverflow(amount) => {
+                                        ValidationFail::NotPermitted(format!(
+                                            "local gas amount {amount} exceeds Decimal range"
+                                        ))
+                                    }
+                                    QuoteError::ZeroTwap => ValidationFail::NotPermitted(
+                                        "gas TWAP must be non-zero".to_owned(),
+                                    ),
+                                })?;
+                            let config_snapshot = state_transaction.settlement_engine().config();
+                            let twap_window_seconds =
+                                config_snapshot.twap_window.whole_seconds().max(0);
+                            let twap_window_seconds =
+                                u32::try_from(twap_window_seconds).unwrap_or(u32::MAX);
+                            let xor_due_micro = Self::decimal_to_micro_u128(
+                                *quote.receipt.xor_due,
+                                "xor_due amount",
+                            )?;
+                            let xor_after_haircut_micro = Self::decimal_to_micro_u128(
+                                *quote.receipt.xor_with_haircut,
+                                "xor_after_haircut amount",
+                            )?;
+                            let xor_variance_micro =
+                                xor_due_micro.saturating_sub(xor_after_haircut_micro);
+                            let pending = PendingSettlement {
+                                source_id,
+                                asset_definition_id: asset_def,
+                                local_amount_micro: quote.receipt.local_amount_micro,
+                                xor_due_micro,
+                                xor_after_haircut_micro,
+                                xor_variance_micro,
+                                timestamp_ms: block_timestamp_ms,
+                                liquidity_profile,
+                                volatility_bucket,
+                                twap_local_per_xor,
+                                epsilon_bps: quote.effective_epsilon_bps,
+                                twap_window_seconds,
+                                oracle_timestamp_ms: block_timestamp_ms,
+                            };
+                            state_transaction.record_settlement_receipt(tx_hash, pending);
+                        }
+                    }
+                }
+
+                Ok(())
             }
             (Self::Initial | Self::UserProvided(_), Executable::Ivm(bytes)) => {
                 // IVM path: run the bytecode through the VM with CoreHost, enqueueing ISIs,

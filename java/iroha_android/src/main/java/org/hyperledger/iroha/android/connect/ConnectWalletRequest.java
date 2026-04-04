@@ -14,7 +14,9 @@ import org.hyperledger.iroha.android.crypto.Blake2b;
 public final class ConnectWalletRequest {
 
   private static final String SCHEME = "iroha";
+  private static final String LAUNCH_SCHEME = "irohaconnect";
   private static final String HOST = "connect";
+  private static final String LAUNCH_HOST = "wc";
   private static final int SID_LENGTH = 32;
 
   private final String sidBase64Url;
@@ -43,13 +45,15 @@ public final class ConnectWalletRequest {
       throws ConnectProtocolException {
     Objects.requireNonNull(uri, "uri");
     Objects.requireNonNull(defaultBaseUri, "defaultBaseUri");
-    final String scheme = normalize(uri.getScheme());
-    final String host = normalize(uri.getHost());
+    final URI normalizedUri = normalizeConnectUri(uri);
+    final String scheme = normalize(normalizedUri.getScheme());
+    final String host = normalize(normalizedUri.getHost());
     if (!SCHEME.equals(scheme) || !HOST.equals(host)) {
-      throw new ConnectProtocolException("Connect deep link must use iroha://connect");
+      throw new ConnectProtocolException(
+          "Connect deep link must use iroha://connect or irohaconnect://connect");
     }
 
-    final Map<String, String> query = parseQuery(uri.getRawQuery());
+    final Map<String, String> query = parseQuery(normalizedUri.getRawQuery());
     final String sid = firstPresent(query, "sid");
     if (sid == null || sid.isBlank()) {
       throw new ConnectProtocolException("Missing required query parameter: sid");
@@ -144,6 +148,44 @@ public final class ConnectWalletRequest {
       }
     }
     return null;
+  }
+
+  private static URI normalizeConnectUri(final URI uri) throws ConnectProtocolException {
+    final String scheme = normalize(uri.getScheme());
+    final String host = normalize(uri.getHost());
+    if (SCHEME.equals(scheme) && HOST.equals(host)) {
+      return uri;
+    }
+    if (LAUNCH_SCHEME.equals(scheme) && HOST.equals(host)) {
+      return rebuildCanonicalConnectUri(uri);
+    }
+    if (LAUNCH_SCHEME.equals(scheme) && LAUNCH_HOST.equals(host)) {
+      final Map<String, String> query = parseQuery(uri.getRawQuery());
+      final String embeddedUri = trimToNull(firstPresent(query, "uri"));
+      if (embeddedUri == null) {
+        throw new ConnectProtocolException("Missing required query parameter: uri");
+      }
+      try {
+        return normalizeConnectUri(new URI(embeddedUri));
+      } catch (final URISyntaxException ex) {
+        throw new ConnectProtocolException("Embedded connect URI is malformed", ex);
+      }
+    }
+    return uri;
+  }
+
+  private static URI rebuildCanonicalConnectUri(final URI uri)
+      throws ConnectProtocolException {
+    try {
+      return new URI(
+          SCHEME,
+          uri.getRawAuthority(),
+          uri.getRawPath(),
+          uri.getRawQuery(),
+          uri.getRawFragment());
+    } catch (final URISyntaxException ex) {
+      throw new ConnectProtocolException("Connect deep link URI is malformed", ex);
+    }
   }
 
   private static Map<String, String> parseQuery(final String rawQuery) {

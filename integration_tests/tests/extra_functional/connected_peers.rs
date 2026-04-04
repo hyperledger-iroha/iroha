@@ -231,7 +231,10 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     // Removed peer might see one extra commit while transitioning to follower mode.
     assert_matches!(status.blocks_non_empty, 1 | 2 | 3);
 
-    // Re-register the peer and wait for the roster to reflect the change.
+    // Re-register the peer using the same join flow as a new peer. Keeping the
+    // removed peer process online while it is outside the roster is flaky on
+    // 4-peer localnets; restarting it after the register block is more stable.
+    removed_peer.shutdown().await;
     let re_register_timeout = sync_timeout.saturating_add(da_commit_timeout);
     let register_peer: InstructionBox = RegisterPeerWithPop::new(
         removed_peer.id(),
@@ -241,17 +244,50 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
             .to_vec(),
     )
     .into();
+    let mut client = leader_peer(randomized_peers.iter().copied()).client();
+    client.transaction_status_timeout = submit_timeout;
+    client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
     if sandbox::handle_result(
-        submit_instruction_until_peer_roster(
-            randomized_peers.iter().copied(),
-            &roster_client,
-            register_peer,
-            n_peers,
-            context,
-            submit_timeout,
-            re_register_timeout,
-        )
-        .await,
+        submit_instruction_or_warn(client, register_peer, context).await,
+        context,
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    if sandbox::handle_result(
+        wait_for_block_height(randomized_peers.iter().copied(), 3, re_register_timeout).await,
+        context,
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+
+    let genesis = network.genesis();
+    if sandbox::handle_result(
+        removed_peer
+            .start(
+                network.config_layers_with_additional_peers([removed_peer]),
+                Some(&genesis),
+            )
+            .await,
+        context,
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    if sandbox::handle_result(
+        wait_for_block_height(std::iter::once(removed_peer), 3, sync_timeout).await,
+        context,
+    )?
+    .is_none()
+    {
+        return Ok(());
+    }
+    if sandbox::handle_result(
+        wait_for_peer_roster(&roster_client, n_peers, re_register_timeout).await,
         context,
     )?
     .is_none()
@@ -260,16 +296,8 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     }
     let expected_connected = expected_connected_peers(n_peers);
 
-    // Re-registration is verified via roster propagation above, so keep the final
-    // block expectation at the post-unregister baseline.
     if sandbox::handle_result(
-        assert_peers_status(
-            randomized_peers.iter().copied(),
-            2,
-            expected_connected,
-            sync_timeout,
-        )
-        .await,
+        assert_peers_status(network.peers().iter(), 3, expected_connected, sync_timeout).await,
         context,
     )?
     .is_none()

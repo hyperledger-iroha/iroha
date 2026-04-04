@@ -10040,6 +10040,7 @@ exit 0
                             .map(|set| set.inner().clone())
                     })
                     .collect::<Vec<_>>(),
+                Executable::ContractCall(_) => Vec::new(),
                 Executable::Ivm(_) => Vec::new(),
                 Executable::IvmProved(_) => Vec::new(),
             })

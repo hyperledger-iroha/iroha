@@ -2,6 +2,412 @@
 
 Last updated: 2026-04-04
 
+## 2026-04-04 Follow-up: Rust SCCP discovery helpers and bridge CLI commands now exist
+- Added first-class Rust client helpers for the SCCP discovery routes in
+  `crates/iroha/src/client.rs` instead of leaving Rust relayers to construct
+  those Torii paths manually.
+  - `get_sccp_capabilities_json()` and `get_sccp_capabilities()` now fetch the
+    public SCCP capability snapshot.
+  - `get_sccp_proof_manifests_json()` and `get_sccp_proof_manifests()` now
+    fetch the SCCP proof-manifest collection.
+- Added typed Rust-side DTOs for SCCP codec/counterparty/capability snapshots
+  so the CLI and other Rust consumers can work with stable shapes instead of
+  ad hoc nested JSON maps.
+- `crates/iroha_cli/src/bridge.rs` now implements the bridge feature through the
+  normal `Run` trait path and adds read-only SCCP commands:
+  - `iroha ops bridge sccp capabilities`
+  - `iroha ops bridge sccp manifests`
+  - `iroha ops bridge sccp artifact --message-id <hex>`
+- Text output now renders concise summaries for the capability snapshot, the
+  per-chain manifest table, and typed SCCP message artifacts; JSON output keeps
+  the raw payload path for machine consumers.
+- Validation in progress on isolated Cargo homes / target dirs because the
+  shared repo target directory is currently occupied by unrelated long-running
+  cargo jobs in the same checkout.
+
+## 2026-04-04 Follow-up: SDKs and the Rust client now fetch typed SCCP message-proof artifacts
+- Added first-class SCCP message-artifact fetch helpers to the Rust, Python,
+  and JavaScript client surfaces instead of leaving relayers to construct
+  `/v1/sccp/artifacts/message/{message_id}` manually.
+- `crates/iroha/src/client.rs` now exposes:
+  - `get_sccp_message_proof_artifact_json(message_id_hex)` for the JSON route;
+    and
+  - `get_sccp_message_proof_artifact(message_id_hex)` for the typed Norito
+    artifact path.
+- `python/iroha_torii_client/client.py` now exposes
+  `get_sccp_message_proof_artifact(message_id)` plus typed SCCP artifact data
+  classes for commitments, Merkle proofs, payload envelopes, public inputs, and
+  the top-level transparent proof artifact.
+- `python/iroha_torii_client/mock.py` now serves
+  `GET /v1/sccp/artifacts/message/{message_id}` and accepts
+  `POST /__mock__/sccp/config` so embedded mock-server tests can provision
+  typed SCCP artifacts without a live node.
+- `javascript/iroha_js/src/toriiClient.js` and
+  `javascript/iroha_js/index.d.ts` now expose
+  `getSccpMessageProofArtifact(messageIdHex)` plus the corresponding TypeScript
+  interfaces for the typed artifact shape. The generated dist bundle was
+  refreshed so published JS consumers see the same API.
+- The new client decoders cross-check the embedded bundle against the published
+  public inputs (`message_id`, `payload_hash`, and `commitment_root`) instead
+  of treating the artifact payload as an unchecked nested object.
+- Focused validation completed on the new client helpers:
+  - `cargo test --offline -p iroha get_sccp_message_proof_artifact_ --lib -- --nocapture`
+  - `source /tmp/iroha-pytest-venv/bin/activate && python -m pytest python/iroha_torii_client/tests/test_client.py -k "sccp_message_proof_artifact or sccp_capabilities or sccp_proof_manifests"`
+  - `python3 -m py_compile python/iroha_torii_client/__init__.py python/iroha_torii_client/client.py python/iroha_torii_client/tests/test_client.py`
+  - `python3 -m py_compile python/iroha_torii_client/mock.py python/iroha_torii_client/tests/test_client.py`
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test javascript/iroha_js/test/toriiClient.test.js --test-name-pattern "getSccpCapabilities|getSccpProofManifests|getSccpMessageProofArtifact"`
+  - `npm run build:dist` (from `javascript/iroha_js`)
+- Current verification boundary:
+  - Rust, Python, and JavaScript SCCP helper coverage is green for the focused
+    artifact/capability/manifest paths; and
+  - actual chain-specific prover outputs and on-chain remote verifier programs
+    are still not implemented, so `proof_bytes` remain deterministic
+    placeholders.
+
+## 2026-04-04 Follow-up: SCCP transparent bridge proofs are now typed artifacts
+- Added a typed SCCP transparent proof artifact in
+  `crates/iroha_sccp/src/lib.rs` for generic `message` bundles. The new
+  artifact carries the chain profile, manifest seed/backend labels, public
+  inputs, placeholder `proof_bytes`, and the embedded Nexus SCCP bundle.
+- `crates/iroha_torii/src/routing.rs` now wraps generic SCCP `message` bundles
+  into that typed artifact before storing them as transparent bridge proofs, and
+  `GET /v1/sccp/artifacts/message/{message_id}` exposes the artifact directly as
+  a first-class relayer fetch route.
+- `crates/iroha_core/src/smartcontracts/isi/world.rs` now rejects malformed
+  SCCP transparent bridge proofs during `SubmitBridgeProof` instead of accepting
+  arbitrary opaque bytes under the `sccp/stark-fri-v1/*` backend family.
+- `crates/iroha_torii/src/routing.rs` now enriches bridge proof JSON summaries
+  with typed SCCP public-input metadata whenever the stored transparent payload
+  decodes as the new artifact.
+- `GET /v1/sccp/capabilities` now advertises both the raw message bundle route
+  and the canonical typed proof-artifact route, and the Python + JS Torii
+  clients were updated to preserve the new `message_proof_path` field.
+- Focused validation completed on the new shared SCCP layer and client surfaces:
+  - `cargo test --offline -p iroha_sccp --lib -- --nocapture`
+  - `cargo test --offline -p iroha_torii sccp_ --lib -- --nocapture`
+  - `cargo test --offline -p iroha_core --test bridge_proofs -- --nocapture`
+  - `python3 -m py_compile python/iroha_torii_client/__init__.py python/iroha_torii_client/client.py python/iroha_torii_client/mock.py python/iroha_torii_client/tests/test_client.py`
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test javascript/iroha_js/test/toriiClient.test.js --test-name-pattern "getSccpCapabilities|getSccpProofManifests"`
+- Current verification boundary:
+  - the SCCP artifact model, Torii discovery route, bridge-proof registration
+    path, and the new `iroha_core` rejection guard are validated; and
+  - actual chain-specific prover outputs and on-chain remote verifier programs
+    are still not implemented, so `proof_bytes` remain deterministic placeholders.
+
+## 2026-04-04 Follow-up: public contract calls now execute by reference and deploys are alias-centric
+- Replaced the heavy public runtime call path that resent full `.to` bytecode and
+  inline manifests on every `/v1/contracts/call` submission.
+- `crates/iroha_data_model/src/transaction/executable.rs` now defines
+  `Executable::ContractCall(ContractInvocation)` so deployed instances can be
+  invoked by canonical `contract_address`, `entrypoint`, and optional Norito
+  payload instead of embedding bytecode into every transaction.
+- `crates/iroha_core/src/executor.rs`,
+  `crates/iroha_core/src/pipeline/access.rs`,
+  `crates/iroha_core/src/pipeline/overlay.rs`,
+  `crates/iroha_core/src/tx.rs`,
+  `crates/iroha_core/src/queue.rs`,
+  `crates/iroha_core/src/queue/router.rs`,
+  `crates/iroha_core/src/state.rs`, and
+  `crates/iroha_core/src/smartcontracts/isi/triggers/set.rs`
+  now resolve bound contract code/manifests from world state for admission,
+  access-set derivation, overlay building, trigger execution, and runtime
+  execution of `Executable::ContractCall`.
+- `crates/iroha_torii/src/routing.rs` now:
+  - emits `Executable::ContractCall` for normal public contract calls,
+    multisig-wrapped contract calls, and ephemeral trigger-backed settlement
+    calls;
+  - keeps contract-call transaction metadata compact by storing only fee/gas
+    fields instead of duplicating `contract_manifest`, `contract_address`,
+    `contract_entrypoint`, and `contract_payload`; and
+  - changes `POST /v1/contracts/deploy` to require `contract_alias`, derive the
+    dataspace from that alias, and treat redeploying the same alias as an
+    upgrade that clears the previous alias binding, deactivates the retired
+    address, binds the alias to the newly derived address, and reports
+    `previous_contract_address` plus `upgraded`.
+- `crates/iroha/src/client.rs` and `crates/iroha_cli/src/contracts.rs` now use
+  the alias-centric deploy request shape (`contract_alias`, optional
+  `lease_expiry_ms`) instead of the older `dataspace` input.
+- `crates/iroha_torii/src/explorer.rs` now labels the new executable kind as
+  `ContractCall` and exposes a compact `executable_payload` object in
+  transaction detail, so explorer clients can show `contract_address`,
+  `entrypoint`, and payload directly without relying on metadata.
+- Follow-up coverage and surfaces now also include:
+  - `crates/iroha_torii/tests/contracts_deploy_integration.rs` covering
+    alias-bound redeploys that mint a new immutable address, move the alias,
+    and deactivate the retired address;
+  - `crates/iroha_torii/tests/contracts_call_integration.rs` refreshed to
+    exercise the stricter ABI-validated public call path with the new deploy
+    helper and current block sequencing; and
+  - the JavaScript Torii client, typings, dist bundle, recipe CLI, and docs now
+    speak the alias-first deploy DTO (`contractAlias`, optional
+    `leaseExpiryMs`) instead of the legacy `dataspace`/`manifest` shortcut; and
+  - `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift` plus
+    `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift` now mirror the
+    same alias-centric deploy DTO, contract-address-or-alias call selector,
+    compact call response, multisig contract-call request shape, and
+    governance deploy-contract proposal selector/decoder instead of the stale
+    `namespace` / `contract_id` contract payloads.
+- Focused validation completed on the patched tree:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_data_model`
+  - `cargo check -p iroha_core`
+  - `cargo check -p iroha_torii`
+  - `cargo check -p iroha`
+  - `cargo check -p iroha_cli`
+  - `cargo test -p iroha_data_model executable_json_roundtrip_for_instructions_and_ivm -- --nocapture`
+  - `cargo test -p iroha_torii contract_call_metadata_keeps_only_fee_fields -- --nocapture`
+  - `IROHA_RUN_IGNORED=1 cargo test -p iroha_torii --test contracts_deploy_integration contracts_redeploy_same_alias_rotates_address_and_deactivates_previous --features app_api,ws_integration_tests -- --nocapture`
+  - `IROHA_RUN_IGNORED=1 cargo test -p iroha_torii --test contracts_call_integration contracts_call_enqueues_transaction --features app_api,ws_integration_tests -- --nocapture`
+  - `npm run build:dist` (from `javascript/iroha_js`)
+  - `npm run test:js -- test/toriiClient.test.js` (from `javascript/iroha_js`)
+  - `swift test --filter 'ToriiClientTests/testDeployContract'` (from `IrohaSwift`)
+  - `swift test --filter 'ToriiClientTests/testCallContract'` (from `IrohaSwift`)
+  - `swift test --filter 'ToriiClientTests/testProposeMultisigContractCallEncodesAliasSelector'` (from `IrohaSwift`)
+  - `swift test --filter 'ToriiClientTests/testSubmitGovernanceDeployContractProposalEncodesAliasSelector'` (from `IrohaSwift`)
+  - `swift test --filter 'ToriiClientTests/testGovernanceDeployContractProposalRejectsAmbiguousTarget'` (from `IrohaSwift`)
+  - `swift test --filter 'ToriiClientTests/testGetGovernanceProposalDecodesRecord'` (from `IrohaSwift`)
+  - `cargo test -p iroha_torii transaction_detail_includes_contract_call_payload --lib -- --nocapture`
+  - `cargo test -p iroha_torii transaction_detail_includes_rejection_reason --lib -- --nocapture`
+- Current verification boundary:
+  - focused contract-call/deploy redesign checks are green, including real
+    Torii handler integration coverage for alias upgrades and public calls plus
+    the updated Swift DTO/response tests; and
+  - the full `IrohaSwift` suite still has unrelated pre-existing failures
+    outside the edited contract tests (for example fixture/parsing assertions in
+    `AccountAddressFixtureTests` and multiple older `ToriiClientTests` cases); and
+  - a fresh full `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings`
+    sweep has not been rerun end-to-end after this protocol/API change.
+
+## 2026-04-04 Follow-up: Torii now exposes typed SCCP proof manifests
+- Added shared SCCP proof-manifest helpers in
+  `crates/iroha_sccp/src/lib.rs` so the chain matrix, backend labels, manifest
+  seeds, verifier targets, finality-model labels, codec keys, and required
+  public inputs are defined once instead of being duplicated in Torii.
+- Added `GET /v1/sccp/manifests` in `crates/iroha_torii/src/routing.rs` and
+  `crates/iroha_torii/src/lib.rs` as a read-only manifest-discovery endpoint
+  for relayers and remote verifier workers.
+- The new manifest surface covers `eth`, `bsc`, `sol`, `ton`, `tron`,
+  `sora2`, `sora-kusama`, and `sora-polkadot`, and each entry now publishes:
+  - the chain-specific `sccp/stark-fri-v1/<chain>` message backend;
+  - the matching `bridge/sccp/stark-fri-v1/<chain>` registry backend;
+  - the canonical counterparty account codec/key;
+  - the verifier target and finality-model label; and
+  - the manifest seed plus required public inputs used to bind the proof
+    statement.
+- `GET /v1/sccp/capabilities` now links to `/v1/sccp/manifests`, and the
+  existing SCCP backend selection path in Torii now derives its backend label
+  and manifest hash from the shared manifest table instead of local string
+  formatting.
+- `javascript/iroha_js/src/toriiClient.js` now exposes:
+  - `getSccpCapabilities()` for the relayer-facing SCCP capability advert; and
+  - `getSccpProofManifests()` for the typed per-chain manifest surface.
+- `javascript/iroha_js/src/sccp.js` now includes `SCCP_DOMAIN_SORA2` and the
+  shared `SCCP_STARK_FRI_PROOF_FAMILY_V1` constant so JS consumers see the
+  same chain matrix and proof-family label as Rust.
+- `crates/iroha_torii/src/openapi.rs` now documents `/v1/sccp/manifests`, and
+  the generated spec regression asserts that both SCCP discovery routes are
+  present.
+- Focused validation completed on the patched tree:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/openapi.rs`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_sccp --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_torii sccp_capabilities_endpoint_roundtrips_json_and_norito --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_torii sccp_manifests_endpoint_roundtrips_json_and_norito --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_torii sccp_message_backend_tests --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture`
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test test/toriiClient.test.js --test-name-pattern "getSccpCapabilities|getSccpProofManifests"` (run from `javascript/iroha_js/`)
+
+## 2026-04-04 Follow-up: Torii now exposes SCCP capability discovery for relayers
+- Added `GET /v1/sccp/capabilities` to `crates/iroha_torii/src/routing.rs` and
+  `crates/iroha_torii/src/lib.rs` as a public read-only snapshot of the SCCP
+  proof surface.
+- The new endpoint returns:
+  - the local hub identity (`local_domain = SORA`, `local_chain = "sora"`);
+  - legacy SCCP burn/governance registry backends;
+  - the generic message proof family (`stark-fri-v1`);
+  - the supported codec registry (`text_utf8`, `evm_hex`,
+    `solana_base58`, `ton_raw`, `tron_base58check`); and
+  - the per-counterparty generic message backend / registry backend pairs for
+    `eth`, `bsc`, `sol`, `ton`, `tron`, `sora2`, `sora-kusama`, and
+    `sora-polkadot`, including the canonical remote account codec each route
+    expects.
+- `crates/iroha_torii/src/openapi.rs` now documents `/v1/sccp/capabilities`,
+  and the generated spec regression asserts that the route is present.
+- The same validation pass also required narrow `ContractCall` compatibility
+  fixes in `crates/iroha_core/src/executor.rs`,
+  `crates/iroha_core/src/pipeline/access.rs`,
+  `crates/iroha_core/src/pipeline/overlay.rs`,
+  `crates/iroha_core/src/block.rs`,
+  `crates/iroha_core/src/smartcontracts/isi/triggers/set.rs`, and
+  `crates/iroha_core/src/smartcontracts/isi/triggers/specialized.rs` so the
+  current worktree compiles cleanly through the `Executable::ContractCall`
+  migration again.
+- `crates/iroha_torii/src/lib.rs` now covers JSON and Norito roundtrips for the
+  new SCCP capabilities response.
+- `docs/source/bridge_proofs.md` now documents the relayer-facing discovery
+  route alongside the existing SCCP bundle and proof-submit surfaces.
+- Focused validation completed on the patched tree:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs crates/iroha_torii/src/lib.rs crates/iroha_torii/src/openapi.rs`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_torii sccp_capabilities_endpoint_roundtrips_json_and_norito --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_torii sccp_message_backend_tests --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_torii bridge_proof_submit_ --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_torii bridge_message_submit_ --lib -- --nocapture`
+
+## 2026-04-04 Follow-up: targeted integration runtime regressions are stabilized again
+- Closed the remaining runtime failures that were still red after the
+  dataspace-qualified domain cleanup by tightening the affected integration
+  harnesses and Soracloud/Torii wiring instead of masking them with looser
+  assertions.
+- `integration_tests/tests/iroha_cli.rs`
+  - Soracloud CLI helper commands now append a stable control-plane timeout for
+    the live Torii paths.
+  - The local Hugging Face mirror used by the Soracloud HF tests is now
+    resilient to client disconnects and survives repeated profile/weight
+    requests within one test window.
+  - The test binary override logic now derives the primary target root from the
+    running test binary and prefers the fresh workspace `iroha3d` over stale
+    `iroha-test-network` daemon siblings when `IROHA_TEST_SKIP_BUILD=1`.
+- `crates/irohad/src/main.rs`, `crates/iroha_torii/src/lib.rs`,
+  `crates/iroha_torii/src/soracloud.rs`
+  - Torii now receives the resolved
+    `config.soracloud_runtime.hf` settings from `irohad`, so HF deploy/renew
+    profile derivation uses the actual node config instead of falling back to
+    baked-in defaults.
+- `crates/iroha_torii/src/routing.rs`
+  - Fixed the current `CoreState` API drift in SCCP reconstruction by resolving
+    block counts through `state.view().kura()`.
+- `integration_tests/tests/triggers/time_trigger.rs`
+  - Time-trigger submissions now clamp transaction TTL to a safe multiple of
+    the sync timeout, and retry logic explicitly treats `"Transaction expired"`
+    as a retryable transient.
+- `integration_tests/tests/extra_functional/unstable_network.rs`
+  - Numeric asset registration now waits for the definition to appear after a
+    submit timeout instead of treating the timeout as a hard failure.
+- `integration_tests/tests/extra_functional/connected_peers.rs`
+  - Roster-change submissions now tolerate timeout/duplicate races more
+    explicitly, and the 4-peer re-register path now restarts the removed peer
+    after the register block so the roster returns to 4 deterministically.
+- Focused validation completed on the patched tree:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_unstable_fix cargo test -p integration_tests --test mod triggers::time_trigger:: -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_unstable_fix cargo test -p integration_tests --test mod extra_functional::unstable_network::unstable_network_12_peers_4_faults -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_unstable_fix cargo test -p integration_tests --test mod extra_functional::connected_peers:: -- --nocapture`
+  - `RUST_TEST_THREADS=1 IROHA_TEST_SKIP_BUILD=1 CARGO_TARGET_DIR=target_tmp_unstable_fix cargo test -p integration_tests --test iroha_cli soracloud_hf_ -- --nocapture`
+- Current verification boundary:
+  - the previously failing targeted runtime slices are green on the patched
+    tree; and
+  - a fresh full `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings`
+    sweep has not yet been rerun end-to-end after these latest integration
+    harness changes.
+
+## 2026-04-04 Follow-up: SCCP transparent proofs now split by counterparty chain in the bridge registry
+- Tightened `crates/iroha_torii/src/routing.rs` so generic SCCP `message`
+  bundles no longer collapse into one transparent proof backend label.
+- Torii now derives the SCCP transparent backend and manifest seed from the
+  message counterparty domain:
+  - `ETH <-> SORA` traffic records under `bridge/sccp/stark-fri-v1/eth`;
+  - the same derivation now exists for `bsc`, `sol`, `ton`, `tron`,
+    `sora2`, `sora-kusama`, and `sora-polkadot`.
+- This applies consistently to both:
+  - `POST /v1/bridge/proofs/submit` for outbound/generic proof registration;
+    and
+  - `POST /v1/bridge/messages` for inbound message verification plus receipt /
+    settlement preparation.
+- Both Torii responses now also expose:
+  - `counterparty_domain` with the numeric SCCP domain id; and
+  - `counterparty_chain` with the normalized domain key relayers can branch on
+    without parsing the backend label.
+- The proof query surface now mirrors the same metadata:
+  - `GET /v1/zk/proof/{backend}/{hash}` and `GET /v1/zk/proofs` include
+    `bridge.payload.counterparty_domain` and `bridge.payload.counterparty_chain`
+    for chain-split SCCP transparent proofs.
+- `crates/iroha_torii/src/lib.rs` now covers the new behavior with focused
+  regressions asserting that:
+  - outbound `message_bundle` proof submission reports
+    `bridge/sccp/stark-fri-v1/eth`; and
+  - inbound `ETH -> SORA` message submission reports the same chain-specific
+    backend in its response.
+- `docs/source/bridge_proofs.md` now documents the per-chain backend split for
+  SCCP transparent proofs.
+- Focused validation completed on the patched tree:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs crates/iroha_torii/src/lib.rs`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_torii bridge_proof_submit_ --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_torii bridge_message_submit_ --lib -- --nocapture`
+
+## 2026-04-04 Follow-up: SCCP v1 message codecs are now explicit across EVM, Solana, TON, and Tron routes
+- Tightened `crates/iroha_sccp/src/lib.rs` so generic SCCP message payloads no longer
+  accept arbitrary nonzero codec ids with opaque byte blobs.
+- The shared SCCP verifier now enforces explicit v1 codec families for asset ids,
+  senders, recipients, and route ids:
+  - `1`: UTF-8 logical identifiers;
+  - `2`: EVM `0x`-prefixed 20-byte hex addresses;
+  - `3`: Solana base58 public keys;
+  - `4`: TON raw `workchain:account_hex` addresses; and
+  - `5`: Tron base58check addresses.
+- This validation now sits at the `iroha_sccp` layer, so all message-bundle
+  verification paths inherit the same format guarantees before proofs are
+  persisted or bridge receipts are emitted.
+- `crates/iroha_torii/src/routing.rs` now reuses the shared UTF-8 logical codec
+  constant when auto-deriving a settlement route from SCCP `transfer.route_id`.
+- `crates/iroha_torii/src/lib.rs` updated the SCCP handler fixtures to use valid
+  per-chain codec encodings, avoiding earlier test payloads that mislabeled
+  logical identifiers as EVM addresses.
+- Focused validation completed on the patched tree:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs crates/iroha_torii/src/routing.rs crates/iroha_torii/src/lib.rs`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_sccp --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_torii bridge_message_submit_ --lib -- --nocapture`
+
+## 2026-04-04 Follow-up: inbound SCCP bridge messages can now append same-transaction contract settlement
+- Extended the generic SCCP inbound path so `POST /v1/bridge/messages` no longer stops at
+  proof persistence plus `BridgeReceipt` emission when the caller provides an
+  explicit settlement target.
+- `crates/iroha_torii/src/routing.rs` now accepts an optional nested
+  `settlement` object on bridge-message submission:
+  - contract resolution uses the same `contract_address` / `contract_alias`
+    surface as `/v1/contracts/call`;
+  - Torii appends an ephemeral by-call trigger after `SubmitBridgeProof` and
+    `RecordBridgeReceipt`, so proof verification and contract settlement can
+    happen in one transaction; and
+  - when the target entrypoint is parameterized and `payload` is omitted,
+    transfer messages auto-build `finalize_inbound(route, message_id, recipient, amount)`
+    arguments from the SCCP bundle plus the caller-supplied local route key.
+- Follow-up on the same path:
+  - if the SCCP transfer already carries a logical-name `route_id`
+    (`route_id_codec == 1`), Torii now derives the settlement route directly
+    from the bundle, so the request can omit `settlement.route` entirely for
+    the common `finalize_inbound` flow; and
+  - the bridge-message response now reports the resolved settlement route even
+    when it was inferred rather than passed explicitly.
+- The new settlement helper reuses the existing contract manifest validation and
+  payload normalization path, so entrypoint access metadata stays consistent
+  with normal Torii contract-call flows.
+- `crates/iroha_torii/src/lib.rs` now covers the new path with a focused
+  regression that installs a minimal `finalize_inbound` contract artifact,
+  prepares an inbound transfer bundle, and asserts that the bridge-message
+  response includes the resolved settlement contract, entrypoint, route, and a
+  deterministic transaction scaffold.
+- A second focused regression now proves the route-derivation path by omitting
+  `settlement.route` and asserting that the response still exposes the
+  canonical logical route from the SCCP transfer payload.
+- `docs/source/bridge_proofs.md` now documents the optional `settlement`
+  request object and clarifies that auto-dispatch is opt-in per submission.
+- Supporting compile cleanup:
+  - the Torii test `AppState` fixture now initializes the newer
+    `soracloud_hf_config` field so the focused SCCP bridge regression build is
+    compile-clean again.
+- Focused validation completed on the patched tree:
+  - `rustfmt --edition 2024 crates/iroha_torii/src/routing.rs crates/iroha_torii/src/lib.rs`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_torii bridge_message_submit_ --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/cargo-home-iroha-offline CARGO_TARGET_DIR=/tmp/iroha-sccp-target-offline cargo test --offline -p iroha_torii sccp_message_bundle_endpoint_roundtrips_json --lib -- --nocapture`
+- Current verification boundary:
+  - the bridge-message SCCP path is green for proof-only ingestion, receipt
+    emission, non-SORA target rejection, and opt-in same-transaction contract
+    settlement preparation;
+  - always-on policy-driven settlement dispatch is still a higher-level bridge
+    integration choice rather than an unconditional Torii behavior; and
+  - a fresh broader `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings`
+    sweep has not yet been rerun on this patched tree.
+
 ## 2026-04-04 Follow-up: Nexus fee admission regressions are closed
 - Closed the public-network spam gap where fee-insolvent external transactions
   could still be enqueued, proposed, and persisted on chain as rejected block
@@ -19484,3 +19890,32 @@ Last updated: 2026-04-04
   - `cargo fmt --all`
   - `cargo test -p mochi-core account_controller_replaced_summary_mentions_old_and_new_controllers -- --nocapture`
   - `cargo test -p mochi-core account_recovery_policy_summary_mentions_alias_and_quorum -- --nocapture`
+
+## 2026-04-04 Always-On Throughput First Pass
+- Reworked Izanami’s default `stable` workload into a pre-seeded transfer hot path in [`crates/izanami/src/instructions.rs`](/Users/takemiyamakoto/dev/iroha/crates/izanami/src/instructions.rs):
+  - stable recipes now default to preallocated `TransferAsset` only;
+  - genesis now pre-seeds every user with the base numeric asset so the measured transfer path does not mint or create balances on demand;
+  - the stable transfer plan no longer emits `TrackAssetInstance` updates or inline mint instructions.
+- Tightened Izanami ingress health accounting in [`crates/izanami/src/chaos.rs`](/Users/takemiyamakoto/dev/iroha/crates/izanami/src/chaos.rs):
+  - read-side operations such as confirmation / trigger-status queries still fail over, but their overload no longer marks submit endpoints unhealthy;
+  - submit-path queue pressure still triggers endpoint unhealthy/cooldown transitions;
+  - stable transfer plans now stay on `AcceptedByIngress` without escalating to blocking-applied confirmation.
+- Changed the client confirmation path in [`crates/iroha/src/client.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha/src/client.rs):
+  - confirmation polling now requests `/v1/pipeline/transactions/status?scope=local`;
+  - `Queued` / `Approved` responses stay local and no longer fan out to committed-query fallback on every poll;
+  - committed fallback is retained for local misses and `Rejected` without a reason;
+  - generic `get_transaction_status_response(...)` keeps the public auto-scope behavior.
+- Split Torii’s pipeline-status read limiter from the general query limiter in [`crates/iroha_torii/src/lib.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs) while reusing the existing query-rate numeric budget, and raised the in-process pipeline-status cache floor to `1_500_000` entries with a `15 minute` TTL.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `cargo test -p izanami --lib`
+  - `cargo test -p izanami transfer_asset_plan_uses_preseeded_balances -- --nocapture`
+  - `cargo test -p izanami stable_transfer_plan_never_escalates_to_blocking_applied -- --nocapture`
+  - `cargo test -p izanami endpoint_pool_status_query_429_does_not_mark_endpoint_unhealthy -- --nocapture`
+  - `cargo test -p izanami endpoint_pool_submit_queue_pressure_marks_endpoint_unhealthy -- --nocapture`
+  - `cargo test -p iroha pipeline_status_ -- --nocapture`
+  - `cargo test -p iroha transaction_confirmation_status_stops_on_connection_refused_ -- --nocapture`
+  - `cargo test -p iroha get_transaction_status_response_requests_json_and_decodes_typed_payload -- --nocapture`
+  - `cargo test -p iroha_torii pipeline_status_handler_uses_dedicated_rate_limiter -- --nocapture`
+- Additional note:
+  - a broader `cargo test -p iroha_torii pipeline_status_handler_ -- --nocapture` run compiled and exercised the new limiter tests successfully, but it also surfaced an unrelated existing failure in `tests_runtime_handlers::pipeline_status_handler_encodes_rejection_as_base64`, which is outside this throughput pass.

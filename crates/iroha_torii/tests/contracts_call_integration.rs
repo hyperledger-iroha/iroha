@@ -423,14 +423,13 @@ async fn contracts_call_enqueues_transaction() {
     let zero_limit_resp = app.clone().oneshot(zero_limit_req).await.unwrap();
     assert_eq!(zero_limit_resp.status(), http::StatusCode::BAD_REQUEST);
 
-    let payload = norito::json!({ "note": "integration-test" });
     let call_body = iroha_torii::test_utils::contract_call_request_json(
         &creds.account,
         &creds.private_key,
         contract_address.as_str(),
         iroha_torii::test_utils::ContractCallOptions {
             entrypoint: Some("main"),
-            payload: Some(&payload),
+            payload: None,
             gas_asset_id: None,
             gas_limit: 5_000,
         },
@@ -453,7 +452,7 @@ async fn contracts_call_enqueues_transaction() {
     );
     assert_eq!(
         call_json
-            .get("namespace")
+            .get("dataspace")
             .and_then(json::Value::as_str)
             .unwrap(),
         "universal"
@@ -493,15 +492,13 @@ async fn contracts_call_enqueues_transaction() {
     );
 
     let applied_call =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
     assert_eq!(applied_call, 1);
 
-    let draft_payload = norito::json!({ "note": "client-signed" });
     let draft_body = iroha_torii::json_object(vec![
         iroha_torii::json_entry("authority", creds.account.clone()),
         iroha_torii::json_entry("contract_address", contract_address.as_str()),
         iroha_torii::json_entry("entrypoint", "main"),
-        iroha_torii::json_entry("payload", draft_payload.clone()),
         iroha_torii::json_entry("gas_limit", 5_000u64),
     ]);
     let draft_body = json::to_json(&draft_body).expect("serialize draft call request");
@@ -568,7 +565,6 @@ async fn contracts_call_enqueues_transaction() {
         ),
         iroha_torii::json_entry("contract_address", contract_address.as_str()),
         iroha_torii::json_entry("entrypoint", "main"),
-        iroha_torii::json_entry("payload", draft_payload),
         iroha_torii::json_entry("creation_time_ms", creation_time_ms),
         iroha_torii::json_entry("gas_limit", 5_000u64),
     ]);
@@ -609,7 +605,7 @@ async fn contracts_call_enqueues_transaction() {
     );
 
     let applied_detached_submit =
-        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 4);
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
     assert_eq!(applied_detached_submit, 1);
 }
 

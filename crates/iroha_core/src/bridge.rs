@@ -123,7 +123,7 @@ fn collect_sccp_messages_from_executable(
                 push_instruction(instruction_index, instruction);
             }
         }
-        Executable::Ivm(_) => {}
+        Executable::ContractCall(_) | Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
             for (instruction_index, instruction) in proved.overlay.iter().enumerate() {
                 push_instruction(instruction_index, instruction);

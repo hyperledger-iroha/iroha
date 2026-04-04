@@ -14,7 +14,7 @@ use color_eyre::{
     Result,
     eyre::{WrapErr, eyre},
 };
-use iroha::client::Client;
+use iroha::client::{Client, TransactionWaitOptions, TransactionWaitTerminalStatus};
 use iroha_config::{kura::FsyncMode, parameters::actual::SumeragiNposTimeouts};
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
@@ -33,7 +33,7 @@ use iroha_genesis::GenesisBlock;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, Signatory};
 use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
 use tokio::{
-    sync::{Notify, OwnedSemaphorePermit, Semaphore},
+    sync::{Notify, OwnedSemaphorePermit, Semaphore, mpsc},
     task::{JoinHandle, JoinSet, spawn_blocking},
     time,
 };
@@ -138,6 +138,11 @@ const IZANAMI_SHARED_HOST_RECOVERY_MIN_DURATION_SECS: u64 = 1_200;
 const IZANAMI_SHARED_HOST_SOAK_MIN_DURATION_SECS: u64 = 3_600;
 const IZANAMI_SHARED_HOST_SOAK_TPS_FLOOR: f64 = 5.0;
 const IZANAMI_SHARED_HOST_SOAK_MAX_INFLIGHT_FLOOR: usize = 8;
+const IZANAMI_THROUGHPUT_CONFIRMATION_SAMPLE_PERCENT: u64 = 1;
+const IZANAMI_THROUGHPUT_CONFIRMATION_CAP_PER_MINUTE_PER_ENDPOINT: u32 = 100;
+const IZANAMI_THROUGHPUT_CONFIRMATION_WINDOW_SECS: u64 = 60;
+const IZANAMI_THROUGHPUT_CONFIRMATION_QUEUE_CAP: usize = 4_096;
+const IZANAMI_THROUGHPUT_CONFIRMATION_POLL_INTERVAL_MS: u64 = 100;
 const IZANAMI_SUBMISSION_BACKLOG_MULTIPLIER: usize = 4;
 const IZANAMI_SHARED_HOST_SOAK_PROGRESS_TIMEOUT_FLOOR_SECS: u64 = 600;
 const IZANAMI_SHARED_HOST_SOAK_PIPELINE_TIME_MS: u64 = 150;
@@ -484,7 +489,8 @@ impl EndpointHealthPool {
             Err(err) => {
                 let failure_class = classify_ingress_failure(&err);
                 let retryable = failure_class.is_retryable();
-                let transitioned_unhealthy = self.mark_failure_at(endpoint_idx, now, failure_class);
+                let transitioned_unhealthy = ingress_failure_affects_submit_health(op_name)
+                    && self.mark_failure_at(endpoint_idx, now, failure_class);
                 if transitioned_unhealthy {
                     self.ingress_stats.record_endpoint_unhealthy(endpoint_idx);
                     warn!(
@@ -559,8 +565,8 @@ impl EndpointHealthPool {
                 Err(err) => {
                     let failure_class = classify_ingress_failure(&err);
                     let retryable = failure_class.is_retryable();
-                    let transitioned_unhealthy =
-                        self.mark_failure_at(endpoint_idx, now, failure_class);
+                    let transitioned_unhealthy = ingress_failure_affects_submit_health(op_name)
+                        && self.mark_failure_at(endpoint_idx, now, failure_class);
                     if transitioned_unhealthy {
                         self.ingress_stats.record_endpoint_unhealthy(endpoint_idx);
                         warn!(
@@ -641,8 +647,8 @@ impl EndpointHealthPool {
                 Err(err) => {
                     let failure_class = classify_ingress_failure(&err);
                     let retryable = failure_class.is_retryable();
-                    let transitioned_unhealthy =
-                        self.mark_failure_at(endpoint_idx, now, failure_class);
+                    let transitioned_unhealthy = ingress_failure_affects_submit_health(op_name)
+                        && self.mark_failure_at(endpoint_idx, now, failure_class);
                     if transitioned_unhealthy {
                         self.ingress_stats.record_endpoint_unhealthy(endpoint_idx);
                         warn!(
@@ -1212,6 +1218,28 @@ impl IngressFailureClass {
             Self::QueuePressure => "queue_pressure",
         }
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum IngressOperationClass {
+    Submit,
+    StatusRead,
+}
+
+fn classify_ingress_operation(op_name: &str) -> IngressOperationClass {
+    if op_name.contains("query") || op_name.contains("confirmation") || op_name.contains("precheck")
+    {
+        IngressOperationClass::StatusRead
+    } else {
+        IngressOperationClass::Submit
+    }
+}
+
+fn ingress_failure_affects_submit_health(op_name: &str) -> bool {
+    matches!(
+        classify_ingress_operation(op_name),
+        IngressOperationClass::Submit
+    )
 }
 
 fn ingress_error_message(error: &color_eyre::Report) -> String {
@@ -5867,6 +5895,24 @@ mod tests {
     }
 
     #[test]
+    fn stable_transfer_plan_never_escalates_to_blocking_applied() {
+        let PreparedChaos { mut state, .. } =
+            instructions::prepare_state(3, None, None, WorkloadProfile::Stable, false)
+                .expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(17);
+        let plan = state
+            .produce_plan_for_test(instructions::RecipeKind::TransferAsset, &mut rng)
+            .expect("transfer plan");
+        assert_eq!(
+            effective_submission_confirmation(
+                SubmissionConfirmationMode::AcceptedByIngress,
+                &plan.state_updates,
+            ),
+            SubmissionConfirmationMode::AcceptedByIngress
+        );
+    }
+
+    #[test]
     fn tracked_repeatable_trigger_extracts_registration_target() {
         let trigger_id: TriggerId = "repeat_trigger_test".parse().expect("valid trigger id");
         let updates = vec![PlanUpdate::TrackRepeatableTrigger(trigger_id.clone())];
@@ -6624,6 +6670,84 @@ mod tests {
             Some(9)
         );
         assert_eq!(attempts, vec![0, 1]);
+    }
+
+    #[test]
+    fn endpoint_pool_status_query_429_does_not_mark_endpoint_unhealthy() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:31".to_string(),
+                "http://127.0.0.1:32".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 3,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(5),
+                reprobe_interval: Duration::from_millis(500),
+            },
+            Arc::clone(&ingress_stats),
+        );
+        let now = Instant::now();
+        let mut attempts = Vec::new();
+        let result: Result<Option<u32>> =
+            pool.run_with_failover_at("query_confirmation", now, |idx, _| {
+                attempts.push(idx);
+                if idx == 0 {
+                    Err(eyre!(
+                        "Failed to get pipeline transaction status: 429 Too Many Requests"
+                    ))
+                } else {
+                    Ok(Some(7))
+                }
+            });
+        assert_eq!(result.expect("status query should fail over"), Some(7));
+        assert_eq!(attempts, vec![0, 1]);
+        assert_eq!(
+            ingress_stats.snapshot(),
+            IngressStatsSnapshot {
+                failover_total: 1,
+                endpoint_unhealthy_total: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn endpoint_pool_submit_queue_pressure_marks_endpoint_unhealthy() {
+        let ingress_stats = Arc::new(IngressStats::default());
+        let pool = EndpointHealthPool::new(
+            vec![
+                "http://127.0.0.1:41".to_string(),
+                "http://127.0.0.1:42".to_string(),
+            ],
+            IngressEndpointPoolConfig {
+                max_attempts: 3,
+                unhealthy_failure_threshold: 1,
+                unhealthy_cooldown: Duration::from_secs(5),
+                reprobe_interval: Duration::from_millis(500),
+            },
+            Arc::clone(&ingress_stats),
+        );
+        let now = Instant::now();
+        let mut attempts = Vec::new();
+        let result: Result<&'static str> =
+            pool.run_with_failover_at("submit_transaction_plan", now, |idx, _| {
+                attempts.push(idx);
+                if idx == 0 {
+                    Err(eyre!("transaction queued for too long"))
+                } else {
+                    Ok("ok")
+                }
+            });
+        assert_eq!(result.expect("submit should fail over"), "ok");
+        assert_eq!(attempts, vec![0, 1]);
+        assert_eq!(
+            ingress_stats.snapshot(),
+            IngressStatsSnapshot {
+                failover_total: 1,
+                endpoint_unhealthy_total: 1,
+            }
+        );
     }
 
     #[test]

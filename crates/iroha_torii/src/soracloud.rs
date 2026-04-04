@@ -3178,11 +3178,11 @@ fn hf_shared_lease_pool_id(
     Ok(Hash::new(payload))
 }
 
-fn hf_profile_http_client() -> Result<reqwest::Client, SoracloudError> {
+fn hf_profile_http_client(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
+) -> Result<reqwest::Client, SoracloudError> {
     reqwest::Client::builder()
-        .timeout(Duration::from_millis(
-            iroha_config::parameters::defaults::soracloud_runtime::hf::REQUEST_TIMEOUT_MS,
-        ))
+        .timeout(config.request_timeout)
         .build()
         .map_err(|err| {
             SoracloudError::internal(format!(
@@ -3210,12 +3210,11 @@ fn normalize_hf_base_url(base_url: &str) -> Result<reqwest::Url, SoracloudError>
 }
 
 fn hf_model_info_url(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
     repo_id: &str,
     resolved_revision: &str,
 ) -> Result<reqwest::Url, SoracloudError> {
-    let mut url = normalize_hf_base_url(
-        iroha_config::parameters::defaults::soracloud_runtime::hf::API_BASE_URL,
-    )?;
+    let mut url = normalize_hf_base_url(&config.api_base_url)?;
     {
         let mut segments = url
             .path_segments_mut()
@@ -3232,13 +3231,12 @@ fn hf_model_info_url(
 }
 
 fn hf_repo_file_url(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
     repo_id: &str,
     resolved_revision: &str,
     file_path: &str,
 ) -> Result<reqwest::Url, SoracloudError> {
-    let mut url = normalize_hf_base_url(
-        iroha_config::parameters::defaults::soracloud_runtime::hf::HUB_BASE_URL,
-    )?;
+    let mut url = normalize_hf_base_url(&config.hub_base_url)?;
     {
         let mut segments = url
             .path_segments_mut()
@@ -3256,11 +3254,12 @@ fn hf_repo_file_url(
 
 async fn hf_content_length_bytes(
     client: &reqwest::Client,
+    config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
     repo_id: &str,
     resolved_revision: &str,
     file_path: &str,
 ) -> Result<u64, SoracloudError> {
-    let file_url = hf_repo_file_url(repo_id, resolved_revision, file_path)?;
+    let file_url = hf_repo_file_url(config, repo_id, resolved_revision, file_path)?;
     let response = client.head(file_url.clone()).send().await.map_err(|err| {
         SoracloudError::internal(format!(
             "failed to query Hugging Face file headers from {file_url}: {err}"
@@ -3285,11 +3284,12 @@ async fn hf_content_length_bytes(
 }
 
 async fn derive_hf_resource_profile(
+    config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
     repo_id: &str,
     resolved_revision: &str,
 ) -> Result<SoraHfResourceProfileV1, SoracloudError> {
-    let client = hf_profile_http_client()?;
-    let info_url = hf_model_info_url(repo_id, resolved_revision)?;
+    let client = hf_profile_http_client(config)?;
+    let info_url = hf_model_info_url(config, repo_id, resolved_revision)?;
     let response = client.get(info_url.clone()).send().await.map_err(|err| {
         SoracloudError::internal(format!(
             "failed to fetch Hugging Face model info from {info_url}: {err}"
@@ -3361,7 +3361,7 @@ async fn derive_hf_resource_profile(
     let mut required_model_bytes = 0_u64;
     for file_path in &weight_files {
         required_model_bytes = required_model_bytes.saturating_add(
-            hf_content_length_bytes(&client, repo_id, resolved_revision, file_path).await?,
+            hf_content_length_bytes(&client, config, repo_id, resolved_revision, file_path).await?,
         );
     }
     if required_model_bytes == 0 {
@@ -11338,10 +11338,13 @@ pub(crate) async fn handle_hf_deploy(
         Ok(source_id) => source_id,
         Err(err) => return err.into_response(),
     };
-    let resource_profile = match derive_hf_resource_profile(&repo_id, &resolved_revision).await {
-        Ok(resource_profile) => resource_profile,
-        Err(err) => return err.into_response(),
-    };
+    let resource_profile =
+        match derive_hf_resource_profile(&app.soracloud_hf_config, &repo_id, &resolved_revision)
+            .await
+        {
+            Ok(resource_profile) => resource_profile,
+            Err(err) => return err.into_response(),
+        };
     let generated_bundle = build_soracloud_hf_generated_service_bundle(
         service_name.clone(),
         &source_id.to_string(),
@@ -11634,10 +11637,13 @@ pub(crate) async fn handle_hf_lease_renew(
         Ok(source_id) => source_id,
         Err(err) => return err.into_response(),
     };
-    let resource_profile = match derive_hf_resource_profile(&repo_id, &resolved_revision).await {
-        Ok(resource_profile) => resource_profile,
-        Err(err) => return err.into_response(),
-    };
+    let resource_profile =
+        match derive_hf_resource_profile(&app.soracloud_hf_config, &repo_id, &resolved_revision)
+            .await
+        {
+            Ok(resource_profile) => resource_profile,
+            Err(err) => return err.into_response(),
+        };
     let generated_bundle = build_soracloud_hf_generated_service_bundle(
         service_name.clone(),
         &source_id.to_string(),

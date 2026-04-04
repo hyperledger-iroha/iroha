@@ -32,7 +32,7 @@ use iroha_data_model::{
         CanonicalStateKey, DomainMetadataKey, NftMetadataKey, RwaMetadataKey,
         StateAccessSetAdvisory, TriggerMetadataKey, TxQueueKey,
     },
-    transaction::SignedTransaction,
+    transaction::{SignedTransaction, executable::ContractInvocation},
 };
 use iroha_primitives::json::Json;
 use ivm::host::IVMHost;
@@ -41,8 +41,8 @@ use parking_lot::RwLock;
 
 use crate::{
     executor::parse_gas_limit,
-    smartcontracts::ivm::host::QueryStateSource,
     smartcontracts::triggers::set::{ExecutableRef, SetReadOnly},
+    smartcontracts::{code, ivm::host::QueryStateSource},
     state::{StateReadOnly, WorldReadOnly},
 };
 
@@ -217,6 +217,41 @@ fn parse_contract_call_execution_context(
     }))
 }
 
+fn parse_contract_invocation_execution_context(
+    invocation: &ContractInvocation,
+    bytecode: &[u8],
+) -> Result<ContractCallExecutionContext, String> {
+    let selector = invocation.entrypoint.trim();
+    if selector.is_empty() {
+        return Err("contract entrypoint must not be empty".to_owned());
+    }
+
+    let parsed = ivm::ProgramMetadata::parse(bytecode)
+        .map_err(|err| format!("invalid contract artifact for contract call dispatch: {err}"))?;
+    let prefix_len = parsed.prefix_len() as u64;
+    let contract_interface = parsed
+        .contract_interface
+        .as_ref()
+        .ok_or_else(|| "contract call requires a self-describing contract artifact".to_owned())?;
+    let descriptor = contract_interface
+        .entrypoints
+        .iter()
+        .find(|candidate| candidate.name == selector)
+        .ok_or_else(|| format!("unknown contract entrypoint `{selector}`"))?;
+    if !matches!(
+        descriptor.kind,
+        iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+    ) {
+        return Err(format!("contract entrypoint `{selector}` is not public"));
+    }
+
+    Ok(ContractCallExecutionContext {
+        entrypoint: Some(selector.to_owned()),
+        entrypoint_pc: Some(prefix_len + descriptor.entry_pc),
+        args: invocation.payload.clone().unwrap_or_default(),
+    })
+}
+
 fn apply_contract_call_execution_context(
     vm: &mut ivm::IVM,
     context: Option<&ContractCallExecutionContext>,
@@ -324,6 +359,54 @@ where
             derive_from_isi_batch_with_state(batch.as_ref(), state_ro),
             None,
         ),
+        Executable::ContractCall(call) => {
+            if let Some(view) = state_ro
+                && let Some(record) =
+                    code::fetch_bound_contract_record(view, &call.contract_address)
+            {
+                if let Some((set, source)) = manifest_access_set(
+                    &record.manifest,
+                    record.code_hash,
+                    record.code_bytes.as_ref(),
+                    view.pipeline().access_set_cache_enabled,
+                    Some(call.entrypoint.as_str()),
+                ) {
+                    return (set, Some(source));
+                }
+
+                if matches!(ivm_strategy, IvmStrategy::DynamicThenConservative) {
+                    let set = tx_gas_limit(tx)
+                        .and_then(|gas_limit| {
+                            let context = parse_contract_invocation_execution_context(
+                                call,
+                                record.code_bytes.as_ref(),
+                            )?;
+                            derive_from_ivm_dynamic_with_context(
+                                record.code_bytes.as_ref(),
+                                tx.authority(),
+                                Some(context),
+                                view,
+                                gas_limit,
+                            )
+                        })
+                        .unwrap_or_else(|_| AccessSet::global());
+                    let source = if set.read_keys.is_empty()
+                        && set.write_keys.len() == 1
+                        && set.write_keys.contains("*")
+                    {
+                        AccessSetSource::ConservativeFallback
+                    } else {
+                        AccessSetSource::PrepassMerge
+                    };
+                    return (set, Some(source));
+                }
+            }
+
+            (
+                AccessSet::global(),
+                Some(AccessSetSource::ConservativeFallback),
+            )
+        }
         Executable::IvmProved(proved) => (
             derive_from_isi_batch_with_state(proved.overlay.as_ref(), state_ro),
             None,
@@ -1182,6 +1265,22 @@ where
                 ));
             }
         }
+        ExecutableRef::ContractCall(invocation) => {
+            if let Some(record) =
+                code::fetch_bound_contract_record(state_ro, &invocation.contract_address)
+                && let Some((hinted, _source)) = manifest_access_set(
+                    &record.manifest,
+                    record.code_hash,
+                    record.code_bytes.as_ref(),
+                    state_ro.pipeline().access_set_cache_enabled,
+                    Some(invocation.entrypoint.as_str()),
+                )
+            {
+                set.union_with(hinted);
+            } else {
+                set.union_with(AccessSet::global());
+            }
+        }
         ExecutableRef::Ivm(hash) => {
             let Some(code) = triggers.get_original_contract(&hash) else {
                 return set;
@@ -1380,10 +1479,29 @@ fn derive_from_ivm_dynamic<R>(
 where
     R: StateReadOnly + QueryStateSource,
 {
+    let contract_call_context = parse_contract_call_execution_context(metadata, bytecode)?;
+    derive_from_ivm_dynamic_with_context(
+        bytecode,
+        authority,
+        contract_call_context,
+        state_ro,
+        gas_limit,
+    )
+}
+
+fn derive_from_ivm_dynamic_with_context<R>(
+    bytecode: &[u8],
+    authority: &AccountId,
+    contract_call_context: Option<ContractCallExecutionContext>,
+    state_ro: &R,
+    gas_limit: u64,
+) -> Result<AccessSet, String>
+where
+    R: StateReadOnly + QueryStateSource,
+{
     // Execute VM with CoreHost to collect queued ISIs; do not apply.
     ivm::ProgramMetadata::parse(bytecode).map_err(|e| format!("ivm.metadata: {e}"))?;
     let mut vm = ivm::IVM::new(gas_limit);
-    let contract_call_context = parse_contract_call_execution_context(metadata, bytecode)?;
     // Supply accounts snapshot for vendor helpers to become deterministic.
     let accounts = state_ro.accounts_snapshot();
     let mut host = if let Some(context) = contract_call_context.as_ref() {

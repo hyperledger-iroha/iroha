@@ -4924,6 +4924,7 @@ impl Iroha {
         });
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
+            .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
             .with_sorafs_node(sorafs_node)
             .with_vpn_helper_ticket_secret(config.network.soranet_vpn.helper_ticket_secret);
         let runtime_deps = if let Some(cache) = shared_sorafs_cache {
@@ -8322,6 +8323,11 @@ fn verify_genesis_metadata(
         match tx.instructions() {
             Executable::Instructions(batch) => {
                 instructions.extend(batch.iter().cloned());
+            }
+            Executable::ContractCall(_) => {
+                return Err(Report::new(MainError::Config).attach(
+                    "genesis transaction payload contains contract calls; expected instruction batches",
+                ));
             }
             Executable::Ivm(_) => {
                 return Err(Report::new(MainError::Config).attach(

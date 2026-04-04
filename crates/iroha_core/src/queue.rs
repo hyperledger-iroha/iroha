@@ -630,28 +630,29 @@ impl Queue {
             iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
                 match signed.instructions() {
                     Executable::Instructions(batch) => gas::meter_instructions(batch.as_ref()),
+                    Executable::ContractCall(_) | Executable::Ivm(_) => {
+                        match crate::executor::parse_gas_limit(signed.metadata()) {
+                            Ok(Some(limit)) => limit,
+                            Ok(None) => {
+                                warn!(
+                                    tx = %tx.hash(),
+                                    "missing gas_limit metadata while deriving proposal gas cost"
+                                );
+                                0
+                            }
+                            Err(err) => {
+                                warn!(
+                                    ?err,
+                                    tx = %tx.hash(),
+                                    "invalid gas_limit metadata while deriving proposal gas cost"
+                                );
+                                0
+                            }
+                        }
+                    }
                     Executable::IvmProved(proved) => {
                         gas::meter_instructions(proved.overlay.as_ref())
                     }
-                    Executable::Ivm(_) => match crate::executor::parse_gas_limit(signed.metadata())
-                    {
-                        Ok(Some(limit)) => limit,
-                        Ok(None) => {
-                            warn!(
-                                tx = %tx.hash(),
-                                "missing gas_limit metadata while deriving proposal gas cost"
-                            );
-                            0
-                        }
-                        Err(err) => {
-                            warn!(
-                                ?err,
-                                tx = %tx.hash(),
-                                "invalid gas_limit metadata while deriving proposal gas cost"
-                            );
-                            0
-                        }
-                    },
                 }
             }
             iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
@@ -953,30 +954,36 @@ impl Queue {
 
         let mut contract_targets = BTreeSet::new();
         let mut register_code_seen = false;
-        if let Executable::Instructions(instructions) = signed.instructions() {
-            for instruction in instructions {
-                if let Some(activate) = instruction
-                    .as_any()
-                    .downcast_ref::<ActivateContractInstance>()
-                {
-                    contract_targets.insert(activate.contract_address().clone());
-                } else if let Some(deactivate) = instruction
-                    .as_any()
-                    .downcast_ref::<DeactivateContractInstance>()
-                {
-                    contract_targets.insert(deactivate.contract_address().clone());
-                } else {
-                    let modifies_contract_code = {
-                        let any = instruction.as_any();
-                        any.is::<RegisterSmartContractCode>()
-                            || any.is::<RegisterSmartContractBytes>()
-                            || any.is::<RemoveSmartContractBytes>()
-                    };
-                    if modifies_contract_code {
-                        register_code_seen = true;
+        match signed.instructions() {
+            Executable::Instructions(instructions) => {
+                for instruction in instructions {
+                    if let Some(activate) = instruction
+                        .as_any()
+                        .downcast_ref::<ActivateContractInstance>()
+                    {
+                        contract_targets.insert(activate.contract_address().clone());
+                    } else if let Some(deactivate) = instruction
+                        .as_any()
+                        .downcast_ref::<DeactivateContractInstance>()
+                    {
+                        contract_targets.insert(deactivate.contract_address().clone());
+                    } else {
+                        let modifies_contract_code = {
+                            let any = instruction.as_any();
+                            any.is::<RegisterSmartContractCode>()
+                                || any.is::<RegisterSmartContractBytes>()
+                                || any.is::<RemoveSmartContractBytes>()
+                        };
+                        if modifies_contract_code {
+                            register_code_seen = true;
+                        }
                     }
                 }
             }
+            Executable::ContractCall(call) => {
+                contract_targets.insert(call.contract_address.clone());
+            }
+            Executable::Ivm(_) | Executable::IvmProved(_) => {}
         }
 
         if let Some(contract_address) = metadata_governance_contract_address.clone() {
@@ -990,7 +997,10 @@ impl Queue {
         let contract_instr_seen =
             register_code_seen || !contract_targets.is_empty() || ivm_with_contract_metadata;
 
-        if contract_instr_seen && metadata_governance_contract_address.is_none() {
+        if contract_instr_seen
+            && metadata_governance_contract_address.is_none()
+            && !matches!(signed.instructions(), Executable::ContractCall(_))
+        {
             return Err(Self::enforcement_error(
                 alias,
                 "transactions with contract operations must set `gov_contract_address` metadata when lane governance protects namespaces",
@@ -1737,7 +1747,9 @@ impl Queue {
                         Executable::Instructions(instructions) => {
                             instructions_allow_multisig_envelope_authority(&instructions)
                         }
-                        Executable::IvmProved(_) | Executable::Ivm(_) => false,
+                        Executable::ContractCall(_)
+                        | Executable::IvmProved(_)
+                        | Executable::Ivm(_) => false,
                     };
                 if !rules.validators.is_empty() && checked.as_ref().authority_opt().is_none() {
                     #[cfg(feature = "telemetry")]
@@ -3389,6 +3401,12 @@ impl Queue {
                     Executable::Instructions(batch) => {
                         let instructions: Vec<_> = batch.iter().map(Clone::clone).collect();
                         gas::meter_instructions(&instructions)
+                    }
+                    Executable::ContractCall(_) => {
+                        match crate::executor::parse_gas_limit(signed.metadata()) {
+                            Ok(Some(limit)) => limit,
+                            _ => 0,
+                        }
                     }
                     Executable::IvmProved(proved) => {
                         gas::meter_instructions(proved.overlay.as_ref())
@@ -5322,6 +5340,9 @@ pub mod tests {
         let expected_gas = match tx.as_ref().instructions() {
             iroha_data_model::transaction::Executable::Instructions(batch) => {
                 crate::gas::meter_instructions(batch.as_ref())
+            }
+            iroha_data_model::transaction::Executable::ContractCall(_) => {
+                panic!("expected ISI transaction for gas test")
             }
             iroha_data_model::transaction::Executable::Ivm(_) => {
                 panic!("expected ISI transaction for gas test")

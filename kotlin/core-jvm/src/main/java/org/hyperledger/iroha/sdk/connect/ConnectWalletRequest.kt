@@ -31,19 +31,24 @@ class ConnectWalletRequest private constructor(
 
     companion object {
         private const val SCHEME = "iroha"
+        private const val LAUNCH_SCHEME = "irohaconnect"
         private const val HOST = "connect"
+        private const val LAUNCH_HOST = "wc"
         private const val SID_LENGTH = 32
 
         @JvmStatic
         @Throws(ConnectProtocolException::class)
         fun parse(uri: URI, defaultBaseUri: URI): ConnectWalletRequest {
-            val scheme = normalize(uri.scheme)
-            val host = normalize(uri.host)
+            val normalizedUri = normalizeConnectUri(uri)
+            val scheme = normalize(normalizedUri.scheme)
+            val host = normalize(normalizedUri.host)
             if (scheme != SCHEME || host != HOST) {
-                throw ConnectProtocolException("Connect deep link must use iroha://connect")
+                throw ConnectProtocolException(
+                    "Connect deep link must use iroha://connect or irohaconnect://connect",
+                )
             }
 
-            val query = parseQuery(uri.rawQuery)
+            val query = parseQuery(normalizedUri.rawQuery)
             val sid = firstPresent(query, "sid")
             if (sid.isNullOrBlank()) {
                 throw ConnectProtocolException("Missing required query parameter: sid")
@@ -94,6 +99,42 @@ class ConnectWalletRequest private constructor(
                 if (!value.isNullOrBlank()) return value.trim()
             }
             return null
+        }
+
+        @Throws(ConnectProtocolException::class)
+        private fun normalizeConnectUri(uri: URI): URI {
+            val scheme = normalize(uri.scheme)
+            val host = normalize(uri.host)
+            if (scheme == SCHEME && host == HOST) {
+                return uri
+            }
+            if (scheme == LAUNCH_SCHEME && host == HOST) {
+                return rebuildCanonicalConnectUri(uri)
+            }
+            if (scheme == LAUNCH_SCHEME && host == LAUNCH_HOST) {
+                val query = parseQuery(uri.rawQuery)
+                val embeddedUri = trimToNull(firstPresent(query, "uri"))
+                    ?: throw ConnectProtocolException("Missing required query parameter: uri")
+                try {
+                    return normalizeConnectUri(URI(embeddedUri))
+                } catch (ex: URISyntaxException) {
+                    throw ConnectProtocolException("Embedded connect URI is malformed", ex)
+                }
+            }
+            return uri
+        }
+
+        @Throws(ConnectProtocolException::class)
+        private fun rebuildCanonicalConnectUri(uri: URI): URI = try {
+            URI(
+                SCHEME,
+                uri.rawAuthority,
+                uri.rawPath,
+                uri.rawQuery,
+                uri.rawFragment,
+            )
+        } catch (ex: URISyntaxException) {
+            throw ConnectProtocolException("Connect deep link URI is malformed", ex)
         }
 
         private fun parseQuery(rawQuery: String?): Map<String, String> {

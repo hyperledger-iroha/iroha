@@ -4,6 +4,7 @@ use std::{iter::IntoIterator, vec::Vec};
 
 use ::base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_data_model_derive::model;
+use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
@@ -11,6 +12,7 @@ pub use self::model::*;
 #[cfg(test)]
 use crate::isi::Instruction;
 use crate::isi::InstructionBox;
+use crate::smart_contract::ContractAddress;
 
 #[model]
 mod model {
@@ -29,6 +31,8 @@ mod model {
         #[cfg_attr(not(feature = "fast_dsl"), debug("{_0:?}"))]
         #[cfg_attr(feature = "fast_dsl", debug("Instructions(..)"))]
         Instructions(ConstVec<InstructionBox>),
+        /// Invoke a deployed contract instance by reference.
+        ContractCall(ContractInvocation),
         /// IVM smart contract bytecode (.to)
         Ivm(IvmBytecode),
         /// IVM smart contract bytecode accompanied by a precomputed instruction overlay.
@@ -74,6 +78,29 @@ mod model {
         /// Commitment to gas policy compliance (without revealing exact gas usage).
         pub gas_policy_commitment: Hash,
     }
+
+    /// By-reference invocation of a deployed contract instance.
+    #[derive(
+        derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(
+            crate::DeriveFastJson,
+            crate::DeriveJsonSerialize,
+            crate::DeriveJsonDeserialize
+        )
+    )]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    pub struct ContractInvocation {
+        /// Canonical deployed contract address.
+        pub contract_address: ContractAddress,
+        /// Public or view entrypoint selector.
+        pub entrypoint: String,
+        /// Optional Norito JSON payload forwarded to the contract.
+        #[norito(default)]
+        pub payload: Option<Json>,
+    }
 }
 
 // Collect any iterator of instructions into an executable, avoiding
@@ -101,6 +128,12 @@ where
 impl From<IvmBytecode> for Executable {
     fn from(source: IvmBytecode) -> Self {
         Self::Ivm(source)
+    }
+}
+
+impl From<ContractInvocation> for Executable {
+    fn from(source: ContractInvocation) -> Self {
+        Self::ContractCall(source)
     }
 }
 
@@ -233,6 +266,7 @@ impl Executable {
     pub fn instruction_count(&self) -> u64 {
         match self {
             Executable::Instructions(instructions) => instructions.len() as u64,
+            Executable::ContractCall(_) => 0,
             Executable::Ivm(_) => 0,
             Executable::IvmProved(proved) => proved.overlay.len() as u64,
         }
@@ -242,6 +276,7 @@ impl Executable {
     pub fn ivm_size_bytes(&self) -> usize {
         match self {
             Executable::Ivm(b) => b.size_bytes(),
+            Executable::ContractCall(_) => 0,
             Executable::Instructions(_) => 0,
             Executable::IvmProved(proved) => proved.bytecode.size_bytes(),
         }
@@ -264,6 +299,9 @@ impl norito::json::JsonDeserialize for Executable {
                         parser,
                     )?;
                 Executable::Instructions(instrs)
+            }
+            "ContractCall" => {
+                Executable::ContractCall(ContractInvocation::json_deserialize(parser)?)
             }
             "Ivm" => Executable::Ivm(IvmBytecode::json_deserialize(parser)?),
             "IvmProved" => {
@@ -342,6 +380,11 @@ impl norito::json::FastJsonWrite for Executable {
                 norito::json::write_json_string("Instructions", out);
                 out.push(':');
                 norito::json::JsonSerialize::json_serialize(instrs, out);
+            }
+            Executable::ContractCall(invocation) => {
+                norito::json::write_json_string("ContractCall", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(invocation, out);
             }
             Executable::Ivm(bytecode) => {
                 norito::json::write_json_string("Ivm", out);
@@ -459,6 +502,22 @@ mod tests {
         let json = norito::json::to_json(&ivm_executable).expect("serialize ivm");
         let deserialized: Executable = norito::json::from_str(&json).expect("deserialize ivm");
         assert_eq!(ivm_executable, deserialized);
+
+        let contract_call_executable = Executable::ContractCall(ContractInvocation {
+            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address"),
+            entrypoint: "contribute".to_owned(),
+            payload: Some(Json::new(norito::json!({
+                "sale": "genesis_sale",
+                "payment_amount": 1
+            }))),
+        });
+        let json =
+            norito::json::to_json(&contract_call_executable).expect("serialize contract call");
+        let deserialized: Executable =
+            norito::json::from_str(&json).expect("deserialize contract call");
+        assert_eq!(contract_call_executable, deserialized);
 
         let proved_executable = Executable::IvmProved(IvmProved {
             bytecode: IvmBytecode::from_compiled(vec![7, 7, 7]),

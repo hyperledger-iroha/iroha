@@ -628,11 +628,18 @@ pub fn prepare_state(
         )));
     }
     let initial_float: Numeric = 1_000_000_000_u64.into();
+    let initial_user_balance: Numeric = 1_000_u64.into();
     let treasury_asset_id = AssetId::new(asset_numeric_id.clone(), treasury.id.clone());
     genesis_tx.push(InstructionBox::from(Mint::asset_numeric(
         initial_float,
         treasury_asset_id.clone(),
     )));
+    for account in &users {
+        genesis_tx.push(InstructionBox::from(Mint::asset_numeric(
+            initial_user_balance.clone(),
+            AssetId::new(asset_numeric_id.clone(), account.id.clone()),
+        )));
+    }
 
     let mut state = ChaosState::new(
         base_domain.clone(),
@@ -670,17 +677,18 @@ pub fn prepare_state(
         }
     }
     let mut recipes = match workload_profile {
-        WorkloadProfile::Stable => BASE_RECIPES_STABLE.to_vec(),
+        WorkloadProfile::Stable => {
+            let mut recipes = BASE_RECIPES_STABLE.to_vec();
+            if allow_contract_deploy_in_stable {
+                recipes.extend([
+                    RecipeKind::DeployIvmContract,
+                    RecipeKind::DeployKotodamaContract,
+                ]);
+            }
+            recipes
+        }
         WorkloadProfile::Chaos => BASE_RECIPES_CHAOS.to_vec(),
     };
-    if matches!(workload_profile, WorkloadProfile::Stable) && !allow_contract_deploy_in_stable {
-        recipes.retain(|kind| {
-            !matches!(
-                kind,
-                RecipeKind::DeployIvmContract | RecipeKind::DeployKotodamaContract
-            )
-        });
-    }
     if nexus.is_some() {
         let extra = match workload_profile {
             WorkloadProfile::Stable => NEXUS_RECIPES_STABLE,
@@ -816,28 +824,9 @@ pub(crate) enum RecipeKind {
     CompleteReplicationOrder,
 }
 
-// Stable runs favor deterministic recipes; contract deployment can be enabled via
-// `allow_contract_deploy_in_stable`.
-const BASE_RECIPES_STABLE: &[RecipeKind] = &[
-    RecipeKind::RegisterNft,
-    RecipeKind::MintAsset,
-    RecipeKind::TransferAsset,
-    RecipeKind::TransferNft,
-    RecipeKind::BurnAsset,
-    RecipeKind::SetAccountKeyValue,
-    RecipeKind::RemoveAccountKeyValue,
-    RecipeKind::SetDomainKeyValue,
-    RecipeKind::RemoveDomainKeyValue,
-    RecipeKind::SetAssetDefinitionKeyValue,
-    RecipeKind::RemoveAssetDefinitionKeyValue,
-    RecipeKind::SetAssetInstanceKeyValue,
-    RecipeKind::RemoveAssetInstanceKeyValue,
-    RecipeKind::RegisterRole,
-    RecipeKind::MintTriggerRepetitions,
-    RecipeKind::BurnTriggerRepetitions,
-    RecipeKind::DeployIvmContract,
-    RecipeKind::DeployKotodamaContract,
-];
+// Stable runs default to the preallocated hot path only. Contract deployment remains an
+// explicit opt-in escape hatch for targeted smoke coverage.
+const BASE_RECIPES_STABLE: &[RecipeKind] = &[RecipeKind::TransferAsset];
 
 const BASE_RECIPES_CHAOS: &[RecipeKind] = &[
     RecipeKind::RegisterAssetDefinition,
@@ -1196,6 +1185,16 @@ impl ChaosState {
         }
     }
 
+    /// Expose plan generation to sibling test modules without widening production visibility.
+    #[cfg(test)]
+    pub(crate) fn produce_plan_for_test(
+        &mut self,
+        kind: RecipeKind,
+        rng: &mut StdRng,
+    ) -> Result<TransactionPlan> {
+        self.produce_plan(kind, rng)
+    }
+
     fn plan_register_domain(&mut self, _rng: &mut StdRng) -> Result<TransactionPlan> {
         Err(eyre!(
             "runtime domain registration requires an active SNS domain-name lease; Izanami does not synthesize leases"
@@ -1284,20 +1283,13 @@ impl ChaosState {
         let receiver = self.random_user(rng)?.clone();
         let amount: Numeric = rng.random_range(1_u32..=50_u32).into();
         let treasury_asset = AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone());
-        let receiver_asset = AssetId::new(self.asset_numeric.clone(), receiver.id.clone());
-        let instructions = vec![
-            InstructionBox::from(Mint::asset_numeric(amount.clone(), treasury_asset.clone())),
-            InstructionBox::from(Transfer::asset_numeric(
-                treasury_asset.clone(),
-                amount,
-                receiver.id.clone(),
-            )),
-        ];
+        let instructions = vec![InstructionBox::from(Transfer::asset_numeric(
+            treasury_asset,
+            amount,
+            receiver.id.clone(),
+        ))];
         Ok(TransactionPlan {
-            state_updates: vec![
-                PlanUpdate::TrackAssetInstance(treasury_asset.clone()),
-                PlanUpdate::TrackAssetInstance(receiver_asset.clone()),
-            ],
+            state_updates: Vec::new(),
             label: "transfer_asset",
             instructions,
             signer: self.treasury.clone(),
@@ -3386,17 +3378,13 @@ mod tests {
     }
 
     #[test]
-    fn base_recipes_include_asset_instance_metadata() {
-        assert!(
-            BASE_RECIPES_STABLE
-                .iter()
-                .any(|kind| matches!(kind, RecipeKind::SetAssetInstanceKeyValue))
-        );
-        assert!(
-            BASE_RECIPES_STABLE
-                .iter()
-                .any(|kind| matches!(kind, RecipeKind::RemoveAssetInstanceKeyValue))
-        );
+    fn stable_recipes_are_preseeded_transfer_only() {
+        assert_eq!(BASE_RECIPES_STABLE.len(), 1);
+        assert!(matches!(BASE_RECIPES_STABLE[0], RecipeKind::TransferAsset));
+    }
+
+    #[test]
+    fn chaos_recipes_include_stateful_paths() {
         assert!(
             BASE_RECIPES_CHAOS
                 .iter()
@@ -3408,24 +3396,19 @@ mod tests {
                 .any(|kind| matches!(kind, RecipeKind::RemoveAssetInstanceKeyValue))
         );
         assert!(
-            BASE_RECIPES_STABLE
+            BASE_RECIPES_CHAOS
                 .iter()
                 .any(|kind| matches!(kind, RecipeKind::MintTriggerRepetitions))
         );
         assert!(
-            BASE_RECIPES_STABLE
+            BASE_RECIPES_CHAOS
                 .iter()
                 .any(|kind| matches!(kind, RecipeKind::BurnTriggerRepetitions))
         );
         assert!(
-            BASE_RECIPES_STABLE
+            BASE_RECIPES_CHAOS
                 .iter()
                 .any(|kind| matches!(kind, RecipeKind::DeployIvmContract))
-        );
-        assert!(
-            BASE_RECIPES_STABLE
-                .iter()
-                .any(|kind| matches!(kind, RecipeKind::DeployKotodamaContract))
         );
         assert!(
             BASE_RECIPES_CHAOS
@@ -4069,6 +4052,31 @@ mod tests {
         assert_ne!(
             metadata_asset, stale_asset,
             "asset metadata should not target an asset that never committed"
+        );
+    }
+
+    #[test]
+    fn transfer_asset_plan_uses_preseeded_balances() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(224);
+
+        let plan = state.plan_transfer_asset(&mut rng).expect("transfer asset");
+
+        assert!(plan.state_updates.is_empty());
+        assert_eq!(plan.instructions.len(), 1);
+        assert!(
+            plan.instructions[0]
+                .as_any()
+                .downcast_ref::<TransferBox>()
+                .is_some(),
+            "stable transfer path should submit only the transfer instruction"
+        );
+        assert!(
+            plan.instructions
+                .iter()
+                .all(|instruction| instruction.as_any().downcast_ref::<MintBox>().is_none()),
+            "stable transfer path should not mint during the measured hot path"
         );
     }
 

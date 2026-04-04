@@ -21,6 +21,7 @@ from iroha_torii_client import (  # noqa: E402  (import depends on sys.path muta
     ToriiClient,
     decode_pdp_commitment_header,
 )
+from iroha_torii_client.mock import ToriiMockServer  # noqa: E402
 
 CANONICAL_OWNER = "sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6"
 CANONICAL_ASSET_ID = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
@@ -475,6 +476,334 @@ def test_get_node_capabilities_parses_snapshot() -> None:
     assert capabilities.crypto.sm.acceleration.neon_sm3 is True
     assert capabilities.crypto.curves.registry_version == 2
     assert capabilities.crypto.curves.allowed_curve_bitmap == [32770]
+
+
+def test_get_sccp_capabilities_parses_snapshot() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "local_domain": 0,
+                "local_chain": "sora",
+                "proof_family": "stark-fri-v1",
+                "burn_bundle_path": "/v1/sccp/proofs/burn/{message_id}",
+                "governance_bundle_path": "/v1/sccp/proofs/governance/{message_id}",
+                "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
+                "message_proof_path": "/v1/sccp/artifacts/message/{message_id}",
+                "proof_manifest_path": "/v1/sccp/manifests",
+                "legacy_burn_registry_backend": "bridge/sccp/burn-v1",
+                "legacy_governance_registry_backend": "bridge/sccp/governance-v1",
+                "proof_submit_path": "/v1/bridge/proofs/submit",
+                "message_submit_path": "/v1/bridge/messages",
+                "message_payload_kinds": ["asset_register", "route_activate", "transfer"],
+                "codecs": [
+                    {
+                        "id": 4,
+                        "key": "ton_raw",
+                        "description": "TON raw addresses in workchain:account_hex form.",
+                    }
+                ],
+                "counterparties": [
+                    {
+                        "domain": 4,
+                        "chain": "ton",
+                        "message_backend": "sccp/stark-fri-v1/ton",
+                        "registry_backend": "bridge/sccp/stark-fri-v1/ton",
+                        "counterparty_account_codec": 4,
+                        "counterparty_account_codec_key": "ton_raw",
+                    }
+                ],
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    capabilities = client.get_sccp_capabilities()
+
+    assert capabilities.local_domain == 0
+    assert capabilities.local_chain == "sora"
+    assert capabilities.message_proof_path == "/v1/sccp/artifacts/message/{message_id}"
+    assert capabilities.proof_manifest_path == "/v1/sccp/manifests"
+    assert capabilities.message_payload_kinds == ["asset_register", "route_activate", "transfer"]
+    assert capabilities.codecs[0].key == "ton_raw"
+    assert capabilities.counterparties[0].message_backend == "sccp/stark-fri-v1/ton"
+
+
+def test_get_sccp_proof_manifests_parses_snapshot() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "local_domain": 0,
+                "local_chain": "sora",
+                "proof_family": "stark-fri-v1",
+                "manifests": [
+                    {
+                        "version": 1,
+                        "local_domain": 0,
+                        "local_chain": "sora",
+                        "counterparty_domain": 1,
+                        "chain": "eth",
+                        "proof_family": "stark-fri-v1",
+                        "message_backend": "sccp/stark-fri-v1/eth",
+                        "registry_backend": "bridge/sccp/stark-fri-v1/eth",
+                        "counterparty_account_codec": 2,
+                        "counterparty_account_codec_key": "evm_hex",
+                        "finality_model": "EthereumBeaconExecution",
+                        "verifier_target": "EvmContract",
+                        "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:eth",
+                        "required_public_inputs": [
+                            "message_id",
+                            "payload_hash",
+                            "target_domain",
+                            "commitment_root",
+                            "finality_height",
+                            "finality_block_hash",
+                        ],
+                        "message_payload_kinds": ["asset_register", "route_activate", "transfer"],
+                    }
+                ],
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    manifests = client.get_sccp_proof_manifests()
+
+    assert manifests.local_domain == 0
+    assert manifests.proof_family == "stark-fri-v1"
+    assert manifests.manifests[0].chain == "eth"
+    assert manifests.manifests[0].verifier_target == "EvmContract"
+    assert manifests.manifests[0].required_public_inputs[-1] == "finality_block_hash"
+
+
+def test_get_sccp_proof_manifests_rejects_unknown_verifier_target() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "local_domain": 0,
+                "local_chain": "sora",
+                "proof_family": "stark-fri-v1",
+                "manifests": [
+                    {
+                        "version": 1,
+                        "local_domain": 0,
+                        "local_chain": "sora",
+                        "counterparty_domain": 4,
+                        "chain": "ton",
+                        "proof_family": "stark-fri-v1",
+                        "message_backend": "sccp/stark-fri-v1/ton",
+                        "registry_backend": "bridge/sccp/stark-fri-v1/ton",
+                        "counterparty_account_codec": 4,
+                        "counterparty_account_codec_key": "ton_raw",
+                        "finality_model": "TonMasterchain",
+                        "verifier_target": "UnknownVerifier",
+                        "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+                        "required_public_inputs": ["message_id"],
+                        "message_payload_kinds": ["transfer"],
+                    }
+                ],
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="verifier_target must be one of"):
+        client.get_sccp_proof_manifests()
+
+
+def test_get_sccp_message_proof_artifact_parses_typed_snapshot() -> None:
+    session = RecordingSession()
+    message_id = "11" * 32
+    payload_hash = "22" * 32
+    commitment_root = "33" * 32
+    finality_block_hash = "44" * 32
+    session.queue(
+        StubResponse(
+            payload={
+                "version": 1,
+                "local_domain": 0,
+                "counterparty_domain": 4,
+                "proof_family": "stark-fri-v1",
+                "message_backend": "sccp/stark-fri-v1/ton",
+                "registry_backend": "bridge/sccp/stark-fri-v1/ton",
+                "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+                "finality_model": "TonMasterchain",
+                "verifier_target": "TonContract",
+                "public_inputs": {
+                    "version": 1,
+                    "message_id": message_id,
+                    "payload_hash": payload_hash,
+                    "target_domain": 4,
+                    "commitment_root": commitment_root,
+                    "finality_height": "19",
+                    "finality_block_hash": finality_block_hash,
+                },
+                "proof_bytes": "aa55",
+                "bundle": {
+                    "version": 1,
+                    "commitment_root": commitment_root,
+                    "commitment": {
+                        "version": 1,
+                        "kind": "Transfer",
+                        "target_domain": 4,
+                        "message_id": message_id,
+                        "payload_hash": payload_hash,
+                        "parliament_certificate_hash": None,
+                    },
+                    "merkle_proof": {
+                        "steps": [
+                            {
+                                "sibling_hash": "55" * 32,
+                                "sibling_is_left": False,
+                            }
+                        ]
+                    },
+                    "payload": {
+                        "Transfer": {
+                            "version": 1,
+                            "source_domain": 0,
+                            "dest_domain": 4,
+                            "nonce": "21",
+                            "asset_home_domain": 0,
+                            "asset_id_codec": 1,
+                            "asset_id": "786f7223756e6976657273616c",
+                            "amount": "77",
+                            "sender_codec": 1,
+                            "sender": "6e657875733a736f726173776170",
+                            "recipient_codec": 4,
+                            "recipient": (
+                                "303a3031323334353637383961626364656630313233343536373839616263646566"
+                                "3031323334353637383961626364656630313233343536373839616263646566"
+                            ),
+                            "route_id_codec": 1,
+                            "route_id": "6e657875733a746f6e3a786f72",
+                        }
+                    },
+                    "finality_proof": "bb66",
+                },
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    artifact = client.get_sccp_message_proof_artifact(f"0x{message_id}")
+
+    assert artifact.counterparty_domain == 4
+    assert artifact.finality_model == "TonMasterchain"
+    assert artifact.public_inputs.message_id == message_id
+    assert artifact.bundle.payload.kind == "Transfer"
+    assert artifact.bundle.payload.value["amount"] == "77"
+    assert session.calls[0]["url"] == f"http://node.test/v1/sccp/artifacts/message/{message_id}"
+
+
+def test_get_sccp_message_proof_artifact_rejects_mismatched_public_inputs() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "version": 1,
+                "local_domain": 0,
+                "counterparty_domain": 1,
+                "proof_family": "stark-fri-v1",
+                "message_backend": "sccp/stark-fri-v1/eth",
+                "registry_backend": "bridge/sccp/stark-fri-v1/eth",
+                "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:eth",
+                "finality_model": "EthereumBeaconExecution",
+                "verifier_target": "EvmContract",
+                "public_inputs": {
+                    "version": 1,
+                    "message_id": "11" * 32,
+                    "payload_hash": "22" * 32,
+                    "target_domain": 1,
+                    "commitment_root": "33" * 32,
+                    "finality_height": "7",
+                    "finality_block_hash": "44" * 32,
+                },
+                "proof_bytes": "aa55",
+                "bundle": {
+                    "version": 1,
+                    "commitment_root": "33" * 32,
+                    "commitment": {
+                        "version": 1,
+                        "kind": "Transfer",
+                        "target_domain": 1,
+                        "message_id": "99" * 32,
+                        "payload_hash": "22" * 32,
+                        "parliament_certificate_hash": None,
+                    },
+                    "merkle_proof": {"steps": []},
+                    "payload": {"Transfer": {"version": 1}},
+                    "finality_proof": "bb66",
+                },
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    with pytest.raises(RuntimeError, match="message_id"):
+        client.get_sccp_message_proof_artifact("11" * 32)
+
+
+def test_get_sccp_message_proof_artifact_against_mock_server() -> None:
+    server = ToriiMockServer().start()
+    message_id = "11" * 32
+    try:
+        response = requests.post(
+            f"{server.base_url.rstrip('/')}/__mock__/sccp/config",
+            json={
+                "message_artifacts": {
+                    message_id: {
+                        "version": 1,
+                        "local_domain": 0,
+                        "counterparty_domain": 4,
+                        "proof_family": "stark-fri-v1",
+                        "message_backend": "sccp/stark-fri-v1/ton",
+                        "registry_backend": "bridge/sccp/stark-fri-v1/ton",
+                        "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+                        "finality_model": "TonMasterchain",
+                        "verifier_target": "TonContract",
+                        "public_inputs": {
+                            "version": 1,
+                            "message_id": message_id,
+                            "payload_hash": "22" * 32,
+                            "target_domain": 4,
+                            "commitment_root": "33" * 32,
+                            "finality_height": "19",
+                            "finality_block_hash": "44" * 32,
+                        },
+                        "proof_bytes": "aa55",
+                        "bundle": {
+                            "version": 1,
+                            "commitment_root": "33" * 32,
+                            "commitment": {
+                                "version": 1,
+                                "kind": "Transfer",
+                                "target_domain": 4,
+                                "message_id": message_id,
+                                "payload_hash": "22" * 32,
+                                "parliament_certificate_hash": None,
+                            },
+                            "merkle_proof": {"steps": []},
+                            "payload": {"Transfer": {"version": 1, "amount": "77"}},
+                            "finality_proof": "bb66",
+                        },
+                    }
+                }
+            },
+            timeout=5.0,
+        )
+        response.raise_for_status()
+
+        client = ToriiClient(server.base_url)
+        artifact = client.get_sccp_message_proof_artifact(message_id)
+
+        assert artifact.bundle.payload.kind == "Transfer"
+        assert artifact.bundle.payload.value["amount"] == "77"
+        assert artifact.message_backend == "sccp/stark-fri-v1/ton"
+    finally:
+        server.stop()
 
 
 def test_get_runtime_abi_active_parses_payload() -> None:

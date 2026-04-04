@@ -134,6 +134,7 @@ pub trait Visit {
 /// Walk a transaction and delegate to the provided visitor.
 pub fn visit_transaction<V: Visit + ?Sized>(visitor: &mut V, transaction: &SignedTransaction) {
     match transaction.instructions() {
+        Executable::ContractCall(_) => {}
         Executable::Ivm(bytecode) => visitor.visit_ivm(bytecode),
         Executable::IvmProved(proved) => {
             // For proved execution the semantic state transition is expressed by the overlay, but

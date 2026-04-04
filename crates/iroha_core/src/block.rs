@@ -7189,6 +7189,7 @@ pub(crate) mod valid {
                             crate::pipeline::overlay::build_overlay_for_transaction_quarantine(
                                 tx,
                                 accounts_snapshot.as_ref(),
+                                state_block,
                                 q_cycle_cap,
                                 q_time_cap,
                                 upper_cycle_cap,
@@ -16464,6 +16465,10 @@ fn estimate_transaction_teu(tx: &SignedTransaction) -> u64 {
             let instructions: Vec<_> = batch.iter().cloned().collect();
             crate::gas::meter_instructions(&instructions)
         }
+        Executable::ContractCall(_) => crate::executor::parse_gas_limit(tx.metadata())
+            .ok()
+            .flatten()
+            .unwrap_or(IVM_TEU_FALLBACK),
         Executable::Ivm(bytecode) => match ProgramMetadata::parse(bytecode.as_ref()) {
             Ok(parsed) => {
                 let max_cycles = parsed.metadata.max_cycles;

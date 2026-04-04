@@ -2022,10 +2022,10 @@ and encodes code bytes as base64 strings before signing:
 
 > Need a turnkey CLI instead of writing bespoke scripts? Use
 > `javascript/iroha_js/recipes/contracts.mjs`. The helper reads your `.to`
-> artifact (`CONTRACT_CODE_PATH`), optional manifest JSON
-> (`CONTRACT_MANIFEST_PATH` or `CONTRACT_MANIFEST_JSON`), and dispatches the
-> relevant REST calls. Flip `CONTRACT_STAGE` between `register`, `instance`, or
-> `both` to mirror the JS-06 roadmap flows, and pass
+> artifact (`CONTRACT_CODE_PATH`), requires a stable `CONTRACT_ALIAS`, and
+> dispatches the alias-first deploy flow. Optional `CONTRACT_LEASE_EXPIRY_MS`
+> lets CI stage leased alias bindings, and
+> pass
 > `TORII_AUTH_TOKEN`/`TORII_API_TOKEN` when the node is locked down.
 
 ```js
@@ -2084,16 +2084,17 @@ when governance stages code hashes separately, and the JS-only Norito path now
 round-trips the full current manifest metadata surface including
 `entrypoints`, `kotoba`, and `provenance`. Bytecode helpers enforce the 32-byte
 hash length and accept `Buffer`, typed arrays, or base64 strings. Public
-deployment and activation are now address-first through `ToriiClient.deployContract`,
-which returns the canonical `contract_address` alongside the code and ABI hashes.
+deployment is now alias-first through `ToriiClient.deployContract`, which
+requires `contractAlias`, returns a fresh immutable `contract_address`, and
+reports whether the deploy upgraded an existing alias binding.
 `buildRemoveSmartContractBytesInstruction/Transaction` wires the bytecode
 reclamation ISI into CI/governance tooling and rejects empty reason strings
 before submission so operators get fast feedback during rehearsals.
 
 The recipe mirrors the same validation rules: keys can be supplied as
-`PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`, and manifest overrides
-use camelCase fields so CI orchestrators can reuse governance artefacts directly, including
-`accessSetHints`, `entrypoints`, `kotoba`, and `provenance`.
+`PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`, `CONTRACT_ALIAS`
+selects the deploy dataspace via its suffix, and `CONTRACT_LEASE_EXPIRY_MS`
+can stage a leased alias binding for rehearsal environments.
 
 ### Contract calls via Torii
 

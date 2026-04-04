@@ -13,8 +13,8 @@ use iroha_data_model::{
     isi::smart_contract_code::{
         ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
     },
-    smart_contract::ContractAddress,
     smart_contract::manifest::ContractManifest,
+    smart_contract::{ContractAddress, ContractAlias},
 };
 use mv::storage::StorageReadOnly;
 use thiserror::Error;
@@ -152,6 +152,21 @@ pub struct ContractArtifacts {
     pub bound_code_hash: Option<Hash>,
 }
 
+/// Fully resolved on-chain contract instance record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoundContractRecord {
+    /// Canonical instance address used to resolve the binding.
+    pub contract_address: ContractAddress,
+    /// Optional stable alias currently bound to the instance.
+    pub contract_alias: Option<ContractAlias>,
+    /// Code hash currently bound to the instance.
+    pub code_hash: Hash,
+    /// Stored manifest for the bound code hash.
+    pub manifest: ContractManifest,
+    /// Stored bytecode for the bound code hash.
+    pub code_bytes: Vec<u8>,
+}
+
 /// Fetch manifest, code bytes, and instance binding in a single pass.
 #[must_use]
 pub fn fetch_artifacts(
@@ -186,6 +201,30 @@ pub fn fetch_instance_binding(
         .contract_instances()
         .get(contract_address)
         .copied()
+}
+
+/// Resolve the fully bound contract instance record for `contract_address`.
+#[must_use]
+pub fn fetch_bound_contract_record(
+    state: &impl StateReadOnly,
+    contract_address: &ContractAddress,
+) -> Option<BoundContractRecord> {
+    let code_hash = fetch_instance_binding(state, contract_address)?;
+    let manifest = fetch_manifest(state, &code_hash)?;
+    let code_bytes = fetch_code_bytes(state, &code_hash)?;
+    let contract_alias = state
+        .world()
+        .contract_alias_bindings()
+        .get(contract_address)
+        .map(|binding| binding.alias.clone());
+
+    Some(BoundContractRecord {
+        contract_address: contract_address.clone(),
+        contract_alias,
+        code_hash,
+        manifest,
+        code_bytes,
+    })
 }
 
 #[cfg(test)]

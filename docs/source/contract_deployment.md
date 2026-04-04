@@ -56,11 +56,14 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
 - `POST /v1/contracts/deploy`
   - Request body: `DeployContractDto` (see `docs/source/torii_contracts_api.md` for field details).
   - Torii decodes the base64 payload, verifies the embedded `CNTR` interface,
-    derives the manifest from the artifact itself, activates the canonical
-    address-backed instance in the target dataspace, prepends a domainless
-    self-registration for the authority, and submits the resulting transaction
-    on behalf of the caller.
-  - Response: `{ ok, contract_address, dataspace, deploy_nonce, tx_hash_hex, code_hash_hex, abi_hash_hex }`.
+    derives the manifest from the artifact itself, allocates a fresh immutable
+    `contract_address`, binds the requested stable `contract_alias` to that
+    address, prepends a domainless self-registration for the authority, and
+    submits the resulting transaction on behalf of the caller.
+  - Redeploying the same `contract_alias` performs an in-place upgrade:
+    Torii deploys a new address, rebinds the alias atomically, and deactivates
+    the previous address.
+  - Response: `{ ok, contract_alias, contract_address, previous_contract_address?, upgraded, dataspace, deploy_nonce, tx_hash_hex, code_hash_hex, abi_hash_hex }`.
   - Errors: invalid base64, invalid contract artifact, size cap exceeded,
     governance gating for protected namespaces, or fee/balance failures.
 - `GET /v1/contracts/code/{code_hash}`
@@ -87,7 +90,7 @@ returns HTTP 429; any handler error increments
   `/v1/gov/protected-namespaces` and the CLI mirrors them via
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
 - Unprotected namespaces are public: any signer may register code bytes,
-  register manifests, and deploy address-backed public contracts there.
+  register manifests, and deploy alias-backed public contracts there.
 - Proposals created with `ProposeDeployContract` (or the Torii
   `/v1/gov/proposals/deploy-contract` endpoint) capture
   `(contract_address, code_hash, abi_hash, abi_version)`.
@@ -104,8 +107,8 @@ returns HTTP 429; any handler error increments
 
 ## CLI helpers
 
-- `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path>`
-  submits the Torii deploy request (computing hashes on the fly).
+- `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path> --contract-alias <name::dataspace>`
+  submits the alias-first Torii deploy request (computing hashes on the fly).
 - `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` computes
   `code_hash`/`abi_hash` for compiled `.to`, derives the manifest from the
   embedded `CNTR`, and optionally signs it for inspection, printing JSON or

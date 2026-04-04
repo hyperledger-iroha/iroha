@@ -163,6 +163,7 @@ pub fn visit_transaction<V: Execute + Visit + ?Sized>(
                 }
             }
         }
+        Executable::ContractCall(_) => {}
         Executable::Instructions(instructions) => {
             for isi in instructions {
                 if executor.verdict().is_ok() {

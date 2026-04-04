@@ -746,28 +746,24 @@ scripts can be dropped into staging rehearals or release workflows without bespo
 
 ### Contract deployment recipe (JS-06)
 
-JS-06 also requires a deterministic way to publish bytecode/manifest payloads without
-rewriting curl invocations. The new `javascript/iroha_js/recipes/contracts.mjs` helper
-reads bytecode from `CONTRACT_CODE_PATH`, optional manifest JSON from either
-`CONTRACT_MANIFEST_PATH` or `CONTRACT_MANIFEST_JSON`, and runs `/v1/contracts/deploy`
-followed by `/v1/contracts/instance` when `CONTRACT_STAGE` includes `instance` (default:
-`both`). Supply the credentials and namespace context via:
+JS-06 also requires a deterministic way to publish bytecode without rewriting
+curl invocations. The `javascript/iroha_js/recipes/contracts.mjs` helper reads
+bytecode from `CONTRACT_CODE_PATH`, requires a stable `CONTRACT_ALIAS`, and
+runs the alias-first `/v1/contracts/deploy` flow. Supply the credentials and
+alias context via:
 
 ```
 TORII_URL=https://torii.devnet.example \
 AUTHORITY=<i105-account-id> \
 PRIVATE_KEY_HEX=$(cat ~/.iroha/keys/alice.hex) \
 CONTRACT_CODE_PATH=./artifacts/demo_contract.to \
-CONTRACT_MANIFEST_PATH=./artifacts/demo_manifest.json \
-CONTRACT_NAMESPACE=apps \
-CONTRACT_ID=demo.contract \
+CONTRACT_ALIAS=demo_contract::universal \
 node javascript/iroha_js/recipes/contracts.mjs
 ```
 
-Set `CONTRACT_STAGE=register` to upload the manifest/bytecode without activating a
-namespace binding (useful when governance controls activation), or `CONTRACT_STAGE=instance`
-when bytecode already lives on-chain and you only need to bind an `ActivateContractInstance`.
-`TORII_AUTH_TOKEN`/`TORII_API_TOKEN` propagate directly to `ToriiClient`, and private keys are
+Set `CONTRACT_LEASE_EXPIRY_MS` when you need a leased alias binding for a
+rehearsal environment. `TORII_AUTH_TOKEN`/`TORII_API_TOKEN` propagate directly
+to `ToriiClient`, and private keys are
 validated whether you pass `PRIVATE_KEY=ed25519:<hex>` or a raw `PRIVATE_KEY_HEX` string, so
 the script can run inside CI without bespoke wrappers.
 

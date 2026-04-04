@@ -1175,6 +1175,7 @@ struct AppState {
     kiso: KisoHandle,
     query_service: LiveQueryStoreHandle,
     rate_limiter: limits::RateLimiter,
+    pipeline_status_rate_limiter: limits::RateLimiter,
     tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
     proof_rate_limiter: limits::RateLimiter,
@@ -1362,8 +1363,8 @@ enum PipelineStatusKind {
     Expired,
 }
 
-const PIPELINE_STATUS_CACHE_CAP: usize = 100_000;
-const PIPELINE_STATUS_CACHE_TTL: Duration = Duration::from_secs(60 * 60);
+const PIPELINE_STATUS_CACHE_CAP: usize = 1_500_000;
+const PIPELINE_STATUS_CACHE_TTL: Duration = Duration::from_secs(15 * 60);
 const PIPELINE_STATUS_CACHE_PRUNE_INTERVAL_SECS: u64 = 30;
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
 const TORII_PROXY_ATTEMPT_TIMEOUT: Duration = Duration::from_secs(10);
@@ -2617,6 +2618,23 @@ async fn check_access(
     hint: &str,
 ) -> Result<(), Error> {
     check_access_enforced(app, headers, remote, hint, true).await
+}
+
+async fn check_access_with_rate_limiter(
+    app: &AppState,
+    headers: &axum::http::HeaderMap,
+    remote: Option<IpAddr>,
+    hint: &str,
+    rate_limiter: &limits::RateLimiter,
+) -> Result<(), Error> {
+    validate_api_token(app, headers)?;
+    let key = rate_limit_key(headers, remote, hint, app.api_token_enforced());
+    if !limits::allow_conditionally(rate_limiter, &key, true).await {
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    Ok(())
 }
 
 fn validate_api_token(app: &AppState, headers: &axum::http::HeaderMap) -> Result<(), Error> {
@@ -17287,6 +17305,124 @@ async fn handler_sccp_message_proof(
     )
 }
 
+async fn handler_sccp_message_artifact(
+    State(app): State<SharedAppState>,
+    axum::extract::Path(message_id): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/artifacts/message/{message_id}",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests(&app, &key).await?;
+    #[cfg(feature = "telemetry")]
+    if let Some(api_token) = token_hdr {
+        crate::telemetry::report_torii_api_hit(
+            &app.telemetry,
+            &api_token,
+            "v1/sccp/artifacts/message",
+        );
+    }
+    let accept = headers.get(axum::http::header::ACCEPT).cloned();
+    Ok(
+        routing::handle_v1_sccp_message_proof_artifact(app.state.as_ref(), message_id, accept)
+            .await?
+            .into_response(),
+    )
+}
+
+async fn handler_sccp_capabilities(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/capabilities",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests(&app, &key).await?;
+    #[cfg(feature = "telemetry")]
+    if let Some(api_token) = token_hdr {
+        crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/sccp/capabilities");
+    }
+    let accept = headers.get(axum::http::header::ACCEPT).cloned();
+    Ok(routing::handle_v1_sccp_capabilities(accept)
+        .await?
+        .into_response())
+}
+
+async fn handler_sccp_manifests(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/manifests",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests(&app, &key).await?;
+    #[cfg(feature = "telemetry")]
+    if let Some(api_token) = token_hdr {
+        crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/sccp/manifests");
+    }
+    let accept = headers.get(axum::http::header::ACCEPT).cloned();
+    Ok(routing::handle_v1_sccp_manifests(accept)
+        .await?
+        .into_response())
+}
+
 #[cfg(feature = "telemetry")]
 async fn handler_sumeragi_validator_sets(
     State(app): State<SharedAppState>,
@@ -20709,11 +20845,12 @@ async fn handler_pipeline_transaction_status(
     AxQuery(query): AxQuery<PipelineStatusQuery>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
-    check_access(
+    check_access_with_rate_limiter(
         &app,
         &headers,
         Some(remote_ip),
         "v1/pipeline/transactions/status",
+        &app.pipeline_status_rate_limiter,
     )
     .await?;
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
@@ -22916,6 +23053,7 @@ pub struct Torii {
     soracloud_public_burst_per_ip: Option<std::num::NonZeroU32>,
     soracloud_public_max_inflight: usize,
     rate_limiter: limits::RateLimiter,
+    pipeline_status_rate_limiter: limits::RateLimiter,
     tx_rate_limiter: limits::RateLimiter,
     deploy_rate_limiter: limits::RateLimiter,
     proof_rate_limiter: limits::RateLimiter,
@@ -23004,7 +23142,7 @@ pub struct Torii {
     uaid_onboarding: Option<AccountOnboardingSigner>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
-    soracloud_hf_config: Option<iroha_config::parameters::actual::SoracloudRuntimeHuggingFace>,
+    soracloud_hf_config: iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
 }
 
 /// Optional runtime-owned Torii dependencies that are not present in all embeddings.
@@ -23012,6 +23150,7 @@ pub struct Torii {
 pub struct ToriiRuntimeDeps {
     telemetry: routing::MaybeTelemetry,
     soracloud_runtime: Option<SharedSoracloudRuntime>,
+    soracloud_hf_config: Option<iroha_config::parameters::actual::SoracloudRuntimeHuggingFace>,
     sorafs_node: Option<sorafs_node::NodeHandle>,
     sorafs_cache: Option<Arc<RwLock<sorafs::ProviderAdvertCache>>>,
     vpn_helper_ticket_secret: Option<[u8; 32]>,
@@ -23321,7 +23460,13 @@ impl Torii {
                 .route(
                     "/v1/sccp/proofs/message/{message_id}",
                     get(handler_sccp_message_proof),
+                )
+                .route(
+                    "/v1/sccp/artifacts/message/{message_id}",
+                    get(handler_sccp_message_artifact),
                 );
+            let sumeragi = sumeragi.route("/v1/sccp/capabilities", get(handler_sccp_capabilities));
+            let sumeragi = sumeragi.route("/v1/sccp/manifests", get(handler_sccp_manifests));
 
             #[cfg(feature = "telemetry")]
             let sumeragi = sumeragi
@@ -25050,6 +25195,14 @@ impl Torii {
                 .query_burst_per_authority
                 .map(std::num::NonZeroU32::get),
         );
+        let pipeline_status_rl = limits::RateLimiter::new(
+            config
+                .query_rate_per_authority_per_sec
+                .map(std::num::NonZeroU32::get),
+            config
+                .query_burst_per_authority
+                .map(std::num::NonZeroU32::get),
+        );
         let tx_rl = limits::RateLimiter::new(
             config
                 .tx_rate_per_authority_per_sec
@@ -25408,6 +25561,7 @@ impl Torii {
             soracloud_public_burst_per_ip: config.soracloud_public_burst_per_ip,
             soracloud_public_max_inflight: config.soracloud_public_max_inflight.get(),
             rate_limiter: rl,
+            pipeline_status_rate_limiter: pipeline_status_rl,
             tx_rate_limiter: tx_rl,
             deploy_rate_limiter: deploy_rl,
             proof_rate_limiter,
@@ -25673,6 +25827,7 @@ impl Torii {
             kiso: self.kiso.clone(),
             query_service: self.query_service.clone(),
             rate_limiter: self.rate_limiter.clone(),
+            pipeline_status_rate_limiter: self.pipeline_status_rate_limiter.clone(),
             tx_rate_limiter: self.tx_rate_limiter.clone(),
             deploy_rate_limiter: self.deploy_rate_limiter.clone(),
             proof_rate_limiter: self.proof_rate_limiter.clone(),
@@ -25817,6 +25972,7 @@ impl Torii {
             vpn_receipts: Arc::new(DashMap::new()),
             vpn_state_lock: Arc::new(tokio::sync::Mutex::new(())),
             soracloud_runtime: self.soracloud_runtime.clone(),
+            soracloud_hf_config: self.soracloud_hf_config.clone(),
             #[cfg(feature = "app_api")]
             soracloud_proxy_pending: Arc::new(tokio::sync::Mutex::new(BTreeMap::new())),
             #[cfg(feature = "app_api")]
@@ -28566,6 +28722,7 @@ pub(crate) mod tests_runtime_handlers {
             kiso,
             query_service: query_handle,
             rate_limiter: limits::RateLimiter::new(None, None),
+            pipeline_status_rate_limiter: limits::RateLimiter::new(None, None),
             tx_rate_limiter: limits::RateLimiter::new(None, None),
             deploy_rate_limiter,
             proof_rate_limiter: limits::RateLimiter::new(None, None),
@@ -28575,6 +28732,7 @@ pub(crate) mod tests_runtime_handlers {
             content_egress_limiter: limits::RateLimiter::new_u64(None, None),
             proof_limits: routing::ProofApiLimits::default(),
             content_config: content_config_snapshot,
+            soracloud_hf_config: Default::default(),
             ws_message_timeout: Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),
             require_api_token: false,
             api_tokens_set: api_tokens_set.clone(),
@@ -30685,6 +30843,81 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(payload.resolved_from, "queue");
     }
 
+    #[tokio::test]
+    async fn pipeline_status_handler_uses_dedicated_rate_limiter() {
+        let mut app = mk_app_state_for_tests();
+        let tx_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [0x71; Hash::LENGTH],
+        ));
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+            app_mut.pipeline_status_rate_limiter = limits::RateLimiter::new(Some(2), Some(2));
+            app_mut.pipeline_status_cache.record_entry(
+                tx_hash,
+                PipelineStatusEntry::fresh(PipelineStatusKind::Queued, None, None),
+            );
+        }
+
+        let headers = HeaderMap::new();
+        let remote_ip = std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST);
+        let rate_key = rate_limit_key(
+            &headers,
+            Some(remote_ip),
+            "v1/pipeline/transactions/status",
+            false,
+        );
+        assert!(limits::allow_conditionally(&app.rate_limiter, &rate_key, true).await);
+        assert!(!limits::allow_conditionally(&app.rate_limiter, &rate_key, true).await);
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app),
+            headers,
+            crate::loopback_connect_info(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+                scope: Some("local".to_owned()),
+            }),
+        )
+        .await
+        .expect("pipeline status should bypass the general query limiter");
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn pipeline_status_handler_cache_hit_ignores_tx_rate_limiter_pressure() {
+        let mut app = mk_app_state_for_tests();
+        let tx_hash = HashOf::<SignedTransaction>::from_untyped_unchecked(Hash::prehashed(
+            [0x72; Hash::LENGTH],
+        ));
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            app_mut.tx_rate_limiter = limits::RateLimiter::new(Some(1), Some(1));
+            app_mut.pipeline_status_cache.record_entry(
+                tx_hash,
+                PipelineStatusEntry::fresh(PipelineStatusKind::Applied, None, None),
+            );
+        }
+
+        assert!(app.tx_rate_limiter.allow("pipeline-status-test").await);
+        assert!(!app.tx_rate_limiter.allow("pipeline-status-test").await);
+
+        let resp = super::handler_pipeline_transaction_status(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            None,
+            crate::NoritoQuery(PipelineStatusQuery {
+                hash: Some(tx_hash.to_string()),
+                scope: Some("local".to_owned()),
+            }),
+        )
+        .await
+        .expect("cached pipeline status should stay available under tx-ingress pressure");
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
     #[cfg(feature = "app_api")]
     #[tokio::test]
     async fn account_get_handler_supports_json_and_norito() {
@@ -31509,6 +31742,113 @@ pub(crate) mod tests_runtime_handlers {
         (app, message_id)
     }
 
+    fn bridge_finalize_inbound_ivm_program(abi_version: u8) -> Vec<u8> {
+        let meta = ivm::ProgramMetadata {
+            version_major: 1,
+            version_minor: 1,
+            mode: 0,
+            vector_length: 0,
+            max_cycles: 0,
+            abi_version,
+        };
+        let interface = ivm::EmbeddedContractInterfaceV1 {
+            compiler_fingerprint: "torii-bridge-tests".to_owned(),
+            features_bitmap: 0,
+            access_set_hints: None,
+            kotoba: Vec::new(),
+            entrypoints: vec![ivm::EmbeddedEntrypointDescriptor {
+                name: "finalize_inbound".to_owned(),
+                kind: iroha_data_model::smart_contract::manifest::EntryPointKind::Public,
+                params: vec![
+                    iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor {
+                        name: "route".to_owned(),
+                        type_name: "Name".to_owned(),
+                    },
+                    iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor {
+                        name: "message_id".to_owned(),
+                        type_name: "Name".to_owned(),
+                    },
+                    iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor {
+                        name: "recipient".to_owned(),
+                        type_name: "AccountId".to_owned(),
+                    },
+                    iroha_data_model::smart_contract::manifest::EntrypointParamDescriptor {
+                        name: "amount".to_owned(),
+                        type_name: "int".to_owned(),
+                    },
+                ],
+                return_type: None,
+                permission: None,
+                read_keys: Vec::new(),
+                write_keys: Vec::new(),
+                access_hints_complete: Some(true),
+                access_hints_skipped: Vec::new(),
+                triggers: Vec::new(),
+                entry_pc: 0,
+            }],
+            states: Vec::new(),
+        };
+        let mut out = meta.encode();
+        out.extend_from_slice(&interface.encode_section());
+        out.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        out
+    }
+
+    fn install_contract_instance_with_code_for_test(
+        app: &mut SharedAppState,
+        authority: &AccountId,
+        authority_keypair: &KeyPair,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+        code: Vec<u8>,
+    ) {
+        let app_mut = Arc::get_mut(app).expect("unique app state");
+        let state = Arc::get_mut(&mut app_mut.state).expect("unique core state");
+        let mut block = state.block(BlockHeader::new(
+            nonzero_ext::nonzero!(1_u64),
+            None,
+            None,
+            None,
+            0,
+            0,
+        ));
+        let mut stx = block.transaction();
+
+        let register_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::smart_contract::CanRegisterSmartContractCode
+                .into();
+        Grant::account_permission(register_permission, authority.clone())
+            .execute(authority, &mut stx)
+            .expect("grant CanRegisterSmartContractCode");
+
+        let enact_permission: iroha_data_model::permission::Permission =
+            iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
+        Grant::account_permission(enact_permission, authority.clone())
+            .execute(authority, &mut stx)
+            .expect("grant CanEnactGovernance");
+
+        let verified = ivm::verify_contract_artifact(&code).expect("verify contract artifact");
+        let code_hash =
+            iroha_core::smartcontracts::code::register_code_bytes(authority, code, &mut stx)
+                .expect("register contract bytes");
+        assert_eq!(
+            verified.code_hash, code_hash,
+            "verified code hash must match stored bytes"
+        );
+        let manifest = verified.manifest.signed(authority_keypair);
+        iroha_core::smartcontracts::code::register_manifest(authority, manifest, &mut stx)
+            .expect("register manifest");
+        iroha_core::smartcontracts::code::activate_instance(
+            authority,
+            contract_address.clone(),
+            code_hash,
+            &mut stx,
+        )
+        .expect("activate instance");
+
+        stx.apply();
+        block.commit().expect("commit block");
+    }
+
     #[tokio::test]
     async fn sccp_burn_bundle_endpoint_roundtrips_json_and_norito() {
         routing::clear_sccp_bundles_for_tests();
@@ -31719,14 +32059,14 @@ pub(crate) mod tests_runtime_handlers {
             dest_domain: iroha_sccp::SCCP_DOMAIN_SORA2,
             nonce: 12,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            asset_id_codec: 1,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             asset_id: b"xor#universal".to_vec(),
             amount: 77,
-            sender_codec: 1,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"nexus:soraswap".to_vec(),
-            recipient_codec: 2,
+            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             recipient: b"sora2:alice".to_vec(),
-            route_id_codec: 1,
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: b"nexus:sora2:xor".to_vec(),
         });
         let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload.clone());
@@ -31758,6 +32098,300 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
+    async fn sccp_message_artifact_endpoint_roundtrips_json_and_norito() {
+        routing::clear_sccp_bundles_for_tests();
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_TON,
+            nonce: 21,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_TON_RAW,
+            recipient: b"0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:ton:xor".to_vec(),
+        });
+        let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+
+        let json_response = routing::handle_v1_sccp_message_proof_artifact(
+            app.state.as_ref(),
+            hex::encode(message_id),
+            None,
+        )
+        .await
+        .expect("json response");
+        assert_eq!(
+            json_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/json".as_slice())
+        );
+        let json_bytes = axum::body::to_bytes(json_response.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let decoded_json: iroha_sccp::NexusSccpMessageTransparentProofV1 =
+            serde_json::from_slice(&json_bytes).expect("decode json artifact");
+        assert_eq!(
+            decoded_json.counterparty_domain,
+            iroha_sccp::SCCP_DOMAIN_TON
+        );
+        assert_eq!(decoded_json.message_backend, "sccp/stark-fri-v1/ton");
+        assert_eq!(decoded_json.bundle.commitment.message_id, message_id);
+        assert!(iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(&decoded_json));
+
+        let norito_response = routing::handle_v1_sccp_message_proof_artifact(
+            app.state.as_ref(),
+            hex::encode(message_id),
+            Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
+        )
+        .await
+        .expect("norito response");
+        assert_eq!(
+            norito_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(crate::utils::NORITO_MIME_TYPE.as_bytes())
+        );
+        let norito_bytes = axum::body::to_bytes(norito_response.into_body(), usize::MAX)
+            .await
+            .expect("norito body");
+        let decoded_norito: iroha_sccp::NexusSccpMessageTransparentProofV1 =
+            norito::decode_from_bytes(&norito_bytes).expect("decode norito artifact");
+        assert_eq!(decoded_norito, decoded_json);
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn sccp_capabilities_endpoint_roundtrips_json_and_norito() {
+        let json_response = routing::handle_v1_sccp_capabilities(None)
+            .await
+            .expect("json response");
+        assert_eq!(
+            json_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/json".as_slice())
+        );
+        let json_bytes = axum::body::to_bytes(json_response.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let decoded_json: routing::SccpCapabilitiesDto =
+            serde_json::from_slice(&json_bytes).expect("decode json capabilities");
+        assert_eq!(decoded_json.local_domain, iroha_sccp::SCCP_DOMAIN_SORA);
+        assert_eq!(decoded_json.local_chain, "sora");
+        assert_eq!(
+            decoded_json.proof_family,
+            iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1
+        );
+        assert_eq!(
+            decoded_json.message_proof_path,
+            "/v1/sccp/artifacts/message/{message_id}"
+        );
+        assert_eq!(decoded_json.proof_manifest_path, "/v1/sccp/manifests");
+        let ton = decoded_json
+            .counterparties
+            .iter()
+            .find(|entry| entry.chain == "ton")
+            .expect("ton counterparty");
+        assert_eq!(ton.message_backend, "sccp/stark-fri-v1/ton");
+        assert_eq!(ton.registry_backend, "bridge/sccp/stark-fri-v1/ton");
+        assert_eq!(
+            ton.counterparty_account_codec,
+            iroha_sccp::SCCP_CODEC_TON_RAW
+        );
+        assert_eq!(ton.counterparty_account_codec_key, "ton_raw");
+
+        let norito_response = routing::handle_v1_sccp_capabilities(Some(HeaderValue::from_static(
+            crate::utils::NORITO_MIME_TYPE,
+        )))
+        .await
+        .expect("norito response");
+        assert_eq!(
+            norito_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(crate::utils::NORITO_MIME_TYPE.as_bytes())
+        );
+        let norito_bytes = axum::body::to_bytes(norito_response.into_body(), usize::MAX)
+            .await
+            .expect("norito body");
+        let decoded_norito: routing::SccpCapabilitiesDto =
+            norito::decode_from_bytes(&norito_bytes).expect("decode norito capabilities");
+        assert_eq!(decoded_norito.local_domain, decoded_json.local_domain);
+        assert_eq!(decoded_norito.local_chain, decoded_json.local_chain);
+        assert_eq!(decoded_norito.proof_family, decoded_json.proof_family);
+        assert_eq!(
+            decoded_norito.message_proof_path,
+            decoded_json.message_proof_path
+        );
+        assert_eq!(decoded_norito.codecs.len(), decoded_json.codecs.len());
+        assert_eq!(
+            decoded_norito.counterparties.len(),
+            decoded_json.counterparties.len()
+        );
+    }
+
+    #[tokio::test]
+    async fn sccp_manifests_endpoint_roundtrips_json_and_norito() {
+        let json_response = routing::handle_v1_sccp_manifests(None)
+            .await
+            .expect("json response");
+        assert_eq!(
+            json_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/json".as_slice())
+        );
+        let json_bytes = axum::body::to_bytes(json_response.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let decoded_json: routing::SccpProofManifestSetDto =
+            serde_json::from_slice(&json_bytes).expect("decode json manifests");
+        assert_eq!(decoded_json.local_domain, iroha_sccp::SCCP_DOMAIN_SORA);
+        assert_eq!(decoded_json.local_chain, "sora");
+        assert_eq!(
+            decoded_json.proof_family,
+            iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1
+        );
+        let ton = decoded_json
+            .manifests
+            .iter()
+            .find(|entry| entry.chain == "ton")
+            .expect("ton manifest");
+        assert_eq!(ton.message_backend, "sccp/stark-fri-v1/ton");
+        assert_eq!(ton.registry_backend, "bridge/sccp/stark-fri-v1/ton");
+        assert_eq!(ton.counterparty_account_codec_key, "ton_raw");
+        assert_eq!(
+            ton.manifest_seed,
+            "iroha:sccp:bridge-proof:message:stark-fri:v1:ton"
+        );
+
+        let norito_response = routing::handle_v1_sccp_manifests(Some(HeaderValue::from_static(
+            crate::utils::NORITO_MIME_TYPE,
+        )))
+        .await
+        .expect("norito response");
+        assert_eq!(
+            norito_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(crate::utils::NORITO_MIME_TYPE.as_bytes())
+        );
+        let norito_bytes = axum::body::to_bytes(norito_response.into_body(), usize::MAX)
+            .await
+            .expect("norito body");
+        let decoded_norito: routing::SccpProofManifestSetDto =
+            norito::decode_from_bytes(&norito_bytes).expect("decode norito manifests");
+        assert_eq!(decoded_norito.local_domain, decoded_json.local_domain);
+        assert_eq!(decoded_norito.local_chain, decoded_json.local_chain);
+        assert_eq!(decoded_norito.proof_family, decoded_json.proof_family);
+        assert_eq!(decoded_norito.manifests.len(), decoded_json.manifests.len());
+    }
+
+    #[tokio::test]
+    async fn bridge_proof_submit_uses_chain_specific_sccp_backend_for_message_bundle() {
+        routing::clear_sccp_bundles_for_tests();
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 13,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 88,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let bundle_response = routing::handle_v1_sccp_message_bundle(
+            app.state.as_ref(),
+            hex::encode(message_id),
+            None,
+        )
+        .await
+        .expect("bundle response");
+        let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
+            .await
+            .expect("bundle body");
+        let bundle_value = norito::json::from_str::<norito::json::Value>(
+            std::str::from_utf8(&bundle_bytes).expect("bundle utf8"),
+        )
+        .expect("bundle value");
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let response = routing::handle_post_bridge_proof_submit(
+            app.chain_id.clone(),
+            app.queue.clone(),
+            app.state.clone(),
+            app.telemetry.clone(),
+            crate::utils::extractors::JsonOnly(crate::routing::BridgeProofSubmitDto {
+                authority,
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                burn_bundle: None,
+                governance_bundle: None,
+                message_bundle: Some(bundle_value),
+                creation_time_ms: Some(84),
+            }),
+        )
+        .await
+        .expect("proof submit response")
+        .into_response();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let decoded = norito::json::from_str::<norito::json::Value>(
+            std::str::from_utf8(&body).expect("response utf8"),
+        )
+        .expect("response json");
+        let object = decoded.as_object().expect("response object");
+
+        assert_eq!(
+            object
+                .get("proof_kind")
+                .and_then(norito::json::Value::as_str),
+            Some("message")
+        );
+        assert_eq!(
+            object.get("backend").and_then(norito::json::Value::as_str),
+            Some("bridge/sccp/stark-fri-v1/eth")
+        );
+        assert_eq!(
+            object
+                .get("counterparty_domain")
+                .and_then(norito::json::Value::as_u64),
+            Some(iroha_sccp::SCCP_DOMAIN_ETH.into())
+        );
+        assert_eq!(
+            object
+                .get("counterparty_chain")
+                .and_then(norito::json::Value::as_str),
+            Some("eth")
+        );
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
     async fn bridge_message_submit_prepares_inbound_transfer_receipt() {
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
@@ -31766,14 +32400,14 @@ pub(crate) mod tests_runtime_handlers {
             dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
             nonce: 9,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_ETH,
-            asset_id_codec: 1,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             asset_id: b"weth#eth".to_vec(),
             amount: 123,
-            sender_codec: 1,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"eth:bridge".to_vec(),
-            recipient_codec: 1,
+            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             recipient: b"alice@universal".to_vec(),
-            route_id_codec: 1,
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: b"eth:sora:weth".to_vec(),
         });
         let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
@@ -31805,6 +32439,7 @@ pub(crate) mod tests_runtime_handlers {
                 signature_b64: None,
                 message_bundle: bundle_value,
                 receipt_lane: Some(7),
+                settlement: None,
                 creation_time_ms: Some(42),
             }),
         )
@@ -31831,6 +32466,22 @@ pub(crate) mod tests_runtime_handlers {
                 .get("message_kind")
                 .and_then(norito::json::Value::as_str),
             Some("transfer")
+        );
+        assert_eq!(
+            object.get("backend").and_then(norito::json::Value::as_str),
+            Some("bridge/sccp/stark-fri-v1/eth")
+        );
+        assert_eq!(
+            object
+                .get("counterparty_domain")
+                .and_then(norito::json::Value::as_u64),
+            Some(iroha_sccp::SCCP_DOMAIN_ETH.into())
+        );
+        assert_eq!(
+            object
+                .get("counterparty_chain")
+                .and_then(norito::json::Value::as_str),
+            Some("eth")
         );
         assert_eq!(
             object
@@ -31863,14 +32514,14 @@ pub(crate) mod tests_runtime_handlers {
             dest_domain: iroha_sccp::SCCP_DOMAIN_SORA2,
             nonce: 11,
             asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            asset_id_codec: 1,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             asset_id: b"xor#universal".to_vec(),
             amount: 5,
-            sender_codec: 1,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             sender: b"sora:bridge".to_vec(),
-            recipient_codec: 1,
+            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             recipient: b"sora2:alice".to_vec(),
-            route_id_codec: 1,
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: b"sora:sora2:xor".to_vec(),
         });
         let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
@@ -31902,6 +32553,7 @@ pub(crate) mod tests_runtime_handlers {
                 signature_b64: None,
                 message_bundle: bundle_value,
                 receipt_lane: None,
+                settlement: None,
                 creation_time_ms: Some(77),
             }),
         )
@@ -31919,6 +32571,235 @@ pub(crate) mod tests_runtime_handlers {
         assert!(
             message.contains("only accepts inbound messages for SORA"),
             "unexpected error: {message}"
+        );
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn bridge_message_submit_prepares_ephemeral_settlement_contract_call() {
+        routing::clear_sccp_bundles_for_tests();
+
+        let authority_keypair = KeyPair::random();
+        let authority = AccountId::new(authority_keypair.public_key().clone());
+        let mut settlement_app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &authority,
+            1,
+            iroha_data_model::nexus::DataSpaceId::new(0),
+        )
+        .expect("contract address");
+        install_contract_instance_with_code_for_test(
+            &mut settlement_app,
+            &authority,
+            &authority_keypair,
+            &contract_address,
+            bridge_finalize_inbound_ivm_program(1),
+        );
+
+        let route_name: Name = "eth:sora:weth".parse().expect("route name");
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            nonce: 10,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"weth#eth".to_vec(),
+            amount: 55,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"eth:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            recipient: authority.to_string().into_bytes(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"eth:sora:weth".to_vec(),
+        });
+        let (bundle_app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let bundle_response = routing::handle_v1_sccp_message_bundle(
+            bundle_app.state.as_ref(),
+            hex::encode(message_id),
+            None,
+        )
+        .await
+        .expect("bundle response");
+        let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
+            .await
+            .expect("bundle body");
+        let bundle_value = norito::json::from_str::<norito::json::Value>(
+            std::str::from_utf8(&bundle_bytes).expect("bundle utf8"),
+        )
+        .expect("bundle value");
+
+        let response = routing::handle_post_bridge_message_submit(
+            settlement_app.chain_id.clone(),
+            settlement_app.queue.clone(),
+            settlement_app.state.clone(),
+            settlement_app.telemetry.clone(),
+            crate::utils::extractors::JsonOnly(crate::routing::BridgeMessageSubmitDto {
+                authority: authority.clone(),
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                message_bundle: bundle_value,
+                receipt_lane: Some(9),
+                settlement: Some(crate::routing::BridgeMessageSettlementDto {
+                    contract_address: Some(contract_address.clone()),
+                    contract_alias: None,
+                    entrypoint: None,
+                    payload: None,
+                    route: Some(route_name.clone()),
+                    gas_asset_id: None,
+                    fee_sponsor: None,
+                    gas_limit: None,
+                }),
+                creation_time_ms: Some(111),
+            }),
+        )
+        .await
+        .expect("message submit response")
+        .into_response();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let decoded = norito::json::from_str::<norito::json::Value>(
+            std::str::from_utf8(&body).expect("response utf8"),
+        )
+        .expect("response json");
+        let object = decoded.as_object().expect("response object");
+
+        assert_eq!(
+            object
+                .get("submitted")
+                .and_then(norito::json::Value::as_bool),
+            Some(false)
+        );
+        assert_eq!(
+            object
+                .get("settlement_contract_address")
+                .and_then(norito::json::Value::as_str),
+            Some(contract_address.as_ref())
+        );
+        assert_eq!(
+            object
+                .get("settlement_entrypoint")
+                .and_then(norito::json::Value::as_str),
+            Some("finalize_inbound")
+        );
+        assert_eq!(
+            object
+                .get("settlement_route")
+                .and_then(norito::json::Value::as_str),
+            Some(route_name.as_ref())
+        );
+        assert!(
+            object
+                .get("transaction_scaffold_b64")
+                .and_then(norito::json::Value::as_str)
+                .is_some(),
+            "expected a transaction scaffold when no signing material is supplied"
+        );
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn bridge_message_submit_derives_settlement_route_from_transfer_bundle() {
+        routing::clear_sccp_bundles_for_tests();
+
+        let authority_keypair = KeyPair::random();
+        let authority = AccountId::new(authority_keypair.public_key().clone());
+        let mut settlement_app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &authority,
+            1,
+            iroha_data_model::nexus::DataSpaceId::new(0),
+        )
+        .expect("contract address");
+        install_contract_instance_with_code_for_test(
+            &mut settlement_app,
+            &authority,
+            &authority_keypair,
+            &contract_address,
+            bridge_finalize_inbound_ivm_program(1),
+        );
+
+        let route_name: Name = "eth:sora:weth".parse().expect("route name");
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            nonce: 10,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"weth#eth".to_vec(),
+            amount: 55,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"eth:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            recipient: authority.to_string().into_bytes(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: route_name.as_ref().as_bytes().to_vec(),
+        });
+        let (bundle_app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let bundle_response = routing::handle_v1_sccp_message_bundle(
+            bundle_app.state.as_ref(),
+            hex::encode(message_id),
+            None,
+        )
+        .await
+        .expect("bundle response");
+        let bundle_bytes = axum::body::to_bytes(bundle_response.into_body(), usize::MAX)
+            .await
+            .expect("bundle body");
+        let bundle_value = norito::json::from_str::<norito::json::Value>(
+            std::str::from_utf8(&bundle_bytes).expect("bundle utf8"),
+        )
+        .expect("bundle value");
+
+        let response = routing::handle_post_bridge_message_submit(
+            settlement_app.chain_id.clone(),
+            settlement_app.queue.clone(),
+            settlement_app.state.clone(),
+            settlement_app.telemetry.clone(),
+            crate::utils::extractors::JsonOnly(crate::routing::BridgeMessageSubmitDto {
+                authority: authority.clone(),
+                private_key: None,
+                public_key_hex: None,
+                signature_b64: None,
+                message_bundle: bundle_value,
+                receipt_lane: Some(9),
+                settlement: Some(crate::routing::BridgeMessageSettlementDto {
+                    contract_address: Some(contract_address.clone()),
+                    contract_alias: None,
+                    entrypoint: None,
+                    payload: None,
+                    route: None,
+                    gas_asset_id: None,
+                    fee_sponsor: None,
+                    gas_limit: None,
+                }),
+                creation_time_ms: Some(111),
+            }),
+        )
+        .await
+        .expect("message submit response")
+        .into_response();
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("response body");
+        let decoded = norito::json::from_str::<norito::json::Value>(
+            std::str::from_utf8(&body).expect("response utf8"),
+        )
+        .expect("response json");
+        let object = decoded.as_object().expect("response object");
+
+        assert_eq!(
+            object
+                .get("settlement_route")
+                .and_then(norito::json::Value::as_str),
+            Some(route_name.as_ref())
         );
 
         routing::clear_sccp_bundles_for_tests();
@@ -35114,7 +35995,8 @@ pub(crate) mod tests_runtime_handlers {
             authority: creds.account.clone(),
             private_key: clone_private_key(&creds.private_key),
             code_b64: code_b64.clone(),
-            dataspace: None,
+            contract_alias: "rate-limit::dataspace".parse().expect("contract alias"),
+            lease_expiry_ms: None,
         };
         // Exhaust the exact handler key up front so this regression does not depend
         // on how quickly the first deploy request completes on the current host.
@@ -35908,7 +36790,8 @@ pub(crate) mod tests_runtime_handlers {
             authority: creds.account,
             private_key: clone_private_key(&creds.private_key),
             code_b64,
-            dataspace: None,
+            contract_alias: "deploy-test::dataspace".parse().expect("contract alias"),
+            lease_expiry_ms: None,
         };
         let resp = super::handler_post_contract_deploy(
             State(app),

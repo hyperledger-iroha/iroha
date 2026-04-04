@@ -308,6 +308,14 @@ trait RunContext {
     ) -> Result<()> {
         let executable = instructions.into();
         let executable = match executable {
+            Executable::ContractCall(invocation) => {
+                if self.input_instructions() || self.output_instructions() {
+                    eyre::bail!(
+                        "Incompatible `--input` `--output` flags with contract-call executables"
+                    )
+                }
+                Executable::ContractCall(invocation)
+            }
             Executable::Ivm(bytecode) => {
                 if self.input_instructions() || self.output_instructions() {
                     eyre::bail!(
@@ -5622,6 +5630,11 @@ mod trigger {
 
         let executable_value = match trigger.action().executable() {
             Executable::Instructions(instrs) => to_value(instrs)?,
+            Executable::ContractCall(invocation) => {
+                let mut outer = BTreeMap::<String, Value>::new();
+                outer.insert("ContractCall".into(), to_value(invocation)?);
+                Value::Object(outer)
+            }
             Executable::Ivm(bytecode) => {
                 let mut inner = BTreeMap::<String, Value>::new();
                 inner.insert("hash".into(), to_value(&HashOf::new(bytecode))?);
@@ -8181,6 +8194,7 @@ transaction_status_timeout = "77s"
         let exec = ctx.captured.expect("captured instructions");
         let instructions = match exec {
             Executable::Instructions(instructions) => instructions.into_vec(),
+            Executable::ContractCall(_) => panic!("expected instructions"),
             Executable::Ivm(_) => panic!("expected instructions"),
             Executable::IvmProved(_) => panic!("expected instructions"),
         };

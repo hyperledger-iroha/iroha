@@ -40,6 +40,7 @@ iroha_crypto = { path = "crates/iroha_crypto", default-features = false, feature
 iroha_macro = { path = "crates/iroha_macro", default-features = false }
 iroha_futures = { path = "crates/iroha_futures" }
 iroha_genesis = { path = "crates/iroha_genesis" }
+iroha_sccp = { path = "crates/iroha_sccp" }
 norito = { path = "crates/norito", features = ["json", "json-std-io", "strict-safe", "gpu-compression"] }
 norito_derive = { path = "crates/norito_derive" }
 iroha_ffi = { path = "crates/iroha_ffi" }

@@ -58,8 +58,7 @@ use crate::{
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
     queue::evaluate_policy_with_catalog,
-    smartcontracts::Execute,
-    smartcontracts::ivm::cache::IvmCache,
+    smartcontracts::{Execute, code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
 
@@ -563,6 +562,7 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
         Executable::Instructions(instructions) => {
             instructions.iter().any(is_time_sensitive_instruction)
         }
+        Executable::ContractCall(_) => true,
         Executable::IvmProved(proved) => proved.overlay.iter().any(is_time_sensitive_instruction),
         Executable::Ivm(_) => true,
     }
@@ -611,7 +611,7 @@ pub(crate) fn allows_unregistered_authority(
 
             instructions_allow_multisig_envelope_authority(instructions)
         }
-        Executable::IvmProved(_) | Executable::Ivm(_) => false,
+        Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => false,
     }
 }
 
@@ -1434,6 +1434,29 @@ impl<'tx> AcceptedTransaction<'tx> {
                     ));
                 }
             }
+            Executable::ContractCall(_) => {
+                let gas_limit_key = iroha_data_model::name::Name::from_str("gas_limit")
+                    .expect("static gas_limit key");
+                let Some(raw_gas_limit) = tx.metadata().get(&gas_limit_key) else {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: "missing gas_limit in transaction metadata".into(),
+                        },
+                    ));
+                };
+                let gas_limit = raw_gas_limit.try_into_any_norito::<u64>().map_err(|err| {
+                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                        reason: format!("invalid gas_limit metadata: {err}"),
+                    })
+                })?;
+                if gas_limit == 0 {
+                    return Err(AcceptTransactionFail::TransactionLimit(
+                        TransactionLimitError {
+                            reason: "gas_limit must be positive".into(),
+                        },
+                    ));
+                }
+            }
             Executable::IvmProved(proved) => {
                 let gas_limit_key = iroha_data_model::name::Name::from_str("gas_limit")
                     .expect("static gas_limit key");
@@ -1801,6 +1824,13 @@ impl<'tx> AcceptedTransaction<'tx> {
                         },
                     ));
                 }
+            }
+            Executable::ContractCall(_) => {
+                return Err(AcceptTransactionFail::TransactionLimit(
+                    TransactionLimitError {
+                        reason: "Heartbeat transaction must not include contract calls".into(),
+                    },
+                ));
             }
             Executable::IvmProved(_) => {
                 return Err(AcceptTransactionFail::TransactionLimit(
@@ -2233,7 +2263,9 @@ impl StateBlock<'_> {
                 Executable::Instructions(instructions) => {
                     instructions_allow_multisig_envelope_authority(instructions)
                 }
-                Executable::IvmProved(_) | Executable::Ivm(_) => false,
+                Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => {
+                    false
+                }
             };
             if (has_multisig_role
                 || has_multisig_state
@@ -2300,24 +2332,57 @@ impl StateBlock<'_> {
                     .ok()
             });
 
-        if let Executable::Ivm(bytes) = tx.as_ref().instructions() {
-            let gas_limit = crate::executor::parse_gas_limit(tx.as_ref().metadata())
-                .map_err(TransactionRejectionReason::Validation)?;
-            if gas_limit.is_none() {
-                return Err(TransactionRejectionReason::Validation(
-                    ValidationFail::NotPermitted(
-                        "missing gas_limit in transaction metadata".to_owned(),
-                    ),
-                ));
+        match tx.as_ref().instructions() {
+            Executable::ContractCall(call) => {
+                let gas_limit = crate::executor::parse_gas_limit(tx.as_ref().metadata())
+                    .map_err(TransactionRejectionReason::Validation)?;
+                if gas_limit.is_none() {
+                    return Err(TransactionRejectionReason::Validation(
+                        ValidationFail::NotPermitted(
+                            "missing gas_limit in transaction metadata".to_owned(),
+                        ),
+                    ));
+                }
+                let record =
+                    code::fetch_bound_contract_record(state_transaction, &call.contract_address)
+                        .ok_or_else(|| {
+                            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                                format!(
+                                    "contract instance `{}` not found in WSV",
+                                    call.contract_address
+                                ),
+                            ))
+                        })?;
+                let contract_address = Some(call.contract_address.clone());
+                Self::validate_ivm(
+                    authority.clone(),
+                    state_transaction,
+                    IvmBytecode::from_compiled(record.code_bytes),
+                    None,
+                    contract_address,
+                    ivm_cache,
+                )?;
             }
-            Self::validate_ivm(
-                authority.clone(),
-                state_transaction,
-                bytes.clone(),
-                manifest_metadata.clone(),
-                contract_address_meta.clone(),
-                ivm_cache,
-            )?;
+            Executable::Ivm(bytes) => {
+                let gas_limit = crate::executor::parse_gas_limit(tx.as_ref().metadata())
+                    .map_err(TransactionRejectionReason::Validation)?;
+                if gas_limit.is_none() {
+                    return Err(TransactionRejectionReason::Validation(
+                        ValidationFail::NotPermitted(
+                            "missing gas_limit in transaction metadata".to_owned(),
+                        ),
+                    ));
+                }
+                Self::validate_ivm(
+                    authority.clone(),
+                    state_transaction,
+                    bytes.clone(),
+                    manifest_metadata.clone(),
+                    contract_address_meta.clone(),
+                    ivm_cache,
+                )?;
+            }
+            _ => {}
         }
 
         debug!(tx=%tx.as_ref().hash(), "Validating transaction");
@@ -2962,30 +3027,36 @@ fn enforce_manifest_protected_namespaces(
 
     let mut contract_targets = BTreeSet::new();
     let mut register_code_seen = false;
-    if let Executable::Instructions(instructions) = tx.instructions() {
-        for instruction in instructions {
-            if let Some(activate) = instruction
-                .as_any()
-                .downcast_ref::<ActivateContractInstance>()
-            {
-                contract_targets.insert(activate.contract_address().clone());
-            } else if let Some(deactivate) = instruction
-                .as_any()
-                .downcast_ref::<DeactivateContractInstance>()
-            {
-                contract_targets.insert(deactivate.contract_address().clone());
-            } else {
-                let modifies_contract_code = {
-                    let any = instruction.as_any();
-                    any.is::<RegisterSmartContractCode>()
-                        || any.is::<RegisterSmartContractBytes>()
-                        || any.is::<RemoveSmartContractBytes>()
-                };
-                if modifies_contract_code {
-                    register_code_seen = true;
+    match tx.instructions() {
+        Executable::Instructions(instructions) => {
+            for instruction in instructions {
+                if let Some(activate) = instruction
+                    .as_any()
+                    .downcast_ref::<ActivateContractInstance>()
+                {
+                    contract_targets.insert(activate.contract_address().clone());
+                } else if let Some(deactivate) = instruction
+                    .as_any()
+                    .downcast_ref::<DeactivateContractInstance>()
+                {
+                    contract_targets.insert(deactivate.contract_address().clone());
+                } else {
+                    let modifies_contract_code = {
+                        let any = instruction.as_any();
+                        any.is::<RegisterSmartContractCode>()
+                            || any.is::<RegisterSmartContractBytes>()
+                            || any.is::<RemoveSmartContractBytes>()
+                    };
+                    if modifies_contract_code {
+                        register_code_seen = true;
+                    }
                 }
             }
         }
+        Executable::ContractCall(call) => {
+            contract_targets.insert(call.contract_address.clone());
+        }
+        Executable::Ivm(_) | Executable::IvmProved(_) => {}
     }
 
     if let Some(contract_address) = metadata_governance_contract_address.clone() {
@@ -2999,7 +3070,10 @@ fn enforce_manifest_protected_namespaces(
     let contract_instr_seen =
         register_code_seen || !contract_targets.is_empty() || ivm_with_contract_metadata;
 
-    if contract_instr_seen && metadata_governance_contract_address.is_none() {
+    if contract_instr_seen
+        && metadata_governance_contract_address.is_none()
+        && !matches!(tx.instructions(), Executable::ContractCall(_))
+    {
         return Err(reject_lane_policy(
             alias,
             "transactions with contract operations must set `gov_contract_address` metadata when lane governance protects namespaces",
@@ -3214,7 +3288,7 @@ fn enforce_lane_policies(
         Executable::Instructions(instructions) => {
             instructions_allow_multisig_envelope_authority(instructions)
         }
-        Executable::IvmProved(_) | Executable::Ivm(_) => false,
+        Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => false,
     };
 
     let mut runtime_upgrade_present = false;

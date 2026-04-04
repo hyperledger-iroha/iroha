@@ -8202,7 +8202,8 @@ id: 88
 
     func testDeployContractRejectsRemovedServerSideSigningFlow() async {
         let req = ToriiDeployContractRequest(authority: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
-                                             codeB64: "AQ==")
+                                             codeB64: "AQ==",
+                                             contractAlias: "mint::universal")
         await XCTAssertThrowsErrorAsync(try await makeClient().deployContract(req)) { error in
             guard case let ToriiClientError.invalidPayload(reason) = error else {
                 return XCTFail("Expected invalidPayload, got \(error)")
@@ -8214,7 +8215,8 @@ id: 88
 
     func testDeployContractRejectsInvalidBase64() {
         let request = ToriiDeployContractRequest(authority: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
-                                                 codeB64: "%%%")
+                                                 codeB64: "%%%",
+                                                 contractAlias: "mint::universal")
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
             guard case ToriiClientError.invalidPayload = error else {
                 return XCTFail("Expected invalidPayload error")
@@ -8222,15 +8224,47 @@ id: 88
         }
     }
 
-    func testDeployContractRejectsUnsupportedFields() {
+    func testDeployContractEncodesAliasFirstPayload() throws {
         let request = ToriiDeployContractRequest(authority: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
                                                  codeB64: "AQ==",
-                                                 codeHash: String(repeating: "a", count: 64))
+                                                 contractAlias: "mint::universal",
+                                                 leaseExpiryMs: 42)
+        let body = try XCTUnwrap(try JSONSerialization.jsonObject(with: JSONEncoder().encode(request)) as? [String: Any])
+        XCTAssertEqual(body["authority"] as? String, "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
+        XCTAssertEqual(body["code_b64"] as? String, "AQ==")
+        XCTAssertEqual(body["contract_alias"] as? String, "mint::universal")
+        XCTAssertEqual(body["lease_expiry_ms"] as? Int, 42)
+    }
+
+    func testDeployContractRejectsInvalidAlias() {
+        let request = ToriiDeployContractRequest(authority: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+                                                 codeB64: "AQ==",
+                                                 contractAlias: "mint@universal")
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
             guard case ToriiClientError.invalidPayload = error else {
                 return XCTFail("Expected invalidPayload error")
             }
         }
+    }
+
+    func testDeployContractParsesUpgradeResponse() throws {
+        let codeHash = String(repeating: "a", count: 64)
+        let abiHash = String(repeating: "b", count: 64)
+        let txHash = String(repeating: "c", count: 64)
+        let payload = """
+        {"ok":true,"contract_alias":"mint::universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","previous_contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9","upgraded":true,"dataspace":"universal","deploy_nonce":7,"tx_hash_hex":"\(txHash)","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)"}
+        """.data(using: .utf8)!
+        let response = try JSONDecoder().decode(ToriiDeployContractResponse.self, from: payload)
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.contractAlias, "mint::universal")
+        XCTAssertEqual(response.contractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8")
+        XCTAssertEqual(response.previousContractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq9")
+        XCTAssertTrue(response.upgraded)
+        XCTAssertEqual(response.dataspace, "universal")
+        XCTAssertEqual(response.deployNonce, 7)
+        XCTAssertEqual(response.txHashHex, txHash)
+        XCTAssertEqual(response.codeHashHex, codeHash)
+        XCTAssertEqual(response.abiHashHex, abiHash)
     }
 
     func testDeployContractInstanceRejectsRemovedServerSideSigningFlow() async {
@@ -8282,8 +8316,7 @@ id: 88
             XCTAssertNil(json["private_key"])
             XCTAssertEqual(json["public_key_hex"] as? String, String(repeating: "1", count: 64))
             XCTAssertEqual(json["signature_b64"] as? String, "AQ==")
-            XCTAssertEqual(json["namespace"] as? String, "apps")
-            XCTAssertEqual(json["contract_id"] as? String, "mint")
+            XCTAssertEqual(json["contract_alias"] as? String, "mint::universal")
             XCTAssertEqual(json["entrypoint"] as? String, "create")
             XCTAssertEqual(json["gas_limit"] as? Int, 7)
             XCTAssertEqual(json["gas_asset_id"] as? String, "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
@@ -8293,7 +8326,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let bodyData = """
-            {"ok":true,"submitted":true,"namespace":"apps","contract_id":"mint","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"tx_hash_hex":"\(txHash)","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create"}
+            {"ok":true,"submitted":true,"dataspace":"universal","contract_address":"tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","creation_time_ms":321,"tx_hash_hex":"\(txHash)","transaction_scaffold_b64":"Aw==","signed_transaction_b64":"AQ==","signing_message_b64":"Ag==","entrypoint":"create"}
             """.data(using: .utf8)!
             return (response, bodyData)
         }
@@ -8302,8 +8335,7 @@ id: 88
             authority: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
             publicKeyHex: String(repeating: "1", count: 64),
             signatureB64: "AQ==",
-            namespace: "apps",
-            contractId: "mint",
+            contractAlias: "mint::universal",
             entrypoint: "create",
             payload: .object(["amount": .string("10")]),
             creationTimeMs: 321,
@@ -8316,12 +8348,13 @@ id: 88
             case .success(let response):
                 XCTAssertTrue(response.ok)
                 XCTAssertTrue(response.submitted)
-                XCTAssertEqual(response.namespace, "apps")
-                XCTAssertEqual(response.contractId, "mint")
+                XCTAssertEqual(response.dataspace, "universal")
+                XCTAssertEqual(response.contractAddress, "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8")
                 XCTAssertEqual(response.codeHashHex, codeHash)
                 XCTAssertEqual(response.abiHashHex, abiHash)
                 XCTAssertEqual(response.creationTimeMs, 321)
                 XCTAssertEqual(response.txHashHex, txHash)
+                XCTAssertEqual(response.transactionScaffoldB64, "Aw==")
                 XCTAssertEqual(response.signedTransactionB64, "AQ==")
                 XCTAssertEqual(response.signingMessageB64, "Ag==")
                 XCTAssertEqual(response.entrypoint, "create")
@@ -8336,9 +8369,22 @@ id: 88
     func testCallContractRejectsZeroGasLimit() {
         let request = ToriiContractCallRequest(
             authority: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
-            namespace: "apps",
-            contractId: "mint",
+            contractAlias: "mint::universal",
             gasLimit: 0
+        )
+        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
+            guard case ToriiClientError.invalidPayload = error else {
+                return XCTFail("Expected invalidPayload error")
+            }
+        }
+    }
+
+    func testCallContractRejectsAmbiguousContractTarget() {
+        let request = ToriiContractCallRequest(
+            authority: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
+            contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            contractAlias: "mint::universal",
+            gasLimit: 7
         )
         XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
             guard case ToriiClientError.invalidPayload = error else {
@@ -8361,8 +8407,7 @@ id: 88
             XCTAssertEqual(json["multisig_account_alias"] as? String, "cbdc@banka")
             XCTAssertNil(json["private_key"])
             XCTAssertEqual(json["signer_account_id"] as? String, "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
-            XCTAssertEqual(json["namespace"] as? String, "apps")
-            XCTAssertEqual(json["contract_id"] as? String, "mint")
+            XCTAssertEqual(json["contract_alias"] as? String, "mint::universal")
             XCTAssertEqual(json["entrypoint"] as? String, "execute")
             XCTAssertEqual(json["gas_limit"] as? Int, 5)
             let response = HTTPURLResponse(url: request.url!,
@@ -8378,8 +8423,7 @@ id: 88
         let request = ToriiMultisigContractCallProposeRequest(
             selector: ToriiMultisigAccountSelector(multisigAccountAlias: "cbdc@banka"),
             signerAccountId: "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB",
-            namespace: "apps",
-            contractId: "mint",
+            contractAlias: "mint::universal",
             entrypoint: "execute",
             payload: .object(["amount": .string("10")]),
             gasAssetId: "62Fk4FPcMuLvW5QjDGNF2a4jAmjM",
@@ -8721,7 +8765,7 @@ id: 88
         waitForExpectations(timeout: 1)
     }
 
-    func testSubmitGovernanceDeployContractProposal() {
+    func testSubmitGovernanceDeployContractProposalEncodesAliasSelector() {
         let expectation = expectation(description: "governance proposal")
         let proposalId = String(repeating: "3", count: 64)
         let codeHash = String(repeating: "4", count: 64)
@@ -8731,8 +8775,13 @@ id: 88
             XCTAssertEqual(request.httpMethod, "POST")
             XCTAssertEqual(request.value(forHTTPHeaderField: "Content-Type"), "application/json")
             let body = self.bodyJSON(from: request)
-            XCTAssertEqual(body["namespace"] as? String, "apps")
-            XCTAssertEqual(body["contract_id"] as? String, "demo.contract")
+            XCTAssertEqual(body["contract_alias"] as? String, "demo::universal")
+            XCTAssertEqual(body["code_hash"] as? String, codeHash)
+            XCTAssertEqual(body["abi_hash"] as? String, abiHash)
+            XCTAssertEqual(body["abi_version"] as? String, "1")
+            XCTAssertEqual(body["mode"] as? String, "Plain")
+            let limits = body["limits"] as? [String: Any]
+            XCTAssertEqual(limits?["max_gas"] as? Int, 5000)
             let response = HTTPURLResponse(url: request.url!,
                                            statusCode: 200,
                                            httpVersion: nil,
@@ -8743,12 +8792,13 @@ id: 88
             return (response, payload)
         }
 
-        let request = ToriiGovernanceDeployContractProposalRequest(namespace: "apps",
-                                                                   contractId: "demo.contract",
+        let request = ToriiGovernanceDeployContractProposalRequest(contractAlias: "demo::universal",
                                                                    codeHashHex: codeHash,
                                                                    abiHashHex: abiHash,
                                                                    abiVersion: "1",
-                                                                   window: ToriiGovernanceWindow(lower: 10, upper: 20))
+                                                                   window: ToriiGovernanceWindow(lower: 10, upper: 20),
+                                                                   mode: .plain,
+                                                                   limits: .object(["max_gas": .number(5000)]))
         makeClient().submitGovernanceDeployContractProposal(request) { result in
             switch result {
             case .success(let response):
@@ -8761,6 +8811,21 @@ id: 88
             expectation.fulfill()
         }
         waitForExpectations(timeout: 1)
+    }
+
+    func testGovernanceDeployContractProposalRejectsAmbiguousTarget() throws {
+        let request = ToriiGovernanceDeployContractProposalRequest(
+            contractAddress: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8",
+            contractAlias: "demo::universal",
+            codeHashHex: String(repeating: "4", count: 64),
+            abiHashHex: String(repeating: "5", count: 64)
+        )
+        XCTAssertThrowsError(try JSONEncoder().encode(request)) { error in
+            guard case let ToriiClientError.invalidPayload(message) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertTrue(message.contains("exactly one of contract_address or contract_alias"))
+        }
     }
 
     func testFinalizeGovernanceEncodesProposalId() {
@@ -8935,6 +9000,7 @@ id: 88
         let proposalId = String(repeating: "6", count: 64)
         let codeHash = String(repeating: "7", count: 64)
         let abiHash = String(repeating: "8", count: 64)
+        let contractAddress = "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
         StubURLProtocol.handler = { request in
             XCTAssertEqual(request.url?.path, "/v1/gov/proposals/\(proposalId)")
             let response = HTTPURLResponse(url: request.url!,
@@ -8942,7 +9008,7 @@ id: 88
                                            httpVersion: nil,
                                            headerFields: ["Content-Type": "application/json"])!
             let payload = """
-            {"found":true,"proposal":{"proposer":"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB","kind":{"DeployContract":{"namespace":"apps","contract_id":"demo","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","abi_version":"1"}},"created_height":42,"status":"Approved"}}
+            {"found":true,"proposal":{"proposer":"sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB","kind":{"DeployContract":{"contract_address":"\(contractAddress)","code_hash_hex":"\(codeHash)","abi_hash_hex":"\(abiHash)","abi_version":"1"}},"created_height":42,"status":"Approved"}}
             """.data(using: .utf8)!
             return (response, payload)
         }
@@ -8955,7 +9021,7 @@ id: 88
                 guard case .deployContract(let payload) = response.proposal?.kind else {
                     return XCTFail("expected deploy contract kind")
                 }
-                XCTAssertEqual(payload.contractId, "demo")
+                XCTAssertEqual(payload.contractAddress, contractAddress)
             case .failure(let error):
                 XCTFail("unexpected error: \(error)")
             }

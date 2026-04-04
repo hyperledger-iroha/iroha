@@ -443,6 +443,9 @@ mod tests {
                     self.submitted = Some(list.into_vec());
                     Ok(())
                 }
+                Executable::ContractCall(_) => {
+                    eyre::bail!("unexpected contract-call submission in test context")
+                }
                 Executable::Ivm(IvmBytecode { .. }) => {
                     eyre::bail!("unexpected IVM bytecode submission in test context")
                 }

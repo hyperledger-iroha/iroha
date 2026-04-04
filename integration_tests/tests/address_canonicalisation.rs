@@ -446,6 +446,7 @@ fn offline_allowance_genesis_helper_seeds_domain_once_and_names_asset_definition
     for transaction in genesis.0.transactions_vec() {
         let instructions = match transaction.instructions() {
             Executable::Instructions(instructions) => instructions.iter(),
+            Executable::ContractCall(_) => continue,
             Executable::Ivm(_) | Executable::IvmProved(_) => continue,
         };
         for instruction in instructions {

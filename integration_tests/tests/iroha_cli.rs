@@ -12,7 +12,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
     },
     thread,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use integration_tests::sandbox;
@@ -98,10 +98,13 @@ fn configure_program_overrides_from_existing_binaries() {
         }
 
         if std::env::var_os(TEST_NETWORK_BIN_IROHAD).is_none()
-            && let Some(path) = cli_path
-                .as_deref()
-                .and_then(matching_irohad_binary_path_from_cli_path)
+            && let Some(path) = find_primary_target_irohad_binary_path()
                 .or_else(find_existing_irohad_binary_path)
+                .or_else(|| {
+                    cli_path
+                        .as_deref()
+                        .and_then(matching_irohad_binary_path_from_cli_path)
+                })
         {
             let value = path.to_string_lossy().into_owned();
             set_env_var(TEST_NETWORK_BIN_IROHAD, &value);
@@ -181,9 +184,79 @@ fn find_existing_irohad_binary_path() -> Option<PathBuf> {
     find_existing_binary_path_from_roots(&target_roots, &profiles, irohad_binary_name())
 }
 
+fn current_test_binary_target_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let mut directory = exe.parent()?;
+    if directory.file_name().is_some_and(|value| value == "deps") {
+        directory = directory.parent()?;
+    }
+    directory.parent().map(Path::to_path_buf)
+}
+
+fn find_primary_target_irohad_binary_path() -> Option<PathBuf> {
+    let mut target_roots = Vec::new();
+    if let Some(target_root) = current_test_binary_target_root() {
+        target_roots.push(target_root);
+    }
+    if let Some(target_root) = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from)
+        && !target_roots.contains(&target_root)
+    {
+        target_roots.push(target_root);
+    }
+    let workspace_target = workspace_root().join("target");
+    if !target_roots.contains(&workspace_target) {
+        target_roots.push(workspace_target);
+    }
+
+    let mut profiles = Vec::new();
+    if let Ok(profile) = std::env::var("PROFILE")
+        && !profile.trim().is_empty()
+    {
+        profiles.push(profile);
+    }
+    if !profiles.iter().any(|value| value == "debug") {
+        profiles.push("debug".to_owned());
+    }
+    if !profiles.iter().any(|value| value == "release") {
+        profiles.push("release".to_owned());
+    }
+
+    find_existing_binary_path_from_roots(&target_roots, &profiles, irohad_binary_name())
+}
+
 fn matching_irohad_binary_path_from_cli_path(path: &Path) -> Option<PathBuf> {
     let candidate = path.parent()?.join(irohad_binary_name());
     candidate.is_file().then_some(candidate)
+}
+
+fn binary_modified_at(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).ok()?.modified().ok()
+}
+
+fn newest_existing_binary_path(
+    paths: impl IntoIterator<Item = Option<PathBuf>>,
+) -> Option<PathBuf> {
+    let mut first_match = None;
+    let mut newest_match: Option<(SystemTime, PathBuf)> = None;
+
+    for candidate in paths.into_iter().flatten() {
+        if !candidate.is_file() {
+            continue;
+        }
+        if first_match.is_none() {
+            first_match = Some(candidate.clone());
+        }
+        if let Some(modified_at) = binary_modified_at(&candidate) {
+            let replace = newest_match
+                .as_ref()
+                .is_none_or(|(current_modified_at, _)| modified_at > *current_modified_at);
+            if replace {
+                newest_match = Some((modified_at, candidate));
+            }
+        }
+    }
+
+    newest_match.map(|(_, path)| path).or(first_match)
 }
 
 fn find_existing_binary_path_from_roots(
@@ -191,15 +264,11 @@ fn find_existing_binary_path_from_roots(
     profiles: &[String],
     binary_name: &str,
 ) -> Option<PathBuf> {
-    for target_root in target_roots {
-        for profile in profiles {
-            let candidate = target_root.join(profile).join(binary_name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
+    newest_existing_binary_path(target_roots.iter().flat_map(|target_root| {
+        profiles
+            .iter()
+            .map(move |profile| Some(target_root.join(profile).join(binary_name)))
+    }))
 }
 
 const fn cli_binary_name() -> &'static str {
@@ -366,6 +435,43 @@ fn find_existing_binary_path_from_roots_returns_daemon_match() {
         irohad_binary_name(),
     );
     assert_eq!(found, Some(expected));
+}
+
+#[test]
+fn find_existing_binary_path_from_roots_prefers_newer_match() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root_a = temp.path().join("target-a");
+    let root_b = temp.path().join("target-b");
+    let older = root_a.join("debug").join(irohad_binary_name());
+    let newer = root_b.join("debug").join(irohad_binary_name());
+    std::fs::create_dir_all(older.parent().expect("older parent")).expect("create older dirs");
+    std::fs::create_dir_all(newer.parent().expect("newer parent")).expect("create newer dirs");
+    std::fs::write(&older, b"older").expect("write older binary");
+    std::thread::sleep(Duration::from_secs(1));
+    std::fs::write(&newer, b"newer").expect("write newer binary");
+
+    let profiles = vec!["debug".to_owned(), "release".to_owned()];
+    let found =
+        find_existing_binary_path_from_roots(&[root_a, root_b], &profiles, irohad_binary_name());
+    assert_eq!(found, Some(newer));
+}
+
+#[test]
+fn newest_existing_binary_path_prefers_fresher_daemon_over_cli_sibling() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let stale = temp
+        .path()
+        .join("iroha-test-network/debug")
+        .join(irohad_binary_name());
+    let fresh = temp.path().join("debug").join(irohad_binary_name());
+    std::fs::create_dir_all(stale.parent().expect("stale parent")).expect("create stale dirs");
+    std::fs::create_dir_all(fresh.parent().expect("fresh parent")).expect("create fresh dirs");
+    std::fs::write(&stale, b"stale").expect("write stale daemon");
+    std::thread::sleep(Duration::from_secs(1));
+    std::fs::write(&fresh, b"fresh").expect("write fresh daemon");
+
+    let selected = newest_existing_binary_path([Some(stale), Some(fresh.clone())]);
+    assert_eq!(selected, Some(fresh));
 }
 
 #[test]
@@ -636,6 +742,7 @@ impl MockHttpServer {
             .expect("mock listener address")
             .to_string();
         let base_url = format!("http://{address}");
+        let routes = Arc::new(routes);
         let stop = Arc::new(AtomicBool::new(false));
         let stop_flag = Arc::clone(&stop);
         let handle = thread::spawn(move || {
@@ -643,33 +750,45 @@ impl MockHttpServer {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
                         let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-                        let path = read_mock_http_request_path(&mut stream);
-                        if stop_flag.load(Ordering::SeqCst) && path.is_empty() {
-                            continue;
-                        }
-                        let response = routes.get(&path).cloned().unwrap_or(MockHttpResponse {
-                            content_type: "text/plain",
-                            body: b"not found".to_vec(),
+                        let stop_flag = Arc::clone(&stop_flag);
+                        let routes = Arc::clone(&routes);
+                        thread::spawn(move || {
+                            let path = read_mock_http_request_path(&mut stream);
+                            if stop_flag.load(Ordering::SeqCst) && path.is_empty() {
+                                return;
+                            }
+                            let response = routes.get(&path).cloned().unwrap_or(MockHttpResponse {
+                                content_type: "text/plain",
+                                body: b"not found".to_vec(),
+                            });
+                            let status = if routes.contains_key(&path) {
+                                "200 OK"
+                            } else {
+                                "404 Not Found"
+                            };
+                            let headers = format!(
+                                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
+                                response.body.len(),
+                                response.content_type
+                            );
+                            let _ = std::io::Write::write_all(&mut stream, headers.as_bytes());
+                            let _ = std::io::Write::write_all(&mut stream, &response.body);
                         });
-                        let status = if routes.contains_key(&path) {
-                            "200 OK"
-                        } else {
-                            "404 Not Found"
-                        };
-                        let headers = format!(
-                            "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
-                            response.body.len(),
-                            response.content_type
-                        );
-                        std::io::Write::write_all(&mut stream, headers.as_bytes())
-                            .expect("write mock HTTP headers");
-                        std::io::Write::write_all(&mut stream, &response.body)
-                            .expect("write mock HTTP body");
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(10));
                     }
-                    Err(error) => panic!("mock HTTP server accept failed: {error}"),
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::Interrupted
+                                | std::io::ErrorKind::ConnectionAborted
+                                | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    Err(error) => {
+                        eprintln!("mock HTTP server accept error: {error}");
+                        thread::sleep(Duration::from_millis(50));
+                    }
                 }
             }
         });
@@ -691,7 +810,7 @@ impl Drop for MockHttpServer {
         self.stop.store(true, Ordering::SeqCst);
         let _ = TcpStream::connect(&self.address);
         if let Some(handle) = self.handle.take() {
-            handle.join().expect("join mock HTTP server");
+            let _ = handle.join();
         }
     }
 }
@@ -699,6 +818,7 @@ impl Drop for MockHttpServer {
 fn read_mock_http_request_path(stream: &mut TcpStream) -> String {
     let mut request = Vec::new();
     let mut buffer = [0_u8; 1024];
+    let deadline = Instant::now() + Duration::from_secs(5);
     loop {
         match std::io::Read::read(stream, &mut buffer) {
             Ok(0) => break,
@@ -714,18 +834,25 @@ fn read_mock_http_request_path(stream: &mut TcpStream) -> String {
                     std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
                 ) =>
             {
-                break;
+                if Instant::now() >= deadline {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(10));
             }
             Err(error) => panic!("read mock HTTP request failed: {error}"),
         }
     }
 
-    String::from_utf8_lossy(&request)
+    let target = String::from_utf8_lossy(&request)
         .lines()
         .next()
         .and_then(|line| line.split_whitespace().nth(1))
         .unwrap_or_default()
-        .to_owned()
+        .to_owned();
+    if let Ok(url) = Url::parse(&target) {
+        return url.path().to_owned();
+    }
+    target.split('?').next().unwrap_or_default().to_owned()
 }
 
 fn start_mock_hf_source_server() -> MockHttpServer {
@@ -799,6 +926,20 @@ async fn mock_hf_source_server_serves_profile_routes() -> eyre::Result<()> {
             .get(reqwest::header::CONTENT_LENGTH)
             .and_then(|value| value.to_str().ok()),
         Some("4096")
+    );
+
+    let repeated_info = client
+        .get(format!(
+            "{}/api/models/{}/revision/{}",
+            server.base_url,
+            SORACLOUD_LIVE_HF_TEST_REPO_ID,
+            SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION
+        ))
+        .send()
+        .await?;
+    assert!(
+        repeated_info.status().is_success(),
+        "mock HF server should continue serving later profile requests"
     );
 
     Ok(())

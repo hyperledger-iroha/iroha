@@ -51,6 +51,7 @@ required-features = ["build-i3"]
 
 [dependencies]
 iroha = { workspace = true }
+iroha_sccp = { workspace = true }
 iroha_primitives = { workspace = true }
 ivm = { workspace = true }
 iroha_crypto = { workspace = true, features = ["sm"] }

@@ -4676,6 +4676,18 @@ fn sumeragi_paths() -> Map {
         Value::Object(bridge_finality_bundle_operation()),
     );
     paths.insert(
+        "/v1/sccp/capabilities".to_owned(),
+        Value::Object(sccp_capabilities_operation()),
+    );
+    paths.insert(
+        "/v1/sccp/manifests".to_owned(),
+        Value::Object(sccp_manifests_operation()),
+    );
+    paths.insert(
+        "/v1/sccp/artifacts/message/{message_id}".to_owned(),
+        Value::Object(sccp_message_artifact_operation()),
+    );
+    paths.insert(
         "/v1/sumeragi/validator-sets".to_owned(),
         Value::Object(sumeragi_validator_sets_operation()),
     );
@@ -4881,6 +4893,126 @@ fn bridge_finality_bundle_operation() -> Map {
             "Finality bundle not found for the requested height.",
             error_schema_reference(),
         ),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn sccp_capabilities_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Bridge".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Discover SCCP proof capabilities.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns the local SCCP domain id, legacy proof backends, generic message proof \
+             family, supported codecs, and the per-counterparty backend labels relayers should \
+             use for Ethereum, BSC, Solana, TON, Tron, SORA2, SORA Kusama, and SORA Polkadot."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("sccpCapabilities".to_owned()),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        json_response("SCCP capability snapshot.", schema_ref("JsonValue")),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn sccp_manifests_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Bridge".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Discover SCCP proof manifests.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns the typed per-counterparty SCCP proof manifests used to derive chain-specific \
+             backend labels, verifier targets, finality models, public inputs, and manifest seeds \
+             for Ethereum, BSC, Solana, TON, Tron, SORA2, SORA Kusama, and SORA Polkadot."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("sccpProofManifests".to_owned()),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        json_response("SCCP proof manifest collection.", schema_ref("JsonValue")),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn sccp_message_artifact_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Bridge".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Fetch a typed SCCP transparent proof artifact.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns the typed transparent SCCP proof artifact for a canonical message id, \
+             including the chain profile, public inputs, placeholder proof bytes, and embedded \
+             Nexus message bundle. Supports JSON or Norito content negotiation via the `Accept` \
+             header."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("sccpMessageArtifact".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![string_path_param(
+            "message_id",
+            "Canonical SCCP message id hex string.",
+        )]),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        json_response(
+            "Typed SCCP transparent proof artifact.",
+            schema_ref("JsonValue"),
+        ),
+    );
+    responses.insert(
+        "404".into(),
+        json_response("SCCP message not found.", error_schema_reference()),
     );
     responses.insert("406".into(), not_acceptable_response());
     operation.insert("responses".into(), Value::Object(responses));
@@ -10160,6 +10292,9 @@ mod tests {
         assert!(paths.contains_key("/v1/sumeragi/commit-certificates"));
         assert!(paths.contains_key("/v1/bridge/finality/{height}"));
         assert!(paths.contains_key("/v1/bridge/finality/bundle/{height}"));
+        assert!(paths.contains_key("/v1/sccp/capabilities"));
+        assert!(paths.contains_key("/v1/sccp/manifests"));
+        assert!(paths.contains_key("/v1/sccp/artifacts/message/{message_id}"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets/{height}"));
         assert!(paths.contains_key("/health"));

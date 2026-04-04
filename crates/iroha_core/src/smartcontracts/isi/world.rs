@@ -6242,6 +6242,20 @@ pub mod isi {
                         ),
                     ));
                 }
+                if tp.proof.backend.starts_with("sccp/stark-fri-v1/")
+                    && iroha_sccp::recover_nexus_sccp_message_transparent_proof(
+                        tp.proof.backend.as_str(),
+                        &tp.proof.bytes,
+                    )
+                    .is_none()
+                {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "SCCP transparent bridge proofs must decode as valid typed message artifacts"
+                                .into(),
+                        ),
+                    ));
+                }
             }
         }
 

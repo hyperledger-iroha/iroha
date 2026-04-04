@@ -143,12 +143,14 @@ use iroha_sccp::{
     BurnPayloadV1, GovernancePayloadV1, NexusBridgeFinalityProofV1, NexusCommitQcV1,
     NexusConsensusPhaseV1, NexusParliamentCertificateV1, NexusParliamentRosterMemberV1,
     NexusParliamentSignatureSchemeV1, NexusParliamentSignatureV1, NexusSccpBurnProofV1,
-    NexusSccpGovernanceProofV1, NexusSccpMessageProofV1, SccpHubCommitmentV1, SccpHubMessageKind,
-    SccpMerkleProofV1, SccpPayloadV1, burn_message_id, canonical_burn_payload_bytes,
+    NexusSccpGovernanceProofV1, NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
+    SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1, SccpPayloadV1, SccpProofManifestV1,
+    build_nexus_sccp_message_transparent_proof, burn_message_id, canonical_burn_payload_bytes,
     canonical_governance_payload_bytes, canonical_sccp_payload_bytes, commitment_leaf_hash,
-    decode_nexus_bridge_finality_proof, parliament_certificate_hash, payload_hash, sccp_message_id,
-    sccp_message_kind, sccp_message_target_domain, verify_burn_bundle_structure,
-    verify_governance_bundle_structure, verify_message_bundle_structure,
+    decode_nexus_bridge_finality_proof, parliament_certificate_hash, payload_hash,
+    recover_nexus_sccp_message_transparent_proof, sccp_message_id, sccp_message_kind,
+    sccp_message_target_domain, verify_burn_bundle_structure, verify_governance_bundle_structure,
+    verify_message_bundle_structure,
 };
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::{MicropaymentCreditSnapshot, MicropaymentTicketCounters, Status};
@@ -3003,6 +3005,66 @@ fn bridge_record_to_json(
                 "backend".into(),
                 norito::json::Value::from(tp.proof.backend.clone()),
             );
+            if let Some(proof) = recover_nexus_sccp_message_transparent_proof(
+                tp.proof.backend.as_str(),
+                &tp.proof.bytes,
+            ) {
+                payload.insert(
+                    "counterparty_domain".into(),
+                    norito::json::Value::from(proof.counterparty_domain),
+                );
+                if let Some(counterparty_chain) =
+                    iroha_sccp::sccp_chain_key_for_domain(proof.counterparty_domain)
+                {
+                    payload.insert(
+                        "counterparty_chain".into(),
+                        norito::json::Value::from(counterparty_chain),
+                    );
+                }
+                payload.insert(
+                    "proof_family".into(),
+                    norito::json::Value::from(proof.proof_family.clone()),
+                );
+                payload.insert(
+                    "target_domain".into(),
+                    norito::json::Value::from(proof.public_inputs.target_domain),
+                );
+                payload.insert(
+                    "message_id".into(),
+                    norito::json::Value::from(hex::encode(proof.public_inputs.message_id)),
+                );
+                payload.insert(
+                    "payload_hash".into(),
+                    norito::json::Value::from(hex::encode(proof.public_inputs.payload_hash)),
+                );
+                payload.insert(
+                    "commitment_root".into(),
+                    norito::json::Value::from(hex::encode(proof.public_inputs.commitment_root)),
+                );
+                payload.insert(
+                    "finality_height".into(),
+                    norito::json::Value::from(proof.public_inputs.finality_height),
+                );
+                payload.insert(
+                    "finality_block_hash".into(),
+                    norito::json::Value::from(hex::encode(proof.public_inputs.finality_block_hash)),
+                );
+                payload.insert(
+                    "proof_artifact_len_bytes".into(),
+                    norito::json::Value::from(proof.proof_bytes.len()),
+                );
+            } else if let Some((counterparty_domain, counterparty_chain)) =
+                sccp_counterparty_from_backend(tp.proof.backend.as_str())
+            {
+                payload.insert(
+                    "counterparty_domain".into(),
+                    norito::json::Value::from(counterparty_domain),
+                );
+                payload.insert(
+                    "counterparty_chain".into(),
+                    norito::json::Value::from(counterparty_chain),
+                );
+            }
             payload.insert(
                 "proof_len_bytes".into(),
                 norito::json::Value::from(tp.proof.bytes.len()),
@@ -4486,6 +4548,231 @@ where
     Ok(resp)
 }
 
+#[derive(
+    Clone,
+    Debug,
+    serde::Deserialize,
+    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Public description of a supported SCCP codec family.
+pub struct SccpCodecCapabilityDto {
+    /// Numeric SCCP codec identifier.
+    pub id: u8,
+    /// Stable logical key relayers can branch on.
+    pub key: String,
+    /// Human-readable format summary.
+    pub description: String,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    serde::Deserialize,
+    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Public description of one supported non-SORA SCCP counterparty.
+pub struct SccpCounterpartyCapabilityDto {
+    /// Numeric SCCP domain identifier.
+    pub domain: u32,
+    /// Stable logical chain key.
+    pub chain: String,
+    /// Generic SCCP message proof backend emitted before bridge-registry prefixing.
+    pub message_backend: String,
+    /// Bridge proof registry backend label returned by Torii proof-submit APIs.
+    pub registry_backend: String,
+    /// Canonical codec used for the counterparty account/address surface.
+    pub counterparty_account_codec: u8,
+    /// Stable logical key for `counterparty_account_codec`.
+    pub counterparty_account_codec_key: String,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    serde::Deserialize,
+    serde::Serialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Public SCCP capability snapshot for relayers and proof workers.
+pub struct SccpCapabilitiesDto {
+    /// Numeric SCCP domain identifier for the local Nexus chain.
+    pub local_domain: u32,
+    /// Stable logical key for the local chain.
+    pub local_chain: String,
+    /// Canonical transparent-ZK proof family for generic SCCP messages.
+    pub proof_family: String,
+    /// Legacy burn bundle fetch path.
+    pub burn_bundle_path: String,
+    /// Legacy governance bundle fetch path.
+    pub governance_bundle_path: String,
+    /// Generic SCCP message bundle fetch path.
+    pub message_bundle_path: String,
+    /// Generic SCCP typed proof-artifact fetch path.
+    pub message_proof_path: String,
+    /// SCCP proof manifest discovery path.
+    pub proof_manifest_path: String,
+    /// Registry backend label used by legacy burn proofs.
+    pub legacy_burn_registry_backend: String,
+    /// Registry backend label used by legacy governance proofs.
+    pub legacy_governance_registry_backend: String,
+    /// Optional Torii path for outbound proof registration.
+    #[norito(default)]
+    pub proof_submit_path: Option<String>,
+    /// Optional Torii path for inbound verified message submission.
+    #[norito(default)]
+    pub message_submit_path: Option<String>,
+    /// Generic SCCP payload kinds supported by `/v1/sccp/proofs/message/{message_id}`.
+    pub message_payload_kinds: Vec<String>,
+    /// Supported codec families for generic SCCP messages.
+    pub codecs: Vec<SccpCodecCapabilityDto>,
+    /// Supported non-SORA counterparties for generic SCCP message proofs.
+    pub counterparties: Vec<SccpCounterpartyCapabilityDto>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    serde::Deserialize,
+    serde::Serialize,
+    norito::derive::NoritoDeserialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Public SCCP proof manifest collection keyed by counterparty domain.
+pub struct SccpProofManifestSetDto {
+    /// Numeric SCCP domain identifier for the local Nexus chain.
+    pub local_domain: u32,
+    /// Stable logical key for the local chain.
+    pub local_chain: String,
+    /// Canonical transparent-ZK proof family for generic SCCP message proofs.
+    pub proof_family: String,
+    /// Per-counterparty proof manifests.
+    pub manifests: Vec<SccpProofManifestV1>,
+}
+
+fn sccp_codec_key(codec: u8) -> Result<&'static str> {
+    iroha_sccp::sccp_codec_key(codec).ok_or_else(|| {
+        conversion_error(format!(
+            "unsupported SCCP codec for capability discovery: {codec}"
+        ))
+    })
+}
+
+fn sccp_codec_description(codec: u8) -> Result<&'static str> {
+    iroha_sccp::sccp_codec_description(codec).ok_or_else(|| {
+        conversion_error(format!(
+            "unsupported SCCP codec for capability discovery: {codec}"
+        ))
+    })
+}
+
+fn sccp_counterparty_account_codec(domain: u32) -> Result<u8> {
+    iroha_sccp::sccp_counterparty_account_codec(domain).ok_or_else(|| {
+        conversion_error(format!(
+            "unsupported SCCP domain for capability discovery: {domain}"
+        ))
+    })
+}
+
+fn sccp_codec_capabilities() -> Result<Vec<SccpCodecCapabilityDto>> {
+    [
+        iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+        iroha_sccp::SCCP_CODEC_EVM_HEX,
+        iroha_sccp::SCCP_CODEC_SOLANA_BASE58,
+        iroha_sccp::SCCP_CODEC_TON_RAW,
+        iroha_sccp::SCCP_CODEC_TRON_BASE58CHECK,
+    ]
+    .into_iter()
+    .map(|codec| {
+        Ok(SccpCodecCapabilityDto {
+            id: codec,
+            key: sccp_codec_key(codec)?.to_owned(),
+            description: sccp_codec_description(codec)?.to_owned(),
+        })
+    })
+    .collect()
+}
+
+fn sccp_counterparty_capabilities() -> Result<Vec<SccpCounterpartyCapabilityDto>> {
+    iroha_sccp::SCCP_CORE_REMOTE_DOMAINS
+        .into_iter()
+        .map(|domain| {
+            let manifest = iroha_sccp::sccp_proof_manifest_for_domain(domain).ok_or_else(|| {
+                conversion_error(format!(
+                    "unsupported SCCP domain for manifest discovery: {domain}"
+                ))
+            })?;
+            Ok(SccpCounterpartyCapabilityDto {
+                domain,
+                chain: manifest.chain,
+                message_backend: manifest.message_backend,
+                registry_backend: manifest.registry_backend,
+                counterparty_account_codec: manifest.counterparty_account_codec,
+                counterparty_account_codec_key: manifest.counterparty_account_codec_key,
+            })
+        })
+        .collect()
+}
+
+fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
+    Ok(SccpCapabilitiesDto {
+        local_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+        local_chain: "sora".to_owned(),
+        proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
+        burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}".to_owned(),
+        governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}".to_owned(),
+        message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
+        message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
+        proof_manifest_path: "/v1/sccp/manifests".to_owned(),
+        legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
+        legacy_governance_registry_backend: "bridge/sccp/governance-v1".to_owned(),
+        #[cfg(feature = "app_api")]
+        proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
+        #[cfg(not(feature = "app_api"))]
+        proof_submit_path: None,
+        #[cfg(feature = "app_api")]
+        message_submit_path: Some("/v1/bridge/messages".to_owned()),
+        #[cfg(not(feature = "app_api"))]
+        message_submit_path: None,
+        message_payload_kinds: vec![
+            "asset_register".to_owned(),
+            "route_activate".to_owned(),
+            "transfer".to_owned(),
+        ],
+        codecs: sccp_codec_capabilities()?,
+        counterparties: sccp_counterparty_capabilities()?,
+    })
+}
+
+fn sccp_proof_manifest_snapshot() -> Result<SccpProofManifestSetDto> {
+    let manifests = iroha_sccp::SCCP_CORE_REMOTE_DOMAINS
+        .into_iter()
+        .map(|domain| {
+            iroha_sccp::sccp_proof_manifest_for_domain(domain).ok_or_else(|| {
+                conversion_error(format!(
+                    "unsupported SCCP domain for manifest discovery: {domain}"
+                ))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(SccpProofManifestSetDto {
+        local_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+        local_chain: "sora".to_owned(),
+        proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
+        manifests,
+    })
+}
+
 #[cfg(feature = "app_api")]
 fn bridge_manifest_hash_for_seed(seed: &str) -> [u8; 32] {
     <[u8; 32]>::from(iroha_crypto::Hash::new(seed.as_bytes()))
@@ -4580,6 +4867,80 @@ fn bridge_proof_from_sccp_governance_bundle(
 }
 
 #[cfg(feature = "app_api")]
+fn sccp_counterparty_domain(primary: u32, secondary: u32) -> Result<u32> {
+    if primary != iroha_sccp::SCCP_DOMAIN_SORA {
+        return Ok(primary);
+    }
+    if secondary != iroha_sccp::SCCP_DOMAIN_SORA {
+        return Ok(secondary);
+    }
+    Err(conversion_error(
+        "SCCP message backend requires a non-SORA counterparty domain".to_owned(),
+    ))
+}
+
+fn sccp_backend_suffix_for_domain(domain: u32) -> Result<&'static str> {
+    iroha_sccp::sccp_chain_key_for_domain(domain).ok_or_else(|| {
+        conversion_error(format!(
+            "unsupported SCCP domain for backend selection: {domain}"
+        ))
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn sccp_message_backend_descriptor(payload: &SccpPayloadV1) -> Result<(String, [u8; 32], u32)> {
+    let counterparty_domain = match payload {
+        SccpPayloadV1::AssetRegister(payload) => {
+            sccp_counterparty_domain(payload.target_domain, payload.home_domain)?
+        }
+        SccpPayloadV1::RouteActivate(payload) => {
+            sccp_counterparty_domain(payload.target_domain, payload.source_domain)?
+        }
+        SccpPayloadV1::Transfer(payload) => {
+            sccp_counterparty_domain(payload.dest_domain, payload.source_domain)?
+        }
+    };
+    let manifest =
+        iroha_sccp::sccp_proof_manifest_for_domain(counterparty_domain).ok_or_else(|| {
+            conversion_error(format!(
+                "unsupported SCCP domain for message backend selection: {counterparty_domain}"
+            ))
+        })?;
+    let backend = manifest.message_backend;
+    let manifest_hash = bridge_manifest_hash_for_seed(&manifest.manifest_seed);
+    Ok((backend, manifest_hash, counterparty_domain))
+}
+
+#[cfg(feature = "app_api")]
+fn sccp_counterparty_for_burn_payload(payload: &BurnPayloadV1) -> Result<(u32, &'static str)> {
+    let counterparty_domain = sccp_counterparty_domain(payload.dest_domain, payload.source_domain)?;
+    let backend_suffix = sccp_backend_suffix_for_domain(counterparty_domain)?;
+    Ok((counterparty_domain, backend_suffix))
+}
+
+#[cfg(feature = "app_api")]
+fn sccp_counterparty_for_governance_payload(
+    payload: &GovernancePayloadV1,
+) -> Result<(u32, &'static str)> {
+    let counterparty_domain = iroha_sccp::governance_target_domain(payload);
+    let backend_suffix = sccp_backend_suffix_for_domain(counterparty_domain)?;
+    Ok((counterparty_domain, backend_suffix))
+}
+
+#[cfg(feature = "app_api")]
+fn sccp_counterparty_for_message_payload(payload: &SccpPayloadV1) -> Result<(u32, &'static str)> {
+    let (_, _, counterparty_domain) = sccp_message_backend_descriptor(payload)?;
+    let backend_suffix = sccp_backend_suffix_for_domain(counterparty_domain)?;
+    Ok((counterparty_domain, backend_suffix))
+}
+
+#[cfg(feature = "app_api")]
+fn sccp_counterparty_from_backend(backend: &str) -> Option<(u32, &'static str)> {
+    let domain = iroha_sccp::sccp_counterparty_domain_from_backend(backend)?;
+    Some((domain, iroha_sccp::sccp_chain_key_for_domain(domain)?))
+}
+
+#[cfg(feature = "app_api")]
 fn bridge_proof_from_sccp_message_bundle(
     bundle: &NexusSccpMessageProofV1,
 ) -> Result<iroha_data_model::bridge::BridgeProof> {
@@ -4591,27 +4952,426 @@ fn bridge_proof_from_sccp_message_bundle(
     let finality = decode_nexus_bridge_finality_proof(&bundle.finality_proof).ok_or_else(|| {
         conversion_error("SCCP message bundle finality proof could not be decoded".to_owned())
     })?;
-    let proof_bytes = to_bytes(bundle)
-        .map_err(|err| conversion_error(format!("failed to encode SCCP message bundle: {err}")))?;
+    let (backend, manifest_hash, _) = sccp_message_backend_descriptor(&bundle.payload)?;
+    let artifact = build_nexus_sccp_message_transparent_proof(bundle).ok_or_else(|| {
+        conversion_error("failed to build SCCP transparent proof artifact".to_owned())
+    })?;
+    let proof_bytes = to_bytes(&artifact).map_err(|err| {
+        conversion_error(format!(
+            "failed to encode SCCP transparent proof artifact: {err}"
+        ))
+    })?;
     Ok(iroha_data_model::bridge::BridgeProof {
         range: iroha_data_model::bridge::BridgeProofRange {
             start_height: finality.height,
             end_height: finality.height,
         },
-        manifest_hash: bridge_manifest_hash_for_seed(
-            "iroha:sccp:bridge-proof:message:stark-fri:v1",
-        ),
+        manifest_hash,
         payload: iroha_data_model::bridge::BridgeProofPayload::TransparentZk(
             iroha_data_model::bridge::BridgeTransparentProof {
-                proof: iroha_data_model::proof::ProofBox::new(
-                    "sccp/stark-fri-v1".into(),
-                    proof_bytes,
-                ),
+                proof: iroha_data_model::proof::ProofBox::new(backend, proof_bytes),
                 recursion_depth: None,
             },
         ),
         pinned: false,
     })
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod sccp_message_backend_tests {
+    use super::*;
+
+    #[test]
+    fn sccp_message_backend_descriptor_uses_counterparty_domain_suffix() {
+        let outbound_eth = SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 1,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 1,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let inbound_ton = SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_TON,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            nonce: 2,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_TON,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#ton".to_vec(),
+            amount: 1,
+            sender_codec: iroha_sccp::SCCP_CODEC_TON_RAW,
+            sender: b"0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            recipient: b"alice@universal".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"ton:sora:xor".to_vec(),
+        });
+        let outbound_sora2 = SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_SORA2,
+            nonce: 3,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 1,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            recipient: b"alice@sora2".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:sora2:xor".to_vec(),
+        });
+
+        let (outbound_eth_backend, _, outbound_eth_domain) =
+            sccp_message_backend_descriptor(&outbound_eth).expect("outbound eth backend");
+        assert_eq!(outbound_eth_backend, "sccp/stark-fri-v1/eth");
+        assert_eq!(outbound_eth_domain, iroha_sccp::SCCP_DOMAIN_ETH);
+
+        let (inbound_ton_backend, _, inbound_ton_domain) =
+            sccp_message_backend_descriptor(&inbound_ton).expect("inbound ton backend");
+        assert_eq!(inbound_ton_backend, "sccp/stark-fri-v1/ton");
+        assert_eq!(inbound_ton_domain, iroha_sccp::SCCP_DOMAIN_TON);
+
+        let (outbound_sora2_backend, _, outbound_sora2_domain) =
+            sccp_message_backend_descriptor(&outbound_sora2).expect("outbound sora2 backend");
+        assert_eq!(outbound_sora2_backend, "sccp/stark-fri-v1/sora2");
+        assert_eq!(outbound_sora2_domain, iroha_sccp::SCCP_DOMAIN_SORA2);
+    }
+
+    #[test]
+    fn bridge_record_to_json_includes_sccp_counterparty_metadata() {
+        let record = iroha_data_model::bridge::BridgeProofRecord {
+            proof: iroha_data_model::bridge::BridgeProof {
+                range: iroha_data_model::bridge::BridgeProofRange {
+                    start_height: 7,
+                    end_height: 7,
+                },
+                manifest_hash: [0x11; 32],
+                payload: iroha_data_model::bridge::BridgeProofPayload::TransparentZk(
+                    iroha_data_model::bridge::BridgeTransparentProof {
+                        proof: iroha_data_model::proof::ProofBox::new(
+                            "sccp/stark-fri-v1/tron".to_owned(),
+                            vec![0xaa, 0xbb],
+                        ),
+                        recursion_depth: None,
+                    },
+                ),
+                pinned: false,
+            },
+            commitment: [0x22; 32],
+            size_bytes: 2,
+        };
+
+        let json = bridge_record_to_json(&record);
+        let object = json.as_object().expect("bridge record object");
+        let payload = object
+            .get("payload")
+            .and_then(norito::json::Value::as_object)
+            .expect("payload object");
+
+        assert_eq!(
+            payload
+                .get("counterparty_domain")
+                .and_then(norito::json::Value::as_u64),
+            Some(iroha_sccp::SCCP_DOMAIN_TRON.into())
+        );
+        assert_eq!(
+            payload
+                .get("counterparty_chain")
+                .and_then(norito::json::Value::as_str),
+            Some("tron")
+        );
+    }
+
+    #[test]
+    fn sccp_capabilities_snapshot_lists_remote_domains_and_codecs() {
+        let snapshot = sccp_capabilities_snapshot().expect("capabilities");
+        assert_eq!(snapshot.local_domain, iroha_sccp::SCCP_DOMAIN_SORA);
+        assert_eq!(snapshot.local_chain, "sora");
+        assert_eq!(
+            snapshot.proof_family,
+            iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1
+        );
+        assert_eq!(
+            snapshot.message_proof_path,
+            "/v1/sccp/artifacts/message/{message_id}"
+        );
+        assert_eq!(snapshot.proof_manifest_path, "/v1/sccp/manifests");
+        assert_eq!(
+            snapshot.proof_submit_path.as_deref(),
+            if cfg!(feature = "app_api") {
+                Some("/v1/bridge/proofs/submit")
+            } else {
+                None
+            }
+        );
+        assert_eq!(
+            snapshot.message_submit_path.as_deref(),
+            if cfg!(feature = "app_api") {
+                Some("/v1/bridge/messages")
+            } else {
+                None
+            }
+        );
+        assert_eq!(snapshot.codecs.len(), 5);
+        assert_eq!(
+            snapshot
+                .counterparties
+                .iter()
+                .map(|entry| entry.domain)
+                .collect::<Vec<_>>()
+                .as_slice(),
+            iroha_sccp::SCCP_CORE_REMOTE_DOMAINS.as_slice()
+        );
+        let ton = snapshot
+            .counterparties
+            .iter()
+            .find(|entry| entry.chain == "ton")
+            .expect("ton counterparty");
+        assert_eq!(ton.message_backend, "sccp/stark-fri-v1/ton");
+        assert_eq!(ton.registry_backend, "bridge/sccp/stark-fri-v1/ton");
+        assert_eq!(
+            ton.counterparty_account_codec,
+            iroha_sccp::SCCP_CODEC_TON_RAW
+        );
+        assert_eq!(ton.counterparty_account_codec_key, "ton_raw");
+    }
+
+    #[test]
+    fn sccp_proof_manifest_snapshot_matches_counterparty_backends() {
+        let snapshot = sccp_proof_manifest_snapshot().expect("proof manifests");
+        assert_eq!(snapshot.local_domain, iroha_sccp::SCCP_DOMAIN_SORA);
+        assert_eq!(snapshot.local_chain, "sora");
+        assert_eq!(
+            snapshot.proof_family,
+            iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1
+        );
+        assert_eq!(
+            snapshot.manifests.len(),
+            iroha_sccp::SCCP_CORE_REMOTE_DOMAINS.len()
+        );
+
+        let eth = snapshot
+            .manifests
+            .iter()
+            .find(|manifest| manifest.counterparty_domain == iroha_sccp::SCCP_DOMAIN_ETH)
+            .expect("eth manifest");
+        assert_eq!(eth.message_backend, "sccp/stark-fri-v1/eth");
+        assert_eq!(eth.registry_backend, "bridge/sccp/stark-fri-v1/eth");
+        assert_eq!(
+            eth.manifest_seed,
+            "iroha:sccp:bridge-proof:message:stark-fri:v1:eth"
+        );
+
+        let ton = snapshot
+            .manifests
+            .iter()
+            .find(|manifest| manifest.counterparty_domain == iroha_sccp::SCCP_DOMAIN_TON)
+            .expect("ton manifest");
+        assert_eq!(ton.chain, "ton");
+        assert_eq!(ton.counterparty_account_codec_key, "ton_raw");
+    }
+
+    #[test]
+    fn message_bundle_bridge_proof_wraps_typed_transparent_artifact() {
+        let bundle = NexusSccpMessageProofV1 {
+            version: 1,
+            commitment_root: commitment_leaf_hash(&SccpHubCommitmentV1 {
+                version: 1,
+                kind: SccpHubMessageKind::Transfer,
+                target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                message_id: iroha_sccp::sccp_message_id(&SccpPayloadV1::Transfer(
+                    iroha_sccp::TransferPayloadV1 {
+                        version: 1,
+                        source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                        dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                        nonce: 99,
+                        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                        asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                        asset_id: b"xor#universal".to_vec(),
+                        amount: 5,
+                        sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                        sender: b"sora:bridge".to_vec(),
+                        recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+                        recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+                        route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                        route_id: b"nexus:eth:xor".to_vec(),
+                    },
+                )),
+                payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(
+                    &SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+                        version: 1,
+                        source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                        dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                        nonce: 99,
+                        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                        asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                        asset_id: b"xor#universal".to_vec(),
+                        amount: 5,
+                        sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                        sender: b"sora:bridge".to_vec(),
+                        recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+                        recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+                        route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                        route_id: b"nexus:eth:xor".to_vec(),
+                    }),
+                )),
+                parliament_certificate_hash: None,
+            }),
+            commitment: SccpHubCommitmentV1 {
+                version: 1,
+                kind: SccpHubMessageKind::Transfer,
+                target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                message_id: iroha_sccp::transfer_message_id(&iroha_sccp::TransferPayloadV1 {
+                    version: 1,
+                    source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                    dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                    nonce: 99,
+                    asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                    asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                    asset_id: b"xor#universal".to_vec(),
+                    amount: 5,
+                    sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                    sender: b"sora:bridge".to_vec(),
+                    recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+                    recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+                    route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                    route_id: b"nexus:eth:xor".to_vec(),
+                }),
+                payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(
+                    &SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+                        version: 1,
+                        source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                        dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                        nonce: 99,
+                        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                        asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                        asset_id: b"xor#universal".to_vec(),
+                        amount: 5,
+                        sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                        sender: b"sora:bridge".to_vec(),
+                        recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+                        recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+                        route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                        route_id: b"nexus:eth:xor".to_vec(),
+                    }),
+                )),
+                parliament_certificate_hash: None,
+            },
+            merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
+            payload: SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+                version: 1,
+                source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                nonce: 99,
+                asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                asset_id: b"xor#universal".to_vec(),
+                amount: 5,
+                sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                sender: b"sora:bridge".to_vec(),
+                recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+                recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+                route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                route_id: b"nexus:eth:xor".to_vec(),
+            }),
+            finality_proof: norito::to_bytes(&iroha_sccp::NexusBridgeFinalityProofV1 {
+                version: 1,
+                chain_id: "00000000-0000-0000-0000-000000000753".to_owned(),
+                height: 7,
+                block_hash: [7u8; 32],
+                commitment_root: commitment_leaf_hash(&SccpHubCommitmentV1 {
+                    version: 1,
+                    kind: SccpHubMessageKind::Transfer,
+                    target_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                    message_id: iroha_sccp::transfer_message_id(&iroha_sccp::TransferPayloadV1 {
+                        version: 1,
+                        source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                        dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                        nonce: 99,
+                        asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                        asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                        asset_id: b"xor#universal".to_vec(),
+                        amount: 5,
+                        sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                        sender: b"sora:bridge".to_vec(),
+                        recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+                        recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+                        route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                        route_id: b"nexus:eth:xor".to_vec(),
+                    }),
+                    payload_hash: iroha_sccp::payload_hash(
+                        &iroha_sccp::canonical_sccp_payload_bytes(&SccpPayloadV1::Transfer(
+                            iroha_sccp::TransferPayloadV1 {
+                                version: 1,
+                                source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                                dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                                nonce: 99,
+                                asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+                                asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                                asset_id: b"xor#universal".to_vec(),
+                                amount: 5,
+                                sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                                sender: b"sora:bridge".to_vec(),
+                                recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+                                recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+                                route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                                route_id: b"nexus:eth:xor".to_vec(),
+                            },
+                        )),
+                    ),
+                    parliament_certificate_hash: None,
+                }),
+                block_header_bytes: vec![0x42; 4],
+                commit_qc: iroha_sccp::NexusCommitQcV1 {
+                    version: 1,
+                    phase: iroha_sccp::NexusConsensusPhaseV1::Commit,
+                    height: 7,
+                    view: 0,
+                    epoch: 0,
+                    mode_tag: "iroha2-consensus::permissioned-sumeragi@v1".to_owned(),
+                    subject_block_hash: [7u8; 32],
+                    validator_set_hash_version: 1,
+                    validator_public_keys: vec![
+                        "ea01309060D021340617E9554CCBC2CF3CC3DB922A9BA323ABDF7C271FCC6EF69BE7A8DEBCA7D9E96C0F0089ABA22CDAADE4A2"
+                            .to_owned(),
+                    ],
+                    validator_set_pops: vec![vec![1u8; 48]],
+                    signers_bitmap: vec![0b0000_0001],
+                    bls_aggregate_signature: vec![2u8; 96],
+                },
+            })
+            .expect("encode finality"),
+        };
+
+        let bridge_proof =
+            bridge_proof_from_sccp_message_bundle(&bundle).expect("build bridge proof");
+        let iroha_data_model::bridge::BridgeProofPayload::TransparentZk(tp) = bridge_proof.payload
+        else {
+            panic!("expected transparent proof payload");
+        };
+        let decoded = recover_nexus_sccp_message_transparent_proof(
+            tp.proof.backend.as_str(),
+            &tp.proof.bytes,
+        )
+        .expect("recover typed proof");
+        assert!(iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(&decoded));
+        assert_eq!(decoded.message_backend, "sccp/stark-fri-v1/eth");
+        assert_eq!(
+            decoded.bundle.commitment.message_id,
+            bundle.commitment.message_id
+        );
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -5144,6 +5904,44 @@ pub async fn handle_v1_sccp_message_bundle(
         })
         .ok_or_else(sccp_not_found)?;
     sccp_bundle_response(&bundle, accept.as_ref())
+}
+
+/// GET /v1/sccp/artifacts/message/{message_id} — typed SCCP transparent proof artifact keyed by canonical message id.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sccp_message_proof_artifact(
+    state: &CoreState,
+    message_id_hex: String,
+    accept: Option<axum::http::HeaderValue>,
+) -> Result<Response> {
+    let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
+    let bundle = reconstruct_sccp_message_bundle_from_committed_blocks(state, message_id)?
+        .or_else(|| {
+            SCCP_MESSAGE_BUNDLES
+                .read()
+                .expect("SCCP message bundle registry poisoned")
+                .get(&message_id)
+                .cloned()
+        })
+        .ok_or_else(sccp_not_found)?;
+    let artifact = build_nexus_sccp_message_transparent_proof(&bundle)
+        .ok_or_else(|| sccp_internal_error("failed to build SCCP proof artifact".to_owned()))?;
+    sccp_bundle_response(&artifact, accept.as_ref())
+}
+
+/// GET /v1/sccp/capabilities — relayer-facing SCCP capability discovery for proof backends, codecs, and routes.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sccp_capabilities(
+    accept: Option<axum::http::HeaderValue>,
+) -> Result<Response> {
+    let snapshot = sccp_capabilities_snapshot()?;
+    sccp_bundle_response(&snapshot, accept.as_ref())
+}
+
+/// GET /v1/sccp/manifests — relayer-facing SCCP proof manifest discovery for chain-specific verifier profiles.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sccp_manifests(accept: Option<axum::http::HeaderValue>) -> Result<Response> {
+    let snapshot = sccp_proof_manifest_snapshot()?;
+    sccp_bundle_response(&snapshot, accept.as_ref())
 }
 
 /// GET /v1/sumeragi/validator-sets — Bounded history of validator-set snapshots (newest first)
@@ -8548,7 +9346,7 @@ pub async fn handle_post_contract_call(
     let prepared =
         resolve_contract_call_target(&state, contract_address.as_ref(), contract_alias.as_ref())?;
     let PreparedContractCall {
-        code_bytes,
+        code_bytes: _code_bytes,
         code_hash,
         abi_hash,
         manifest,
@@ -8574,11 +9372,14 @@ pub async fn handle_post_contract_call(
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
+    let executable = iroha_data_model::transaction::executable::ContractInvocation {
+        contract_address: contract_address.clone(),
+        entrypoint: resolved_entrypoint.to_owned(),
+        payload: normalized_payload.clone(),
+    };
     let builder = builder
         .with_metadata(metadata)
-        .with_executable(dm::Executable::Ivm(dm::IvmBytecode::from_compiled(
-            code_bytes,
-        )));
+        .with_executable(dm::Executable::ContractCall(executable));
     let response_entrypoint = Some(resolved_entrypoint.to_owned());
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
@@ -8868,17 +9669,41 @@ pub async fn handle_post_bridge_proof_submit(
         ));
     }
 
-    let (proof_kind, bridge_proof) = match (
+    let (proof_kind, bridge_proof, counterparty_domain, counterparty_chain) = match (
         burn_bundle.as_ref(),
         governance_bundle.as_ref(),
         message_bundle.as_ref(),
     ) {
-        (Some(bundle), None, None) => ("burn", bridge_proof_from_sccp_burn_bundle(bundle)?),
-        (None, Some(bundle), None) => (
-            "governance",
-            bridge_proof_from_sccp_governance_bundle(bundle)?,
-        ),
-        (None, None, Some(bundle)) => ("message", bridge_proof_from_sccp_message_bundle(bundle)?),
+        (Some(bundle), None, None) => {
+            let (counterparty_domain, counterparty_chain) =
+                sccp_counterparty_for_burn_payload(&bundle.payload)?;
+            (
+                "burn",
+                bridge_proof_from_sccp_burn_bundle(bundle)?,
+                counterparty_domain,
+                counterparty_chain.to_owned(),
+            )
+        }
+        (None, Some(bundle), None) => {
+            let (counterparty_domain, counterparty_chain) =
+                sccp_counterparty_for_governance_payload(&bundle.payload)?;
+            (
+                "governance",
+                bridge_proof_from_sccp_governance_bundle(bundle)?,
+                counterparty_domain,
+                counterparty_chain.to_owned(),
+            )
+        }
+        (None, None, Some(bundle)) => {
+            let (counterparty_domain, counterparty_chain) =
+                sccp_counterparty_for_message_payload(&bundle.payload)?;
+            (
+                "message",
+                bridge_proof_from_sccp_message_bundle(bundle)?,
+                counterparty_domain,
+                counterparty_chain.to_owned(),
+            )
+        }
         _ => unreachable!("bundle_count enforces exactly one populated SCCP bundle"),
     };
 
@@ -8913,6 +9738,8 @@ pub async fn handle_post_bridge_proof_submit(
                 submitted: true,
                 proof_kind: proof_kind.to_owned(),
                 backend,
+                counterparty_domain,
+                counterparty_chain: counterparty_chain.clone(),
                 manifest_hash_hex,
                 range_start_height,
                 range_end_height,
@@ -8981,6 +9808,8 @@ pub async fn handle_post_bridge_proof_submit(
                 submitted: true,
                 proof_kind: proof_kind.to_owned(),
                 backend,
+                counterparty_domain,
+                counterparty_chain: counterparty_chain.clone(),
                 manifest_hash_hex,
                 range_start_height,
                 range_end_height,
@@ -9005,6 +9834,8 @@ pub async fn handle_post_bridge_proof_submit(
                 submitted: false,
                 proof_kind: proof_kind.to_owned(),
                 backend,
+                counterparty_domain,
+                counterparty_chain,
                 manifest_hash_hex,
                 range_start_height,
                 range_end_height,
@@ -9046,6 +9877,7 @@ pub async fn handle_post_bridge_message_submit(
         signature_b64,
         message_bundle,
         receipt_lane,
+        settlement,
         creation_time_ms,
     } = req;
 
@@ -9065,6 +9897,8 @@ pub async fn handle_post_bridge_message_submit(
         SccpPayloadV1::RouteActivate(_) => "route_activate",
         SccpPayloadV1::Transfer(_) => "transfer",
     };
+    let (counterparty_domain, counterparty_chain) =
+        sccp_counterparty_for_message_payload(&message_bundle.payload)?;
     let message_id_hex = hex::encode(message_bundle.commitment.message_id);
     let bridge_proof = bridge_proof_from_sccp_message_bundle(&message_bundle)?;
     let range_start_height = bridge_proof.range.start_height;
@@ -9077,12 +9911,33 @@ pub async fn handle_post_bridge_message_submit(
     let receipt_direction = receipt
         .as_ref()
         .map(|receipt| String::from_utf8_lossy(&receipt.direction).into_owned());
+    let settlement = prepare_bridge_message_settlement(
+        state.as_ref(),
+        &authority,
+        &message_bundle,
+        settlement.as_ref(),
+    )?;
+    let settlement_contract_address = settlement
+        .as_ref()
+        .map(|prepared| prepared.contract_address.clone());
+    let settlement_entrypoint = settlement
+        .as_ref()
+        .map(|prepared| prepared.entrypoint.clone());
+    let settlement_route = settlement.as_ref().and_then(|prepared| {
+        prepared
+            .route
+            .as_ref()
+            .map(std::string::ToString::to_string)
+    });
 
     let creation_time_ms = creation_time_ms.unwrap_or_else(current_time_millis);
     let mut instructions: Vec<dm::InstructionBox> =
         vec![dm::SubmitBridgeProof::new(bridge_proof).into()];
     if let Some(receipt) = receipt {
         instructions.push(dm::RecordBridgeReceipt::new(receipt).into());
+    }
+    if let Some(settlement) = settlement {
+        instructions.extend(settlement.instructions);
     }
     let mut builder = dm::TransactionBuilder::new((*chain_id).clone(), authority.clone().into());
     builder.set_creation_time(Duration::from_millis(creation_time_ms));
@@ -9108,12 +9963,17 @@ pub async fn handle_post_bridge_message_submit(
                 message_kind: proof_kind.to_owned(),
                 message_id_hex,
                 backend,
+                counterparty_domain,
+                counterparty_chain: counterparty_chain.to_owned(),
                 manifest_hash_hex,
                 range_start_height,
                 range_end_height,
                 creation_time_ms,
                 receipt_lane,
                 receipt_direction,
+                settlement_contract_address: settlement_contract_address.clone(),
+                settlement_entrypoint: settlement_entrypoint.clone(),
+                settlement_route: settlement_route.clone(),
                 tx_hash_hex: Some(tx_hash_hex),
                 transaction_scaffold_b64: None,
                 signed_transaction_b64: None,
@@ -9179,12 +10039,17 @@ pub async fn handle_post_bridge_message_submit(
                 message_kind: proof_kind.to_owned(),
                 message_id_hex,
                 backend,
+                counterparty_domain,
+                counterparty_chain: counterparty_chain.to_owned(),
                 manifest_hash_hex,
                 range_start_height,
                 range_end_height,
                 creation_time_ms,
                 receipt_lane,
                 receipt_direction,
+                settlement_contract_address: settlement_contract_address.clone(),
+                settlement_entrypoint: settlement_entrypoint.clone(),
+                settlement_route: settlement_route.clone(),
                 tx_hash_hex: Some(tx_hash_hex),
                 transaction_scaffold_b64: None,
                 signed_transaction_b64: None,
@@ -9206,12 +10071,17 @@ pub async fn handle_post_bridge_message_submit(
                 message_kind: proof_kind.to_owned(),
                 message_id_hex,
                 backend,
+                counterparty_domain,
+                counterparty_chain: counterparty_chain.to_owned(),
                 manifest_hash_hex,
                 range_start_height,
                 range_end_height,
                 creation_time_ms,
                 receipt_lane,
                 receipt_direction,
+                settlement_contract_address,
+                settlement_entrypoint,
+                settlement_route,
                 tx_hash_hex: None,
                 transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
                 signed_transaction_b64: Some(signed_transaction_b64),
@@ -9331,6 +10201,9 @@ pub async fn handle_post_contract_view(
 
 #[cfg(feature = "app_api")]
 const DEFAULT_MULTISIG_CONTRACT_CALL_GAS_LIMIT: u64 = 5_000;
+
+#[cfg(feature = "app_api")]
+const DEFAULT_BRIDGE_SETTLEMENT_GAS_LIMIT: u64 = 5_000;
 
 #[cfg(feature = "app_api")]
 fn current_time_millis() -> u64 {
@@ -10188,45 +11061,16 @@ fn execute_contract_call_simulation(
 
 #[cfg(feature = "app_api")]
 fn build_contract_call_metadata(
-    manifest: &manifest::ContractManifest,
-    contract_address: &iroha_data_model::smart_contract::ContractAddress,
-    contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
-    entrypoint: Option<&str>,
-    payload: Option<&IrohaJson>,
+    _manifest: &manifest::ContractManifest,
+    _contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    _contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
+    _entrypoint: Option<&str>,
+    _payload: Option<&IrohaJson>,
     gas_asset_id: Option<&str>,
     fee_sponsor: Option<&iroha_data_model::account::AccountId>,
     gas_limit: u64,
 ) -> Metadata {
     let mut metadata = Metadata::default();
-    let manifest_key =
-        Name::from_str(manifest::MANIFEST_METADATA_KEY).expect("static manifest metadata key");
-    metadata.insert(manifest_key, IrohaJson::new(manifest.clone()));
-
-    let address_key =
-        Name::from_str("contract_address").expect("static metadata key `contract_address`");
-    metadata.insert(address_key, IrohaJson::new(contract_address.to_string()));
-    let gov_address_key =
-        Name::from_str("gov_contract_address").expect("static metadata key `gov_contract_address`");
-    metadata.insert(
-        gov_address_key,
-        IrohaJson::new(contract_address.to_string()),
-    );
-    if let Some(contract_alias) = contract_alias {
-        let alias_key =
-            Name::from_str("contract_alias").expect("static metadata key `contract_alias`");
-        metadata.insert(alias_key, IrohaJson::new(contract_alias.to_string()));
-    }
-
-    if let Some(selector) = entrypoint {
-        let ep_key = Name::from_str("contract_entrypoint")
-            .expect("static metadata key `contract_entrypoint`");
-        metadata.insert(ep_key, IrohaJson::new(selector.to_owned()));
-    }
-    if let Some(payload_value) = payload {
-        let payload_key =
-            Name::from_str("contract_payload").expect("static metadata key `contract_payload`");
-        metadata.insert(payload_key, payload_value.clone());
-    }
     if let Some(asset_id) = gas_asset_id {
         let gas_asset_key =
             Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
@@ -10282,7 +11126,6 @@ fn build_multisig_contract_call_instructions(
     gas_limit: u64,
     manifest: &manifest::ContractManifest,
     code_hash: &Hash,
-    code_bytes: Vec<u8>,
 ) -> Result<(
     Vec<iroha_data_model::isi::InstructionBox>,
     HashOf<Vec<iroha_data_model::isi::InstructionBox>>,
@@ -10310,8 +11153,12 @@ fn build_multisig_contract_call_instructions(
     let filter = iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
         .for_trigger(trigger_id.clone());
     let action = iroha_data_model::trigger::action::Action::new(
-        iroha_data_model::transaction::Executable::Ivm(
-            iroha_data_model::transaction::IvmBytecode::from_compiled(code_bytes),
+        iroha_data_model::transaction::Executable::ContractCall(
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract_address.clone(),
+                entrypoint: entrypoint.to_owned(),
+                payload: payload.cloned(),
+            },
         ),
         iroha_data_model::trigger::action::Repeats::Exactly(1),
         multisig_account_id.clone(),
@@ -10329,6 +11176,234 @@ fn build_multisig_contract_call_instructions(
     ];
     let instructions_hash = HashOf::new(&instructions);
     Ok((instructions, instructions_hash))
+}
+
+#[cfg(feature = "app_api")]
+fn derive_bridge_settlement_trigger_id(
+    authority: &iroha_data_model::account::AccountId,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    entrypoint: &str,
+    message_id: [u8; 32],
+) -> Result<iroha_data_model::trigger::TriggerId> {
+    let seed = format!(
+        "{authority}|{contract_address}|{entrypoint}|{}",
+        hex::encode(message_id)
+    );
+    let digest = blake3_hash(seed.as_bytes());
+    let trigger_name = format!("bridge_cc_{}", &hex::encode(digest.as_bytes())[..24]);
+    let trigger_name = Name::from_str(&trigger_name)
+        .map_err(|err| conversion_error(format!("failed to derive trigger id: {err}")))?;
+    Ok(iroha_data_model::trigger::TriggerId::new(trigger_name))
+}
+
+#[cfg(feature = "app_api")]
+fn build_ephemeral_contract_call_instructions(
+    authority: &iroha_data_model::account::AccountId,
+    trigger_id: iroha_data_model::trigger::TriggerId,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
+    entrypoint: &str,
+    payload: Option<&IrohaJson>,
+    gas_asset_id: Option<&str>,
+    fee_sponsor: Option<&iroha_data_model::account::AccountId>,
+    gas_limit: u64,
+    manifest: &manifest::ContractManifest,
+) -> Vec<iroha_data_model::isi::InstructionBox> {
+    let trigger_metadata = build_contract_call_metadata(
+        manifest,
+        contract_address,
+        contract_alias,
+        Some(entrypoint),
+        payload,
+        gas_asset_id,
+        fee_sponsor,
+        gas_limit,
+    );
+    let filter = iroha_data_model::events::execute_trigger::ExecuteTriggerEventFilter::new()
+        .for_trigger(trigger_id.clone());
+    let action = iroha_data_model::trigger::action::Action::new(
+        iroha_data_model::transaction::Executable::ContractCall(
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract_address.clone(),
+                entrypoint: entrypoint.to_owned(),
+                payload: payload.cloned(),
+            },
+        ),
+        iroha_data_model::trigger::action::Repeats::Exactly(1),
+        authority.clone(),
+        filter,
+    )
+    .with_metadata(trigger_metadata);
+    let trigger = iroha_data_model::trigger::Trigger::new(trigger_id.clone(), action);
+    vec![
+        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::Register::trigger(
+            trigger,
+        )),
+        iroha_data_model::isi::InstructionBox::from(iroha_data_model::isi::ExecuteTrigger::new(
+            trigger_id,
+        )),
+    ]
+}
+
+#[cfg(feature = "app_api")]
+fn parse_sora_settlement_recipient(
+    recipient_bytes: &[u8],
+) -> Result<iroha_data_model::account::AccountId> {
+    let recipient_literal = std::str::from_utf8(recipient_bytes)
+        .map_err(|err| conversion_error(format!("recipient is not valid UTF-8: {err}")))?;
+    iroha_data_model::account::AccountId::parse_encoded(recipient_literal)
+        .map_err(|err| {
+            conversion_error(format!(
+                "recipient `{recipient_literal}` is not a valid SORA account id: {err}"
+            ))
+        })
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+}
+
+#[cfg(feature = "app_api")]
+fn default_bridge_settlement_payload(
+    bundle: &NexusSccpMessageProofV1,
+    route: &Name,
+) -> Result<IrohaJson> {
+    let SccpPayloadV1::Transfer(payload) = &bundle.payload else {
+        return Err(conversion_error(
+            "automatic bridge settlement payload generation is only supported for transfer messages"
+                .to_owned(),
+        ));
+    };
+    let recipient = parse_sora_settlement_recipient(&payload.recipient)?;
+    let amount = i64::try_from(payload.amount).map_err(|_| {
+        conversion_error(
+            "transfer amount exceeds the signed 64-bit range required by the bridge settlement contract"
+                .to_owned(),
+        )
+    })?;
+    let mut object = Map::new();
+    object.insert("route".into(), Value::from(route.as_ref()));
+    object.insert(
+        "message_id".into(),
+        Value::from(hex::encode(bundle.commitment.message_id)),
+    );
+    object.insert("recipient".into(), Value::from(recipient.to_string()));
+    object.insert("amount".into(), Value::from(amount));
+    Ok(IrohaJson::new(Value::Object(object)))
+}
+
+#[cfg(feature = "app_api")]
+fn derive_bridge_settlement_route(
+    bundle: &NexusSccpMessageProofV1,
+    configured_route: Option<&Name>,
+) -> Result<Name> {
+    if let Some(route) = configured_route {
+        return Ok(route.clone());
+    }
+
+    let SccpPayloadV1::Transfer(payload) = &bundle.payload else {
+        return Err(conversion_error(
+            "automatic bridge settlement route derivation is only supported for transfer messages"
+                .to_owned(),
+        ));
+    };
+    if payload.route_id_codec != iroha_sccp::SCCP_CODEC_TEXT_UTF8 {
+        return Err(conversion_error(
+            "settlement route is required when the SCCP transfer route_id is not encoded as a logical Name"
+                .to_owned(),
+        ));
+    }
+    let route_literal = std::str::from_utf8(&payload.route_id)
+        .map_err(|err| conversion_error(format!("route_id is not valid UTF-8: {err}")))?;
+    route_literal.parse::<Name>().map_err(|err| {
+        conversion_error(format!(
+            "route_id `{route_literal}` is not a valid Name: {err}"
+        ))
+    })
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone)]
+struct PreparedBridgeMessageSettlement {
+    instructions: Vec<iroha_data_model::isi::InstructionBox>,
+    contract_address: iroha_data_model::smart_contract::ContractAddress,
+    entrypoint: String,
+    route: Option<Name>,
+}
+
+#[cfg(feature = "app_api")]
+fn prepare_bridge_message_settlement(
+    state: &CoreState,
+    authority: &iroha_data_model::account::AccountId,
+    bundle: &NexusSccpMessageProofV1,
+    settlement: Option<&BridgeMessageSettlementDto>,
+) -> Result<Option<PreparedBridgeMessageSettlement>> {
+    let Some(settlement) = settlement else {
+        return Ok(None);
+    };
+
+    let gas_limit = settlement
+        .gas_limit
+        .unwrap_or(DEFAULT_BRIDGE_SETTLEMENT_GAS_LIMIT);
+    if gas_limit == 0 {
+        return Err(conversion_error(
+            "settlement gas_limit must be positive".to_owned(),
+        ));
+    }
+
+    let prepared = resolve_contract_call_target(
+        state,
+        settlement.contract_address.as_ref(),
+        settlement.contract_alias.as_ref(),
+    )?;
+    let PreparedContractCall {
+        code_bytes: _code_bytes,
+        code_hash: _,
+        abi_hash: _,
+        manifest,
+        dataspace: _,
+        contract_address,
+        contract_alias,
+    } = prepared;
+    let entrypoint = settlement
+        .entrypoint
+        .as_deref()
+        .unwrap_or("finalize_inbound");
+    let descriptor = ensure_public_contract_entrypoint(&manifest, entrypoint)?;
+
+    let mut resolved_route = settlement.route.clone();
+    let payload = if let Some(payload) = settlement.payload.as_ref() {
+        normalize_contract_payload(descriptor, Some(payload))?
+    } else if descriptor.params.is_empty() {
+        None
+    } else {
+        let route = derive_bridge_settlement_route(bundle, settlement.route.as_ref())?;
+        let generated_payload = default_bridge_settlement_payload(bundle, &route)?;
+        resolved_route = Some(route);
+        normalize_contract_payload(descriptor, Some(&generated_payload))?
+    };
+
+    let trigger_id = derive_bridge_settlement_trigger_id(
+        authority,
+        &contract_address,
+        entrypoint,
+        bundle.commitment.message_id,
+    )?;
+    let instructions = build_ephemeral_contract_call_instructions(
+        authority,
+        trigger_id,
+        &contract_address,
+        contract_alias.as_ref(),
+        entrypoint,
+        payload.as_ref(),
+        settlement.gas_asset_id.as_deref(),
+        settlement.fee_sponsor.as_ref(),
+        gas_limit,
+        &manifest,
+    );
+    Ok(Some(PreparedBridgeMessageSettlement {
+        instructions,
+        contract_address,
+        entrypoint: entrypoint.to_owned(),
+        route: resolved_route,
+    }))
 }
 
 #[cfg(feature = "app_api")]
@@ -11518,7 +12593,6 @@ mod multisig_contract_call_tests {
             5_000,
             &manifest,
             &code_hash,
-            vec![0x01, 0x02, 0x03],
         )
         .expect("instructions");
 
@@ -11527,7 +12601,7 @@ mod multisig_contract_call_tests {
     }
 
     #[test]
-    fn contract_call_metadata_includes_lane_governance_address_key() {
+    fn contract_call_metadata_keeps_only_fee_fields() {
         let manifest = manifest::ContractManifest {
             code_hash: None,
             abi_hash: None,
@@ -11542,6 +12616,9 @@ mod multisig_contract_call_tests {
             "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
                 .parse()
                 .expect("contract address");
+        let sponsor = iroha_data_model::account::AccountId::of(
+            iroha_crypto::KeyPair::random().public_key().clone(),
+        );
 
         let metadata = build_contract_call_metadata(
             &manifest,
@@ -11549,20 +12626,19 @@ mod multisig_contract_call_tests {
             None,
             Some("create_mint_request"),
             None,
-            None,
-            None,
+            Some("xor#test"),
+            Some(&sponsor),
             300_000,
         );
-
-        let gov_contract_address = metadata
-            .get(&Name::from_str("gov_contract_address").expect("static name"))
-            .expect("gov_contract_address metadata");
         assert_eq!(
-            gov_contract_address
-                .try_into_any_norito::<String>()
-                .expect("gov contract address string"),
-            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            metadata.iter().count(),
+            3,
+            "only gas asset, fee sponsor, and gas limit should remain"
         );
+        assert!(metadata.get("gov_contract_address").is_none());
+        assert!(metadata.get("contract_address").is_none());
+        assert!(metadata.get("contract_entrypoint").is_none());
+        assert!(metadata.get("contract_payload").is_none());
     }
 }
 
@@ -12950,7 +14026,6 @@ mod multisig_selector_tests {
             300_000,
             &contract_manifest,
             &Hash::new(b"mint-request-type-filter-contract".to_vec()),
-            vec![0x01, 0x02, 0x03],
         )
         .expect("contract mint request instructions");
         let contract_mint_request_hash = insert_active_multisig_proposal(
@@ -13863,7 +14938,6 @@ seiyaku BlobPayloadNormalizeTest {
             .expect("proposal id")
             .to_owned();
         let PreparedContractCall {
-            code_bytes,
             code_hash,
             manifest,
             ..
@@ -13885,7 +14959,6 @@ seiyaku BlobPayloadNormalizeTest {
             10_000,
             &manifest,
             &code_hash,
-            code_bytes,
         )
         .expect("normalized instructions");
         let expected_hash = expected_hash.to_string();
@@ -14042,7 +15115,7 @@ pub async fn handle_post_contract_call_multisig_propose(
     let prepared =
         resolve_contract_call_target(&state, contract_address.as_ref(), contract_alias.as_ref())?;
     let PreparedContractCall {
-        code_bytes,
+        code_bytes: _code_bytes,
         code_hash,
         abi_hash: _,
         manifest,
@@ -14073,7 +15146,6 @@ pub async fn handle_post_contract_call_multisig_propose(
         gas_limit,
         &manifest,
         &code_hash,
-        code_bytes,
     )?;
 
     let proposal_id = hex::encode(proposal_hash.as_ref());
@@ -16064,9 +17136,11 @@ pub struct DeployContractDto {
     pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
     /// Base64-encoded compiled `.to` bytecode
     pub code_b64: String,
-    /// Optional dataspace alias for the deployment. Defaults to `universal`.
+    /// Stable on-chain alias bound to the deployed contract instance.
+    pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    /// Optional lease expiry timestamp (unix ms) for the alias binding.
     #[norito(default)]
-    pub dataspace: Option<String>,
+    pub lease_expiry_ms: Option<u64>,
 }
 
 #[cfg(feature = "app_api")]
@@ -16082,8 +17156,15 @@ pub struct DeployContractDto {
 pub struct DeployContractResponseDto {
     /// Whether deploy succeeded
     pub ok: bool,
+    /// Stable on-chain alias bound to the deployed contract instance.
+    pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
     /// Canonical Bech32m contract address activated by the deployment.
     pub contract_address: iroha_data_model::smart_contract::ContractAddress,
+    /// Previous contract address retired by the upgrade, when present.
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub previous_contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Whether this deploy replaced an existing alias binding.
+    pub upgraded: bool,
     /// Dataspace alias hosting the activated contract instance.
     pub dataspace: String,
     /// Successful deploy nonce consumed for address derivation.
@@ -16287,25 +17368,19 @@ fn resolve_contract_call_target(
 }
 
 #[cfg(feature = "app_api")]
-fn resolve_public_contract_deploy_dataspace(
+fn resolve_public_contract_deploy_alias(
     state: &CoreState,
-    dataspace_alias: Option<&str>,
+    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
 ) -> core::result::Result<(String, iroha_data_model::nexus::DataSpaceId), Error> {
-    let requested = dataspace_alias.unwrap_or("universal");
     let catalog = state.nexus_snapshot().dataspace_catalog;
-    let dataspace = catalog.by_alias(requested).ok_or_else(|| {
+    let (_name, _domain, dataspace_id) = contract_alias
+        .resolve_components(&catalog)
+        .map_err(|err| conversion_error(err.to_string()))?;
+    let dataspace = catalog.by_id(dataspace_id).ok_or_else(|| {
         Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::NotFound,
         ))
     })?;
-    if dataspace.alias != "universal" {
-        return Err(Error::Query(
-            iroha_data_model::ValidationFail::NotPermitted(
-                "address-first public deploy currently supports only the universal dataspace"
-                    .into(),
-            ),
-        ));
-    }
     Ok((dataspace.alias.clone(), dataspace.id))
 }
 
@@ -16568,6 +17643,10 @@ pub struct BridgeProofSubmitResponseDto {
     pub proof_kind: String,
     /// Bridge proof backend label that will be stored in the registry.
     pub backend: String,
+    /// SCCP counterparty domain resolved from the submitted bundle.
+    pub counterparty_domain: u32,
+    /// Canonical SCCP counterparty chain key derived from the submitted bundle.
+    pub counterparty_chain: String,
     /// Hex-encoded manifest hash bound into the bridge proof artifact.
     pub manifest_hash_hex: String,
     /// Inclusive start height covered by the bridge proof.
@@ -16591,6 +17670,49 @@ pub struct BridgeProofSubmitResponseDto {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+/// Optional contract settlement target appended after inbound SCCP proof verification.
+pub struct BridgeMessageSettlementDto {
+    /// Optional canonical contract address.
+    #[norito(default)]
+    pub contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Optional on-chain contract alias (`name::domain.dataspace` or `name::dataspace`).
+    #[norito(default)]
+    pub contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+    /// Optional settlement entrypoint selector; defaults to `finalize_inbound`.
+    #[norito(default)]
+    pub entrypoint: Option<String>,
+    /// Optional explicit Norito JSON payload forwarded to the settlement contract.
+    ///
+    /// When omitted, Torii auto-builds the payload for transfer messages using
+    /// `route`, the canonical SCCP `message_id`, the decoded SORA `recipient`,
+    /// and the transfer `amount`.
+    #[norito(default)]
+    pub payload: Option<IrohaJson>,
+    /// Optional local route key used when auto-building the settlement payload.
+    #[norito(default)]
+    pub route: Option<Name>,
+    /// Optional gas asset id forwarded to the ephemeral contract-call metadata.
+    #[norito(default)]
+    pub gas_asset_id: Option<String>,
+    /// Optional fee sponsor account forwarded to the ephemeral contract-call metadata.
+    #[norito(default)]
+    pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
+    /// Optional gas limit forwarded to the ephemeral contract-call metadata.
+    ///
+    /// Defaults to `5000` when omitted.
+    #[norito(default)]
+    pub gas_limit: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// Request payload for ingesting an inbound SCCP message proof and preparing a settlement transaction.
 pub struct BridgeMessageSubmitDto {
@@ -16610,6 +17732,9 @@ pub struct BridgeMessageSubmitDto {
     /// Optional lane id used when emitting a bridge receipt for transfer payloads.
     #[norito(default)]
     pub receipt_lane: Option<u32>,
+    /// Optional deployed contract call appended after proof verification.
+    #[norito(default)]
+    pub settlement: Option<BridgeMessageSettlementDto>,
     /// Optional fixed transaction creation timestamp used to keep detached-sign flows deterministic.
     #[norito(default)]
     pub creation_time_ms: Option<u64>,
@@ -16629,6 +17754,10 @@ pub struct BridgeMessageSubmitResponseDto {
     pub message_id_hex: String,
     /// Bridge proof backend label that will be stored in the registry.
     pub backend: String,
+    /// SCCP counterparty domain resolved from the submitted bundle.
+    pub counterparty_domain: u32,
+    /// Canonical SCCP counterparty chain key derived from the submitted bundle.
+    pub counterparty_chain: String,
     /// Hex-encoded manifest hash bound into the bridge proof artifact.
     pub manifest_hash_hex: String,
     /// Inclusive start height covered by the bridge proof.
@@ -16643,6 +17772,15 @@ pub struct BridgeMessageSubmitResponseDto {
     /// Optional receipt direction emitted for transfer payloads.
     #[norito(default)]
     pub receipt_direction: Option<String>,
+    /// Optional canonical settlement contract target appended to the transaction.
+    #[norito(default)]
+    pub settlement_contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    /// Optional settlement entrypoint selector appended to the transaction.
+    #[norito(default)]
+    pub settlement_entrypoint: Option<String>,
+    /// Optional logical settlement route used when auto-building the contract payload.
+    #[norito(default)]
+    pub settlement_route: Option<String>,
     /// Hex-encoded transaction hash submitted to the queue.
     #[norito(default)]
     pub tx_hash_hex: Option<String>,
@@ -18359,20 +19497,29 @@ pub async fn handle_post_contract_deploy(
     NoritoJson(req): NoritoJson<DeployContractDto>,
 ) -> Result<impl IntoResponse> {
     use iroha_data_model::{
-        isi::{smart_contract_code, smart_contract_code::ActivateContractInstance},
+        isi::{
+            contract_alias::SetContractAlias,
+            smart_contract_code,
+            smart_contract_code::{ActivateContractInstance, DeactivateContractInstance},
+        },
         prelude as dm,
     };
     let DeployContractDto {
         authority,
         private_key,
         code_b64,
-        dataspace,
+        contract_alias,
+        lease_expiry_ms,
     } = req;
     let signer = KeyPair::from(private_key.0.clone());
     let prepared = prepare_contract_deployment(&code_b64, &signer)?;
     let authority: dm::AccountId = authority.into();
     let (dataspace_alias, dataspace_id) =
-        resolve_public_contract_deploy_dataspace(&state, dataspace.as_deref())?;
+        resolve_public_contract_deploy_alias(&state, &contract_alias)?;
+    let now_ms = current_time_millis();
+    let previous_contract_address = state
+        .world_view()
+        .contract_address_by_alias_at(&contract_alias, now_ms);
     let deploy_nonce = contract_deploy_nonce_for_authority(&state, &authority)?;
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
         iroha_data_model::account::address::chain_discriminant(),
@@ -18389,7 +19536,7 @@ pub async fn handle_post_contract_deploy(
             .expect("static deploy nonce metadata key");
 
     // Construct transaction: register the authority only if absent, store manifest/code,
-    // activate canonical universal binding, and advance the successful deploy nonce.
+    // activate canonical binding, update the stable alias, and advance the successful deploy nonce.
     let isi_code = smart_contract_code::RegisterSmartContractCode {
         manifest: prepared.manifest.clone(),
     };
@@ -18397,14 +19544,28 @@ pub async fn handle_post_contract_deploy(
         code_hash: prepared.code_hash,
         code: prepared.code_bytes.clone(),
     };
-    let mut instructions = Vec::with_capacity(5);
+    let mut instructions = Vec::with_capacity(8);
     instructions.extend(register_authority_if_missing(&state, &authority));
     instructions.push(dm::InstructionBox::from(isi_code));
     instructions.push(dm::InstructionBox::from(isi_bytes));
+    if let Some(previous_contract_address) = previous_contract_address.clone() {
+        instructions.push(dm::InstructionBox::from(SetContractAlias::clear(
+            previous_contract_address.clone(),
+        )));
+        instructions.push(dm::InstructionBox::from(DeactivateContractInstance {
+            contract_address: previous_contract_address,
+            reason: Some("superseded by alias upgrade".to_owned()),
+        }));
+    }
     instructions.push(dm::InstructionBox::from(ActivateContractInstance {
         contract_address: contract_address.clone(),
         code_hash: prepared.code_hash,
     }));
+    instructions.push(dm::InstructionBox::from(SetContractAlias::bind(
+        contract_address.clone(),
+        contract_alias.clone(),
+        lease_expiry_ms,
+    )));
     instructions.push(dm::InstructionBox::from(dm::SetKeyValue::account(
         authority.clone(),
         deploy_nonce_key,
@@ -18432,7 +19593,10 @@ pub async fn handle_post_contract_deploy(
 
     let body = norito::json::to_json_pretty(&DeployContractResponseDto {
         ok: true,
+        contract_alias,
         contract_address,
+        previous_contract_address: previous_contract_address.clone(),
+        upgraded: previous_contract_address.is_some(),
         dataspace: dataspace_alias,
         deploy_nonce,
         tx_hash_hex,
@@ -20803,7 +21967,8 @@ mod deploy_tests {
             authority: iroha_data_model::account::AccountId::of(kp.public_key().clone()),
             private_key: iroha_data_model::prelude::ExposedPrivateKey(kp.private_key().clone()),
             code_b64,
-            dataspace: None,
+            contract_alias: "fixture::universal".parse().expect("contract alias"),
+            lease_expiry_ms: None,
         };
 
         #[cfg(feature = "telemetry")]
