@@ -17349,6 +17349,46 @@ async fn handler_sccp_message_artifact(
     )
 }
 
+async fn handler_sccp_message_job(
+    State(app): State<SharedAppState>,
+    axum::extract::Path(message_id): axum::extract::Path<String>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/jobs/message/{message_id}",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests(&app, &key).await?;
+    #[cfg(feature = "telemetry")]
+    if let Some(api_token) = token_hdr {
+        crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/sccp/jobs/message");
+    }
+    let accept = headers.get(axum::http::header::ACCEPT).cloned();
+    Ok(
+        routing::handle_v1_sccp_message_proof_job(app.state.as_ref(), message_id, accept)
+            .await?
+            .into_response(),
+    )
+}
+
 async fn handler_sccp_capabilities(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -23464,6 +23504,10 @@ impl Torii {
                 .route(
                     "/v1/sccp/artifacts/message/{message_id}",
                     get(handler_sccp_message_artifact),
+                )
+                .route(
+                    "/v1/sccp/jobs/message/{message_id}",
+                    get(handler_sccp_message_job),
                 );
             let sumeragi = sumeragi.route("/v1/sccp/capabilities", get(handler_sccp_capabilities));
             let sumeragi = sumeragi.route("/v1/sccp/manifests", get(handler_sccp_manifests));
@@ -32171,6 +32215,84 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
+    async fn sccp_message_job_endpoint_roundtrips_json_and_norito() {
+        routing::clear_sccp_bundles_for_tests();
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_TON,
+            nonce: 21,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_TON_RAW,
+            recipient: b"0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:ton:xor".to_vec(),
+        });
+        let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+
+        let json_response = routing::handle_v1_sccp_message_proof_job(
+            app.state.as_ref(),
+            hex::encode(message_id),
+            None,
+        )
+        .await
+        .expect("json response");
+        assert_eq!(
+            json_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(b"application/json".as_slice())
+        );
+        let json_bytes = axum::body::to_bytes(json_response.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let decoded_json: iroha_sccp::SccpCounterpartyProofJobV1 =
+            serde_json::from_slice(&json_bytes).expect("decode json proof job");
+        assert_eq!(decoded_json.chain, "ton");
+        assert_eq!(
+            decoded_json.counterparty_domain,
+            iroha_sccp::SCCP_DOMAIN_TON
+        );
+        assert_eq!(decoded_json.payload_kind, "transfer");
+        match &decoded_json.payload_projection {
+            iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) => {
+                assert_eq!(transfer.amount, 77);
+            }
+            other => panic!("unexpected proof job projection: {other:?}"),
+        }
+
+        let norito_response = routing::handle_v1_sccp_message_proof_job(
+            app.state.as_ref(),
+            hex::encode(message_id),
+            Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
+        )
+        .await
+        .expect("norito response");
+        assert_eq!(
+            norito_response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .map(HeaderValue::as_bytes),
+            Some(crate::utils::NORITO_MIME_TYPE.as_bytes())
+        );
+        let norito_bytes = axum::body::to_bytes(norito_response.into_body(), usize::MAX)
+            .await
+            .expect("norito body");
+        let decoded_norito: iroha_sccp::SccpCounterpartyProofJobV1 =
+            norito::decode_from_bytes(&norito_bytes).expect("decode norito proof job");
+        assert_eq!(decoded_norito, decoded_json);
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
     async fn sccp_capabilities_endpoint_roundtrips_json_and_norito() {
         let json_response = routing::handle_v1_sccp_capabilities(None)
             .await
@@ -32196,6 +32318,10 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             decoded_json.message_proof_path,
             "/v1/sccp/artifacts/message/{message_id}"
+        );
+        assert_eq!(
+            decoded_json.message_job_path,
+            "/v1/sccp/jobs/message/{message_id}"
         );
         assert_eq!(decoded_json.proof_manifest_path, "/v1/sccp/manifests");
         let ton = decoded_json
@@ -32234,6 +32360,10 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             decoded_norito.message_proof_path,
             decoded_json.message_proof_path
+        );
+        assert_eq!(
+            decoded_norito.message_job_path,
+            decoded_json.message_job_path
         );
         assert_eq!(decoded_norito.codecs.len(), decoded_json.codecs.len());
         assert_eq!(

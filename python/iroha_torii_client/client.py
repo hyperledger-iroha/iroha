@@ -96,6 +96,7 @@ SCCP_HUB_MESSAGE_KIND_VALUES = {
     "RouteActivate",
     "Transfer",
 }
+SCCP_CHAIN_FAMILY_VALUES = {"Evm", "Solana", "Ton", "Tron", "Substrate"}
 SCCP_MESSAGE_PAYLOAD_KIND_VALUES = {
     "AssetRegister",
     "RouteActivate",
@@ -255,6 +256,9 @@ __all__ = [
     "SccpMessageProofBundle",
     "SccpMessageTransparentPublicInputs",
     "SccpMessageTransparentProofArtifact",
+    "SccpNormalizedCodecValue",
+    "SccpPayloadProjection",
+    "SccpCounterpartyProofJob",
     "RuntimeAbiActive",
     "RuntimeAbiHash",
     "RuntimeUpgradeEventCounters",
@@ -971,6 +975,7 @@ class SccpCapabilities:
     governance_bundle_path: str
     message_bundle_path: str
     message_proof_path: str
+    message_job_path: str
     proof_manifest_path: str
     legacy_burn_registry_backend: str
     legacy_governance_registry_backend: str
@@ -1087,6 +1092,43 @@ class SccpMessageTransparentProofArtifact:
     verifier_target: str
     public_inputs: SccpMessageTransparentPublicInputs
     proof_bytes: str
+    bundle: SccpMessageProofBundle
+
+
+@dataclass(frozen=True)
+class SccpNormalizedCodecValue:
+    """Normalized chain-specific codec value collapsed from the SCCP job enum surface."""
+
+    kind: str
+    value: Union[str, Mapping[str, Any]]
+
+
+@dataclass(frozen=True)
+class SccpPayloadProjection:
+    """Normalized SCCP payload projection collapsed from the SCCP job enum surface."""
+
+    kind: str
+    value: Mapping[str, Any]
+
+
+@dataclass(frozen=True)
+class SccpCounterpartyProofJob:
+    """Normalized SCCP counterparty proof job returned by Torii."""
+
+    version: int
+    chain_family: str
+    chain: str
+    local_domain: int
+    counterparty_domain: int
+    proof_family: str
+    message_backend: str
+    registry_backend: str
+    manifest_seed: str
+    finality_model: str
+    verifier_target: str
+    public_inputs: SccpMessageTransparentPublicInputs
+    payload_kind: str
+    payload_projection: SccpPayloadProjection
     bundle: SccpMessageProofBundle
 
 
@@ -3051,6 +3093,26 @@ class ToriiClient:
         return self._parse_sccp_message_proof_artifact(
             payload,
             context="sccp message proof artifact",
+        )
+
+    def get_sccp_message_proof_job(
+        self,
+        message_id: Union[str, bytes, bytearray, memoryview],
+    ) -> SccpCounterpartyProofJob:
+        """Fetch a normalized SCCP counterparty proof job (`GET /v1/sccp/jobs/message/{message_id}`)."""
+
+        normalized_message_id = self._normalize_hex_string(
+            message_id,
+            context="sccp message proof job message_id",
+            expected_length=64,
+        )
+        payload = self._get_json_object(
+            f"/v1/sccp/jobs/message/{normalized_message_id}",
+            context="sccp message proof job",
+        )
+        return self._parse_sccp_message_proof_job(
+            payload,
+            context="sccp message proof job",
         )
 
     def get_runtime_abi_active(self) -> RuntimeAbiActive:
@@ -7238,6 +7300,10 @@ class ToriiClient:
                 record.get("message_proof_path"),
                 f"{context}.message_proof_path",
             ),
+            message_job_path=ToriiClient._require_string(
+                record.get("message_job_path"),
+                f"{context}.message_job_path",
+            ),
             proof_manifest_path=ToriiClient._require_string(
                 record.get("proof_manifest_path"),
                 f"{context}.proof_manifest_path",
@@ -7430,6 +7496,290 @@ class ToriiClient:
                 f"{context}.bundle.commitment_root must match {context}.public_inputs.commitment_root"
             )
         return artifact
+
+    @staticmethod
+    def _coerce_sccp_codec_scalar(value: Any, *, context: str) -> str:
+        if isinstance(value, (bytes, bytearray, memoryview)):
+            return bytes(value).hex()
+        if isinstance(value, (list, tuple)):
+            try:
+                return bytes(
+                    ToriiClient._coerce_unsigned(entry, f"{context}[{index}]")
+                    for index, entry in enumerate(value)
+                ).hex()
+            except ValueError as exc:
+                raise RuntimeError(f"{context} must contain byte values") from exc
+        if isinstance(value, str):
+            literal = value.strip()
+            if not literal:
+                raise RuntimeError(f"{context} must be a non-empty string")
+            if literal.startswith(("0x", "0X")):
+                literal = literal[2:]
+            if literal and all(ch in "0123456789abcdefABCDEF" for ch in literal):
+                return literal.lower()
+            return literal
+        raise RuntimeError(f"{context} must be bytes, a byte array, or a non-empty string")
+
+    @staticmethod
+    def _parse_sccp_normalized_codec_value(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpNormalizedCodecValue:
+        record = ToriiClient._ensure_mapping(payload, context)
+        if len(record) != 1:
+            raise RuntimeError(f"{context} must contain exactly one SCCP codec variant")
+        kind, body = next(iter(record.items()))
+        body_record = ToriiClient._ensure_mapping(body, f"{context}.{kind}")
+        if kind == "TextUtf8":
+            return SccpNormalizedCodecValue(
+                kind=kind,
+                value=ToriiClient._require_string(body_record.get("value"), f"{context}.{kind}.value"),
+            )
+        if kind in {"EvmHex", "SolanaBase58"}:
+            return SccpNormalizedCodecValue(
+                kind=kind,
+                value=ToriiClient._coerce_sccp_codec_scalar(
+                    body_record.get("bytes"),
+                    context=f"{context}.{kind}.bytes",
+                ),
+            )
+        if kind == "TonRaw":
+            return SccpNormalizedCodecValue(
+                kind=kind,
+                value={
+                    "workchain": ToriiClient._coerce_int(
+                        body_record.get("workchain"),
+                        f"{context}.{kind}.workchain",
+                    ),
+                    "account": ToriiClient._coerce_sccp_codec_scalar(
+                        body_record.get("account"),
+                        context=f"{context}.{kind}.account",
+                    ),
+                },
+            )
+        if kind == "TronBase58Check":
+            return SccpNormalizedCodecValue(
+                kind=kind,
+                value=ToriiClient._coerce_sccp_codec_scalar(
+                    body_record.get("payload"),
+                    context=f"{context}.{kind}.payload",
+                ),
+            )
+        raise RuntimeError(f"{context} has unsupported SCCP codec variant {kind}")
+
+    @staticmethod
+    def _parse_sccp_payload_projection(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpPayloadProjection:
+        record = ToriiClient._ensure_mapping(payload, context)
+        if len(record) != 1:
+            raise RuntimeError(f"{context} must contain exactly one SCCP payload projection variant")
+        kind, body = next(iter(record.items()))
+        body_record = ToriiClient._ensure_mapping(body, f"{context}.{kind}")
+
+        if kind == "AssetRegister":
+            value = {
+                "version": ToriiClient._coerce_unsigned(
+                    body_record.get("version"),
+                    f"{context}.{kind}.version",
+                ),
+                "target_domain": ToriiClient._coerce_unsigned(
+                    body_record.get("target_domain"),
+                    f"{context}.{kind}.target_domain",
+                ),
+                "home_domain": ToriiClient._coerce_unsigned(
+                    body_record.get("home_domain"),
+                    f"{context}.{kind}.home_domain",
+                ),
+                "nonce": ToriiClient._coerce_unsigned(
+                    body_record.get("nonce"),
+                    f"{context}.{kind}.nonce",
+                ),
+                "asset_id": ToriiClient._parse_sccp_normalized_codec_value(
+                    ToriiClient._ensure_mapping(
+                        body_record.get("asset_id"),
+                        f"{context}.{kind}.asset_id",
+                    ),
+                    context=f"{context}.{kind}.asset_id",
+                ),
+                "decimals": ToriiClient._coerce_unsigned(
+                    body_record.get("decimals"),
+                    f"{context}.{kind}.decimals",
+                ),
+            }
+            return SccpPayloadProjection(kind=kind, value=value)
+
+        if kind == "RouteActivate":
+            value = {
+                "version": ToriiClient._coerce_unsigned(
+                    body_record.get("version"),
+                    f"{context}.{kind}.version",
+                ),
+                "source_domain": ToriiClient._coerce_unsigned(
+                    body_record.get("source_domain"),
+                    f"{context}.{kind}.source_domain",
+                ),
+                "target_domain": ToriiClient._coerce_unsigned(
+                    body_record.get("target_domain"),
+                    f"{context}.{kind}.target_domain",
+                ),
+                "nonce": ToriiClient._coerce_unsigned(
+                    body_record.get("nonce"),
+                    f"{context}.{kind}.nonce",
+                ),
+                "asset_id": ToriiClient._parse_sccp_normalized_codec_value(
+                    ToriiClient._ensure_mapping(
+                        body_record.get("asset_id"),
+                        f"{context}.{kind}.asset_id",
+                    ),
+                    context=f"{context}.{kind}.asset_id",
+                ),
+                "route_id": ToriiClient._parse_sccp_normalized_codec_value(
+                    ToriiClient._ensure_mapping(
+                        body_record.get("route_id"),
+                        f"{context}.{kind}.route_id",
+                    ),
+                    context=f"{context}.{kind}.route_id",
+                ),
+            }
+            return SccpPayloadProjection(kind=kind, value=value)
+
+        if kind == "Transfer":
+            value = {
+                "version": ToriiClient._coerce_unsigned(
+                    body_record.get("version"),
+                    f"{context}.{kind}.version",
+                ),
+                "source_domain": ToriiClient._coerce_unsigned(
+                    body_record.get("source_domain"),
+                    f"{context}.{kind}.source_domain",
+                ),
+                "dest_domain": ToriiClient._coerce_unsigned(
+                    body_record.get("dest_domain"),
+                    f"{context}.{kind}.dest_domain",
+                ),
+                "nonce": ToriiClient._coerce_unsigned(
+                    body_record.get("nonce"),
+                    f"{context}.{kind}.nonce",
+                ),
+                "asset_home_domain": ToriiClient._coerce_unsigned(
+                    body_record.get("asset_home_domain"),
+                    f"{context}.{kind}.asset_home_domain",
+                ),
+                "asset_id": ToriiClient._parse_sccp_normalized_codec_value(
+                    ToriiClient._ensure_mapping(
+                        body_record.get("asset_id"),
+                        f"{context}.{kind}.asset_id",
+                    ),
+                    context=f"{context}.{kind}.asset_id",
+                ),
+                "amount": ToriiClient._coerce_unsigned(
+                    body_record.get("amount"),
+                    f"{context}.{kind}.amount",
+                ),
+                "sender": ToriiClient._parse_sccp_normalized_codec_value(
+                    ToriiClient._ensure_mapping(
+                        body_record.get("sender"),
+                        f"{context}.{kind}.sender",
+                    ),
+                    context=f"{context}.{kind}.sender",
+                ),
+                "recipient": ToriiClient._parse_sccp_normalized_codec_value(
+                    ToriiClient._ensure_mapping(
+                        body_record.get("recipient"),
+                        f"{context}.{kind}.recipient",
+                    ),
+                    context=f"{context}.{kind}.recipient",
+                ),
+                "route_id": ToriiClient._parse_sccp_normalized_codec_value(
+                    ToriiClient._ensure_mapping(
+                        body_record.get("route_id"),
+                        f"{context}.{kind}.route_id",
+                    ),
+                    context=f"{context}.{kind}.route_id",
+                ),
+            }
+            return SccpPayloadProjection(kind=kind, value=value)
+
+        raise RuntimeError(f"{context} has unsupported SCCP payload projection variant {kind}")
+
+    @staticmethod
+    def _parse_sccp_message_proof_job(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpCounterpartyProofJob:
+        record = ToriiClient._ensure_mapping(payload, context)
+        chain_family = ToriiClient._require_choice(
+            record.get("chain_family"),
+            allowed=SCCP_CHAIN_FAMILY_VALUES,
+            context=f"{context}.chain_family",
+        )
+        job = SccpCounterpartyProofJob(
+            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
+            chain_family=chain_family,
+            chain=ToriiClient._require_string(record.get("chain"), f"{context}.chain"),
+            local_domain=ToriiClient._coerce_unsigned(
+                record.get("local_domain"),
+                f"{context}.local_domain",
+            ),
+            counterparty_domain=ToriiClient._coerce_unsigned(
+                record.get("counterparty_domain"),
+                f"{context}.counterparty_domain",
+            ),
+            proof_family=ToriiClient._require_string(record.get("proof_family"), f"{context}.proof_family"),
+            message_backend=ToriiClient._require_string(
+                record.get("message_backend"),
+                f"{context}.message_backend",
+            ),
+            registry_backend=ToriiClient._require_string(
+                record.get("registry_backend"),
+                f"{context}.registry_backend",
+            ),
+            manifest_seed=ToriiClient._require_string(record.get("manifest_seed"), f"{context}.manifest_seed"),
+            finality_model=ToriiClient._require_choice(
+                record.get("finality_model"),
+                allowed=SCCP_FINALITY_MODEL_VALUES,
+                context=f"{context}.finality_model",
+            ),
+            verifier_target=ToriiClient._require_choice(
+                record.get("verifier_target"),
+                allowed=SCCP_VERIFIER_TARGET_VALUES,
+                context=f"{context}.verifier_target",
+            ),
+            public_inputs=ToriiClient._parse_sccp_message_transparent_public_inputs(
+                ToriiClient._ensure_mapping(record.get("public_inputs"), f"{context}.public_inputs"),
+                context=f"{context}.public_inputs",
+            ),
+            payload_kind=ToriiClient._require_string(record.get("payload_kind"), f"{context}.payload_kind"),
+            payload_projection=ToriiClient._parse_sccp_payload_projection(
+                ToriiClient._ensure_mapping(
+                    record.get("payload_projection"),
+                    f"{context}.payload_projection",
+                ),
+                context=f"{context}.payload_projection",
+            ),
+            bundle=ToriiClient._parse_sccp_message_proof_bundle(
+                ToriiClient._ensure_mapping(record.get("bundle"), f"{context}.bundle"),
+                context=f"{context}.bundle",
+            ),
+        )
+        if job.bundle.commitment.message_id != job.public_inputs.message_id:
+            raise RuntimeError(
+                f"{context}.bundle.commitment.message_id must match public_inputs.message_id"
+            )
+        if job.bundle.commitment.payload_hash != job.public_inputs.payload_hash:
+            raise RuntimeError(
+                f"{context}.bundle.commitment.payload_hash must match public_inputs.payload_hash"
+            )
+        if job.bundle.commitment_root != job.public_inputs.commitment_root:
+            raise RuntimeError(
+                f"{context}.bundle.commitment_root must match public_inputs.commitment_root"
+            )
+        return job
 
     @staticmethod
     def _parse_sccp_message_transparent_public_inputs(

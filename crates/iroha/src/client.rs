@@ -191,6 +191,8 @@ pub struct SccpCapabilities {
     pub message_bundle_path: String,
     /// Generic SCCP typed proof-artifact fetch path.
     pub message_proof_path: String,
+    /// Generic SCCP normalized proof-job fetch path.
+    pub message_job_path: String,
     /// SCCP proof-manifest discovery path.
     pub proof_manifest_path: String,
     /// Registry backend label used by legacy burn proofs.
@@ -10054,6 +10056,58 @@ impl Client {
             .wrap_err("failed to decode SCCP message proof artifact")
     }
 
+    /// GET `/v1/sccp/jobs/message/{message_id}`.
+    /// Returns the normalized SCCP counterparty proof job as JSON.
+    /// # Errors
+    /// Returns an error if the message id is malformed, the HTTP request fails, the response is
+    /// non-OK, or JSON deserialization fails.
+    pub fn get_sccp_message_proof_job_json(
+        &self,
+        message_id_hex: &str,
+    ) -> Result<norito::json::Value> {
+        let message_id_hex = normalize_message_id_hex(message_id_hex)?;
+        let path = format!("v1/sccp/jobs/message/{message_id_hex}");
+        let url = join_torii_url(&self.torii_url, &path);
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get SCCP message proof job: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        Ok(norito::json::from_slice(resp.body())?)
+    }
+
+    /// GET `/v1/sccp/jobs/message/{message_id}`.
+    /// Returns the normalized SCCP counterparty proof job.
+    /// # Errors
+    /// Returns an error if the message id is malformed, the HTTP request fails, the response is
+    /// non-OK, or the Norito job cannot be decoded into the typed SCCP structure.
+    pub fn get_sccp_message_proof_job(
+        &self,
+        message_id_hex: &str,
+    ) -> Result<iroha_sccp::SccpCounterpartyProofJobV1> {
+        let message_id_hex = normalize_message_id_hex(message_id_hex)?;
+        let path = format!("v1/sccp/jobs/message/{message_id_hex}");
+        let url = join_torii_url(&self.torii_url, &path);
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_NORITO),
+        )?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get SCCP message proof job: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        norito::decode_from_bytes(resp.body()).wrap_err("failed to decode SCCP message proof job")
+    }
+
     /// GET `/v1/runtime/metrics`
     /// Returns a JSON summary of runtime metrics (ABI count and upgrade events counters).
     /// # Errors
@@ -17865,6 +17919,13 @@ mod tests {
         build_nexus_sccp_message_transparent_proof(&bundle).expect("build SCCP message artifact")
     }
 
+    fn sample_sccp_message_proof_job() -> iroha_sccp::SccpCounterpartyProofJobV1 {
+        iroha_sccp::build_sccp_counterparty_proof_job_from_artifact(
+            &sample_sccp_message_proof_artifact(),
+        )
+        .expect("build SCCP proof job")
+    }
+
     fn sample_sccp_capabilities() -> SccpCapabilities {
         SccpCapabilities {
             local_domain: iroha_sccp::SCCP_DOMAIN_SORA,
@@ -17874,6 +17935,7 @@ mod tests {
             governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}".to_owned(),
             message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
             message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
+            message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
             proof_manifest_path: "/v1/sccp/manifests".to_owned(),
             legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
             legacy_governance_registry_backend: "bridge/sccp/governance-v1".to_owned(),
@@ -18041,6 +18103,42 @@ mod tests {
         assert!(
             err.to_string().contains("message id"),
             "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn get_sccp_message_proof_job_requests_norito_and_decodes_typed_payload() {
+        let payload = sample_sccp_message_proof_job();
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&payload).expect("encode norito response"))
+            .expect("response build");
+        let message_id_hex = hex::encode(payload.public_inputs.message_id);
+
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client.get_sccp_message_proof_job(&format!("0x{message_id_hex}"))
+        })
+        .expect("sccp message proof job");
+
+        assert_eq!(decoded, payload);
+        let snapshot = store
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("job snapshot");
+        assert_eq!(
+            snapshot.url.path(),
+            format!("/v1/sccp/jobs/message/{message_id_hex}")
+        );
+        assert!(
+            snapshot.headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("accept") && value == APPLICATION_NORITO
+            }),
+            "request should set Accept: {APPLICATION_NORITO}"
         );
     }
 

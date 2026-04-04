@@ -144,8 +144,9 @@ use iroha_sccp::{
     NexusConsensusPhaseV1, NexusParliamentCertificateV1, NexusParliamentRosterMemberV1,
     NexusParliamentSignatureSchemeV1, NexusParliamentSignatureV1, NexusSccpBurnProofV1,
     NexusSccpGovernanceProofV1, NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
-    SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1, SccpPayloadV1, SccpProofManifestV1,
-    build_nexus_sccp_message_transparent_proof, burn_message_id, canonical_burn_payload_bytes,
+    SccpCounterpartyProofJobV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
+    SccpPayloadV1, SccpProofManifestV1, build_nexus_sccp_message_transparent_proof,
+    build_sccp_counterparty_proof_job_from_bundle, burn_message_id, canonical_burn_payload_bytes,
     canonical_governance_payload_bytes, canonical_sccp_payload_bytes, commitment_leaf_hash,
     decode_nexus_bridge_finality_proof, parliament_certificate_hash, payload_hash,
     recover_nexus_sccp_message_transparent_proof, sccp_message_id, sccp_message_kind,
@@ -4649,6 +4650,8 @@ pub struct SccpCapabilitiesDto {
     pub message_bundle_path: String,
     /// Generic SCCP typed proof-artifact fetch path.
     pub message_proof_path: String,
+    /// Generic SCCP normalized counterparty proof-job fetch path.
+    pub message_job_path: String,
     /// SCCP proof manifest discovery path.
     pub proof_manifest_path: String,
     /// Registry backend label used by legacy burn proofs.
@@ -4762,6 +4765,7 @@ fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
         governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}".to_owned(),
         message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
         message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
+        message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
         proof_manifest_path: "/v1/sccp/manifests".to_owned(),
         legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
         legacy_governance_registry_backend: "bridge/sccp/governance-v1".to_owned(),
@@ -6078,6 +6082,29 @@ pub async fn handle_v1_sccp_message_proof_artifact(
     let artifact = build_nexus_sccp_message_transparent_proof(&bundle)
         .ok_or_else(|| sccp_internal_error("failed to build SCCP proof artifact".to_owned()))?;
     sccp_bundle_response(&artifact, accept.as_ref())
+}
+
+/// GET /v1/sccp/jobs/message/{message_id} — normalized SCCP counterparty proof job keyed by canonical message id.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sccp_message_proof_job(
+    state: &CoreState,
+    message_id_hex: String,
+    accept: Option<axum::http::HeaderValue>,
+) -> Result<Response> {
+    let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
+    let bundle = reconstruct_sccp_message_bundle_from_committed_blocks(state, message_id)?
+        .or_else(|| {
+            SCCP_MESSAGE_BUNDLES
+                .read()
+                .expect("SCCP message bundle registry poisoned")
+                .get(&message_id)
+                .cloned()
+        })
+        .ok_or_else(sccp_not_found)?;
+    let job = build_sccp_counterparty_proof_job_from_bundle(&bundle).ok_or_else(|| {
+        sccp_internal_error("failed to build SCCP normalized proof job".to_owned())
+    })?;
+    sccp_bundle_response(&job, accept.as_ref())
 }
 
 /// GET /v1/sccp/capabilities — relayer-facing SCCP capability discovery for proof backends, codecs, and routes.

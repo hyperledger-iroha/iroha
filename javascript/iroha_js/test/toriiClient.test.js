@@ -8430,6 +8430,7 @@ test("getSccpCapabilities normalizes discovery response", async () => {
         governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}",
         message_bundle_path: "/v1/sccp/proofs/message/{message_id}",
         message_proof_path: "/v1/sccp/artifacts/message/{message_id}",
+        message_job_path: "/v1/sccp/jobs/message/{message_id}",
         proof_manifest_path: "/v1/sccp/manifests",
         legacy_burn_registry_backend: "bridge/sccp/burn-v1",
         legacy_governance_registry_backend: "bridge/sccp/governance-v1",
@@ -8467,6 +8468,7 @@ test("getSccpCapabilities normalizes discovery response", async () => {
     governanceBundlePath: "/v1/sccp/proofs/governance/{message_id}",
     messageBundlePath: "/v1/sccp/proofs/message/{message_id}",
     messageProofPath: "/v1/sccp/artifacts/message/{message_id}",
+    messageJobPath: "/v1/sccp/jobs/message/{message_id}",
     proofManifestPath: "/v1/sccp/manifests",
     legacyBurnRegistryBackend: "bridge/sccp/burn-v1",
     legacyGovernanceRegistryBackend: "bridge/sccp/governance-v1",
@@ -8760,6 +8762,139 @@ test("getSccpMessageProofArtifact rejects bundle/public input mismatch", async (
     () => client.getSccpMessageProofArtifact("11".repeat(32)),
     /bundle\.commitment\.message_id must match public_inputs\.message_id/,
   );
+});
+
+test("getSccpMessageProofJob normalizes typed job response", async () => {
+  const messageId = "11".repeat(32);
+  const payloadHash = "22".repeat(32);
+  const commitmentRoot = "33".repeat(32);
+  const finalityBlockHash = "44".repeat(32);
+  const fetchImpl = async (url) => {
+    assert.equal(url, `${BASE_URL}/v1/sccp/jobs/message/${messageId}`);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        version: 1,
+        chain_family: "Ton",
+        chain: "ton",
+        local_domain: 0,
+        counterparty_domain: 4,
+        proof_family: "stark-fri-v1",
+        message_backend: "sccp/stark-fri-v1/ton",
+        registry_backend: "bridge/sccp/stark-fri-v1/ton",
+        manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+        finality_model: "TonMasterchain",
+        verifier_target: "TonContract",
+        public_inputs: {
+          version: 1,
+          message_id: messageId,
+          payload_hash: payloadHash,
+          target_domain: 4,
+          commitment_root: commitmentRoot,
+          finality_height: "19",
+          finality_block_hash: finalityBlockHash,
+        },
+        payload_kind: "transfer",
+        payload_projection: {
+          Transfer: {
+            version: 1,
+            source_domain: 0,
+            dest_domain: 4,
+            nonce: "21",
+            asset_home_domain: 0,
+            asset_id: { TextUtf8: { value: "xor#universal" } },
+            amount: "77",
+            sender: { TextUtf8: { value: "nexus:soraswap" } },
+            recipient: {
+              TonRaw: {
+                workchain: 0,
+                account: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              },
+            },
+            route_id: { TextUtf8: { value: "nexus:ton:xor" } },
+          },
+        },
+        bundle: {
+          version: 1,
+          commitment_root: commitmentRoot,
+          commitment: {
+            version: 1,
+            kind: "Transfer",
+            target_domain: 4,
+            message_id: messageId,
+            payload_hash: payloadHash,
+            parliament_certificate_hash: null,
+          },
+          merkle_proof: { steps: [] },
+          payload: { Transfer: { version: 1, amount: "77" } },
+          finality_proof: "bb66",
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getSccpMessageProofJob(`0x${messageId}`);
+  assert.deepEqual(result, {
+    version: 1,
+    chainFamily: "Ton",
+    chain: "ton",
+    localDomain: 0,
+    counterpartyDomain: 4,
+    proofFamily: "stark-fri-v1",
+    messageBackend: "sccp/stark-fri-v1/ton",
+    registryBackend: "bridge/sccp/stark-fri-v1/ton",
+    manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+    finalityModel: "TonMasterchain",
+    verifierTarget: "TonContract",
+    publicInputs: {
+      version: 1,
+      messageId,
+      payloadHash,
+      targetDomain: 4,
+      commitmentRoot,
+      finalityHeight: 19,
+      finalityBlockHash,
+    },
+    payloadKind: "transfer",
+    payloadProjection: {
+      kind: "Transfer",
+      value: {
+        version: 1,
+        source_domain: 0,
+        dest_domain: 4,
+        nonce: 21,
+        asset_home_domain: 0,
+        asset_id: { kind: "TextUtf8", value: "xor#universal" },
+        amount: 77,
+        sender: { kind: "TextUtf8", value: "nexus:soraswap" },
+        recipient: {
+          kind: "TonRaw",
+          workchain: 0,
+          account: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        },
+        route_id: { kind: "TextUtf8", value: "nexus:ton:xor" },
+      },
+    },
+    bundle: {
+      version: 1,
+      commitmentRoot,
+      commitment: {
+        version: 1,
+        kind: "Transfer",
+        targetDomain: 4,
+        messageId,
+        payloadHash,
+        parliamentCertificateHash: null,
+      },
+      merkleProof: { steps: [] },
+      payload: {
+        kind: "Transfer",
+        value: { version: 1, amount: "77" },
+      },
+      finalityProof: "bb66",
+    },
+  });
 });
 
 test("getRuntimeAbiActive normalizes ABI version", async () => {

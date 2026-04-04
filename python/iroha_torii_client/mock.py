@@ -110,6 +110,7 @@ class _MockState:
         self.gov_tallies: Dict[str, Dict[str, Any]] = {}
         self.gov_unlock_stats: Dict[str, Any] = {}
         self.sccp_message_artifacts: Dict[str, Dict[str, Any]] = {}
+        self.sccp_message_jobs: Dict[str, Dict[str, Any]] = {}
         self.reset()
 
     # ------------------------------------------------------------------
@@ -217,6 +218,9 @@ class _MockState:
         if method == "GET" and path.startswith("/v1/sccp/artifacts/message/"):
             message_id = path.split("/")[-1].lower()
             return self._sccp_message_artifact_get(message_id)
+        if method == "GET" and path.startswith("/v1/sccp/jobs/message/"):
+            message_id = path.split("/")[-1].lower()
+            return self._sccp_message_job_get(message_id)
         if method == "POST" and path == "/__mock__/pipeline/config":
             return self._pipeline_config(body)
         if method == "POST" and path == "/__mock__/accounts/config":
@@ -279,6 +283,7 @@ class _MockState:
                 "governance_bundle_path": "/v1/sccp/proofs/governance/{message_id}",
                 "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
                 "message_proof_path": "/v1/sccp/artifacts/message/{message_id}",
+                "message_job_path": "/v1/sccp/jobs/message/{message_id}",
                 "proof_manifest_path": "/v1/sccp/manifests",
                 "legacy_burn_registry_backend": "bridge/sccp/burn-v1",
                 "legacy_governance_registry_backend": "bridge/sccp/governance-v1",
@@ -295,6 +300,7 @@ class _MockState:
                 "manifests": [],
             }
             self.sccp_message_artifacts = {}
+            self.sccp_message_jobs = {}
             self._seed_reports()
             self._seed_sumeragi()
 
@@ -329,10 +335,27 @@ class _MockState:
                 normalized_artifacts[str(message_id).lower()] = dict(artifact)
             self.sccp_message_artifacts = normalized_artifacts
 
+        jobs = payload.get("message_jobs")
+        if jobs is not None:
+            if not isinstance(jobs, dict):
+                raise ValueError("message_jobs must be an object")
+            normalized_jobs: Dict[str, Dict[str, Any]] = {}
+            for message_id, job in jobs.items():
+                if not isinstance(job, dict):
+                    raise ValueError("message_jobs entry must be an object")
+                normalized_jobs[str(message_id).lower()] = dict(job)
+            self.sccp_message_jobs = normalized_jobs
+
         return _json_response(HTTPStatus.OK, {"ok": True})
 
     def _sccp_message_artifact_get(self, message_id: str) -> _Response:
         payload = self.sccp_message_artifacts.get(message_id)
+        if payload is None:
+            return _json_response(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        return _json_response(HTTPStatus.OK, payload)
+
+    def _sccp_message_job_get(self, message_id: str) -> _Response:
+        payload = self.sccp_message_jobs.get(message_id)
         if payload is None:
             return _json_response(HTTPStatus.NOT_FOUND, {"error": "not found"})
         return _json_response(HTTPStatus.OK, payload)

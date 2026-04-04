@@ -464,6 +464,12 @@ fn stagger_recovery_gap(pipeline_time: Duration) -> Duration {
         .max(Duration::from_secs(1))
 }
 
+fn bootstrap_torii_ready_timeout(sync_timeout: Duration) -> Duration {
+    sync_timeout
+        .min(Duration::from_secs(90))
+        .max(Duration::from_secs(30))
+}
+
 fn should_resubmit_tx(allow_resubmit: bool, now: Instant, next_resubmit_at: Instant) -> bool {
     allow_resubmit && now >= next_resubmit_at
 }
@@ -494,6 +500,81 @@ fn allow_round_supply_deadline_slip(faulty_peers: usize, force_soft_fork: bool) 
     // Under multi-fault partitions, transaction dissemination can lag one round behind while
     // still converging globally; defer strictness to the final supply assertion.
     force_soft_fork || faulty_peers > 1
+}
+
+async fn wait_for_torii_ready_client(
+    network: &Network,
+    readiness_timeout: Duration,
+) -> Result<iroha::client::Client> {
+    let deadline = Instant::now() + readiness_timeout;
+    let probe_timeout = Duration::from_secs(2).min(readiness_timeout);
+    let mut last_error: Option<String> = None;
+
+    loop {
+        for peer in network.peers() {
+            match timeout(probe_timeout, peer.status()).await {
+                Ok(Ok(_)) => return Ok(peer.client()),
+                Ok(Err(err)) => {
+                    last_error = Some(format!("{}: {err}", peer.mnemonic()));
+                }
+                Err(_) => {
+                    last_error = Some(format!(
+                        "{}: Torii /status probe exceeded {:?}",
+                        peer.mnemonic(),
+                        probe_timeout
+                    ));
+                }
+            }
+        }
+
+        if Instant::now() >= deadline {
+            let detail = last_error.unwrap_or_else(|| "no peer probes recorded".to_string());
+            return Err(eyre!(
+                "no Torii-ready peer became available within {:?}; last probe: {detail}",
+                readiness_timeout
+            ));
+        }
+
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn asset_definition_visible_on_any_peer(
+    network: &Network,
+    asset_definition_id: &AssetDefinitionId,
+) -> bool {
+    for peer in network.peers() {
+        let client = peer.client();
+        match spawn_blocking(move || client.query(FindAssetsDefinitions::new()).execute_all()).await
+        {
+            Ok(Ok(definitions)) => {
+                if definitions
+                    .into_iter()
+                    .any(|definition| definition.id() == asset_definition_id)
+                {
+                    return true;
+                }
+            }
+            Ok(Err(err)) => {
+                iroha_logger::debug!(
+                    ?err,
+                    peer = peer.mnemonic(),
+                    ?asset_definition_id,
+                    "asset definition query failed during bootstrap confirmation"
+                );
+            }
+            Err(err) => {
+                iroha_logger::debug!(
+                    ?err,
+                    peer = peer.mnemonic(),
+                    ?asset_definition_id,
+                    "asset definition query task failed during bootstrap confirmation"
+                );
+            }
+        }
+    }
+
+    false
 }
 
 fn permissioned_prf_seed(chain_id: &ChainId) -> [u8; 32] {
@@ -1151,7 +1232,8 @@ impl UnstableNetwork {
         asset_definition_id: &AssetDefinitionId,
     ) -> Result<()> {
         let status_timeout = scaled_timeout(network.sync_timeout(), network.peers().len());
-        let mut client = network.client();
+        let readiness_timeout = bootstrap_torii_ready_timeout(network.sync_timeout());
+        let mut client = wait_for_torii_ready_client(network, readiness_timeout).await?;
         if client.transaction_status_timeout < status_timeout {
             client.transaction_status_timeout = status_timeout;
         }
@@ -1170,32 +1252,14 @@ impl UnstableNetwork {
         match submit_res {
             Ok(_) => Ok(()),
             Err(err) if is_tx_confirmation_timeout(&err) => {
-                let mut query_client = network.client();
-                if query_client.transaction_status_timeout < status_timeout {
-                    query_client.transaction_status_timeout = status_timeout;
-                }
                 let deadline = Instant::now() + status_timeout;
                 loop {
-                    let client = query_client.clone();
-                    let asset_definition_id = asset_definition_id.clone();
-                    match spawn_blocking(move || {
-                        client.query(FindAssetsDefinitions::new()).execute_all()
-                    })
-                    .await
-                    {
-                        Ok(Ok(definitions)) => {
-                            if definitions
-                                .into_iter()
-                                .any(|definition| definition.id() == &asset_definition_id)
-                            {
-                                iroha_logger::warn!(
-                                    ?asset_definition_id,
-                                    "asset definition registration confirmed via query after tx confirmation timeout"
-                                );
-                                return Ok(());
-                            }
-                        }
-                        Ok(Err(_)) | Err(_) => {}
+                    if asset_definition_visible_on_any_peer(network, asset_definition_id).await {
+                        iroha_logger::warn!(
+                            ?asset_definition_id,
+                            "asset definition registration confirmed via peer query after tx confirmation timeout"
+                        );
+                        return Ok(());
                     }
                     if Instant::now() >= deadline {
                         return Err(err.wrap_err(format!(
@@ -1855,6 +1919,22 @@ mod tests {
         assert_eq!(
             stagger_recovery_gap(Duration::from_millis(500)),
             Duration::from_secs(1)
+        );
+    }
+
+    #[test]
+    fn bootstrap_torii_ready_timeout_has_floor_and_cap() {
+        assert_eq!(
+            bootstrap_torii_ready_timeout(Duration::from_secs(5)),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            bootstrap_torii_ready_timeout(Duration::from_secs(45)),
+            Duration::from_secs(45)
+        );
+        assert_eq!(
+            bootstrap_torii_ready_timeout(Duration::from_secs(300)),
+            Duration::from_secs(90)
         );
     }
 }

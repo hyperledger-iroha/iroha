@@ -490,6 +490,7 @@ def test_get_sccp_capabilities_parses_snapshot() -> None:
                 "governance_bundle_path": "/v1/sccp/proofs/governance/{message_id}",
                 "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
                 "message_proof_path": "/v1/sccp/artifacts/message/{message_id}",
+                "message_job_path": "/v1/sccp/jobs/message/{message_id}",
                 "proof_manifest_path": "/v1/sccp/manifests",
                 "legacy_burn_registry_backend": "bridge/sccp/burn-v1",
                 "legacy_governance_registry_backend": "bridge/sccp/governance-v1",
@@ -523,6 +524,7 @@ def test_get_sccp_capabilities_parses_snapshot() -> None:
     assert capabilities.local_domain == 0
     assert capabilities.local_chain == "sora"
     assert capabilities.message_proof_path == "/v1/sccp/artifacts/message/{message_id}"
+    assert capabilities.message_job_path == "/v1/sccp/jobs/message/{message_id}"
     assert capabilities.proof_manifest_path == "/v1/sccp/manifests"
     assert capabilities.message_payload_kinds == ["asset_register", "route_activate", "transfer"]
     assert capabilities.codecs[0].key == "ton_raw"
@@ -802,6 +804,171 @@ def test_get_sccp_message_proof_artifact_against_mock_server() -> None:
         assert artifact.bundle.payload.kind == "Transfer"
         assert artifact.bundle.payload.value["amount"] == "77"
         assert artifact.message_backend == "sccp/stark-fri-v1/ton"
+    finally:
+        server.stop()
+
+
+def test_get_sccp_message_proof_job_parses_typed_snapshot() -> None:
+    session = RecordingSession()
+    message_id = "11" * 32
+    payload_hash = "22" * 32
+    commitment_root = "33" * 32
+    finality_block_hash = "44" * 32
+    session.queue(
+        StubResponse(
+            payload={
+                "version": 1,
+                "chain_family": "Ton",
+                "chain": "ton",
+                "local_domain": 0,
+                "counterparty_domain": 4,
+                "proof_family": "stark-fri-v1",
+                "message_backend": "sccp/stark-fri-v1/ton",
+                "registry_backend": "bridge/sccp/stark-fri-v1/ton",
+                "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+                "finality_model": "TonMasterchain",
+                "verifier_target": "TonContract",
+                "public_inputs": {
+                    "version": 1,
+                    "message_id": message_id,
+                    "payload_hash": payload_hash,
+                    "target_domain": 4,
+                    "commitment_root": commitment_root,
+                    "finality_height": "19",
+                    "finality_block_hash": finality_block_hash,
+                },
+                "payload_kind": "transfer",
+                "payload_projection": {
+                    "Transfer": {
+                        "version": 1,
+                        "source_domain": 0,
+                        "dest_domain": 4,
+                        "nonce": "21",
+                        "asset_home_domain": 0,
+                        "asset_id": {"TextUtf8": {"value": "xor#universal"}},
+                        "amount": "77",
+                        "sender": {"TextUtf8": {"value": "nexus:soraswap"}},
+                        "recipient": {
+                            "TonRaw": {
+                                "workchain": 0,
+                                "account": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                            }
+                        },
+                        "route_id": {"TextUtf8": {"value": "nexus:ton:xor"}},
+                    }
+                },
+                "bundle": {
+                    "version": 1,
+                    "commitment_root": commitment_root,
+                    "commitment": {
+                        "version": 1,
+                        "kind": "Transfer",
+                        "target_domain": 4,
+                        "message_id": message_id,
+                        "payload_hash": payload_hash,
+                        "parliament_certificate_hash": None,
+                    },
+                    "merkle_proof": {"steps": []},
+                    "payload": {"Transfer": {"version": 1, "amount": "77"}},
+                    "finality_proof": "bb66",
+                },
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    job = client.get_sccp_message_proof_job(f"0x{message_id}")
+
+    assert job.chain_family == "Ton"
+    assert job.chain == "ton"
+    assert job.payload_kind == "transfer"
+    assert job.payload_projection.kind == "Transfer"
+    assert job.payload_projection.value["amount"] == 77
+    assert job.payload_projection.value["recipient"].kind == "TonRaw"
+    assert job.payload_projection.value["recipient"].value["workchain"] == 0
+    assert session.calls[0]["url"] == f"http://node.test/v1/sccp/jobs/message/{message_id}"
+
+
+def test_get_sccp_message_proof_job_against_mock_server() -> None:
+    server = ToriiMockServer().start()
+    message_id = "11" * 32
+    try:
+        response = requests.post(
+            f"{server.base_url.rstrip('/')}/__mock__/sccp/config",
+            json={
+                "message_jobs": {
+                    message_id: {
+                        "version": 1,
+                        "chain_family": "Ton",
+                        "chain": "ton",
+                        "local_domain": 0,
+                        "counterparty_domain": 4,
+                        "proof_family": "stark-fri-v1",
+                        "message_backend": "sccp/stark-fri-v1/ton",
+                        "registry_backend": "bridge/sccp/stark-fri-v1/ton",
+                        "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+                        "finality_model": "TonMasterchain",
+                        "verifier_target": "TonContract",
+                        "public_inputs": {
+                            "version": 1,
+                            "message_id": message_id,
+                            "payload_hash": "22" * 32,
+                            "target_domain": 4,
+                            "commitment_root": "33" * 32,
+                            "finality_height": "19",
+                            "finality_block_hash": "44" * 32,
+                        },
+                        "payload_kind": "transfer",
+                        "payload_projection": {
+                            "Transfer": {
+                                "version": 1,
+                                "source_domain": 0,
+                                "dest_domain": 4,
+                                "nonce": "21",
+                                "asset_home_domain": 0,
+                                "asset_id": {"TextUtf8": {"value": "xor#universal"}},
+                                "amount": "77",
+                                "sender": {"TextUtf8": {"value": "nexus:soraswap"}},
+                                "recipient": {
+                                    "TonRaw": {
+                                        "workchain": 0,
+                                        "account": (
+                                            "0123456789abcdef0123456789abcdef0123456789abcdef"
+                                            "0123456789abcdef"
+                                        ),
+                                    }
+                                },
+                                "route_id": {"TextUtf8": {"value": "nexus:ton:xor"}},
+                            }
+                        },
+                        "bundle": {
+                            "version": 1,
+                            "commitment_root": "33" * 32,
+                            "commitment": {
+                                "version": 1,
+                                "kind": "Transfer",
+                                "target_domain": 4,
+                                "message_id": message_id,
+                                "payload_hash": "22" * 32,
+                                "parliament_certificate_hash": None,
+                            },
+                            "merkle_proof": {"steps": []},
+                            "payload": {"Transfer": {"version": 1, "amount": "77"}},
+                            "finality_proof": "bb66",
+                        },
+                    }
+                }
+            },
+            timeout=5.0,
+        )
+        response.raise_for_status()
+
+        client = ToriiClient(server.base_url)
+        job = client.get_sccp_message_proof_job(message_id)
+
+        assert job.chain == "ton"
+        assert job.payload_projection.kind == "Transfer"
+        assert job.payload_projection.value["amount"] == 77
     finally:
         server.stop()
 

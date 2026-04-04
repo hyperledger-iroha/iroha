@@ -4,12 +4,13 @@
 
 extern crate alloc;
 
-use alloc::{string::String, vec::Vec};
+use alloc::{borrow::ToOwned, string::String, vec::Vec};
 
 use blake2::{
     Blake2bVar,
     digest::{Update, VariableOutput},
 };
+use sha2::{Digest, Sha256};
 use tiny_keccak::Hasher;
 
 pub const SCCP_DOMAIN_SORA: u32 = 0;
@@ -838,6 +839,131 @@ pub struct SccpMessageTransparentInnerProofV1 {
     pub placeholder_proof_hash: H256,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub enum SccpNormalizedCodecValueV1 {
+    TextUtf8 { value: String },
+    EvmHex { bytes: [u8; 20] },
+    SolanaBase58 { bytes: [u8; 32] },
+    TonRaw { workchain: i32, account: [u8; 32] },
+    TronBase58Check { payload: [u8; 21] },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub struct SccpAssetRegisterProjectionV1 {
+    pub version: u8,
+    pub target_domain: u32,
+    pub home_domain: u32,
+    pub nonce: u64,
+    pub asset_id: SccpNormalizedCodecValueV1,
+    pub decimals: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub struct SccpRouteActivateProjectionV1 {
+    pub version: u8,
+    pub source_domain: u32,
+    pub target_domain: u32,
+    pub nonce: u64,
+    pub asset_id: SccpNormalizedCodecValueV1,
+    pub route_id: SccpNormalizedCodecValueV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub struct SccpTransferProjectionV1 {
+    pub version: u8,
+    pub source_domain: u32,
+    pub dest_domain: u32,
+    pub nonce: u64,
+    pub asset_home_domain: u32,
+    pub asset_id: SccpNormalizedCodecValueV1,
+    pub amount: u128,
+    pub sender: SccpNormalizedCodecValueV1,
+    pub recipient: SccpNormalizedCodecValueV1,
+    pub route_id: SccpNormalizedCodecValueV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub enum SccpPayloadProjectionV1 {
+    AssetRegister(SccpAssetRegisterProjectionV1),
+    RouteActivate(SccpRouteActivateProjectionV1),
+    Transfer(SccpTransferProjectionV1),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub struct SccpSubmissionArgumentV1 {
+    pub key: String,
+    pub description: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub struct SccpCounterpartySubmissionTemplateV1 {
+    pub version: u8,
+    pub encoding: String,
+    pub submission_kind: String,
+    pub verifier_entrypoint: String,
+    pub required_arguments: Vec<SccpSubmissionArgumentV1>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub struct SccpCounterpartyProofJobV1 {
+    pub version: u8,
+    pub chain_family: SccpTransparentChainFamilyV1,
+    pub chain: String,
+    pub local_domain: u32,
+    pub counterparty_domain: u32,
+    pub proof_family: String,
+    pub message_backend: String,
+    pub registry_backend: String,
+    pub manifest_seed: String,
+    pub finality_model: SccpProofFinalityModelV1,
+    pub verifier_target: SccpProofVerifierTargetV1,
+    pub public_inputs: SccpMessageTransparentPublicInputsV1,
+    pub payload_kind: String,
+    pub payload_projection: SccpPayloadProjectionV1,
+    pub submission_template: SccpCounterpartySubmissionTemplateV1,
+    pub bundle: NexusSccpMessageProofV1,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[cfg_attr(
@@ -889,6 +1015,7 @@ pub struct SccpProofManifestV1 {
     pub manifest_seed: String,
     pub required_public_inputs: Vec<String>,
     pub message_payload_kinds: Vec<String>,
+    pub submission_template: SccpCounterpartySubmissionTemplateV1,
 }
 
 pub fn is_supported_domain(domain_id: u32) -> bool {
@@ -1066,6 +1193,129 @@ pub fn sccp_message_payload_kind_keys_v1() -> Vec<String> {
     ]
 }
 
+fn sccp_submission_arguments(keys: &[(&str, &str)]) -> Vec<SccpSubmissionArgumentV1> {
+    keys.iter()
+        .map(|(key, description)| SccpSubmissionArgumentV1 {
+            key: (*key).to_owned(),
+            description: (*description).to_owned(),
+        })
+        .collect()
+}
+
+pub fn sccp_submission_template_for_domain(
+    domain: u32,
+) -> Option<SccpCounterpartySubmissionTemplateV1> {
+    match domain {
+        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => Some(SccpCounterpartySubmissionTemplateV1 {
+            version: 1,
+            encoding: "abi_tuple_v1".to_owned(),
+            submission_kind: "contract_call".to_owned(),
+            verifier_entrypoint:
+                "submitSccpMessageProof(bytes proof_bytes, bytes public_inputs, bytes bundle_bytes)"
+                    .to_owned(),
+            required_arguments: sccp_submission_arguments(&[
+                (
+                    "proof_bytes",
+                    "Transparent SCCP proof bytes emitted by the prover backend.",
+                ),
+                (
+                    "public_inputs",
+                    "ABI-encoded SCCP public inputs in manifest order.",
+                ),
+                (
+                    "bundle_bytes",
+                    "ABI-encoded Nexus SCCP message bundle passed to the verifier contract.",
+                ),
+            ]),
+        }),
+        SCCP_DOMAIN_SOL => Some(SccpCounterpartySubmissionTemplateV1 {
+            version: 1,
+            encoding: "borsh_instruction_v1".to_owned(),
+            submission_kind: "program_instruction".to_owned(),
+            verifier_entrypoint: "submit_sccp_message_proof".to_owned(),
+            required_arguments: sccp_submission_arguments(&[
+                (
+                    "proof_bytes",
+                    "Transparent SCCP proof bytes serialized into the instruction data.",
+                ),
+                (
+                    "public_inputs",
+                    "Borsh-encoded SCCP public inputs in manifest order.",
+                ),
+                (
+                    "bundle_bytes",
+                    "Borsh-encoded Nexus SCCP message bundle for the verifier program.",
+                ),
+            ]),
+        }),
+        SCCP_DOMAIN_TON => Some(SccpCounterpartySubmissionTemplateV1 {
+            version: 1,
+            encoding: "ton_cell_v1".to_owned(),
+            submission_kind: "internal_message".to_owned(),
+            verifier_entrypoint: "op::submit_sccp_message_proof".to_owned(),
+            required_arguments: sccp_submission_arguments(&[
+                (
+                    "proof_cell",
+                    "Transparent SCCP proof cell emitted by the TON prover backend.",
+                ),
+                (
+                    "public_inputs_cell",
+                    "Cell-encoded SCCP public inputs in manifest order.",
+                ),
+                (
+                    "bundle_cell",
+                    "Cell-encoded Nexus SCCP message bundle for the TON bridge contract.",
+                ),
+            ]),
+        }),
+        SCCP_DOMAIN_TRON => Some(SccpCounterpartySubmissionTemplateV1 {
+            version: 1,
+            encoding: "tron_abi_tuple_v1".to_owned(),
+            submission_kind: "contract_call".to_owned(),
+            verifier_entrypoint:
+                "submitSccpMessageProof(bytes proof_bytes, bytes public_inputs, bytes bundle_bytes)"
+                    .to_owned(),
+            required_arguments: sccp_submission_arguments(&[
+                (
+                    "proof_bytes",
+                    "Transparent SCCP proof bytes emitted by the prover backend.",
+                ),
+                (
+                    "public_inputs",
+                    "TVM ABI-encoded SCCP public inputs in manifest order.",
+                ),
+                (
+                    "bundle_bytes",
+                    "TVM ABI-encoded Nexus SCCP message bundle for the bridge contract.",
+                ),
+            ]),
+        }),
+        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => {
+            Some(SccpCounterpartySubmissionTemplateV1 {
+                version: 1,
+                encoding: "scale_call_v1".to_owned(),
+                submission_kind: "runtime_call".to_owned(),
+                verifier_entrypoint: "SccpBridge.submit_message_proof".to_owned(),
+                required_arguments: sccp_submission_arguments(&[
+                    (
+                        "proof_bytes",
+                        "Transparent SCCP proof bytes emitted by the prover backend.",
+                    ),
+                    (
+                        "public_inputs",
+                        "SCALE-encoded SCCP public inputs in manifest order.",
+                    ),
+                    (
+                        "bundle_bytes",
+                        "SCALE-encoded Nexus SCCP message bundle for the runtime verifier.",
+                    ),
+                ]),
+            })
+        }
+        _ => None,
+    }
+}
+
 pub fn sccp_proof_manifest_for_domain(domain: u32) -> Option<SccpProofManifestV1> {
     let chain = sccp_chain_key_for_domain(domain)?;
     let counterparty_account_codec = sccp_counterparty_account_codec(domain)?;
@@ -1086,6 +1336,7 @@ pub fn sccp_proof_manifest_for_domain(domain: u32) -> Option<SccpProofManifestV1
         manifest_seed: sccp_manifest_seed_for_domain(domain)?,
         required_public_inputs: sccp_required_public_inputs_v1(),
         message_payload_kinds: sccp_message_payload_kind_keys_v1(),
+        submission_template: sccp_submission_template_for_domain(domain)?,
     })
 }
 
@@ -1181,6 +1432,104 @@ pub fn sccp_message_payload_kind_key(payload: &SccpPayloadV1) -> &'static str {
         SccpPayloadV1::RouteActivate(_) => "route_activate",
         SccpPayloadV1::Transfer(_) => "transfer",
     }
+}
+
+pub fn sccp_payload_projection(payload: &SccpPayloadV1) -> Option<SccpPayloadProjectionV1> {
+    match payload {
+        SccpPayloadV1::AssetRegister(payload) => Some(SccpPayloadProjectionV1::AssetRegister(
+            SccpAssetRegisterProjectionV1 {
+                version: payload.version,
+                target_domain: payload.target_domain,
+                home_domain: payload.home_domain,
+                nonce: payload.nonce,
+                asset_id: decode_sccp_normalized_codec_value(
+                    payload.asset_id_codec,
+                    &payload.asset_id,
+                )?,
+                decimals: payload.decimals,
+            },
+        )),
+        SccpPayloadV1::RouteActivate(payload) => Some(SccpPayloadProjectionV1::RouteActivate(
+            SccpRouteActivateProjectionV1 {
+                version: payload.version,
+                source_domain: payload.source_domain,
+                target_domain: payload.target_domain,
+                nonce: payload.nonce,
+                asset_id: decode_sccp_normalized_codec_value(
+                    payload.asset_id_codec,
+                    &payload.asset_id,
+                )?,
+                route_id: decode_sccp_normalized_codec_value(
+                    payload.route_id_codec,
+                    &payload.route_id,
+                )?,
+            },
+        )),
+        SccpPayloadV1::Transfer(payload) => Some(SccpPayloadProjectionV1::Transfer(
+            SccpTransferProjectionV1 {
+                version: payload.version,
+                source_domain: payload.source_domain,
+                dest_domain: payload.dest_domain,
+                nonce: payload.nonce,
+                asset_home_domain: payload.asset_home_domain,
+                asset_id: decode_sccp_normalized_codec_value(
+                    payload.asset_id_codec,
+                    &payload.asset_id,
+                )?,
+                amount: payload.amount,
+                sender: decode_sccp_normalized_codec_value(payload.sender_codec, &payload.sender)?,
+                recipient: decode_sccp_normalized_codec_value(
+                    payload.recipient_codec,
+                    &payload.recipient,
+                )?,
+                route_id: decode_sccp_normalized_codec_value(
+                    payload.route_id_codec,
+                    &payload.route_id,
+                )?,
+            },
+        )),
+    }
+}
+
+pub fn build_sccp_counterparty_proof_job_from_bundle(
+    bundle: &NexusSccpMessageProofV1,
+) -> Option<SccpCounterpartyProofJobV1> {
+    if !verify_message_bundle_structure(bundle) {
+        return None;
+    }
+    let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
+    let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
+    let chain_family = sccp_transparent_chain_family_for_domain(counterparty_domain)?;
+    let chain = sccp_chain_key_for_domain(counterparty_domain)?;
+    let public_inputs = sccp_message_transparent_public_inputs(bundle)?;
+    let payload_projection = sccp_payload_projection(&bundle.payload)?;
+
+    Some(SccpCounterpartyProofJobV1 {
+        version: 1,
+        chain_family,
+        chain: chain.to_owned(),
+        local_domain: manifest.local_domain,
+        counterparty_domain,
+        proof_family: manifest.proof_family,
+        message_backend: manifest.message_backend,
+        registry_backend: manifest.registry_backend,
+        manifest_seed: manifest.manifest_seed,
+        finality_model: manifest.finality_model,
+        verifier_target: manifest.verifier_target,
+        public_inputs,
+        payload_kind: sccp_message_payload_kind_key(&bundle.payload).to_owned(),
+        payload_projection,
+        submission_template: manifest.submission_template,
+        bundle: bundle.clone(),
+    })
+}
+
+pub fn build_sccp_counterparty_proof_job_from_artifact(
+    artifact: &NexusSccpMessageTransparentProofV1,
+) -> Option<SccpCounterpartyProofJobV1> {
+    verify_nexus_sccp_message_transparent_proof_structure(artifact)
+        .then(|| build_sccp_counterparty_proof_job_from_bundle(&artifact.bundle))
+        .flatten()
 }
 
 pub fn canonical_sccp_message_transparent_public_inputs_bytes(
@@ -1425,6 +1774,15 @@ fn is_ascii_hex_digit(byte: u8) -> bool {
     byte.is_ascii_hexdigit()
 }
 
+fn decode_ascii_hex_nibble(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
+}
+
 fn is_ascii_base58_digit(byte: u8) -> bool {
     matches!(
         byte,
@@ -1435,10 +1793,6 @@ fn is_ascii_base58_digit(byte: u8) -> bool {
             | b'a'..=b'k'
             | b'm'..=b'z'
     )
-}
-
-fn validate_utf8_codec(bytes: &[u8]) -> bool {
-    !bytes.is_empty() && core::str::from_utf8(bytes).is_ok()
 }
 
 fn validate_evm_hex_codec(bytes: &[u8]) -> bool {
@@ -1474,15 +1828,101 @@ fn validate_tron_base58_codec(bytes: &[u8]) -> bool {
         && bytes.iter().copied().all(is_ascii_base58_digit)
 }
 
-fn validate_sccp_codec_bytes(codec_id: u8, bytes: &[u8]) -> bool {
-    match codec_id {
-        SCCP_CODEC_TEXT_UTF8 => validate_utf8_codec(bytes),
-        SCCP_CODEC_EVM_HEX => validate_evm_hex_codec(bytes),
-        SCCP_CODEC_SOLANA_BASE58 => validate_base58_codec(bytes, 32, 44),
-        SCCP_CODEC_TON_RAW => validate_ton_raw_codec(bytes),
-        SCCP_CODEC_TRON_BASE58CHECK => validate_tron_base58_codec(bytes),
-        _ => false,
+fn decode_evm_hex_address(bytes: &[u8]) -> Option<[u8; 20]> {
+    if !validate_evm_hex_codec(bytes) {
+        return None;
     }
+    let mut out = [0u8; 20];
+    for (idx, chunk) in bytes[2..].chunks_exact(2).enumerate() {
+        let hi = decode_ascii_hex_nibble(chunk[0])?;
+        let lo = decode_ascii_hex_nibble(chunk[1])?;
+        out[idx] = (hi << 4) | lo;
+    }
+    Some(out)
+}
+
+fn decode_sol_base58_address(bytes: &[u8]) -> Option<[u8; 32]> {
+    if !validate_base58_codec(bytes, 32, 44) {
+        return None;
+    }
+    let value = core::str::from_utf8(bytes).ok()?;
+    let decoded = bs58::decode(value).into_vec().ok()?;
+    let mut out = [0u8; 32];
+    if decoded.len() != out.len() {
+        return None;
+    }
+    out.copy_from_slice(&decoded);
+    Some(out)
+}
+
+fn decode_ton_raw_address(bytes: &[u8]) -> Option<(i32, [u8; 32])> {
+    if !validate_ton_raw_codec(bytes) {
+        return None;
+    }
+    let value = core::str::from_utf8(bytes).ok()?;
+    let (workchain, account_hex) = value.split_once(':')?;
+    let mut account = [0u8; 32];
+    for (idx, chunk) in account_hex.as_bytes().chunks_exact(2).enumerate() {
+        let hi = decode_ascii_hex_nibble(chunk[0])?;
+        let lo = decode_ascii_hex_nibble(chunk[1])?;
+        account[idx] = (hi << 4) | lo;
+    }
+    Some((workchain.parse::<i32>().ok()?, account))
+}
+
+fn decode_tron_base58check_address(bytes: &[u8]) -> Option<[u8; 21]> {
+    if !validate_tron_base58_codec(bytes) {
+        return None;
+    }
+    let value = core::str::from_utf8(bytes).ok()?;
+    let decoded = bs58::decode(value).into_vec().ok()?;
+    if decoded.len() != 25 {
+        return None;
+    }
+    let (payload, checksum) = decoded.split_at(21);
+    if payload.first().copied() != Some(0x41) {
+        return None;
+    }
+    let hash1 = Sha256::digest(payload);
+    let hash2 = Sha256::digest(hash1);
+    if checksum != &hash2[..4] {
+        return None;
+    }
+    let mut out = [0u8; 21];
+    out.copy_from_slice(payload);
+    Some(out)
+}
+
+pub fn decode_sccp_normalized_codec_value(
+    codec_id: u8,
+    bytes: &[u8],
+) -> Option<SccpNormalizedCodecValueV1> {
+    match codec_id {
+        SCCP_CODEC_TEXT_UTF8 => {
+            let value = core::str::from_utf8(bytes).ok()?;
+            (!value.is_empty()).then(|| SccpNormalizedCodecValueV1::TextUtf8 {
+                value: value.to_owned(),
+            })
+        }
+        SCCP_CODEC_EVM_HEX => Some(SccpNormalizedCodecValueV1::EvmHex {
+            bytes: decode_evm_hex_address(bytes)?,
+        }),
+        SCCP_CODEC_SOLANA_BASE58 => Some(SccpNormalizedCodecValueV1::SolanaBase58 {
+            bytes: decode_sol_base58_address(bytes)?,
+        }),
+        SCCP_CODEC_TON_RAW => {
+            let (workchain, account) = decode_ton_raw_address(bytes)?;
+            Some(SccpNormalizedCodecValueV1::TonRaw { workchain, account })
+        }
+        SCCP_CODEC_TRON_BASE58CHECK => Some(SccpNormalizedCodecValueV1::TronBase58Check {
+            payload: decode_tron_base58check_address(bytes)?,
+        }),
+        _ => None,
+    }
+}
+
+fn validate_sccp_codec_bytes(codec_id: u8, bytes: &[u8]) -> bool {
+    decode_sccp_normalized_codec_value(codec_id, bytes).is_some()
 }
 
 fn push_u8(out: &mut Vec<u8>, value: u8) {
@@ -3024,6 +3464,141 @@ mod tests {
     }
 
     #[test]
+    fn normalized_codec_value_decodes_chain_specific_addresses() {
+        assert_eq!(
+            decode_sccp_normalized_codec_value(
+                SCCP_CODEC_EVM_HEX,
+                b"0x3333333333333333333333333333333333333333",
+            ),
+            Some(SccpNormalizedCodecValueV1::EvmHex { bytes: [0x33; 20] })
+        );
+
+        assert_eq!(
+            decode_sccp_normalized_codec_value(
+                SCCP_CODEC_SOLANA_BASE58,
+                b"11111111111111111111111111111111",
+            ),
+            Some(SccpNormalizedCodecValueV1::SolanaBase58 { bytes: [0u8; 32] })
+        );
+
+        let ton = decode_sccp_normalized_codec_value(
+            SCCP_CODEC_TON_RAW,
+            b"0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .expect("decode ton");
+        match ton {
+            SccpNormalizedCodecValueV1::TonRaw { workchain, account } => {
+                assert_eq!(workchain, 0);
+                assert_eq!(
+                    account,
+                    [
+                        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67,
+                        0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef,
+                        0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef
+                    ]
+                );
+            }
+            other => panic!("unexpected ton codec decode: {other:?}"),
+        }
+
+        let tron = decode_sccp_normalized_codec_value(
+            SCCP_CODEC_TRON_BASE58CHECK,
+            b"T9yD14Nj9j7xAB4dbGeiX9h8unkKHxuWwb",
+        )
+        .expect("decode tron");
+        match tron {
+            SccpNormalizedCodecValueV1::TronBase58Check { payload } => {
+                assert_eq!(payload[0], 0x41);
+                assert_eq!(&payload[1..], &[0u8; 20]);
+            }
+            other => panic!("unexpected tron codec decode: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn counterparty_proof_job_normalizes_transfer_payload_for_ton() {
+        let bundle = sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_TON,
+            nonce: 18,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 91,
+            sender_codec: SCCP_CODEC_TEXT_UTF8,
+            sender: b"sora:bridge".to_vec(),
+            recipient_codec: SCCP_CODEC_TON_RAW,
+            recipient: b"0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:ton:xor".to_vec(),
+        }));
+        let artifact =
+            build_nexus_sccp_message_transparent_proof(&bundle).expect("build transparent proof");
+        let job = build_sccp_counterparty_proof_job_from_artifact(&artifact)
+            .expect("build counterparty proof job");
+
+        assert_eq!(job.chain_family, SccpTransparentChainFamilyV1::Ton);
+        assert_eq!(job.chain, "ton");
+        assert_eq!(job.counterparty_domain, SCCP_DOMAIN_TON);
+        assert_eq!(job.payload_kind, "transfer");
+        assert_eq!(job.public_inputs, artifact.public_inputs);
+        assert_eq!(job.submission_template.encoding, "ton_cell_v1");
+        assert_eq!(job.submission_template.submission_kind, "internal_message");
+        assert_eq!(
+            job.submission_template.verifier_entrypoint,
+            "op::submit_sccp_message_proof"
+        );
+        assert_eq!(
+            job.submission_template
+                .required_arguments
+                .iter()
+                .map(|argument| argument.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["proof_cell", "public_inputs_cell", "bundle_cell"]
+        );
+        match job.payload_projection {
+            SccpPayloadProjectionV1::Transfer(transfer) => {
+                assert_eq!(transfer.amount, 91);
+                assert_eq!(
+                    transfer.asset_id,
+                    SccpNormalizedCodecValueV1::TextUtf8 {
+                        value: "xor#universal".to_owned()
+                    }
+                );
+                assert_eq!(
+                    transfer.sender,
+                    SccpNormalizedCodecValueV1::TextUtf8 {
+                        value: "sora:bridge".to_owned()
+                    }
+                );
+                match transfer.recipient {
+                    SccpNormalizedCodecValueV1::TonRaw { workchain, account } => {
+                        assert_eq!(workchain, 0);
+                        assert_eq!(
+                            account,
+                            [
+                                0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45,
+                                0x67, 0x89, 0xab, 0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab,
+                                0xcd, 0xef, 0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef
+                            ]
+                        );
+                    }
+                    other => panic!("unexpected normalized recipient: {other:?}"),
+                }
+                assert_eq!(
+                    transfer.route_id,
+                    SccpNormalizedCodecValueV1::TextUtf8 {
+                        value: "nexus:ton:xor".to_owned()
+                    }
+                );
+            }
+            other => panic!("unexpected job payload projection: {other:?}"),
+        }
+    }
+
+    #[test]
     fn proof_manifest_helpers_cover_all_core_remote_domains() {
         let manifests = sccp_proof_manifests_v1();
         assert_eq!(manifests.len(), SCCP_CORE_REMOTE_DOMAINS.len());
@@ -3057,6 +3632,20 @@ mod tests {
                 "finality_block_hash",
             ]
         );
+        assert_eq!(eth.submission_template.encoding, "abi_tuple_v1");
+        assert_eq!(eth.submission_template.submission_kind, "contract_call");
+        assert_eq!(
+            eth.submission_template.verifier_entrypoint,
+            "submitSccpMessageProof(bytes proof_bytes, bytes public_inputs, bytes bundle_bytes)"
+        );
+        assert_eq!(
+            eth.submission_template
+                .required_arguments
+                .iter()
+                .map(|argument| argument.key.as_str())
+                .collect::<Vec<_>>(),
+            vec!["proof_bytes", "public_inputs", "bundle_bytes"]
+        );
     }
 
     #[test]
@@ -3076,6 +3665,11 @@ mod tests {
         assert_eq!(
             manifest.verifier_target,
             SccpProofVerifierTargetV1::TonContract
+        );
+        assert_eq!(manifest.submission_template.encoding, "ton_cell_v1");
+        assert_eq!(
+            manifest.submission_template.verifier_entrypoint,
+            "op::submit_sccp_message_proof"
         );
     }
 }

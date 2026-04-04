@@ -29,6 +29,7 @@ Torii now exposes three live SCCP bundle families:
   - legacy burn/governance registry backends;
   - the generic message proof family (`stark-fri-v1`);
   - the typed SCCP message proof-artifact discovery path (`/v1/sccp/artifacts/message/{message_id}`);
+  - the normalized SCCP counterparty proof-job discovery path (`/v1/sccp/jobs/message/{message_id}`);
   - the SCCP proof-manifest discovery path (`/v1/sccp/manifests`);
   - supported codec ids/keys; and
   - the per-counterparty generic message backends / registry backends for `eth`,
@@ -60,10 +61,21 @@ Torii now exposes three live SCCP bundle families:
   - the canonical public inputs (`message_id`, `payload_hash`, `target_domain`, `commitment_root`, `finality_height`, `finality_block_hash`);
   - canonical inner `proof_bytes` that carry the manifest-bound placeholder statement (`chain_family`, chain key, account codec, payload kind, public inputs, statement hash, and placeholder proof hash) until the chain-specific prover backends are swapped in; and
   - the embedded Nexus SCCP message bundle so verifiers can reconstruct the exact statement being proven.
+  - `iroha_sccp` now also exposes a normalized counterparty proof-job projection over that artifact:
+    - `decode_sccp_normalized_codec_value(...)` decodes codec-bearing SCCP fields into typed EVM / Solana / TON / Tron / logical-text values; and
+    - `build_sccp_counterparty_proof_job_from_artifact(...)` / `build_sccp_counterparty_proof_job_from_bundle(...)` produce a prover-oriented job with the normalized payload projection plus the original typed bundle.
   - client helpers now exist for that route directly:
     - Rust: `iroha::client::Client::get_sccp_message_proof_artifact_json(...)` and `get_sccp_message_proof_artifact(...)`;
     - Python: `ToriiClient.get_sccp_message_proof_artifact(...)`; and
     - JavaScript: `ToriiClient.getSccpMessageProofArtifact(...)`.
+- `GET /v1/sccp/jobs/message/{message_id}` returns the normalized SCCP counterparty proof job for the same canonical message id. Each job bundles:
+  - the chain family, chain key, backend labels, manifest seed, finality model, verifier target, and canonical SCCP public inputs;
+  - a normalized payload projection with typed codec values for EVM / Solana / TON / Tron / logical-text surfaces; and
+  - the original typed Nexus SCCP message bundle so a prover worker can keep both the normalized view and the canonical committed preimage in one document.
+  - client helpers now exist for that route directly:
+    - Rust: `iroha::client::Client::get_sccp_message_proof_job_json(...)` and `get_sccp_message_proof_job(...)`;
+    - Python: `ToriiClient.get_sccp_message_proof_job(...)`; and
+    - JavaScript: `ToriiClient.getSccpMessageProofJob(...)`.
 - `GET /v1/sccp/proofs/message/{message_id}` now reconstructs the proof from committed blocks that contain `RecordSccpMessage` instructions and a non-null `sccp_commitment_root` in the finalized block header. The temporary in-memory bundle registry remains only as a fallback/test path.
 - Generic SCCP `message` payloads now enforce explicit v1 codec families during structural verification instead of accepting arbitrary nonzero codec ids:
   - `1`: generic UTF-8 logical identifiers;
@@ -93,7 +105,7 @@ Torii now exposes three live SCCP bundle families:
   - `iroha ops bridge sccp capabilities`
   - `iroha ops bridge sccp manifests`
   - `iroha ops bridge sccp artifact --message-id <hex>`
-  - text mode prints compact chain/proof summaries, and `artifact` also decodes the inner proof envelope when it is present;
+  - text mode prints compact chain/proof summaries, and `artifact` now also decodes the inner proof envelope plus the normalized payload projection when they are present;
   - JSON mode emits the raw typed payload/JSON route response.
 
 - `GET /v1/zk/proofs` and `GET /v1/zk/proofs/count` accept bridge-aware filters:

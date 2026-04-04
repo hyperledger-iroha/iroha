@@ -4688,6 +4688,10 @@ fn sumeragi_paths() -> Map {
         Value::Object(sccp_message_artifact_operation()),
     );
     paths.insert(
+        "/v1/sccp/jobs/message/{message_id}".to_owned(),
+        Value::Object(sccp_message_job_operation()),
+    );
+    paths.insert(
         "/v1/sumeragi/validator-sets".to_owned(),
         Value::Object(sumeragi_validator_sets_operation()),
     );
@@ -5007,6 +5011,55 @@ fn sccp_message_artifact_operation() -> Map {
         "200".into(),
         json_response(
             "Typed SCCP transparent proof artifact.",
+            schema_ref("JsonValue"),
+        ),
+    );
+    responses.insert(
+        "404".into(),
+        json_response("SCCP message not found.", error_schema_reference()),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn sccp_message_job_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Bridge".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Fetch a normalized SCCP counterparty proof job.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns a prover-oriented SCCP job for a canonical message id, including the \
+             chain-specific normalized payload projection plus the original typed Nexus message \
+             bundle. Supports JSON or Norito content negotiation via the `Accept` header."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("sccpMessageJob".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![string_path_param(
+            "message_id",
+            "Canonical SCCP message id hex string.",
+        )]),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        json_response(
+            "Normalized SCCP counterparty proof job.",
             schema_ref("JsonValue"),
         ),
     );
@@ -10295,6 +10348,7 @@ mod tests {
         assert!(paths.contains_key("/v1/sccp/capabilities"));
         assert!(paths.contains_key("/v1/sccp/manifests"));
         assert!(paths.contains_key("/v1/sccp/artifacts/message/{message_id}"));
+        assert!(paths.contains_key("/v1/sccp/jobs/message/{message_id}"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets/{height}"));
         assert!(paths.contains_key("/health"));

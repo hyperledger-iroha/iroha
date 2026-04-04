@@ -4169,6 +4169,7 @@ export interface ToriiSccpCapabilities {
   governanceBundlePath: string;
   messageBundlePath: string;
   messageProofPath: string;
+  messageJobPath: string;
   proofManifestPath: string;
   legacyBurnRegistryBackend: string;
   legacyGovernanceRegistryBackend: string;
@@ -4284,6 +4285,72 @@ export interface ToriiSccpMessageTransparentProofArtifact {
   verifierTarget: ToriiSccpProofVerifierTarget;
   publicInputs: ToriiSccpMessageTransparentPublicInputs;
   proofBytes: string;
+  bundle: ToriiSccpMessageProofBundle;
+}
+
+export type ToriiSccpChainFamily = "Evm" | "Solana" | "Ton" | "Tron" | "Substrate";
+
+export type ToriiSccpNormalizedCodecValue =
+  | { kind: "TextUtf8"; value: string }
+  | { kind: "EvmHex"; bytes: string }
+  | { kind: "SolanaBase58"; bytes: string }
+  | { kind: "TonRaw"; workchain: number; account: string }
+  | { kind: "TronBase58Check"; payload: string };
+
+export type ToriiSccpPayloadProjection =
+  | {
+      kind: "AssetRegister";
+      value: {
+        version: number;
+        target_domain: number;
+        home_domain: number;
+        nonce: number;
+        asset_id: ToriiSccpNormalizedCodecValue;
+        decimals: number;
+      };
+    }
+  | {
+      kind: "RouteActivate";
+      value: {
+        version: number;
+        source_domain: number;
+        target_domain: number;
+        nonce: number;
+        asset_id: ToriiSccpNormalizedCodecValue;
+        route_id: ToriiSccpNormalizedCodecValue;
+      };
+    }
+  | {
+      kind: "Transfer";
+      value: {
+        version: number;
+        source_domain: number;
+        dest_domain: number;
+        nonce: number;
+        asset_home_domain: number;
+        asset_id: ToriiSccpNormalizedCodecValue;
+        amount: number;
+        sender: ToriiSccpNormalizedCodecValue;
+        recipient: ToriiSccpNormalizedCodecValue;
+        route_id: ToriiSccpNormalizedCodecValue;
+      };
+    };
+
+export interface ToriiSccpCounterpartyProofJob {
+  version: number;
+  chainFamily: ToriiSccpChainFamily;
+  chain: string;
+  localDomain: number;
+  counterpartyDomain: number;
+  proofFamily: string;
+  messageBackend: string;
+  registryBackend: string;
+  manifestSeed: string;
+  finalityModel: ToriiSccpProofFinalityModel;
+  verifierTarget: ToriiSccpProofVerifierTarget;
+  publicInputs: ToriiSccpMessageTransparentPublicInputs;
+  payloadKind: string;
+  payloadProjection: ToriiSccpPayloadProjection;
   bundle: ToriiSccpMessageProofBundle;
 }
 
@@ -7410,6 +7477,10 @@ export declare class ToriiClient {
     messageIdHex: string | Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiSccpMessageTransparentProofArtifact>;
+  getSccpMessageProofJob(
+    messageIdHex: string | Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiSccpCounterpartyProofJob>;
   getRuntimeAbiActive(
     options?: { signal?: AbortSignal },
   ): Promise<ToriiRuntimeAbiActiveResponse>;

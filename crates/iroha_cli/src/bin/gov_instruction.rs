@@ -4,9 +4,7 @@ use clap::{Parser, Subcommand};
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     account_address::parse_account_address,
-    data_model::isi::{
-        InstructionBox, decode_instruction_from_pair, governance::RegisterCitizen,
-    },
+    data_model::isi::{InstructionBox, decode_instruction_from_pair, governance::RegisterCitizen},
 };
 
 #[derive(Parser, Debug)]
@@ -68,8 +66,8 @@ fn main() -> Result<()> {
                 .wrap_err("failed to decode --payload-hex as lowercase hex")?;
             let instruction = decode_instruction_from_pair(&wire_id, &bytes)
                 .wrap_err("failed to decode instruction from --wire-id and --payload-hex")?;
-            let encoded =
-                norito::to_bytes(&instruction).wrap_err("failed to encode reconstructed instruction")?;
+            let encoded = norito::to_bytes(&instruction)
+                .wrap_err("failed to encode reconstructed instruction")?;
             print_tx_stdin_json(&encoded);
         }
     }

@@ -24,6 +24,8 @@ pub enum SccpCommand {
     Manifests,
     /// Fetch a typed SCCP message proof artifact by message id
     Artifact(ArtifactArgs),
+    /// Fetch a normalized SCCP counterparty proof job by message id
+    Job(ArtifactArgs),
 }
 
 #[derive(clap::Args, Debug)]
@@ -69,6 +71,7 @@ impl Run for Command {
                 SccpCommand::Capabilities => sccp_capabilities(context),
                 SccpCommand::Manifests => sccp_manifests(context),
                 SccpCommand::Artifact(args) => sccp_artifact(context, args),
+                SccpCommand::Job(args) => sccp_job(context, args),
             },
         }
     }
@@ -146,6 +149,23 @@ fn sccp_artifact(ctx: &mut impl RunContext, args: ArtifactArgs) -> Result<()> {
     }
 }
 
+fn sccp_job(ctx: &mut impl RunContext, args: ArtifactArgs) -> Result<()> {
+    match ctx.output_format() {
+        CliOutputFormat::Text => {
+            let job = ctx
+                .client_from_config()
+                .get_sccp_message_proof_job(&args.message_id)?;
+            ctx.println(render_sccp_job_summary(&job))
+        }
+        CliOutputFormat::Json => {
+            let job = ctx
+                .client_from_config()
+                .get_sccp_message_proof_job_json(&args.message_id)?;
+            ctx.print_data(&job)
+        }
+    }
+}
+
 fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
     let payloads = capabilities.message_payload_kinds.join(",");
     let codecs = capabilities
@@ -168,13 +188,14 @@ fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
         .collect::<Vec<_>>()
         .join(", ");
     format!(
-        "sccp capabilities: local={}({}) proof_family={} payloads={} codecs={} artifact={} manifests={} counterparties=[{}]",
+        "sccp capabilities: local={}({}) proof_family={} payloads={} codecs={} artifact={} job={} manifests={} counterparties=[{}]",
         capabilities.local_chain,
         capabilities.local_domain,
         capabilities.proof_family,
         payloads,
         codecs,
         capabilities.message_proof_path,
+        capabilities.message_job_path,
         capabilities.proof_manifest_path,
         counterparties
     )
@@ -190,14 +211,15 @@ fn render_sccp_manifests_summary(manifests: &SccpProofManifestSet) -> String {
     )];
     lines.extend(manifests.manifests.iter().map(|manifest| {
         format!(
-            "chain={} domain={} backend={} registry={} finality={:?} verifier={:?} codec={}",
+            "chain={} domain={} backend={} registry={} finality={:?} verifier={:?} codec={} submit={}",
             manifest.chain,
             manifest.counterparty_domain,
             manifest.message_backend,
             manifest.registry_backend,
             manifest.finality_model,
             manifest.verifier_target,
-            manifest.counterparty_account_codec_key
+            manifest.counterparty_account_codec_key,
+            render_sccp_submission_template_summary(&manifest.submission_template)
         )
     }));
     lines.join("\n")
@@ -206,6 +228,15 @@ fn render_sccp_manifests_summary(manifests: &SccpProofManifestSet) -> String {
 fn render_sccp_artifact_summary(
     artifact: &iroha_sccp::NexusSccpMessageTransparentProofV1,
 ) -> String {
+    let projection_summary =
+        match iroha_sccp::build_sccp_counterparty_proof_job_from_artifact(artifact) {
+            Some(job) => format!(
+                " projection={} submit={}",
+                render_sccp_payload_projection_summary(&job.payload_projection),
+                render_sccp_submission_template_summary(&job.submission_template)
+            ),
+            None => String::new(),
+        };
     let inner_summary =
         match iroha_sccp::decode_canonical_sccp_message_transparent_inner_proof_bytes(
             &artifact.proof_bytes,
@@ -223,7 +254,7 @@ fn render_sccp_artifact_summary(
             ),
         };
     format!(
-        "sccp artifact: message_id={} payload={} chain={}({}) backend={} proof_family={} finality_height={} commitment_root={}{}",
+        "sccp artifact: message_id={} payload={} chain={}({}) backend={} proof_family={} finality_height={} commitment_root={}{}{}",
         hex::encode(artifact.public_inputs.message_id),
         iroha_sccp::sccp_message_payload_kind_key(&artifact.bundle.payload),
         iroha_sccp::sccp_chain_key_for_domain(artifact.counterparty_domain).unwrap_or("unknown"),
@@ -232,8 +263,84 @@ fn render_sccp_artifact_summary(
         artifact.proof_family,
         artifact.public_inputs.finality_height,
         hex::encode(artifact.public_inputs.commitment_root),
+        projection_summary,
         inner_summary
     )
+}
+
+fn render_sccp_job_summary(job: &iroha_sccp::SccpCounterpartyProofJobV1) -> String {
+    format!(
+        "sccp job: message_id={} payload={} chain={}({}) backend={} registry={} finality={:?} verifier={:?} projection={} submit={}",
+        hex::encode(job.public_inputs.message_id),
+        job.payload_kind,
+        job.chain,
+        job.counterparty_domain,
+        job.message_backend,
+        job.registry_backend,
+        job.finality_model,
+        job.verifier_target,
+        render_sccp_payload_projection_summary(&job.payload_projection),
+        render_sccp_submission_template_summary(&job.submission_template)
+    )
+}
+
+fn render_sccp_submission_template_summary(
+    template: &iroha_sccp::SccpCounterpartySubmissionTemplateV1,
+) -> String {
+    let arguments = template
+        .required_arguments
+        .iter()
+        .map(|argument| argument.key.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(
+        "{}/{}/{}({})",
+        template.submission_kind, template.encoding, template.verifier_entrypoint, arguments
+    )
+}
+
+fn render_sccp_payload_projection_summary(
+    projection: &iroha_sccp::SccpPayloadProjectionV1,
+) -> String {
+    match projection {
+        iroha_sccp::SccpPayloadProjectionV1::AssetRegister(asset) => format!(
+            "asset_register asset_id={} home_domain={} decimals={}",
+            render_sccp_normalized_codec_value(&asset.asset_id),
+            asset.home_domain,
+            asset.decimals
+        ),
+        iroha_sccp::SccpPayloadProjectionV1::RouteActivate(route) => format!(
+            "route_activate asset_id={} route_id={}",
+            render_sccp_normalized_codec_value(&route.asset_id),
+            render_sccp_normalized_codec_value(&route.route_id)
+        ),
+        iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) => format!(
+            "transfer asset_id={} amount={} sender={} recipient={} route_id={}",
+            render_sccp_normalized_codec_value(&transfer.asset_id),
+            transfer.amount,
+            render_sccp_normalized_codec_value(&transfer.sender),
+            render_sccp_normalized_codec_value(&transfer.recipient),
+            render_sccp_normalized_codec_value(&transfer.route_id)
+        ),
+    }
+}
+
+fn render_sccp_normalized_codec_value(value: &iroha_sccp::SccpNormalizedCodecValueV1) -> String {
+    match value {
+        iroha_sccp::SccpNormalizedCodecValueV1::TextUtf8 { value } => format!("text:{value}"),
+        iroha_sccp::SccpNormalizedCodecValueV1::EvmHex { bytes } => {
+            format!("evm:0x{}", hex::encode(bytes))
+        }
+        iroha_sccp::SccpNormalizedCodecValueV1::SolanaBase58 { bytes } => {
+            format!("solana:{}", bs58::encode(bytes).into_string())
+        }
+        iroha_sccp::SccpNormalizedCodecValueV1::TonRaw { workchain, account } => {
+            format!("ton:{workchain}:{}", hex::encode(account))
+        }
+        iroha_sccp::SccpNormalizedCodecValueV1::TronBase58Check { payload } => {
+            format!("tron:{}", hex::encode(payload))
+        }
+    }
 }
 
 #[cfg(test)]
@@ -477,6 +584,7 @@ mod tests {
             governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}".to_owned(),
             message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
             message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
+            message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
             proof_manifest_path: "/v1/sccp/manifests".to_owned(),
             legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
             legacy_governance_registry_backend: "bridge/sccp/governance-v1".to_owned(),
@@ -623,6 +731,13 @@ mod tests {
         build_nexus_sccp_message_transparent_proof(&bundle).expect("build SCCP message artifact")
     }
 
+    fn sample_sccp_message_job() -> iroha_sccp::SccpCounterpartyProofJobV1 {
+        iroha_sccp::build_sccp_counterparty_proof_job_from_artifact(
+            &sample_sccp_message_proof_artifact(),
+        )
+        .expect("build SCCP proof job")
+    }
+
     #[test]
     fn emit_receipt_builds_record_bridge_receipt() {
         let mut ctx = TestContext::new();
@@ -745,7 +860,41 @@ mod tests {
         assert!(rendered.contains("payload=transfer"));
         assert!(rendered.contains("chain=ton(4)"));
         assert!(rendered.contains("finality_height=19"));
+        assert!(rendered.contains("projection=transfer"));
+        assert!(rendered.contains(
+            "recipient=ton:0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
         assert!(rendered.contains("inner_family=Ton"));
         assert!(rendered.contains("inner_payload=transfer"));
+    }
+
+    #[test]
+    fn sccp_job_text_command_prints_summary() {
+        let job = sample_sccp_message_job();
+        let message_id_hex = hex::encode(job.public_inputs.message_id);
+        let server = MockHttpServer::start(BTreeMap::from([(
+            format!("/v1/sccp/jobs/message/{message_id_hex}"),
+            MockHttpResponse {
+                content_type: "application/x-norito",
+                body: norito::to_bytes(&job).expect("encode job"),
+            },
+        )]));
+        let mut ctx = TestContext::with_base_url(CliOutputFormat::Text, server.base_url.clone());
+
+        Command::Sccp(SccpCommand::Job(ArtifactArgs {
+            message_id: format!("0x{message_id_hex}"),
+        }))
+        .run(&mut ctx)
+        .expect("run job command");
+
+        let rendered = ctx.printed_lines.join("\n");
+        assert!(rendered.contains("sccp job:"));
+        assert!(rendered.contains(&message_id_hex));
+        assert!(rendered.contains("payload=transfer"));
+        assert!(rendered.contains("chain=ton(4)"));
+        assert!(rendered.contains("projection=transfer"));
+        assert!(rendered.contains(
+            "recipient=ton:0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
     }
 }

@@ -1,8 +1,59 @@
 # Status
 
-Last updated: 2026-04-04
+Last updated: 2026-04-05
 
-## 2026-04-04 Follow-up: SCCP message artifacts now carry typed inner proof transcripts
+## 2026-04-05 Follow-up: SCCP message-job route is wired through Rust, Python, and JavaScript clients
+- Added first-class client fetch helpers for
+  `GET /v1/sccp/jobs/message/{message_id}` across the checked-in SDK layers:
+  - Rust now exposes
+    `Client::get_sccp_message_proof_job_json(...)` and
+    `Client::get_sccp_message_proof_job(...)` in `crates/iroha/src/client.rs`;
+  - the bridge CLI now exposes `iroha ops bridge sccp job --message-id <hex>`
+    with a compact text summary in `crates/iroha_cli/src/bridge.rs`;
+  - Python now exposes `ToriiClient.get_sccp_message_proof_job(...)` plus typed
+    `SccpCounterpartyProofJob`, `SccpPayloadProjection`, and
+    `SccpNormalizedCodecValue` wrappers in `python/iroha_torii_client`; and
+  - JavaScript now exposes `ToriiClient.getSccpMessageProofJob(...)` plus the
+    corresponding TypeScript types in `javascript/iroha_js`.
+- Extended the Python mock Torii server so
+  `POST /__mock__/sccp/config` can seed `message_jobs`, and the mock capability
+  advert now includes `message_job_path`.
+- Updated the SCCP bridge-proof docs to mention the new Rust / Python /
+  JavaScript job-fetch helpers directly.
+- Focused validation completed:
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-rust-client-sccp-job cargo test --offline -p iroha get_sccp_message_proof_ --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-cli-sccp-job cargo test --offline -p iroha_cli --features bridge --bin iroha bridge::tests::sccp_ -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-torii-current cargo test --offline -p iroha_torii sccp_ --lib -- --nocapture`
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test javascript/iroha_js/test/toriiClient.test.js --test-name-pattern "getSccpCapabilities|getSccpProofManifests|getSccpMessageProofArtifact|getSccpMessageProofJob"`
+  - `npm run build:dist` (from `javascript/iroha_js`)
+  - `python3 -m py_compile python/iroha_torii_client/__init__.py python/iroha_torii_client/client.py python/iroha_torii_client/mock.py python/iroha_torii_client/tests/test_client.py`
+  - `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k "sccp_capabilities or sccp_proof_manifests or sccp_message_proof_artifact or sccp_message_proof_job"`
+- Validation boundary:
+  - Rust server/client/CLI coverage is green for the SCCP message-job path;
+  - JavaScript source, tests, and dist bundle are green for the new helper; and
+  - Python source and targeted SCCP runtime tests are now green as well.
+
+## 2026-04-05 Follow-up: unstable-network 12-peer 4-fault repro is green on the current tree
+- Re-ran the exact reported failure
+  `extra_functional::unstable_network::unstable_network_12_peers_4_faults`
+  on the current worktree and did not reproduce the
+  `asset definition ... stayed absent after tx confirmation timeout` error.
+- Validation completed:
+  - `RUST_TEST_THREADS=1 IROHA_TEST_NETWORK_KEEP_DIRS=1 CARGO_TARGET_DIR=target_tmp_unstable_fix cargo test -p integration_tests --test mod extra_functional::unstable_network::unstable_network_12_peers_4_faults -- --nocapture`
+  - `for i in 1 2 3; do RUST_TEST_THREADS=1 CARGO_TARGET_DIR=target_tmp_unstable_fix cargo test -p integration_tests --test mod extra_functional::unstable_network::unstable_network_12_peers_4_faults -- --nocapture || exit 1; done`
+- The repeated reruns still show the same startup stress signal on this scenario:
+  several peers only exposed Torii `/status` after roughly `41s` to `43s`,
+  while `iroha_test_network` had already observed block `1` via best-effort
+  storage snapshots.
+- No source edits were required in this slice; the current tree already keeps
+  `register_numeric_asset(...)` green under these focused reruns.
+- Current verification boundary:
+  - `4/4` focused reruns of the exact failing test are green on the current
+    tree; and
+  - a fresh broad `cargo test --workspace` replay has not yet been rerun after
+    this verification-only pass.
+
+## 2026-04-05 Follow-up: SCCP message artifacts now carry typed inner proof transcripts and normalized proof jobs
 - Tightened the SCCP transparent proof artifact format in `crates/iroha_sccp`:
   - new message artifacts no longer store an opaque placeholder digest in
     `proof_bytes`;
@@ -13,9 +64,22 @@ Last updated: 2026-04-04
     previously recorded SCCP transparent artifacts remain structurally valid.
 - Added canonical inner-proof encode/decode helpers plus verifier coverage in
   `crates/iroha_sccp/src/lib.rs`.
+- Added normalized chain-specific payload projection helpers in
+  `crates/iroha_sccp/src/lib.rs`:
+  - `decode_sccp_normalized_codec_value(...)` now canonicalizes codec-bearing
+    SCCP fields into typed logical-text / EVM / Solana / TON / Tron values; and
+  - `build_sccp_counterparty_proof_job_from_bundle(...)` /
+    `build_sccp_counterparty_proof_job_from_artifact(...)` now materialize a
+    prover-oriented SCCP job with the normalized payload projection plus the
+    original typed message bundle.
+- Exposed that projection through Torii:
+  - `GET /v1/sccp/jobs/message/{message_id}` now returns the normalized
+    `SccpCounterpartyProofJobV1` document; and
+  - `GET /v1/sccp/capabilities` now advertises the matching
+    `message_job_path`.
 - Extended the operator surfaces that read SCCP artifacts:
   - the bridge CLI artifact summary now decodes the inner proof envelope when
-    present; and
+    present, and also prints the normalized payload projection when available; and
   - Torii bridge-proof JSON summaries now expose `inner_chain_family`,
     `inner_payload_kind`, and `inner_statement_hash` for typed SCCP artifacts.
 - Updated the SCCP bridge-proof docs to describe the stronger `proof_bytes`
@@ -27,7 +91,12 @@ Last updated: 2026-04-04
   - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-sccp-lib-target cargo test --offline -p iroha_sccp --lib -- --nocapture`
   - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-core-bridgeproofs-target cargo test --offline -p iroha_core --test bridge_proofs -- --nocapture`
   - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-torii-sccp-target cargo test --offline -p iroha_torii sccp_message_artifact_endpoint_roundtrips_json_and_norito --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-torii-sccp-target cargo test --offline -p iroha_torii sccp_message_job_endpoint_roundtrips_json_and_norito --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-torii-sccp-target cargo test --offline -p iroha_torii sccp_capabilities_endpoint_roundtrips_json_and_norito --lib -- --nocapture`
   - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-torii-sccp-target cargo test --offline -p iroha_torii bridge_record_to_json_includes_sccp_ --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-rust-client-target cargo test --offline -p iroha get_sccp_capabilities_ --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-cli-bridge-target cargo test --offline -p iroha_cli --features bridge --bin iroha bridge::tests::sccp_ -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-torii-sccp-target cargo test --offline -p iroha_torii --lib openapi::tests::generated_spec_includes_documented_paths -- --nocapture`
   - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-cli-bridge-target cargo test --offline -p iroha_cli --features bridge --bin iroha bridge::tests::sccp_artifact_text_command_prints_summary -- --nocapture`
 
 ## 2026-04-04 Follow-up: Taira hardening now targets direct public nodes and stake-driven validator admission
