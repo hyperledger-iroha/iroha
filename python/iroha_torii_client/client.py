@@ -2482,8 +2482,7 @@ class GovernanceManifestQuorumStats:
 class GovernanceManifestActivation:
     """Recent manifest activation record."""
 
-    namespace: str
-    contract_id: str
+    contract_address: str
     code_hash_hex: str
     abi_hash_hex: Optional[str]
     height: int
@@ -5180,8 +5179,11 @@ class ToriiClient:
         activations: List[GovernanceManifestActivation] = []
         for index, entry in enumerate(payload):
             record = self._ensure_mapping(entry, f"governance.recent_manifest_activations[{index}]")
-            namespace = "" if record.get("namespace") is None else str(record.get("namespace"))
-            contract_id = "" if record.get("contract_id") is None else str(record.get("contract_id"))
+            contract_address = (
+                ""
+                if record.get("contract_address") is None
+                else str(record.get("contract_address"))
+            )
             code_hash = "" if record.get("code_hash_hex") is None else str(record.get("code_hash_hex"))
             abi_hash = (
                 None
@@ -5190,8 +5192,7 @@ class ToriiClient:
             )
             activations.append(
                 GovernanceManifestActivation(
-                    namespace=namespace,
-                    contract_id=contract_id,
+                    contract_address=contract_address,
                     code_hash_hex=code_hash,
                     abi_hash_hex=abi_hash,
                     height=self._coerce_int(

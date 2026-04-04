@@ -22,10 +22,19 @@ use iroha_test_samples::ALICE_ID;
 use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
+fn deploy_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
+    iroha_data_model::smart_contract::ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &ALICE_ID,
+        0,
+        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+    )
+    .expect("deploy contract address")
+}
+
 fn deploy_payload(code_hex: &str, abi_hex: &str) -> DeployContractProposal {
     DeployContractProposal {
-        namespace: "apps".into(),
-        contract_id: "demo.contract".into(),
+        contract_address: deploy_contract_address(),
         code_hash_hex: ContractCodeHash::from_hex_str(code_hex).expect("code hash"),
         abi_hash_hex: ContractAbiHash::from_hex_str(abi_hex).expect("abi hash"),
         abi_version: AbiVersion::new(1),

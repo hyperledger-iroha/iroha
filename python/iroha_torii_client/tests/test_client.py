@@ -982,6 +982,11 @@ def test_get_status_snapshot_parses_payload_and_computes_metrics() -> None:
     assert lane_gov.alias == "lane-alpha"
     assert lane_gov.runtime_upgrade is not None
     assert lane_gov.runtime_upgrade.allowed_ids == ["alpha"]
+    activation = second.status.governance.recent_manifest_activations[0]
+    assert (
+        activation.contract_address
+        == "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s"
+    )
     assert second.status.lane_governance_sealed_aliases == ["sealed-one"]
     assert "peers" in second.status.raw
 
@@ -1022,8 +1027,7 @@ def _status_payload(
         },
         "recent_manifest_activations": [
             {
-                "namespace": "demo",
-                "contract_id": "contract.demo",
+                "contract_address": "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
                 "code_hash_hex": "deadbeef",
                 "abi_hash_hex": "cafebabe",
                 "height": 42,

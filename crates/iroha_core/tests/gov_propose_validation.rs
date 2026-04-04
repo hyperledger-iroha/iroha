@@ -41,38 +41,41 @@ fn mk_state_and_authority() -> (State, iroha_data_model::account::AccountId) {
     (state, account_id)
 }
 
+fn proposal_contract_address(
+    authority: &iroha_data_model::account::AccountId,
+) -> iroha_data_model::smart_contract::ContractAddress {
+    iroha_data_model::smart_contract::ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        authority,
+        0,
+        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+    )
+    .expect("proposal contract address")
+}
+
 fn compute_proposal_id(
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
     code_hex: &str,
     abi_hex: &str,
 ) -> [u8; 32] {
     use iroha_crypto::blake2::Blake2b512;
-    let namespace = namespace.trim();
-    let contract_id = contract_id.trim();
+    let contract_address = contract_address.as_ref().trim();
     let code = hex::decode(code_hex).expect("valid code hex");
     let abi = hex::decode(abi_hex).expect("valid abi hex");
-    let ns_len: u32 = namespace
+    let address_len: u32 = contract_address
         .len()
         .try_into()
-        .expect("namespace length fits u32");
-    let cid_len: u32 = contract_id
-        .len()
-        .try_into()
-        .expect("contract length fits u32");
+        .expect("contract address length fits u32");
     let mut input = Vec::with_capacity(
-        b"iroha:gov:proposal:v1|".len()
-            + core::mem::size_of::<u32>() * 2
-            + namespace.len()
-            + contract_id.len()
+        b"iroha:gov:proposal:v2|".len()
+            + core::mem::size_of::<u32>()
+            + contract_address.len()
             + code.len()
             + abi.len(),
     );
-    input.extend_from_slice(b"iroha:gov:proposal:v1|");
-    input.extend_from_slice(&ns_len.to_le_bytes());
-    input.extend_from_slice(namespace.as_bytes());
-    input.extend_from_slice(&cid_len.to_le_bytes());
-    input.extend_from_slice(contract_id.as_bytes());
+    input.extend_from_slice(b"iroha:gov:proposal:v2|");
+    input.extend_from_slice(&address_len.to_le_bytes());
+    input.extend_from_slice(contract_address.as_bytes());
     input.extend_from_slice(&code);
     input.extend_from_slice(&abi);
     let digest = Blake2b512::digest(&input);
@@ -88,12 +91,13 @@ fn canonical_abi_hex() -> String {
 #[test]
 fn propose_rejects_invalid_hex() {
     let (state, authority) = mk_state_and_authority();
+    let contract_address = proposal_contract_address(&authority);
     let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
     let perm: Permission = CanProposeContractDeployment {
-        contract_id: "demo.contract".into(),
+        contract_address: contract_address.clone(),
     }
     .into();
     Grant::account_permission(perm, authority.clone())
@@ -101,8 +105,7 @@ fn propose_rejects_invalid_hex() {
         .expect("grant propose");
 
     let result = iroha_data_model::isi::governance::ProposeDeployContract {
-        namespace: "apps".into(),
-        contract_id: "demo.contract".into(),
+        contract_address,
         code_hash_hex: "zz".into(),
         abi_hash_hex: canonical_abi_hex(),
         abi_version: "1".into(),
@@ -118,12 +121,13 @@ fn propose_rejects_invalid_hex() {
 #[test]
 fn propose_window_override_applied() {
     let (state, authority) = mk_state_and_authority();
+    let contract_address = proposal_contract_address(&authority);
     let header = BlockHeader::new(nonzero!(5_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
     let perm: Permission = CanProposeContractDeployment {
-        contract_id: "demo.contract".into(),
+        contract_address: contract_address.clone(),
     }
     .into();
     Grant::account_permission(perm, authority.clone())
@@ -136,8 +140,7 @@ fn propose_window_override_applied() {
     let code_hex = "11".repeat(32);
     let abi_hex = canonical_abi_hex();
     iroha_data_model::isi::governance::ProposeDeployContract {
-        namespace: "apps".into(),
-        contract_id: "demo.contract".into(),
+        contract_address: contract_address.clone(),
         code_hash_hex: code_hex.clone(),
         abi_hash_hex: abi_hex.clone(),
         abi_version: "1".into(),
@@ -148,7 +151,7 @@ fn propose_window_override_applied() {
     .execute(&authority, &mut stx)
     .expect("propose");
 
-    let pid = compute_proposal_id("apps", "demo.contract", &code_hex, &abi_hex);
+    let pid = compute_proposal_id(&contract_address, &code_hex, &abi_hex);
     let rid = hex::encode(pid);
     let rec = stx
         .world
@@ -163,12 +166,13 @@ fn propose_window_override_applied() {
 #[test]
 fn propose_window_below_min_delay_rejected() {
     let (state, authority) = mk_state_and_authority();
+    let contract_address = proposal_contract_address(&authority);
     let header = BlockHeader::new(nonzero!(4_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
 
     let perm: Permission = CanProposeContractDeployment {
-        contract_id: "demo.contract".into(),
+        contract_address: contract_address.clone(),
     }
     .into();
     Grant::account_permission(perm, authority.clone())
@@ -178,8 +182,7 @@ fn propose_window_below_min_delay_rejected() {
     let min_delay = stx.gov.min_enactment_delay;
     let lower = 4 + min_delay - 1;
     let result = iroha_data_model::isi::governance::ProposeDeployContract {
-        namespace: "apps".into(),
-        contract_id: "demo.contract".into(),
+        contract_address,
         code_hash_hex: "11".repeat(32),
         abi_hash_hex: canonical_abi_hex(),
         abi_version: "1".into(),
@@ -213,8 +216,7 @@ fn enact_requires_approved_status() {
         iroha_core::state::GovernanceProposalRecord {
             proposer: authority.clone(),
             kind: ProposalKind::DeployContract(DeployContractProposal {
-                namespace: "apps".into(),
-                contract_id: "demo.contract".into(),
+                contract_address: proposal_contract_address(&authority),
                 code_hash_hex: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),
                 abi_hash_hex: ContractAbiHash::from_hex_str(&canonical_abi_hex())
                     .expect("abi hash"),
@@ -241,11 +243,11 @@ fn enact_requires_approved_status() {
 #[test]
 fn proposal_record_exposes_deploy_payload() {
     let (_state, authority) = mk_state_and_authority();
+    let contract_address = proposal_contract_address(&authority);
     let record = iroha_core::state::GovernanceProposalRecord {
         proposer: authority.clone(),
         kind: ProposalKind::DeployContract(DeployContractProposal {
-            namespace: "apps".into(),
-            contract_id: "calc.v1".into(),
+            contract_address: contract_address.clone(),
             code_hash_hex: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),
             abi_hash_hex: ContractAbiHash::from_hex_str(&canonical_abi_hex()).expect("abi hash"),
             abi_version: AbiVersion::new(1),
@@ -259,8 +261,7 @@ fn proposal_record_exposes_deploy_payload() {
     let payload = record
         .as_deploy_contract()
         .expect("payload must be present");
-    assert_eq!(payload.namespace, "apps");
-    assert_eq!(payload.contract_id, "calc.v1");
+    assert_eq!(payload.contract_address, contract_address);
 }
 
 #[test]

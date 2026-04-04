@@ -95,6 +95,7 @@ aes-gcm = { version = "0.10.3", default-features = false, features = ["aes", "al
 qrcode = { version = "0.14.1", default-features = false, features = ["svg", "image"] }
 image = { version = "0.25.9", default-features = false, features = ["png", "gif"] }
 png = "0.18.0"
+pathdiff = "0.2.3"
 
 [build-dependencies]
 build-support = { path = "../build-support", default-features = false }

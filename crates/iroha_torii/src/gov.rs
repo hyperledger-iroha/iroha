@@ -2868,9 +2868,18 @@ mod tests {
             [],
         );
         if with_permissions {
+            let contract_address =
+                iroha_data_model::smart_contract::ContractAddress::derive(
+                    0,
+                    &authority,
+                    0,
+                    iroha_data_model::nexus::DataSpaceId::GLOBAL,
+                )
+                    .expect("contract address");
+            let contract_address_literal = contract_address.to_string();
             let propose = Permission::new(
                 "CanProposeContractDeployment".to_string(),
-                norito::json!({ "contract_id": "apps.demo" }),
+                norito::json!({ "contract_address": contract_address_literal }),
             );
             let ballot = Permission::new(
                 "CanSubmitGovernanceBallot".to_string(),

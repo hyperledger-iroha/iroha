@@ -27,6 +27,17 @@ use iroha_data_model::{
     prelude::{Account, Domain},
 };
 use mv::storage::StorageReadOnly;
+
+fn deploy_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
+    iroha_data_model::smart_contract::ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &iroha_test_samples::ALICE_ID,
+        0,
+        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+    )
+    .expect("deploy contract address")
+}
+
 #[test]
 fn referendum_open_and_close_by_height() {
     use nonzero_ext::nonzero;
@@ -63,8 +74,7 @@ fn referendum_open_and_close_by_height() {
         let proposal = GovernanceProposalRecord {
             proposer: iroha_test_samples::ALICE_ID.clone(),
             kind: ProposalKind::DeployContract(DeployContractProposal {
-                namespace: "apps".into(),
-                contract_id: "auto-window.v1".into(),
+                contract_address: deploy_contract_address(),
                 code_hash_hex: ContractCodeHash::from_hex_str(&hex::encode([0x11; 32]))
                     .expect("code hash"),
                 abi_hash_hex: ContractAbiHash::from_hex_str(&hex::encode([0x22; 32]))

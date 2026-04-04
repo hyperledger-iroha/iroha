@@ -170,7 +170,7 @@ Governance VK verification has no bypass: ballot verification always requires an
 
 RBAC
 - On-chain execution requires permissions:
-  - Proposals: `CanProposeContractDeployment{ contract_id }`
+  - Proposals: `CanProposeContractDeployment{ contract_address }`
   - Ballots: `CanSubmitGovernanceBallot{ referendum_id }`
   - Enactment: `CanEnactGovernance`
   - Slashing/appeals: `CanSlashGovernanceLock{ referendum_id }`, `CanRestituteGovernanceLock{ referendum_id }`

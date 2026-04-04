@@ -2,6 +2,95 @@
 
 Last updated: 2026-04-03
 
+## 2026-04-04 Follow-up: aggressive stepped sweep to 1000 TPS still shows early single-host knees
+- Ran a fresh sequential aggressive stepped sweep on the patched release
+  binaries in `/tmp/iroha_target_tieredfix/release` using:
+  - `4` peers, `0` faulty peers;
+  - `8` submitters;
+  - `max_inflight=8192`;
+  - `duration=60s`;
+  - `target_blocks=30`;
+  - `progress_interval=5s`;
+  - `progress_timeout=45s`; and
+  - offered load `10/25/50/75/100/150/250/500/750/1000 TPS`.
+- Artifacts:
+  - summary:
+    `/tmp/izanami_stepsweep1000_agg_20260404T000647/summary.tsv`
+  - per-rate logs:
+    `/tmp/izanami_stepsweep1000_agg_20260404T000647/*.log`
+- Permissioned results:
+  - `rc=0` at `10`, `25`, `50`, `75 TPS`;
+  - `rc=1` at `100 TPS`; and
+  - `rc=124` timeout-bucket failures at `150`, `250`, `500`, `750`,
+    `1000 TPS`.
+- NPoS results:
+  - `rc=0` at `10`, `25 TPS`;
+  - `rc=1` at `50`, `75`, `100 TPS`; and
+  - `rc=124` timeout-bucket failures at `150`, `250`, `500`, `750`,
+    `1000 TPS`.
+- Failure signatures on this sweep:
+  - no `route_unavailable`;
+  - no `opaque canonical asset definition ids do not carry a domain projection`;
+  - no top-level `missing_qc`; and
+  - no `no proposal observed for view before changing view`.
+- The dominant failure mode is single-host ingress/backpressure collapse:
+  - permissioned `100 TPS`:
+    `offered=6000`, `ingress_accepted=3287`, `inflight_peak=2297`,
+    `backlog_peak=2532`,
+    `izanami_ingress_failover_total=1108`,
+    `izanami_ingress_endpoint_unhealthy_total=953`;
+  - NPoS `50 TPS`:
+    `offered=2245`, `ingress_accepted=944`, `inflight_peak=379`,
+    `backlog_peak=380`,
+    `izanami_ingress_failover_total=420`,
+    `izanami_ingress_endpoint_unhealthy_total=132`;
+  - NPoS `100 TPS`:
+    `offered=6000`, `ingress_accepted=3194`, `inflight_peak=2445`,
+    `backlog_peak=2667`,
+    `izanami_ingress_failover_total=1097`,
+    `izanami_ingress_endpoint_unhealthy_total=834`.
+- Interpretation:
+  - on this aggressive shared-host harness, permissioned still has more
+    headroom than NPoS, but both modes fail from ingress/backlog pressure
+    long before `1000 TPS`; and
+  - the old NPoS commit panic is absent on this sweep, so the current limiter
+    is load-path saturation rather than the earlier opaque-asset-id crash.
+
+## 2026-04-03 Follow-up: NPoS opaque asset-definition crash was really in tiered snapshot sizing
+- The remaining NPoS `sumeragi-commit` panic was not fully fixed by the
+  earlier event-routing change. A fresh backtrace repro in
+  `/tmp/izanami_npos_backtrace_20260403T233914.log` showed the live caller was
+  `iroha_core::state::tiered::MeasuredBytes for AssetDefinitionId` during
+  `StateBlock::commit`, where opaque canonical ids were still forced through
+  `.domain()` / `.name()`.
+- Patched
+  `/Users/mtakemiya/dev/iroha/crates/iroha_core/src/state/tiered.rs` so
+  `MeasuredBytes for AssetDefinitionId` uses `try_domain()` / `try_name()` and
+  only charges projection heap bytes when a projection actually exists.
+- Added regression coverage in
+  `/Users/mtakemiya/dev/iroha/crates/iroha_core/src/state/tiered.rs`:
+  `measured_bytes_for_opaque_asset_definition_id_does_not_require_projection`.
+- Focused validation is green:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha_target_tieredfix cargo test -p iroha_core --lib measured_bytes_for_opaque_asset_definition_id_does_not_require_projection -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha_target_tieredfix cargo build --release -p izanami --bin izanami -p irohad --bin iroha3d`
+- Live NPoS smoke status on the patched release binaries:
+  - top-level smokes:
+    `/tmp/izanami_npos_tieredfix_smoke_20260403T235713.log` and
+    `/tmp/izanami_npos_tieredfix_keep_20260403T235931.log`
+  - retained peer logs under
+    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_bKQ8Wg`
+    no longer contain `asset/id.rs:332`,
+    `opaque canonical asset definition ids do not carry a domain projection`,
+    `panicked at`, or `sumeragi-commit`;
+  - retained peers reached commit-path logging at height `1` without the old
+    panic, for example `missing commit certificate; skipping commit roster
+    record, height: 1` in the kept peer stdout logs.
+- Remaining caveat:
+  - the tiny kept-dir smoke still gets interrupted by an external fatal-signal
+    shutdown very early, so it proves the specific commit panic is gone but it
+    is not yet a trustworthy throughput measurement.
+
 ## 2026-04-03 Follow-up: opaque asset-definition events no longer require domain origin
 - Patched the data-event routing for asset-definition events so opaque
   canonical `AssetDefinitionId` values no longer get forced through

@@ -2,6 +2,80 @@
 
 Last updated: 2026-04-03
 
+Latest sync (2026-04-04 aggressive stepped sweep to `1000 TPS`):
+the current patched tree no longer dies on the old NPoS opaque-asset-id panic,
+but the aggressive single-host load knee is still low and mode-dependent.
+
+- fresh sweep artifacts:
+  - `/tmp/izanami_stepsweep1000_agg_20260404T000647/summary.tsv`
+  - `/tmp/izanami_stepsweep1000_agg_20260404T000647/*.log`
+- matrix outcome:
+  - permissioned: green through `75 TPS`, red at `100 TPS`, timeout-bucket
+    failures from `150 TPS` upward;
+  - NPoS: green through `25 TPS`, red at `50/75/100 TPS`, timeout-bucket
+    failures from `150 TPS` upward.
+- the dominant high-load signature is ingress/backpressure collapse, not a
+  return of the older consensus bugs:
+  - no `route_unavailable`;
+  - no opaque-asset-id commit panic;
+  - no top-level `missing_qc`; and
+  - no `no proposal observed for view before changing view`.
+- representative failure metrics:
+  - permissioned `100 TPS`:
+    `offered=6000`, `ingress_accepted=3287`, `inflight_peak=2297`,
+    `backlog_peak=2532`;
+  - NPoS `50 TPS`:
+    `offered=2245`, `ingress_accepted=944`, `inflight_peak=379`,
+    `backlog_peak=380`; and
+  - NPoS `100 TPS`:
+    `offered=6000`, `ingress_accepted=3194`, `inflight_peak=2445`,
+    `backlog_peak=2667`.
+
+Open work for this slice now remains:
+- separate teardown noise from genuine throughput ceilings for the green
+  low-rate points, since the successful logs still end in post-shutdown
+  connection-refused polling and do not emit clean summary lines;
+- rerun the same stepped matrix with a less aggressive ingress shape
+  (`submitters` / `max_inflight`) to distinguish client-side saturation from
+  Sumeragi’s actual consensus knee; and
+- if high-load NPoS still bends materially earlier than permissioned under a
+  fairer ingress profile, trace the first NPoS-specific queueing bottleneck
+  beyond the already-fixed opaque-asset-id crash.
+
+Latest sync (2026-04-03 tiered `MeasuredBytes` fix for opaque asset ids):
+the live NPoS `sumeragi-commit` crash is no longer attributed to event routing.
+A fresh backtrace repro showed the active caller was
+`iroha_core::state::tiered::MeasuredBytes for AssetDefinitionId` during commit,
+and that path is now patched to tolerate opaque canonical ids.
+
+- shipped in:
+  - `/Users/mtakemiya/dev/iroha/crates/iroha_core/src/state/tiered.rs`
+- the fix:
+  - replaces `.domain()` / `.name()` in `MeasuredBytes for AssetDefinitionId`
+    with `try_domain()` / `try_name()`;
+  - only charges projection heap bytes when the opaque id actually carries a
+    projection; and
+  - adds a regression test for opaque canonical ids.
+- focused validation is green:
+  - `cargo fmt --all`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha_target_tieredfix cargo test -p iroha_core --lib measured_bytes_for_opaque_asset_definition_id_does_not_require_projection -- --nocapture`
+  - `CARGO_INCREMENTAL=0 CARGO_TARGET_DIR=/tmp/iroha_target_tieredfix cargo build --release -p izanami --bin izanami -p irohad --bin iroha3d`
+- fresh smoke evidence:
+  - `/tmp/izanami_npos_backtrace_20260403T233914.log` identified the old
+    caller in `state::tiered`;
+  - `/tmp/izanami_npos_tieredfix_smoke_20260403T235713.log` no longer shows
+    the old panic text at the top level; and
+  - retained peer logs under
+    `/var/folders/n2/xxntlr312qbfdnp0j1xp52hw0000gn/T/irohad_test_network_bKQ8Wg`
+    contain no `asset/id.rs:332` / `sumeragi-commit` panic after the fix.
+
+Open work for this slice now remains:
+- rerun a clean NPoS control sweep without the external fatal-signal teardown
+  interference, so the post-fix behavior is measured under a trustworthy run;
+- then rerun the stepped sweep through at least `100 TPS` again to see whether
+  NPoS now produces a real load curve instead of crashing at `2/2`; and
+- only after that, revisit the permissioned-vs-NPoS high-load knee.
+
 Latest sync (2026-04-03 opaque asset-definition event routing fix):
 the remaining NPoS `sumeragi-commit` panic is now patched at the event-model
 layer: opaque canonical asset-definition ids are no longer forced through

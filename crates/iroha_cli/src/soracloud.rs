@@ -125,6 +125,7 @@ const DEFAULT_CONTAINER_MANIFEST: &str = "fixtures/soracloud/sora_container_mani
 const DEFAULT_SERVICE_MANIFEST: &str = "fixtures/soracloud/sora_service_manifest_v1.json";
 const DEFAULT_AGENT_APARTMENT_MANIFEST: &str =
     "fixtures/soracloud/agent_apartment_manifest_v1.json";
+const SORACLOUD_APP_MANIFEST_VERSION_V1: u16 = 1;
 const AGENT_AUTONOMY_DEFAULT_BUDGET_UNITS: u64 = 10_000;
 const AGENT_AUTONOMY_MAX_HASH_BYTES: usize = 256;
 const AGENT_AUTONOMY_MAX_REQUEST_BYTES: usize = 16 * 1024;
@@ -150,6 +151,8 @@ thread_local! {
 /// Soracloud control-plane commands.
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
+    /// Scaffold and deploy multi-service Soracloud apps.
+    App(AppCommand),
     /// Scaffold baseline container/service manifests.
     Init(InitArgs),
     /// Validate manifests and register a new service deployment.
@@ -262,12 +265,44 @@ pub enum Command {
     ModelHostStatus(ModelHostStatusArgs),
 }
 
+#[derive(clap::Subcommand, Debug)]
+pub enum AppCommand {
+    /// Scaffold an app manifest plus a starter API service.
+    Init(AppInitArgs),
+    /// Deploy every service referenced by an app manifest.
+    Deploy(AppDeployArgs),
+    /// Upgrade every service referenced by an app manifest.
+    Upgrade(AppDeployArgs),
+    /// Show app-scoped Soracloud service status from the control plane.
+    Status(AppStatusArgs),
+}
+
+impl AppCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            Self::Init(args) => context.print_data(&args.run()?),
+            Self::Deploy(args) => {
+                let output =
+                    args.run(MutationMode::Deploy, &context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Self::Upgrade(args) => {
+                let output =
+                    args.run(MutationMode::Upgrade, &context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Self::Status(args) => context.print_data(&args.run()?),
+        }
+    }
+}
+
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         SORACLOUD_SUBMISSION_CONFIG.with(|slot| {
             *slot.borrow_mut() = Some(context.config().clone());
         });
         match self {
+            Command::App(command) => command.run(context),
             Command::Init(args) => context.print_data(&args.run()?),
             Command::Deploy(args) => {
                 let output = args.run(
@@ -554,6 +589,250 @@ impl InitArgs {
             container_manifest_hash: bundle.container_manifest_hash(),
             service_manifest_hash: bundle.service_manifest_hash(),
             template_artifacts,
+        })
+    }
+}
+
+/// Arguments for `app soracloud app init`.
+#[derive(clap::Args, Debug)]
+pub struct AppInitArgs {
+    /// Directory where the app manifest and starter service manifests will be created.
+    #[arg(long, value_name = "DIR", default_value = ".soracloud-app")]
+    output_dir: PathBuf,
+    /// Logical app name used in the scaffolded manifest.
+    #[arg(long, value_name = "NAME", default_value = "sora_app")]
+    app_name: String,
+    /// Version string used in the starter API service manifest.
+    #[arg(long, value_name = "VERSION", default_value = "0.1.0")]
+    app_version: String,
+    /// Overwrite existing files in the output directory.
+    #[arg(long)]
+    overwrite: bool,
+}
+
+impl AppInitArgs {
+    fn run(self) -> Result<AppInitOutput> {
+        fs::create_dir_all(&self.output_dir).wrap_err_with(|| {
+            format!(
+                "failed to create output directory {}",
+                self.output_dir.display()
+            )
+        })?;
+
+        let app_name = normalized_service_label(&self.app_name);
+        let public_url = format!("https://{app_name}.sora");
+        let manifest_path = self.output_dir.join("app_manifest.json");
+        ensure_can_write(&manifest_path, self.overwrite)?;
+
+        let mut container =
+            load_json::<SoraContainerManifestV1>(&workspace_fixture(DEFAULT_CONTAINER_MANIFEST))?;
+        let mut service =
+            load_json::<SoraServiceManifestV1>(&workspace_fixture(DEFAULT_SERVICE_MANIFEST))?;
+
+        let api_service_name: Name = format!("{app_name}_api")
+            .parse()
+            .wrap_err("invalid derived api service name for soracloud app scaffold")?;
+        container.runtime = SoraContainerRuntimeV1::Ivm;
+        container.bundle_path = "/bundles/api-service.to".to_owned();
+        container.entrypoint = "main".to_owned();
+        container.args = vec!["--http".to_owned(), "--port=8787".to_owned()];
+        container.env.insert(
+            "SORACLOUD_TEMPLATE".to_owned(),
+            "app-api-service".to_owned(),
+        );
+        container.capabilities.network =
+            SoraNetworkPolicyV1::Allowlist(vec!["torii.sora.internal".to_owned()]);
+        container.capabilities.allow_wallet_signing = false;
+        container.capabilities.allow_state_writes = true;
+        container.capabilities.allow_model_training = false;
+        container.lifecycle.healthcheck_path = Some("/healthz".to_owned());
+
+        service.service_name = api_service_name.clone();
+        service.service_version = self.app_version;
+        service.route = Some(SoraRouteTargetV1 {
+            host: format!("{app_name}.sora"),
+            path_prefix: "/api".to_owned(),
+            service_port: NonZeroU16::new(8787).expect("nonzero literal"),
+            visibility: SoraRouteVisibilityV1::Public,
+            tls_mode: SoraTlsModeV1::Required,
+        });
+        service.replicas = NonZeroU16::new(2).expect("nonzero literal");
+        service.state_bindings.clear();
+        service.handlers.clear();
+        service.artifacts.clear();
+        let container_hash = Hash::new(Encode::encode(&container));
+        service.container.manifest_hash = container_hash;
+        service.container.expected_schema_version = container.schema_version;
+
+        let api_dir = self.output_dir.join("services").join("api");
+        let container_path = api_dir.join("container_manifest.json");
+        let service_path = api_dir.join("service_manifest.json");
+        ensure_can_write(&container_path, self.overwrite)?;
+        ensure_can_write(&service_path, self.overwrite)?;
+        write_json(&container_path, &container)?;
+        write_json(&service_path, &service)?;
+
+        let manifest = SoracloudAppManifestV1 {
+            schema_version: SORACLOUD_APP_MANIFEST_VERSION_V1,
+            app_name: self.app_name,
+            public_url: public_url.clone(),
+            static_site: Some(SoracloudAppStaticSiteV1 {
+                dist_dir: "web/dist".to_owned(),
+                mount_path: "/".to_owned(),
+                api_base_path: Some("/api".to_owned()),
+                publish_label: Some(format!("{app_name}-site")),
+            }),
+            services: vec![SoracloudAppServiceRefV1 {
+                service_name: api_service_name.to_string(),
+                container_manifest: relative_path_string(&manifest_path, &container_path),
+                service_manifest: relative_path_string(&manifest_path, &service_path),
+                initial_configs: None,
+                initial_secrets: None,
+            }],
+        };
+        manifest.validate()?;
+        write_json(&manifest_path, &manifest)?;
+
+        Ok(AppInitOutput {
+            manifest_path: manifest_path.to_string_lossy().into_owned(),
+            public_url,
+            service_manifest_paths: vec![
+                container_path.to_string_lossy().into_owned(),
+                service_path.to_string_lossy().into_owned(),
+            ],
+        })
+    }
+}
+
+/// Arguments for `app soracloud app deploy` and `app soracloud app upgrade`.
+#[derive(clap::Args, Debug)]
+pub struct AppDeployArgs {
+    /// Path to a `SoracloudAppManifestV1` JSON document.
+    #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
+    manifest: PathBuf,
+    /// Torii base URL to execute deploy/upgrade against authoritative control-plane APIs.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for Torii mutation requests.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl AppDeployArgs {
+    fn run(
+        self,
+        mode: MutationMode,
+        authority: &AccountId,
+        key_pair: &KeyPair,
+    ) -> Result<AppMutationOutput> {
+        let manifest_path = self.manifest.clone();
+        let manifest_dir = manifest_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let manifest: SoracloudAppManifestV1 = load_json(&manifest_path)?;
+        manifest.validate()?;
+
+        let mode_label = match mode {
+            MutationMode::Deploy => "deploy",
+            MutationMode::Upgrade => "upgrade",
+        }
+        .to_owned();
+
+        let mut services = Vec::with_capacity(manifest.services.len());
+        for service in &manifest.services {
+            let container_manifest = resolve_manifest_path(&manifest_dir, &service.container_manifest);
+            let service_manifest = resolve_manifest_path(&manifest_dir, &service.service_manifest);
+            let response = DeployArgs {
+                container: container_manifest.clone(),
+                service: service_manifest.clone(),
+                initial_configs: service
+                    .initial_configs
+                    .as_deref()
+                    .map(|path| resolve_manifest_path(&manifest_dir, path)),
+                initial_secrets: service
+                    .initial_secrets
+                    .as_deref()
+                    .map(|path| resolve_manifest_path(&manifest_dir, path)),
+                torii_url: self.torii_url.clone(),
+                api_token: self.api_token.clone(),
+                timeout_secs: self.timeout_secs,
+            }
+            .run(mode, authority, key_pair)?;
+            services.push(AppServiceMutationOutput {
+                service_name: service.service_name.clone(),
+                container_manifest: container_manifest.to_string_lossy().into_owned(),
+                service_manifest: service_manifest.to_string_lossy().into_owned(),
+                response,
+            });
+        }
+
+        Ok(AppMutationOutput {
+            app_name: manifest.app_name,
+            public_url: manifest.public_url,
+            mode: mode_label,
+            static_site: manifest.static_site,
+            services,
+        })
+    }
+}
+
+/// Arguments for `app soracloud app status`.
+#[derive(clap::Args, Debug)]
+pub struct AppStatusArgs {
+    /// Path to a `SoracloudAppManifestV1` JSON document.
+    #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
+    manifest: PathBuf,
+    /// Torii base URL for authoritative Soracloud status.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when querying live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for live control-plane status query.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+}
+
+impl AppStatusArgs {
+    fn run(self) -> Result<AppStatusOutput> {
+        let manifest: SoracloudAppManifestV1 = load_json(&self.manifest)?;
+        manifest.validate()?;
+        let (endpoint, payload) = fetch_torii_soracloud_status(
+            require_torii_url(self.torii_url.as_deref())?,
+            None,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+        )?;
+
+        let tracked_services = payload
+            .get("services")
+            .and_then(norito::json::Value::as_array)
+            .map(|services| {
+                services
+                    .iter()
+                    .filter(|entry| {
+                        entry
+                            .get("service_name")
+                            .and_then(norito::json::Value::as_str)
+                            .map(|name| manifest.services.iter().any(|service| service.service_name == name))
+                            .unwrap_or(false)
+                    })
+                    .cloned()
+                    .collect::<Vec<_>>()
+            })
+            .unwrap_or_default();
+
+        Ok(AppStatusOutput {
+            app_name: manifest.app_name,
+            public_url: manifest.public_url,
+            source: "torii_control_plane".to_owned(),
+            torii_endpoint: Some(endpoint),
+            static_site: manifest.static_site,
+            services: tracked_services,
         })
     }
 }
@@ -3403,6 +3682,161 @@ impl StatusOutput {
             network_status: Some(network_status),
         }
     }
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SoracloudAppManifestV1 {
+    schema_version: u16,
+    app_name: String,
+    public_url: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    static_site: Option<SoracloudAppStaticSiteV1>,
+    #[norito(default)]
+    services: Vec<SoracloudAppServiceRefV1>,
+}
+
+impl SoracloudAppManifestV1 {
+    fn validate(&self) -> Result<()> {
+        if self.schema_version != SORACLOUD_APP_MANIFEST_VERSION_V1 {
+            return Err(eyre!(
+                "unsupported app manifest schema version {}; expected {}",
+                self.schema_version,
+                SORACLOUD_APP_MANIFEST_VERSION_V1
+            ));
+        }
+        if self.app_name.trim().is_empty() {
+            return Err(eyre!("app manifest field `app_name` must not be empty"));
+        }
+        if !(self.public_url.starts_with("https://") || self.public_url.starts_with("http://")) {
+            return Err(eyre!(
+                "app manifest field `public_url` must start with http:// or https://"
+            ));
+        }
+        if self.services.is_empty() {
+            return Err(eyre!("app manifest must declare at least one service"));
+        }
+
+        let mut seen_service_names = BTreeSet::new();
+        for service in &self.services {
+            service.validate()?;
+            if !seen_service_names.insert(service.service_name.clone()) {
+                return Err(eyre!(
+                    "duplicate app service `{}` in app manifest",
+                    service.service_name
+                ));
+            }
+        }
+
+        if let Some(static_site) = self.static_site.as_ref() {
+            static_site.validate()?;
+        }
+
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SoracloudAppStaticSiteV1 {
+    dist_dir: String,
+    mount_path: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    api_base_path: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    publish_label: Option<String>,
+}
+
+impl SoracloudAppStaticSiteV1 {
+    fn validate(&self) -> Result<()> {
+        if self.dist_dir.trim().is_empty() {
+            return Err(eyre!("app static site field `dist_dir` must not be empty"));
+        }
+        if !self.mount_path.starts_with('/') {
+            return Err(eyre!("app static site field `mount_path` must start with '/'"));
+        }
+        if let Some(api_base_path) = self.api_base_path.as_deref()
+            && !api_base_path.starts_with('/')
+        {
+            return Err(eyre!("app static site field `api_base_path` must start with '/'"));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SoracloudAppServiceRefV1 {
+    service_name: String,
+    container_manifest: String,
+    service_manifest: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    initial_configs: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    initial_secrets: Option<String>,
+}
+
+impl SoracloudAppServiceRefV1 {
+    fn validate(&self) -> Result<()> {
+        if self.service_name.trim().is_empty() {
+            return Err(eyre!("app service field `service_name` must not be empty"));
+        }
+        if self.container_manifest.trim().is_empty() {
+            return Err(eyre!(
+                "app service `{}` field `container_manifest` must not be empty",
+                self.service_name
+            ));
+        }
+        if self.service_manifest.trim().is_empty() {
+            return Err(eyre!(
+                "app service `{}` field `service_manifest` must not be empty",
+                self.service_name
+            ));
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AppInitOutput {
+    manifest_path: String,
+    public_url: String,
+    service_manifest_paths: Vec<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AppMutationOutput {
+    app_name: String,
+    public_url: String,
+    mode: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    static_site: Option<SoracloudAppStaticSiteV1>,
+    services: Vec<AppServiceMutationOutput>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AppServiceMutationOutput {
+    service_name: String,
+    container_manifest: String,
+    service_manifest: String,
+    response: norito::json::Value,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AppStatusOutput {
+    app_name: String,
+    public_url: String,
+    source: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    torii_endpoint: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    static_site: Option<SoracloudAppStaticSiteV1>,
+    services: Vec<norito::json::Value>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -9613,6 +10047,23 @@ fn fetch_torii_soracloud_model_host_status(
 fn require_torii_url<'a>(torii_url: Option<&'a str>) -> Result<&'a str> {
     torii_url
         .ok_or_else(|| eyre!("--torii-url is required for Soracloud live control-plane access"))
+}
+
+fn resolve_manifest_path(base_dir: &Path, path: &str) -> PathBuf {
+    let candidate = PathBuf::from(path);
+    if candidate.is_absolute() {
+        candidate
+    } else {
+        base_dir.join(candidate)
+    }
+}
+
+fn relative_path_string(from_file: &Path, to_path: &Path) -> String {
+    let base_dir = from_file.parent().unwrap_or_else(|| Path::new("."));
+    pathdiff::diff_paths(to_path, base_dir)
+        .unwrap_or_else(|| to_path.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
 }
 
 fn load_json<T>(path: &Path) -> Result<T>

@@ -70,23 +70,38 @@ fn opaque_asset_definition_id() -> AssetDefinitionId {
     .expect("opaque asset definition id")
 }
 
+fn contract_address(
+    authority: &AccountId,
+    deploy_nonce: u64,
+) -> iroha_data_model::smart_contract::ContractAddress {
+    iroha_data_model::smart_contract::ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        authority,
+        deploy_nonce,
+        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+    )
+    .expect("contract address")
+}
+
 fn assert_contract_trigger_metadata(
     metadata: &Metadata,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
     code_hash: iroha_crypto::Hash,
     trigger_id: &TriggerId,
     user_key: &str,
     user_value: &str,
 ) {
-    let key_namespace: Name = "contract_namespace".parse().expect("namespace key");
-    let key_contract: Name = "contract_id".parse().expect("contract_id key");
+    let key_address: Name = "contract_address".parse().expect("contract address key");
     let key_entrypoint: Name = "contract_entrypoint".parse().expect("entrypoint key");
     let key_code: Name = "contract_code_hash".parse().expect("code hash key");
     let key_trigger: Name = "contract_trigger_id".parse().expect("trigger id key");
-    assert_eq!(metadata.get(&key_namespace), Some(&Json::from(namespace)));
-    assert_eq!(metadata.get(&key_contract), Some(&Json::from(contract_id)));
+    assert_eq!(
+        metadata.get(&key_address),
+        Some(&Json::from(contract_address.to_string().as_str()))
+    );
+    assert!(metadata.get(&"contract_namespace".parse::<Name>().expect("legacy namespace key")).is_none());
+    assert!(metadata.get(&"contract_id".parse::<Name>().expect("legacy contract key")).is_none());
     assert_eq!(metadata.get(&key_entrypoint), Some(&Json::from(entrypoint)));
     let code_hash_json = Json::from(code_hash.to_string().as_str());
     assert_eq!(metadata.get(&key_code), Some(&code_hash_json));
@@ -100,6 +115,7 @@ fn assert_contract_trigger_metadata(
 #[allow(clippy::too_many_lines)]
 fn activate_registers_manifest_triggers_and_deactivate_removes() {
     let (state, authority, kp) = setup_state();
+    let contract_address = contract_address(&authority, 0);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -169,8 +185,7 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
         .expect("register manifest");
 
     ActivateContractInstance {
-        namespace: "apps".to_string(),
-        contract_id: "demo.contract".to_string(),
+        contract_address: contract_address.clone(),
         code_hash,
     }
     .execute(&authority, &mut stx)
@@ -183,16 +198,16 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
         .get(&trigger_id)
         .expect("trigger registered");
     let metadata = &action.metadata;
-    let key_namespace: Name = "contract_namespace".parse().expect("namespace key");
-    let key_contract: Name = "contract_id".parse().expect("contract_id key");
+    let key_address: Name = "contract_address".parse().expect("contract address key");
     let key_entrypoint: Name = "contract_entrypoint".parse().expect("entrypoint key");
     let key_code: Name = "contract_code_hash".parse().expect("code hash key");
     let key_trigger: Name = "contract_trigger_id".parse().expect("trigger id key");
-    assert_eq!(metadata.get(&key_namespace), Some(&Json::from("apps")));
     assert_eq!(
-        metadata.get(&key_contract),
-        Some(&Json::from("demo.contract"))
+        metadata.get(&key_address),
+        Some(&Json::from(contract_address.to_string().as_str()))
     );
+    assert!(metadata.get(&"contract_namespace".parse::<Name>().expect("legacy namespace key")).is_none());
+    assert!(metadata.get(&"contract_id".parse::<Name>().expect("legacy contract key")).is_none());
     assert_eq!(metadata.get(&key_entrypoint), Some(&Json::from("run")));
     let code_hash_json = Json::from(code_hash.to_string().as_str());
     assert_eq!(metadata.get(&key_code), Some(&code_hash_json));
@@ -202,8 +217,7 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     assert_eq!(metadata.get(&tag_key), Some(&Json::from("alpha")));
 
     DeactivateContractInstance {
-        namespace: "apps".to_string(),
-        contract_id: "demo.contract".to_string(),
+        contract_address: contract_address.clone(),
         reason: None,
     }
     .execute(&authority, &mut stx)
@@ -216,6 +230,7 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
 #[allow(clippy::too_many_lines)]
 fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes_them() {
     let (state, authority, kp) = setup_state();
+    let contract_address = contract_address(&authority, 0);
     let header = iroha_data_model::block::BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block = state.block(header);
     let mut stx = block.transaction();
@@ -312,8 +327,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
         .expect("register manifest");
 
     ActivateContractInstance {
-        namespace: "apps".to_string(),
-        contract_id: "demo.contract".to_string(),
+        contract_address: contract_address.clone(),
         code_hash,
     }
     .execute(&authority, &mut stx)
@@ -335,8 +349,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     );
     assert_contract_trigger_metadata(
         &data_action.metadata,
-        "apps",
-        "demo.contract",
+        &contract_address,
         "run",
         code_hash,
         &data_trigger_id,
@@ -356,8 +369,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     );
     assert_contract_trigger_metadata(
         &pipeline_action.metadata,
-        "apps",
-        "demo.contract",
+        &contract_address,
         "run",
         code_hash,
         &pipeline_trigger_id,
@@ -366,8 +378,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     );
 
     DeactivateContractInstance {
-        namespace: "apps".to_string(),
-        contract_id: "demo.contract".to_string(),
+        contract_address: contract_address.clone(),
         reason: None,
     }
     .execute(&authority, &mut stx)
@@ -447,6 +458,7 @@ seiyaku Test {{
         .expect("compile source with manifest");
     let parsed = ivm::ProgramMetadata::parse(&program).expect("ivm header");
     let code_hash = iroha_crypto::Hash::new(&program[parsed.header_len..]);
+    let contract_address = contract_address(&authority, 0);
 
     RegisterSmartContractBytes {
         code_hash,
@@ -462,8 +474,7 @@ seiyaku Test {{
     .expect("register manifest");
 
     ActivateContractInstance {
-        namespace: "apps".to_string(),
-        contract_id: "kotodama.demo".to_string(),
+        contract_address: contract_address.clone(),
         code_hash,
     }
     .execute(&authority, &mut stx)
@@ -490,8 +501,7 @@ seiyaku Test {{
     assert_eq!(data_action.authority, authority);
     assert_contract_trigger_metadata(
         &data_action.metadata,
-        "apps",
-        "kotodama.demo",
+        &contract_address,
         "run",
         code_hash,
         &data_trigger_id,
@@ -512,8 +522,7 @@ seiyaku Test {{
     assert_eq!(pipeline_action.authority, authority);
     assert_contract_trigger_metadata(
         &pipeline_action.metadata,
-        "apps",
-        "kotodama.demo",
+        &contract_address,
         "run",
         code_hash,
         &pipeline_trigger_id,
