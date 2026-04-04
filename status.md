@@ -2,6 +2,81 @@
 
 Last updated: 2026-04-03
 
+## 2026-04-03 Follow-up: opaque asset-definition snapshot sizing no longer panics Soracloud commits
+- Patched hot-tier snapshot sizing so opaque canonical
+  `AssetDefinitionId` values are measured without forcing a synthetic
+  `(domain, name)` projection.
+- `crates/iroha_core/src/state/tiered.rs` now:
+  - measures `AssetDefinitionId` domain/name overhead only when a real
+    projection is present via `try_domain()` / `try_name()`;
+  - preserves the base-size accounting for opaque canonical ids; and
+  - includes a regression test covering an opaque UUID-backed asset
+    definition id.
+- This clears the remaining Soracloud commit-time peer crash that was still
+  surfacing as:
+  `opaque canonical asset definition ids do not carry a domain projection`.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_core measured_bytes_cover_opaque_asset_definition_id -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test iroha_cli soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_commands_use_live_torii_control_plane -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test iroha_cli soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane -- --nocapture`
+
+## 2026-04-03 Follow-up: transaction confirmation now fails fast on dead Torii sockets
+- Hardened the `iroha` client confirmation path so `submit_blocking` no
+  longer silently spins when Torii is unreachable during post-submit status
+  checks.
+- `crates/iroha/src/client.rs` now:
+  - treats `std::io::ErrorKind::ConnectionRefused` from pipeline-status or
+    committed-query confirmation lookups as a final confirmation error;
+  - stops `retry_transaction_committed(...)` immediately on final
+    confirmation errors instead of retrying them; and
+  - preserves the existing committed-query fallback only for non-final
+    confirmation failures.
+- Added focused client regression coverage for:
+  - pipeline lookup refusing the Torii socket;
+  - committed-query fallback refusing the Torii socket; and
+  - the retry helper short-circuiting final confirmation errors.
+- Also cleaned the remaining validator bootstrap/runtime fallout in the test
+  harness:
+  - validator runtime accounts now use streaming Ed25519 identities instead
+    of BLS topology keys; and
+  - the Soracloud restart regression
+    `soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_control_plane`
+    is green on the patched client path.
+- Validation completed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha --lib connection_refused -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha --lib retry_transaction_committed_stops_on_final_error -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --lib`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_control_plane -- --nocapture`
+
+## 2026-04-03 Follow-up: dataspace-qualified domain and contract-address fallout is compile-clean
+- Finished the remaining compile fallout from:
+  - removing `DomainId::from_str` in favor of explicit dataspace-qualified
+    domain construction; and
+  - migrating governance / contract-instance code paths from
+    `(namespace, contract_id)` to canonical `ContractAddress`.
+- Repaired the last stale call sites in:
+  - `crates/iroha_test_network/src/config.rs`;
+  - `integration_tests/src/sync.rs`;
+  - `integration_tests/tests/zk_confidential_localnet.rs`;
+  - `integration_tests/tests/common/sora_runtime_governance.rs`;
+  - `integration_tests/tests/sora_parliament_lifecycle_smoke.rs`;
+  - `mochi/mochi-core/src/chaos.rs`; and
+  - `crates/izanami/src/instructions.rs`.
+- Updated SORA governance smoke coverage to:
+  - derive stable `ContractAddress` values for governed deployments;
+  - compute proposal ids from contract addresses; and
+  - query governed contract bindings through `/v1/gov/contracts/{contract_address}`
+    instead of the removed namespace/contract-id filter helper.
+- Validation completed:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test --workspace --no-run`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p integration_tests --test sora_parliament_lifecycle_smoke`
+
 ## 2026-04-03 Follow-up: opaque asset-definition events no longer require domain origin
 - Patched the data-event routing for asset-definition events so opaque
   canonical `AssetDefinitionId` values no longer get forced through

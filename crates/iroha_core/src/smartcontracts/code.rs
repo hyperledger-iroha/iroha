@@ -191,10 +191,13 @@ pub fn fetch_instance_binding(
 #[cfg(test)]
 mod tests {
     use iroha_data_model::{
-        isi::SetParameter,
+        isi::{Grant, SetParameter},
+        nexus::DataSpaceId,
         parameter::custom::{CustomParameter, CustomParameterId},
+        permission,
         prelude::*,
     };
+    use iroha_executor_data_model::permission::parameter::CanSetParameters;
 
     use super::*;
     use crate::{
@@ -249,10 +252,8 @@ mod tests {
         let (state, authority, kp) = test_state();
         let mut block = state.block(default_header(1));
         let mut stx = block.transaction();
-        let contract_address = ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL)
-            .expect("contract address");
 
-        // Register bytecode and manifest, then activate a contract address binding.
+        // Register bytecode and manifest, then activate a public namespace binding.
         let code = minimal_ivm_program(1);
         let code_hash =
             register_code_bytes(&authority, code.clone(), &mut stx).expect("register bytecode");
@@ -269,7 +270,13 @@ mod tests {
         }
         .signed(&kp);
         register_manifest(&authority, manifest.clone(), &mut stx).expect("register manifest");
-
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
         activate_instance(&authority, contract_address.clone(), code_hash, &mut stx)
             .expect("activate instance");
 
@@ -293,13 +300,33 @@ mod tests {
     }
 
     #[test]
-    fn activate_instance_is_idempotent_for_same_contract_address() {
+    fn protected_contract_activation_succeeds_with_governance_permission() {
         let (state, authority, kp) = test_state();
         let mut block = state.block(default_header(1));
         let mut stx = block.transaction();
-        let contract_address = ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL)
-            .expect("contract address");
 
+        // Grant only the governance/parameter permissions needed to protect a namespace.
+        let enact: permission::Permission =
+            iroha_executor_data_model::permission::governance::CanEnactGovernance.into();
+        Grant::account_permission(enact, authority.clone())
+            .execute(&authority, &mut stx)
+            .expect("grant CanEnactGovernance");
+        let set_params: permission::Permission = CanSetParameters.into();
+        Grant::account_permission(set_params, authority.clone())
+            .execute(&authority, &mut stx)
+            .expect("grant CanSetParameters");
+
+        // Protect the `apps` namespace.
+        let id = CustomParameterId("gov_protected_namespaces".parse().unwrap());
+        let payload = iroha_primitives::json::Json::from(
+            norito::json::array(["apps"]).expect("serialize protected namespaces"),
+        );
+        let custom = CustomParameter::new(id, payload);
+        SetParameter::new(Parameter::Custom(custom))
+            .execute(&authority, &mut stx)
+            .expect("set protected namespaces");
+
+        // Register code + manifest and activate under governance protection.
         let code = minimal_ivm_program(1);
         let code_hash =
             register_code_bytes(&authority, code.clone(), &mut stx).expect("register bytecode");
@@ -315,15 +342,21 @@ mod tests {
         }
         .signed(&kp);
         register_manifest(&authority, manifest, &mut stx).expect("register manifest");
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            1,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
         activate_instance(&authority, contract_address.clone(), code_hash, &mut stx)
-            .expect("initial activation");
-        activate_instance(&authority, contract_address.clone(), code_hash, &mut stx)
-            .expect("re-activating the same binding should be a no-op");
-        assert_eq!(
-            stx.world.contract_instances.get(&contract_address),
-            Some(&code_hash),
-            "contract address should stay bound to the same code hash"
-        );
+            .expect("governed activation");
+        stx.apply();
+        block.commit().expect("commit block");
+
+        let view = state.view();
+        let bound = fetch_instance_binding(&view, &contract_address).expect("binding exists");
+        assert_eq!(bound, code_hash);
     }
 
     #[test]

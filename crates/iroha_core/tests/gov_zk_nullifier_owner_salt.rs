@@ -114,7 +114,9 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         let mut stx = sblock.transaction();
         // Grant permissions to ALICE to propose and submit ballots
         let p1: Permission = CanProposeContractDeployment {
-            contract_id: "demo.contract".to_string(),
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address"),
         }
         .into();
         Grant::account_permission(p1, alice_id.clone())
@@ -143,8 +145,9 @@ fn zk_ballot_nullifier_commit_duplicate_rejected() {
         .expect("register vk");
         // Propose a Zk-mode referendum (explicit or default)
         let prop = ProposeDeployContract {
-            namespace: "apps".to_string(),
-            contract_id: "demo.contract".to_string(),
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address"),
             code_hash_hex: "aa".repeat(32),
             abi_hash_hex: canonical_abi_hex(),
             abi_version: "1".to_string(),

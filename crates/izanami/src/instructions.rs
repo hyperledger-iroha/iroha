@@ -88,7 +88,7 @@ use sorafs_manifest::{
 pub const IZANAMI_BASE_SEED: &str = "izanami-chaos";
 use tokio::sync::Mutex;
 
-use crate::config::{NexusProfile, WorkloadProfile};
+use crate::config::WorkloadProfile;
 use crate::smart_contracts;
 
 /// Record describing an account and its signing material.

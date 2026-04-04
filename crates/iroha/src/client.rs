@@ -5122,6 +5122,101 @@ mod evidence_http_tests {
             _ => panic!("expected start query"),
         }
     }
+
+    #[test]
+    fn transaction_confirmation_status_stops_on_connection_refused_pipeline_lookup() {
+        use std::io::{Error, ErrorKind};
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                store.lock().expect("lock snapshot store").push(snapshot);
+                Err(eyre::Report::from(Error::new(
+                    ErrorKind::ConnectionRefused,
+                    "torii down",
+                )))
+            }
+        };
+
+        let result = with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            mark_data_model_compatible(&client);
+            let hash =
+                HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+                    Hash::prehashed([0x45; Hash::LENGTH]),
+                );
+            let entry_hash: HashOf<crate::data_model::transaction::TransactionEntrypoint> =
+                HashOf::from_untyped_unchecked(Hash::prehashed([0x45; Hash::LENGTH]));
+            client.transaction_confirmation_status(hash, entry_hash)
+        });
+
+        let err = result.expect_err("connection refusal should fail fast");
+        assert!(
+            err.to_string().contains("Torii is unreachable"),
+            "unexpected error: {err:?}"
+        );
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(
+            snapshots.len(),
+            1,
+            "should not fall back to committed query"
+        );
+        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+    }
+
+    #[test]
+    fn transaction_confirmation_status_stops_on_connection_refused_committed_lookup() {
+        use std::io::{Error, ErrorKind};
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let payload = norito::json!({
+            "hash": "deadbeef",
+            "status": { "kind": "Queued" },
+            "scope": "auto",
+            "resolved_from": "queue",
+        });
+        let status_body = norito::json::to_string(&payload).expect("status payload");
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_string();
+                store.lock().expect("lock snapshot store").push(snapshot);
+                match path.as_str() {
+                    "/v1/pipeline/transactions/status" => {
+                        Ok(json_response(StatusCode::OK, &status_body))
+                    }
+                    "/query" => Err(eyre::Report::from(Error::new(
+                        ErrorKind::ConnectionRefused,
+                        "torii down",
+                    ))),
+                    path => Err(eyre::eyre!("unexpected request path: {path}")),
+                }
+            }
+        };
+
+        let result = with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            mark_data_model_compatible(&client);
+            let hash =
+                HashOf::<crate::data_model::transaction::SignedTransaction>::from_untyped_unchecked(
+                    Hash::prehashed([0x46; Hash::LENGTH]),
+                );
+            let entry_hash: HashOf<crate::data_model::transaction::TransactionEntrypoint> =
+                HashOf::from_untyped_unchecked(Hash::prehashed([0x46; Hash::LENGTH]));
+            client.transaction_confirmation_status(hash, entry_hash)
+        });
+
+        let err = result.expect_err("connection refusal should fail fast");
+        assert!(
+            err.to_string().contains("Torii is unreachable"),
+            "unexpected error: {err:?}"
+        );
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        assert_eq!(snapshots[1].url.path(), "/query");
+    }
 }
 
 /// Private structure to incapsulate error reporting for HTTP response.
@@ -5328,6 +5423,25 @@ fn is_final_tx_confirmation_error(err: &eyre::Report) -> bool {
 
 fn should_fallback_after_confirmation_error(err: &eyre::Report) -> bool {
     !is_final_tx_confirmation_error(err)
+}
+
+fn is_tx_confirmation_connection_refused(err: &eyre::Report) -> bool {
+    err.chain().any(|cause| {
+        cause
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::ConnectionRefused)
+    })
+}
+
+fn mark_tx_confirmation_transport_error_final(
+    err: eyre::Report,
+    context: &'static str,
+) -> eyre::Report {
+    if is_tx_confirmation_connection_refused(&err) {
+        tx_confirmation_final_report(err.wrap_err(context))
+    } else {
+        err
+    }
 }
 
 fn unwrap_final_tx_confirmation_error(err: eyre::Report) -> eyre::Report {
@@ -6361,6 +6475,9 @@ impl Client {
                     tokio::time::sleep(delay).await;
                 }
                 Err(err) => {
+                    if is_final_tx_confirmation_error(&err) {
+                        return Err(unwrap_final_tx_confirmation_error(err));
+                    }
                     debug!(attempt, ?delay, ?err, "tx confirmation status check failed");
                     last_err = Some(err);
                     if attempt == retries {
@@ -6399,23 +6516,45 @@ impl Client {
         entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<Option<TxConfirmationStatus>> {
         match self.transaction_pipeline_status(hash, entry_hash) {
-            Ok(Some(status)) => match status {
-                TxConfirmationStatus::Queued
-                | TxConfirmationStatus::Approved(_)
-                | TxConfirmationStatus::Rejected(None) => {
-                    let committed = self.transaction_committed(hash, entry_hash)?;
-                    Ok(committed.or(Some(status)))
+            Ok(Some(status)) => {
+                match status {
+                    TxConfirmationStatus::Queued
+                    | TxConfirmationStatus::Approved(_)
+                    | TxConfirmationStatus::Rejected(None) => {
+                        let committed = self.transaction_committed(hash, entry_hash).map_err(|err| {
+                        mark_tx_confirmation_transport_error_final(
+                            err,
+                            "committed transaction query failed because Torii is unreachable",
+                        )
+                    })?;
+                        Ok(committed.or(Some(status)))
+                    }
+                    _ => Ok(Some(status)),
                 }
-                _ => Ok(Some(status)),
-            },
-            Ok(None) => self.transaction_committed(hash, entry_hash),
+            }
+            Ok(None) => self.transaction_committed(hash, entry_hash).map_err(|err| {
+                mark_tx_confirmation_transport_error_final(
+                    err,
+                    "committed transaction query failed because Torii is unreachable",
+                )
+            }),
             Err(err) => {
+                if is_tx_confirmation_connection_refused(&err) {
+                    return Err(tx_confirmation_final_report(err.wrap_err(
+                        "pipeline transaction status query failed because Torii is unreachable",
+                    )));
+                }
                 warn!(
                     %hash,
                     ?err,
                     "pipeline status query failed; falling back to committed query"
                 );
-                self.transaction_committed(hash, entry_hash)
+                self.transaction_committed(hash, entry_hash).map_err(|err| {
+                    mark_tx_confirmation_transport_error_final(
+                        err,
+                        "committed transaction query failed because Torii is unreachable",
+                    )
+                })
             }
         }
     }
@@ -11115,6 +11254,36 @@ mod tx_hash_tests {
         .await;
 
         assert!(result.is_err());
+    }
+
+    #[tokio::test]
+    async fn retry_transaction_committed_stops_on_final_error() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let attempts_clone = Arc::clone(&attempts);
+        let result = super::Client::retry_transaction_committed(
+            move || {
+                attempts_clone.fetch_add(1, Ordering::SeqCst);
+                Err(super::tx_confirmation_final_report(eyre!(
+                    "torii confirmation transport failure"
+                )))
+            },
+            Duration::from_millis(0),
+            3,
+        )
+        .await;
+
+        let err = result.expect_err("final error should stop retries");
+        assert_eq!(attempts.load(Ordering::SeqCst), 1);
+        assert!(
+            err.to_string()
+                .contains("torii confirmation transport failure"),
+            "unexpected error: {err:?}"
+        );
     }
 
     #[tokio::test]

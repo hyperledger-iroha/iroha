@@ -2,6 +2,83 @@
 
 Last updated: 2026-04-03
 
+Latest sync (2026-04-03 opaque asset-definition snapshot sizing fix):
+the remaining Soracloud commit-time peer crash from the `DomainId` cleanup is
+patched. Hot-tier snapshot measurement no longer calls `AssetDefinitionId::domain()`
+for opaque canonical asset-definition ids.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/state/tiered.rs`
+- verified with:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha_core measured_bytes_cover_opaque_asset_definition_id -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test iroha_cli soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_commands_use_live_torii_control_plane -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test iroha_cli soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --test iroha_cli soracloud_training_and_model_weight_lifecycle_use_live_torii_control_plane -- --nocapture`
+
+Open work for this slice now remains:
+- rerun the full runtime workspace suite on the fully patched tree:
+  `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test --workspace`;
+- after a fresh runtime workspace pass is green, rerun strict linting:
+  `cargo clippy --workspace --all-targets -- -D warnings`; and
+- if the fresh runtime sweep still finds failures, treat new breakage as a
+  separate slice from the now-fixed opaque-asset-definition / Soracloud crash.
+
+Latest sync (2026-04-03 fail-fast Torii confirmation + restart recovery):
+the old silent retry loop after peer restart is no longer masking dead Torii
+sockets during transaction confirmation.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha/src/client.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_test_network/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_test_network/src/config.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/iroha_cli.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_commit_certificates.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_npos_stake_activation.rs`
+- verified with:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha --lib connection_refused -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p iroha --lib retry_transaction_committed_stops_on_final_error -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests --lib`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test -p integration_tests soracloud_agent_runtime_state_recovers_after_peer_restart_live_torii_control_plane -- --nocapture`
+
+Open work for this slice now remains:
+- rerun the full runtime workspace suite on the patched client path:
+  `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test --workspace`;
+- after the full runtime pass is stable, rerun the strict lint pass:
+  `cargo clippy --workspace --all-targets -- -D warnings`; and
+- if broader runtime failures remain, prioritise restart/recovery and
+  Soracloud CLI flows first, since they were the concrete area affected by the
+  dead-socket confirmation masking.
+
+Latest sync (2026-04-03 domain/contract-address compile cleanup):
+the repo-wide compile-only verification is green again after the
+dataspace-qualified `DomainId` migration and the contract-governance
+`ContractAddress` refactor.
+
+- verified with:
+  - `cargo fmt --all`
+  - `cargo fmt --all --check`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo test --workspace --no-run`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup cargo check -p integration_tests --test sora_parliament_lifecycle_smoke`
+- closed fallout included:
+  - stale `iroha::Config` initializers missing `account_chain_discriminant`;
+  - old `CanProposeContractDeployment { contract_id: ... }` payloads;
+  - old `ProposeDeployContract { namespace, contract_id, ... }` fixtures;
+  - SORA governance smoke queries still using removed namespace/contract-id
+    instance lookups; and
+  - Mochi chaos `FaultConfig` initializers missing the new boolean gates.
+
+Open work for this slice now remains:
+- run runtime execution, not just compile-only verification:
+  `cargo test --workspace`;
+- if runtime failures appear, prioritise the long SORA governance / localnet
+  integration tests first, since those were the most affected by the address
+  model changes; and
+- after runtime validation is stable, do a strict lint pass with
+  `cargo clippy --workspace --all-targets -- -D warnings`.
+
 Latest sync (2026-04-03 opaque asset-definition event routing fix):
 the remaining NPoS `sumeragi-commit` panic is now patched at the event-model
 layer: opaque canonical asset-definition ids are no longer forced through

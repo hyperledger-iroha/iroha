@@ -201,7 +201,7 @@ fn enact_inserts_manifest_and_marks_enacted() {
     let inst = block
         .world
         .contract_instances()
-        .get(&("universal".to_string(), contract_address.to_string()))
+        .get(&contract_address)
         .copied();
     assert_eq!(inst, Some(key));
 }

@@ -63,8 +63,9 @@ fn referendum_open_and_close_by_height() {
         let proposal = GovernanceProposalRecord {
             proposer: iroha_test_samples::ALICE_ID.clone(),
             kind: ProposalKind::DeployContract(DeployContractProposal {
-                namespace: "apps".into(),
-                contract_id: "auto-window.v1".into(),
+                contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                    .parse()
+                    .expect("contract address"),
                 code_hash_hex: ContractCodeHash::from_hex_str(&hex::encode([0x11; 32]))
                     .expect("code hash"),
                 abi_hash_hex: ContractAbiHash::from_hex_str(&hex::encode([0x22; 32]))

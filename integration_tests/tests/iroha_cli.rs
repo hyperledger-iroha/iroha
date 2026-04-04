@@ -17,9 +17,9 @@ use iroha::{
     data_model::{
         Encode,
         account::AccountId,
-        asset::{AssetDefinitionId, AssetId, definition::AssetDefinition},
+        asset::{AssetDefinitionId, AssetId},
         permission::Permission,
-        prelude::{FindAssetById, FindAssetsDefinitions, Grant, Json, Mint, Register},
+        prelude::{FindAssetById, FindAssetsDefinitions, Grant, Json},
         soracloud::{
             AgentApartmentManifestV1, SoraContainerManifestV1, SoraServiceManifestV1,
             SoraStateMutabilityV1,
@@ -243,8 +243,6 @@ fn soracloud_fixture(path: &str) -> PathBuf {
 }
 
 const SORACLOUD_HF_LEASE_ASSET_DEFINITION_LITERAL: &str = "5PeSrQmLNwwKtruJvDZrbrm9RuMw";
-const SORACLOUD_HF_LEASE_ASSET_NAME: &str = "soracloud_hf_lease";
-
 fn soracloud_hf_lease_asset_definition() -> AssetDefinitionId {
     AssetDefinitionId::parse_address_literal(SORACLOUD_HF_LEASE_ASSET_DEFINITION_LITERAL)
         .expect("test lease asset definition literal should parse")
@@ -289,19 +287,18 @@ fn assert_soracloud_hf_lease_asset_ready(
         .into_iter()
         .any(|definition| definition.id == asset_definition_id);
     if !asset_definition_exists {
-        client.submit_blocking(Register::asset_definition(
-            AssetDefinition::numeric(asset_definition_id.clone())
-                .with_name(SORACLOUD_HF_LEASE_ASSET_NAME.to_owned()),
-        ))?;
+        return Err(eyre::eyre!(
+            "soracloud HF lease asset definition `{asset_definition_id}` is missing from test-network genesis"
+        ));
     }
     for account_id in accounts {
         let asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
         let observed = numeric_asset_balance_u128(client, &asset_id)?;
         let required = u128::from(minimum_amount);
-        let observed = observed.unwrap_or(0);
-        if observed < required {
-            let top_up = u32::try_from(required - observed).expect("test top-up should fit in u32");
-            client.submit_blocking(Mint::asset_numeric(top_up, asset_id.clone()))?;
+        if observed.is_none_or(|balance| balance < required) {
+            return Err(eyre::eyre!(
+                "soracloud HF lease asset `{asset_id}` is below required bootstrap balance {required}; observed {observed:?}"
+            ));
         }
     }
     Ok(())
@@ -572,47 +569,14 @@ fn validator_program_config(
         .peers()
         .first()
         .ok_or_else(|| eyre::eyre!("test network should expose at least one peer"))?;
-    let validator_account_id = AccountId::new(validator_peer.public_key().clone());
-    let expected_public_key = validator_peer.public_key().to_string();
-
-    for entry in std::fs::read_dir(network.env_dir())? {
-        let candidate = entry?.path().join("config.base.toml");
-        if !candidate.is_file() {
-            continue;
-        }
-
-        let config: toml::Value = toml::from_str(&std::fs::read_to_string(&candidate)?)?;
-        let Some(public_key) = config.get("public_key").and_then(toml::Value::as_str) else {
-            continue;
-        };
-        if public_key != expected_public_key {
-            continue;
-        }
-
-        let private_key = config
-            .get("private_key")
-            .and_then(toml::Value::as_str)
-            .ok_or_else(|| {
-                eyre::eyre!(
-                    "peer config `{}` is missing `private_key`",
-                    candidate.display()
-                )
-            })?
-            .parse::<ExposedPrivateKey>()?
-            .0;
-        let key_pair = KeyPair::new(validator_peer.public_key().clone(), private_key)
-            .map_err(|err| eyre::eyre!("failed to rebuild validator keypair: {err}"))?;
-        return Ok((
-            program_config_for_account(&network.client(), "wonderland", &key_pair),
-            validator_peer.id().to_string(),
-            validator_account_id,
-        ));
-    }
-
-    Err(eyre::eyre!(
-        "failed to locate config for validator peer `{}` under `{}`",
-        validator_peer.id(),
-        network.env_dir().display()
+    Ok((
+        program_config_for_account(
+            &network.client(),
+            "wonderland",
+            validator_peer.streaming_key_pair(),
+        ),
+        validator_peer.id().to_string(),
+        validator_peer.account_id(),
     ))
 }
 
@@ -620,16 +584,12 @@ async fn advertise_soracloud_model_host(
     cwd: &Path,
     network: &iroha_test_network::Network,
 ) -> eyre::Result<()> {
-    let (validator_config, peer_id, validator_account_id) = validator_program_config(network)?;
+    let (validator_config, peer_id, _validator_account_id) = validator_program_config(network)?;
     let validator_accounts = network
         .peers()
         .iter()
-        .map(|peer| AccountId::new(peer.public_key().clone()))
+        .map(iroha_test_network::NetworkPeer::account_id)
         .collect::<Vec<_>>();
-    network.client().submit_blocking(Grant::account_permission(
-        Permission::new("CanManageSoracloud".into(), Json::new(())),
-        validator_account_id.clone(),
-    ))?;
     assert_soracloud_hf_lease_asset_ready(&network.client(), &validator_accounts, 100_000)?;
 
     let torii_url = network.client().torii_url.to_string();

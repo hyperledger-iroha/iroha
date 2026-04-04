@@ -24,7 +24,10 @@ use iroha_data_model::{
     consensus::HsmBinding,
     da::commitment::DaProofPolicyBundle,
     domain::{Domain, DomainId},
-    isi::{Grant, InstructionBox, Mint, SetParameter, register::RegisterPeerWithPop},
+    isi::{
+        Grant, InstructionBox, Mint, SetParameter,
+        register::{Register, RegisterPeerWithPop},
+    },
     metadata::Metadata,
     name::Name,
     parameter::{
@@ -549,25 +552,16 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         builder = builder.append_instruction(grant);
     }
 
-    let agent_wallet_asset_definition = AssetDefinitionId::parse_address_literal(
-        "61CtjvNd9T3THAR65GsMVHr82Bjc",
-    )
-    .expect("soracloud agent wallet asset definition id");
-    let hf_shared_lease_asset_definition = AssetDefinitionId::parse_address_literal(
-        "5PeSrQmLNwwKtruJvDZrbrm9RuMw",
-    )
-    .expect("soracloud HF shared lease asset definition id");
-    let mut soracloud_bootstrap_accounts = BTreeSet::from([
-        alice_id.clone(),
-        bob_id.clone(),
-        carpenter_id.clone(),
-    ]);
-    soracloud_bootstrap_accounts.extend(
-        topology_vec
-            .iter()
-            .cloned()
-            .map(|peer_id| AccountId::new(peer_id.public_key().clone())),
-    );
+    let agent_wallet_asset_definition =
+        AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
+            .expect("soracloud agent wallet asset definition id");
+    let hf_shared_lease_asset_definition =
+        AssetDefinitionId::parse_address_literal("5PeSrQmLNwwKtruJvDZrbrm9RuMw")
+            .expect("soracloud HF shared lease asset definition id");
+    // Topology entries only carry the peer BLS identity. Runtime accounts for validator
+    // processes are seeded later from the peer streaming identities in `NetworkBuilder`.
+    let soracloud_bootstrap_accounts =
+        BTreeSet::from([alice_id.clone(), bob_id.clone(), carpenter_id.clone()]);
 
     builder = builder.next_transaction();
     builder = builder.append_instruction(Register::asset_definition(
@@ -1809,7 +1803,8 @@ mod tests {
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
         );
 
-        let validator_id = AccountId::new(peer_id.public_key().clone());
+        let validator_key = KeyPair::random();
+        let validator_id = AccountId::new(validator_key.public_key().clone());
         let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
         let stake_asset_id = AssetDefinitionId::new(
             nexus_domain.clone(),

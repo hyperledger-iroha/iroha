@@ -24,8 +24,9 @@ use nonzero_ext::nonzero;
 
 fn deploy_payload(code_hex: &str, abi_hex: &str) -> DeployContractProposal {
     DeployContractProposal {
-        namespace: "apps".into(),
-        contract_id: "demo.contract".into(),
+        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            .parse()
+            .expect("contract address"),
         code_hash_hex: ContractCodeHash::from_hex_str(code_hex).expect("code hash"),
         abi_hash_hex: ContractAbiHash::from_hex_str(abi_hex).expect("abi hash"),
         abi_version: AbiVersion::new(1),

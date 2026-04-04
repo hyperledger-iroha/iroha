@@ -40,6 +40,7 @@ use iroha_data_model::{
     nexus::AxtRejectContext,
     prelude::{AccountId, ValidationFail},
     proof::VerifyingKeyId,
+    smart_contract::ContractAddress,
     smart_contract::manifest::{ContractManifest, MANIFEST_METADATA_KEY},
     transaction::{Executable, SignedTransaction},
     zk::{
@@ -417,8 +418,12 @@ pub(crate) fn validate_contract_binding<R: StateReadOnly>(
     let contract_address = tx
         .metadata()
         .get(&Name::from_str("contract_address").expect("static name"))
+        .or_else(|| {
+            tx.metadata()
+                .get(&Name::from_str("gov_contract_address").expect("static name"))
+        })
         .and_then(|value| value.clone().try_into_any_norito::<String>().ok())
-        .and_then(|value| value.trim().parse().ok());
+        .and_then(|raw| raw.parse::<ContractAddress>().ok());
 
     let artifacts = code::fetch_artifacts(state_ro, &code_hash, contract_address.as_ref());
     let manifest_opt = artifacts.manifest.as_ref();
@@ -447,8 +452,8 @@ pub(crate) fn validate_contract_binding<R: StateReadOnly>(
         }
     }
 
-    // If contract_address metadata is present, ensure the instance binding matches.
-    if let Some(contract_address) = contract_address {
+    // If contract-address metadata is present, ensure the instance binding matches.
+    if let Some(contract_address) = contract_address.as_ref() {
         let bound_hash = artifacts.bound_code_hash.ok_or_else(|| {
             OverlayBuildError::HeaderPolicy(IvmAdmissionError::BytecodeDecodingFailed(format!(
                 "contract instance `{contract_address}` not found in WSV"
@@ -497,10 +502,7 @@ pub(crate) fn prune_redundant_contract_ops<R: StateReadOnly>(
     }
     let mut manifest_cache: BTreeMap<Hash, Option<ContractManifest>> = BTreeMap::new();
     let mut code_cache: BTreeMap<Hash, Option<Vec<u8>>> = BTreeMap::new();
-    let mut binding_cache: BTreeMap<
-        iroha_data_model::smart_contract::ContractAddress,
-        Option<Hash>,
-    > = BTreeMap::new();
+    let mut binding_cache: BTreeMap<ContractAddress, Option<Hash>> = BTreeMap::new();
     queued.retain(|instr| {
         if let Some(reg) = instr.as_any().downcast_ref::<RegisterSmartContractCode>() {
             if let Some(hash) = reg.manifest().code_hash {
@@ -2931,15 +2933,12 @@ mod tests {
         let (program, header_len, meta) = sample_program();
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
 
+        let contract_address: ContractAddress =
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address");
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
-            &authority,
-            0,
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
-        )
-        .expect("contract address");
 
         // Inject a manifest with a mismatched abi_hash into WSV plus the instance binding.
         let mut world = crate::state::World::default();
@@ -3275,18 +3274,15 @@ mod tests {
         let (program, header_len, meta) = sample_program();
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
 
+        let contract_address: ContractAddress =
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address");
         let wrong_binding = Hash::new(b"other-binding");
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
-            &authority,
-            0,
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
-        )
-        .expect("contract address");
 
-        // Insert a manifest for the actual code, but bind the address to a different code hash.
+        // Insert a manifest for the actual code, but bind the namespace to a different code hash.
         let mut world = crate::state::World::default();
         world
             .contract_instances
@@ -3346,17 +3342,14 @@ mod tests {
         let (program, header_len, meta) = sample_program();
         let (code_hash, _abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
 
+        let contract_address: ContractAddress =
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address");
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
-            &authority,
-            0,
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
-        )
-        .expect("contract address");
 
-        // Bind address to code hash but do not seed manifest in WSV.
+        // Bind namespace to code hash but do not seed manifest in WSV.
         let mut world = crate::state::World::default();
         world
             .contract_instances
@@ -3402,15 +3395,12 @@ mod tests {
         let (program, header_len, meta) = sample_program();
         let (code_hash, _abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
 
+        let contract_address: ContractAddress =
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address");
         let kp = KeyPair::random();
         let authority = AccountId::new(kp.public_key().clone());
-        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
-            &authority,
-            0,
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
-        )
-        .expect("contract address");
 
         let mut world = crate::state::World::default();
         world
@@ -3602,13 +3592,6 @@ mod tests {
 
         let (program, header_len, meta) = sample_program();
         let (code_hash, abi_hash) = super::compute_program_hashes(&meta, header_len, &program);
-        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
-            &iroha_test_samples::ALICE_ID,
-            0,
-            iroha_data_model::nexus::DataSpaceId::GLOBAL,
-        )
-        .expect("contract address");
 
         let mut world = crate::state::World::default();
         let manifest = ContractManifest {
@@ -3623,6 +3606,10 @@ mod tests {
         };
         world.contract_manifests.insert(code_hash, manifest.clone());
         world.contract_code.insert(code_hash, program.clone());
+        let contract_address: ContractAddress =
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address");
         world
             .contract_instances
             .insert(contract_address.clone(), code_hash);

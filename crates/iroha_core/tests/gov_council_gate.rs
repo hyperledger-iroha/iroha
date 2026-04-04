@@ -87,8 +87,9 @@ fn seed_referendum_and_proposal(state: &mut State, pid: [u8; 32], rid: &str) {
         .governance_referenda_mut()
         .insert(rid.to_string(), referendum);
     let payload = DeployContractProposal {
-        namespace: "apps".into(),
-        contract_id: "calc.v1".into(),
+        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            .parse()
+            .expect("contract address"),
         code_hash_hex: ContractCodeHash::from_hex_str(&hex::encode([0x11; 32])).expect("code hash"),
         abi_hash_hex: ContractAbiHash::from_hex_str(&hex::encode([0x22; 32])).expect("abi hash"),
         abi_version: AbiVersion::new(1),
@@ -243,8 +244,9 @@ fn parliament_snapshot_allows_approvals_without_council_state() {
         iroha_core::state::GovernanceProposalRecord {
             proposer: ALICE_ID.clone(),
             kind: ProposalKind::DeployContract(DeployContractProposal {
-                namespace: "apps".into(),
-                contract_id: "jit-only.contract".into(),
+                contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                    .parse()
+                    .expect("contract address"),
                 code_hash_hex: ContractCodeHash::from_hex_str(&hex::encode([0x77; 32]))
                     .expect("code hash"),
                 abi_hash_hex: ContractAbiHash::from_hex_str(&hex::encode([0x88; 32]))

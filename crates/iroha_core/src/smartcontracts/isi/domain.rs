@@ -1901,7 +1901,9 @@ pub mod isi {
 
             state_transaction
                 .world
-                .emit_events(Some(AssetDefinitionEvent::Created(asset_definition)));
+                .emit_events(Some(DomainEvent::AssetDefinition(
+                    AssetDefinitionEvent::Created(asset_definition),
+                )));
 
             Ok(())
         }
@@ -2304,6 +2306,17 @@ pub mod isi {
                     err.to_string().into(),
                 ))
             })?;
+            if state_transaction
+                .nexus
+                .dataspace_catalog
+                .by_id(contract_dataspace_id)
+                .is_none()
+            {
+                return Err(InstructionExecutionError::InvariantViolation(
+                    "contract address dataspace is unknown".to_owned().into(),
+                )
+                .into());
+            }
             if state_transaction
                 .world
                 .contract_instances()
@@ -6423,7 +6436,7 @@ mod tests {
         let proposal_id = [0xC5; 32];
         let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
             iroha_data_model::governance::types::DeployContractProposal {
-                contract_address: "tairac1qyqqqqqqqqqqqqyrj5zgey92heas6qafh205258mch2mg6qlfmpzl"
+                contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
                     .parse()
                     .expect("contract address"),
                 code_hash_hex: iroha_data_model::governance::types::ContractCodeHash::new(

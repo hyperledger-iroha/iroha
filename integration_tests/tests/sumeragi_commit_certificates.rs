@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 use eyre::{Result, WrapErr, ensure, eyre};
 use integration_tests::{metrics::MetricsReader, sandbox};
+use iroha::crypto::{Algorithm, KeyPair};
 use iroha::data_model::{
     Level,
     account::Account,
@@ -38,6 +39,14 @@ const LOW_STAKE: u64 = 1_000;
 const STAKE_QUORUM_WAIT: Duration = Duration::from_secs(5);
 
 type CommitCertificate = Qc;
+
+fn validator_account_id_for_index(index: usize) -> AccountId {
+    let key_pair = KeyPair::from_seed(
+        format!("integration_tests::sumeragi_commit_certificates::{index}").into_bytes(),
+        Algorithm::Ed25519,
+    );
+    AccountId::new(key_pair.public_key().clone())
+}
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
@@ -537,8 +546,8 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
         Register::domain(Domain::new(nexus_domain.clone())).into(),
         Register::asset_definition(definition).into(),
     ];
-    for (idx, peer) in topology.iter().enumerate() {
-        let validator_id = AccountId::new(peer.public_key().clone());
+    for (idx, _peer) in topology.iter().enumerate() {
+        let validator_id = validator_account_id_for_index(idx);
         let stake = if idx == 0 { HIGH_STAKE } else { LOW_STAKE };
         if validator_id != gas_account_id {
             bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
@@ -550,7 +559,7 @@ fn stake_genesis_post_topology_transactions(topology: &[PeerId]) -> Vec<Vec<Inst
 
     let mut validator_tx = Vec::new();
     for (idx, peer) in topology.iter().enumerate() {
-        let validator_id = AccountId::new(peer.public_key().clone());
+        let validator_id = validator_account_id_for_index(idx);
         let stake = if idx == 0 { HIGH_STAKE } else { LOW_STAKE };
         validator_tx.push(
             RegisterPublicLaneValidator {

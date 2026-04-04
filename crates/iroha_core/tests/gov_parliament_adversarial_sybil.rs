@@ -468,8 +468,9 @@ fn duplicate_approvals_do_not_count_twice_for_quorum() {
         &mut state,
         proposal_id,
         ProposalKind::DeployContract(DeployContractProposal {
-            namespace: "sora".to_owned(),
-            contract_id: "malicious.dupcheck.v1".to_owned(),
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address"),
             code_hash_hex: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),
             abi_hash_hex: ContractAbiHash::from_hex_str(&hex::encode(canonical_abi_hash_bytes()))
                 .expect("abi hash"),
@@ -611,8 +612,9 @@ fn wealthy_non_members_cannot_open_referendum_without_sortition_capture() {
         &mut state,
         proposal_id,
         ProposalKind::DeployContract(DeployContractProposal {
-            namespace: "sora".to_owned(),
-            contract_id: "harm.blocked.v1".to_owned(),
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address"),
             code_hash_hex: ContractCodeHash::from_hex_str(&"33".repeat(32)).expect("code hash"),
             abi_hash_hex: ContractAbiHash::from_hex_str(&hex::encode(canonical_abi_hash_bytes()))
                 .expect("abi hash"),

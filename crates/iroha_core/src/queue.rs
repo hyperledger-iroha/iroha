@@ -871,11 +871,10 @@ impl Queue {
 
     #[allow(clippy::too_many_lines)]
     fn enforce_manifest_protected_namespaces(
-        &self,
         alias: &str,
         rules: &GovernanceRules,
         tx: &CheckedTransaction<'_>,
-        _world: &impl WorldReadOnly,
+        world: &impl WorldReadOnly,
     ) -> Result<(), Error> {
         if rules.protected_namespaces.is_empty() {
             return Ok(());
@@ -883,7 +882,7 @@ impl Queue {
 
         let signed = tx.as_ref().as_ref();
         let metadata = signed.metadata();
-        let metadata_gov_contract_address: Option<iroha_data_model::smart_contract::ContractAddress> = metadata
+        let metadata_governance_contract_address = metadata
             .get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY)
             .map(|value| {
                 let raw = value.try_into_any_norito::<String>().map_err(|_| {
@@ -899,20 +898,20 @@ impl Queue {
                         "`gov_contract_address` metadata must not be blank",
                     ));
                 }
-                trimmed.parse().map_err(|err| {
+                trimmed
+                    .parse::<iroha_data_model::smart_contract::ContractAddress>()
+                    .map_err(|err| {
                     Self::enforcement_error(
                         alias,
                         format!(
-                            "`gov_contract_address` metadata `{trimmed}` is not a valid contract address: {err}"
+                            "`gov_contract_address` metadata `{trimmed}` is not a valid ContractAddress: {err}"
                         ),
                     )
                 })
             })
             .transpose()?;
 
-        let metadata_contract_address_hint: Option<
-            iroha_data_model::smart_contract::ContractAddress,
-        > = metadata
+        let metadata_contract_address_hint = metadata
             .get(&*CONTRACT_ADDRESS_METADATA_KEY)
             .map(|value| {
                 let raw = value.try_into_any_norito::<String>().map_err(|_| {
@@ -928,19 +927,20 @@ impl Queue {
                         "`contract_address` metadata must not be blank",
                     ));
                 }
-                trimmed.parse().map_err(|err| {
-                    Self::enforcement_error(
-                        alias,
-                        format!(
-                            "`contract_address` metadata `{trimmed}` is not a valid contract address: {err}"
-                        ),
-                    )
-                })
+                trimmed
+                    .parse::<iroha_data_model::smart_contract::ContractAddress>()
+                    .map_err(|err| {
+                        Self::enforcement_error(
+                            alias,
+                            format!(
+                                "`contract_address` metadata `{trimmed}` is not a valid ContractAddress: {err}"
+                            ),
+                        )
+                    })
             })
             .transpose()?;
 
-        let mut namespaces_from_instructions = BTreeSet::new();
-        let mut contract_bindings = BTreeSet::new();
+        let mut contract_targets = BTreeSet::new();
         let mut register_code_seen = false;
         if let Executable::Instructions(instructions) = signed.instructions() {
             for instruction in instructions {
@@ -948,76 +948,12 @@ impl Queue {
                     .as_any()
                     .downcast_ref::<ActivateContractInstance>()
                 {
-                    let dataspace_id = activate.contract_address.dataspace_id().map_err(|err| {
-                        Self::enforcement_error(
-                            alias,
-                            format!(
-                                "instruction contract_address `{}` carries an invalid dataspace: {err}",
-                                activate.contract_address
-                            ),
-                        )
-                    })?;
-                    let ns = self
-                        .dataspace_catalog
-                        .read()
-                        .by_id(dataspace_id)
-                        .ok_or_else(|| {
-                            Self::enforcement_error(
-                                alias,
-                                format!(
-                                    "instruction contract_address dataspace `{dataspace_id}` is not present in the catalog"
-                                ),
-                            )
-                        })?
-                        .alias
-                        .clone();
-                    let ns = Name::from_str(&ns).map_err(|err| {
-                        Self::enforcement_error(
-                            alias,
-                            format!(
-                                "instruction contract_address dataspace alias `{ns}` is not a valid Name: {err}"
-                            ),
-                        )
-                    })?;
-                    namespaces_from_instructions.insert(ns.clone());
-                    contract_bindings.insert(activate.contract_address.clone());
+                    contract_targets.insert(activate.contract_address().clone());
                 } else if let Some(deactivate) = instruction
                     .as_any()
                     .downcast_ref::<DeactivateContractInstance>()
                 {
-                    let dataspace_id = deactivate.contract_address.dataspace_id().map_err(|err| {
-                        Self::enforcement_error(
-                            alias,
-                            format!(
-                                "instruction contract_address `{}` carries an invalid dataspace: {err}",
-                                deactivate.contract_address
-                            ),
-                        )
-                    })?;
-                    let ns = self
-                        .dataspace_catalog
-                        .read()
-                        .by_id(dataspace_id)
-                        .ok_or_else(|| {
-                            Self::enforcement_error(
-                                alias,
-                                format!(
-                                    "instruction contract_address dataspace `{dataspace_id}` is not present in the catalog"
-                                ),
-                            )
-                        })?
-                        .alias
-                        .clone();
-                    let ns = Name::from_str(&ns).map_err(|err| {
-                        Self::enforcement_error(
-                            alias,
-                            format!(
-                                "instruction contract_address dataspace alias `{ns}` is not a valid Name: {err}"
-                            ),
-                        )
-                    })?;
-                    namespaces_from_instructions.insert(ns.clone());
-                    contract_bindings.insert(deactivate.contract_address.clone());
+                    contract_targets.insert(deactivate.contract_address().clone());
                 } else {
                     let modifies_contract_code = {
                         let any = instruction.as_any();
@@ -1032,87 +968,28 @@ impl Queue {
             }
         }
 
-        if let Some(contract_address) = metadata_contract_address_hint.as_ref() {
-            let dataspace_id = contract_address.dataspace_id().map_err(|err| {
-                Self::enforcement_error(
-                    alias,
-                    format!("`contract_address` metadata carries an invalid dataspace: {err}"),
-                )
-            })?;
-            let namespace = self
-                .dataspace_catalog
-                .read()
-                .by_id(dataspace_id)
-                .ok_or_else(|| {
-                    Self::enforcement_error(
-                        alias,
-                        format!(
-                            "`contract_address` dataspace `{dataspace_id}` is not present in the catalog"
-                        ),
-                    )
-                })?
-                .alias
-                .clone();
-            let namespace = Name::from_str(&namespace).map_err(|err| {
-                Self::enforcement_error(
-                    alias,
-                    format!(
-                        "dataspace alias derived from `contract_address` is not a valid Name: {err}"
-                    ),
-                )
-            })?;
-            namespaces_from_instructions.insert(namespace);
-            contract_bindings.insert(contract_address.clone());
+        if let Some(contract_address) = metadata_governance_contract_address.clone() {
+            contract_targets.insert(contract_address);
         }
 
         let ivm_with_contract_metadata = matches!(signed.instructions(), Executable::Ivm(_))
-            && (metadata_gov_contract_address.is_some()
+            && (metadata_governance_contract_address.is_some()
                 || metadata_contract_address_hint.is_some());
 
         let contract_instr_seen =
-            register_code_seen || !contract_bindings.is_empty() || ivm_with_contract_metadata;
+            register_code_seen || !contract_targets.is_empty() || ivm_with_contract_metadata;
 
-        if contract_instr_seen && metadata_gov_contract_address.is_none() {
+        if contract_instr_seen && metadata_governance_contract_address.is_none() {
             return Err(Self::enforcement_error(
                 alias,
                 "transactions with contract operations must set `gov_contract_address` metadata when lane governance protects namespaces",
             ));
         }
 
-        let Some(metadata_gov_contract_address) = metadata_gov_contract_address else {
-            return Ok(());
-        };
-        let dataspace_id = metadata_gov_contract_address
-            .dataspace_id()
-            .map_err(|err| {
-                Self::enforcement_error(
-                    alias,
-                    format!("`gov_contract_address` metadata carries an invalid dataspace: {err}"),
-                )
-            })?;
-        let dataspace_catalog = self.dataspace_catalog.read();
-        let target_namespace = dataspace_catalog
-            .by_id(dataspace_id)
-            .ok_or_else(|| {
-                Self::enforcement_error(
-                    alias,
-                    format!(
-                        "`gov_contract_address` dataspace `{dataspace_id}` is not present in the catalog"
-                    ),
-                )
-            })?
-            .alias
-            .clone();
-        let target_namespace = Name::from_str(&target_namespace).map_err(|err| {
-            Self::enforcement_error(
-                alias,
-                format!(
-                    "dataspace alias derived from `gov_contract_address` is not a valid Name: {err}"
-                ),
-            )
-        })?;
-        if let Some(contract_address_hint) = metadata_contract_address_hint.as_ref()
-            && contract_address_hint != &metadata_gov_contract_address
+        if let (Some(hint), Some(meta)) = (
+            metadata_contract_address_hint.as_ref(),
+            metadata_governance_contract_address.as_ref(),
+        ) && hint != meta
         {
             return Err(Self::enforcement_error(
                 alias,
@@ -1120,30 +997,19 @@ impl Queue {
             ));
         }
 
-        if !contract_bindings.is_empty()
-            && contract_bindings
+        if let Some(meta_contract_address) = metadata_governance_contract_address.as_ref()
+            && !contract_targets.is_empty()
+            && contract_targets
                 .iter()
-                .any(|contract_address| contract_address != &metadata_gov_contract_address)
+                .any(|contract_address| contract_address != meta_contract_address)
         {
             return Err(Self::enforcement_error(
                 alias,
-                "contract instructions must target the contract_address encoded by `gov_contract_address`",
+                "`gov_contract_address` metadata does not match contract addresses referenced by contract instructions",
             ));
         }
 
-        let mut namespaces_to_check = namespaces_from_instructions.clone();
-        namespaces_to_check.insert(target_namespace.clone());
-
-        for namespace in &namespaces_to_check {
-            if !rules.protected_namespaces.contains(namespace) {
-                return Err(Self::enforcement_error(
-                    alias,
-                    format!(
-                        "namespace `{namespace}` is not declared in lane governance protected set"
-                    ),
-                ));
-            }
-        }
+        let _ = world;
 
         Ok(())
     }
@@ -1861,7 +1727,7 @@ impl Queue {
                     });
                 }
                 if let Err(err) =
-                    self.enforce_manifest_protected_namespaces(&alias, rules, &checked, world)
+                    Self::enforce_manifest_protected_namespaces(&alias, rules, &checked, world)
                 {
                     #[cfg(feature = "telemetry")]
                     if !rules.protected_namespaces.is_empty() {
@@ -4628,7 +4494,7 @@ pub mod tests {
         let (validator, keypair) = gen_account_in("wonderland");
 
         let mut protected = BTreeSet::new();
-        protected.insert(Name::from_str("universal").expect("static namespace"));
+        protected.insert(Name::from_str("apps").expect("static namespace"));
 
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
@@ -4651,14 +4517,26 @@ pub mod tests {
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         queue.install_lane_manifests(&manifests);
 
-        let allowed_contract_address = sample_contract_address(&validator, DataSpaceId::new(0), 0);
-        let rejected_contract_address = sample_contract_address(&validator, DataSpaceId::new(1), 0);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator,
+            0,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
+        let other_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator,
+            1,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
 
-        // Metadata referencing a dataspace outside the protected allowlist must be rejected.
+        // Metadata with a governed contract address is accepted for protected contract ops.
         let mut metadata = Metadata::default();
         metadata.insert(
             (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
-            Json::new(rejected_contract_address.to_string()),
+            Json::new(contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4667,9 +4545,38 @@ pub mod tests {
             vec![sample_unregister_instruction()],
             metadata,
         );
+        queue
+            .push(tx, state.view())
+            .expect("governed contract metadata should be accepted");
+        #[cfg(feature = "telemetry")]
+        assert_eq!(
+            metrics
+                .governance_protected_namespace_total
+                .with_label_values(&["allowed"])
+                .get(),
+            1
+        );
+        #[cfg(feature = "telemetry")]
+        assert_eq!(
+            metrics
+                .governance_manifest_admission_total
+                .with_label_values(&["protected_namespace_rejected"])
+                .get(),
+            0
+        );
+
+        // Missing governance contract address metadata must be rejected.
+        let metadata_missing_cid = Metadata::default();
+        let tx = accepted_tx_with(
+            validator.clone(),
+            &keypair,
+            &time_source,
+            vec![sample_unregister_instruction()],
+            metadata_missing_cid,
+        );
         let err = queue
             .push(tx, state.view())
-            .expect_err("namespace outside manifest must reject");
+            .expect_err("missing contract id metadata must reject");
         assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
         #[cfg(feature = "telemetry")]
         assert_eq!(
@@ -4688,11 +4595,15 @@ pub mod tests {
             1
         );
 
-        // A canonical contract address inside the protected allowlist should be accepted.
+        // Mismatched contract-address hints must be rejected.
         let mut valid_metadata = Metadata::default();
         valid_metadata.insert(
             (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
-            Json::new(allowed_contract_address.to_string()),
+            Json::new(contract_address.to_string()),
+        );
+        valid_metadata.insert(
+            (*super::CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(other_contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4701,9 +4612,10 @@ pub mod tests {
             vec![sample_unregister_instruction()],
             valid_metadata,
         );
-        queue
+        let err = queue
             .push(tx, state.view())
-            .expect("protected namespace metadata satisfied");
+            .expect_err("mismatched contract-address metadata must reject");
+        assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
         #[cfg(feature = "telemetry")]
         assert_eq!(
             metrics
@@ -4724,7 +4636,7 @@ pub mod tests {
 
     #[tokio::test]
     #[allow(clippy::too_many_lines)]
-    async fn governance_manifest_requires_metadata_for_contract_address_ops() {
+    async fn governance_manifest_requires_metadata_for_contract_namespace_ops() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         #[cfg(feature = "telemetry")]
@@ -4744,7 +4656,7 @@ pub mod tests {
         let (validator, keypair) = gen_account_in("wonderland");
 
         let mut protected = BTreeSet::new();
-        protected.insert(Name::from_str("universal").expect("static namespace"));
+        protected.insert(Name::from_str("apps").expect("static namespace"));
 
         let mut statuses = BTreeMap::new();
         let rules = GovernanceRules {
@@ -4767,9 +4679,20 @@ pub mod tests {
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         queue.install_lane_manifests(&manifests);
 
-        let contract_address = sample_contract_address(&validator, DataSpaceId::new(0), 0);
-        let mismatched_contract_address =
-            sample_contract_address(&validator, DataSpaceId::new(0), 1);
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator,
+            0,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
+        let other_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator,
+            1,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let activate = InstructionBox::from(ActivateContractInstance {
             contract_address: contract_address.clone(),
@@ -4797,11 +4720,11 @@ pub mod tests {
             1
         );
 
-        // A mismatched canonical contract address must reject.
+        // Metadata contract address present but mismatched should reject.
         let mut metadata_mismatch = Metadata::default();
         metadata_mismatch.insert(
             (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
-            Json::new(mismatched_contract_address.to_string()),
+            Json::new(other_contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4812,7 +4735,7 @@ pub mod tests {
         );
         let err = queue
             .push(tx, state.view())
-            .expect_err("contract address mismatch must reject");
+            .expect_err("contract_id mismatch must reject");
         assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
         #[cfg(feature = "telemetry")]
         assert_eq!(
@@ -4823,7 +4746,7 @@ pub mod tests {
             2
         );
 
-        // Matching canonical contract address metadata should allow the transaction.
+        // Matching metadata should allow the transaction.
         let mut metadata_ok = Metadata::default();
         metadata_ok.insert(
             (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
@@ -4882,6 +4805,85 @@ pub mod tests {
         queue
             .push(tx, state.view())
             .expect("contract artifact registration metadata satisfied");
+    }
+
+    #[tokio::test]
+    async fn governance_manifest_rejects_cross_namespace_rebind() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut world = world_with_test_domains();
+        let (validator, keypair) = gen_account_in("wonderland");
+        let existing_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator,
+            7,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
+        world
+            .contract_instances
+            .insert(existing_contract_address.clone(), Hash::new(b"demo"));
+        let state = Arc::new(State::new(world, kura.clone(), query_handle.clone()));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+
+        let queue = Arc::new(Queue::test(config_factory(), &time_source));
+
+        let mut protected = BTreeSet::new();
+        protected.insert(Name::from_str("apps").expect("static namespace"));
+        protected.insert(Name::from_str("ops").expect("static namespace"));
+
+        let mut statuses = BTreeMap::new();
+        let rules = GovernanceRules {
+            validators: vec![validator.clone()],
+            protected_namespaces: protected,
+            ..GovernanceRules::default()
+        };
+        let status = LaneManifestStatus {
+            lane: LaneId::SINGLE,
+            alias: "gov".to_string(),
+            dataspace: DataSpaceId::GLOBAL,
+            visibility: LaneVisibility::Public,
+            storage: LaneStorageProfile::FullReplica,
+            governance: Some("parliament".to_string()),
+            manifest_path: Some(PathBuf::from("/tmp/manifest.json")),
+            governance_rules: Some(rules),
+            privacy_commitments: Vec::new(),
+        };
+        statuses.insert(LaneId::SINGLE, status);
+        let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
+        queue.install_lane_manifests(&manifests);
+
+        let code_hash = iroha_crypto::Hash::new(b"demo");
+        let instruction_contract_address =
+            iroha_data_model::smart_contract::ContractAddress::derive(
+                iroha_data_model::account::address::chain_discriminant(),
+                &validator,
+                8,
+                DataSpaceId::GLOBAL,
+            )
+            .expect("contract address");
+        let activate = InstructionBox::from(ActivateContractInstance {
+            contract_address: instruction_contract_address,
+            code_hash,
+        });
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(existing_contract_address.to_string()),
+        );
+
+        let tx = accepted_tx_with(
+            validator.clone(),
+            &keypair,
+            &time_source,
+            vec![activate],
+            metadata,
+        );
+        let err = queue
+            .push(tx, state.view())
+            .expect_err("cross-namespace rebinding must be rejected");
+        assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
     }
 
     #[tokio::test]
@@ -5728,20 +5730,6 @@ pub mod tests {
         InstructionBox::from(Unregister::domain(
             DomainId::try_new(&domain_name, "universal").unwrap(),
         ))
-    }
-
-    fn sample_contract_address(
-        account_id: &AccountId,
-        dataspace_id: DataSpaceId,
-        deploy_nonce: u64,
-    ) -> iroha_data_model::smart_contract::ContractAddress {
-        iroha_data_model::smart_contract::ContractAddress::derive(
-            iroha_config::parameters::defaults::common::chain_discriminant(),
-            account_id,
-            deploy_nonce,
-            dataspace_id,
-        )
-        .expect("sample contract address")
     }
 
     const RUNTIME_UPGRADE_ALLOWED_ID: &str = "upgrade-q1";

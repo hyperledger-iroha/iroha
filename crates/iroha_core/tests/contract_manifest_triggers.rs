@@ -70,23 +70,29 @@ fn opaque_asset_definition_id() -> AssetDefinitionId {
     .expect("opaque asset definition id")
 }
 
+fn sample_contract_address() -> iroha_data_model::smart_contract::ContractAddress {
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        .parse()
+        .expect("contract address")
+}
+
 fn assert_contract_trigger_metadata(
     metadata: &Metadata,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
     entrypoint: &str,
     code_hash: iroha_crypto::Hash,
     trigger_id: &TriggerId,
     user_key: &str,
     user_value: &str,
 ) {
-    let key_namespace: Name = "contract_namespace".parse().expect("namespace key");
-    let key_contract: Name = "contract_id".parse().expect("contract_id key");
+    let key_address: Name = "contract_address".parse().expect("contract address key");
     let key_entrypoint: Name = "contract_entrypoint".parse().expect("entrypoint key");
     let key_code: Name = "contract_code_hash".parse().expect("code hash key");
     let key_trigger: Name = "contract_trigger_id".parse().expect("trigger id key");
-    assert_eq!(metadata.get(&key_namespace), Some(&Json::from(namespace)));
-    assert_eq!(metadata.get(&key_contract), Some(&Json::from(contract_id)));
+    assert_eq!(
+        metadata.get(&key_address),
+        Some(&Json::from(contract_address.as_str()))
+    );
     assert_eq!(metadata.get(&key_entrypoint), Some(&Json::from(entrypoint)));
     let code_hash_json = Json::from(code_hash.to_string().as_str());
     assert_eq!(metadata.get(&key_code), Some(&code_hash_json));
@@ -168,9 +174,9 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
         .execute(&authority, &mut stx)
         .expect("register manifest");
 
+    let contract_address = sample_contract_address();
     ActivateContractInstance {
-        namespace: "apps".to_string(),
-        contract_id: "demo.contract".to_string(),
+        contract_address: contract_address.clone(),
         code_hash,
     }
     .execute(&authority, &mut stx)
@@ -183,15 +189,13 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
         .get(&trigger_id)
         .expect("trigger registered");
     let metadata = &action.metadata;
-    let key_namespace: Name = "contract_namespace".parse().expect("namespace key");
-    let key_contract: Name = "contract_id".parse().expect("contract_id key");
+    let key_address: Name = "contract_address".parse().expect("contract address key");
     let key_entrypoint: Name = "contract_entrypoint".parse().expect("entrypoint key");
     let key_code: Name = "contract_code_hash".parse().expect("code hash key");
     let key_trigger: Name = "contract_trigger_id".parse().expect("trigger id key");
-    assert_eq!(metadata.get(&key_namespace), Some(&Json::from("apps")));
     assert_eq!(
-        metadata.get(&key_contract),
-        Some(&Json::from("demo.contract"))
+        metadata.get(&key_address),
+        Some(&Json::from(contract_address.as_str()))
     );
     assert_eq!(metadata.get(&key_entrypoint), Some(&Json::from("run")));
     let code_hash_json = Json::from(code_hash.to_string().as_str());
@@ -202,8 +206,7 @@ fn activate_registers_manifest_triggers_and_deactivate_removes() {
     assert_eq!(metadata.get(&tag_key), Some(&Json::from("alpha")));
 
     DeactivateContractInstance {
-        namespace: "apps".to_string(),
-        contract_id: "demo.contract".to_string(),
+        contract_address,
         reason: None,
     }
     .execute(&authority, &mut stx)
@@ -311,9 +314,9 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
         .execute(&authority, &mut stx)
         .expect("register manifest");
 
+    let contract_address = sample_contract_address();
     ActivateContractInstance {
-        namespace: "apps".to_string(),
-        contract_id: "demo.contract".to_string(),
+        contract_address: contract_address.clone(),
         code_hash,
     }
     .execute(&authority, &mut stx)
@@ -335,8 +338,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     );
     assert_contract_trigger_metadata(
         &data_action.metadata,
-        "apps",
-        "demo.contract",
+        &contract_address,
         "run",
         code_hash,
         &data_trigger_id,
@@ -356,8 +358,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     );
     assert_contract_trigger_metadata(
         &pipeline_action.metadata,
-        "apps",
-        "demo.contract",
+        &contract_address,
         "run",
         code_hash,
         &pipeline_trigger_id,
@@ -366,8 +367,7 @@ fn activate_registers_manifest_data_and_pipeline_triggers_and_deactivate_removes
     );
 
     DeactivateContractInstance {
-        namespace: "apps".to_string(),
-        contract_id: "demo.contract".to_string(),
+        contract_address,
         reason: None,
     }
     .execute(&authority, &mut stx)
@@ -461,9 +461,9 @@ seiyaku Test {{
     .execute(&authority, &mut stx)
     .expect("register manifest");
 
+    let contract_address = sample_contract_address();
     ActivateContractInstance {
-        namespace: "apps".to_string(),
-        contract_id: "kotodama.demo".to_string(),
+        contract_address: contract_address.clone(),
         code_hash,
     }
     .execute(&authority, &mut stx)
@@ -490,8 +490,7 @@ seiyaku Test {{
     assert_eq!(data_action.authority, authority);
     assert_contract_trigger_metadata(
         &data_action.metadata,
-        "apps",
-        "kotodama.demo",
+        &contract_address,
         "run",
         code_hash,
         &data_trigger_id,
@@ -512,8 +511,7 @@ seiyaku Test {{
     assert_eq!(pipeline_action.authority, authority);
     assert_contract_trigger_metadata(
         &pipeline_action.metadata,
-        "apps",
-        "kotodama.demo",
+        &contract_address,
         "run",
         code_hash,
         &pipeline_trigger_id,

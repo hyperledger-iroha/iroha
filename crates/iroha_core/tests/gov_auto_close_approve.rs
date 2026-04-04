@@ -69,7 +69,9 @@ fn auto_close_emits_approved() {
         let mut sblock1 = state.block(block1);
         let mut stx1 = sblock1.transaction();
         let p1: Permission = CanProposeContractDeployment {
-            contract_id: "demo.contract".into(),
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address"),
         }
         .into();
         Grant::account_permission(p1, ALICE_ID.clone())
@@ -86,8 +88,9 @@ fn auto_close_emits_approved() {
             .execute(&BOB_ID, &mut stx1)
             .expect("grant ballot B");
         ProposeDeployContract {
-            namespace: "apps".into(),
-            contract_id: "demo.contract".into(),
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address"),
             code_hash_hex: "aa".repeat(32),
             abi_hash_hex: canonical_abi_hex(),
             abi_version: "1".into(),

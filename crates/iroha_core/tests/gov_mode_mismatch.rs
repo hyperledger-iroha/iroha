@@ -67,7 +67,9 @@ fn plain_ballot_rejected_on_zk_referendum() {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
     let p1: Permission = CanProposeContractDeployment {
-        contract_id: "demo.contract".into(),
+        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            .parse()
+            .expect("contract address"),
     }
     .into();
     Grant::account_permission(p1, ALICE_ID.clone())
@@ -81,8 +83,9 @@ fn plain_ballot_rejected_on_zk_referendum() {
         .execute(&ALICE_ID, &mut stx)
         .expect("grant ballot");
     ProposeDeployContract {
-        namespace: "apps".into(),
-        contract_id: "demo.contract".into(),
+        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            .parse()
+            .expect("contract address"),
         code_hash_hex: "aa".repeat(32),
         abi_hash_hex: canonical_abi_hex(),
         abi_version: "1".into(),

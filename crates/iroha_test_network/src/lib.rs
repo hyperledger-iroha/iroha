@@ -5036,8 +5036,8 @@ impl NetworkBuilder {
                 Register::asset_definition(fee_definition).into(),
             ];
 
-            for peer in &peer_ids {
-                let validator_id = AccountId::new(peer.public_key().clone());
+            for peer in &peers {
+                let validator_id = peer.account_id();
                 bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
                 bootstrap_tx.push(
                     Mint::asset_numeric(
@@ -5071,13 +5071,13 @@ impl NetworkBuilder {
             genesis_post_topology_isi.push(bootstrap_tx);
 
             let mut validator_tx = Vec::new();
-            for peer in &peer_ids {
-                let validator_id = AccountId::new(peer.public_key().clone());
+            for peer in &peers {
+                let validator_id = peer.account_id();
                 validator_tx.push(
                     RegisterPublicLaneValidator {
                         lane_id: LaneId::SINGLE,
                         validator: validator_id.clone(),
-                        peer_id: peer.clone(),
+                        peer_id: peer.id(),
                         stake_account: validator_id.clone(),
                         initial_stake: Numeric::from(stake_amount),
                         metadata: Metadata::default(),
@@ -5093,6 +5093,54 @@ impl NetworkBuilder {
                 );
             }
             genesis_post_topology_isi.push(validator_tx);
+        }
+
+        if custom_genesis.is_none() {
+            let agent_wallet_asset_definition =
+                AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
+                    .expect("soracloud agent wallet asset definition id");
+            let hf_shared_lease_asset_definition =
+                AssetDefinitionId::parse_address_literal("5PeSrQmLNwwKtruJvDZrbrm9RuMw")
+                    .expect("soracloud HF shared lease asset definition id");
+            let mut soracloud_validator_bootstrap = Vec::new();
+            let mut seeded_accounts = BTreeSet::new();
+            let register_validator_accounts = npos_bootstrap.is_none();
+
+            for peer in &peers {
+                let account_id = peer.account_id();
+                if !seeded_accounts.insert(account_id.clone()) {
+                    continue;
+                }
+                if register_validator_accounts {
+                    soracloud_validator_bootstrap
+                        .push(Register::account(Account::new(account_id.clone())).into());
+                }
+                soracloud_validator_bootstrap.push(
+                    Grant::account_permission(
+                        Permission::new("CanManageSoracloud".into(), Json::new(())),
+                        account_id.clone(),
+                    )
+                    .into(),
+                );
+                soracloud_validator_bootstrap.push(
+                    Mint::asset_numeric(
+                        500_000_u32,
+                        AssetId::new(agent_wallet_asset_definition.clone(), account_id.clone()),
+                    )
+                    .into(),
+                );
+                soracloud_validator_bootstrap.push(
+                    Mint::asset_numeric(
+                        500_000_u32,
+                        AssetId::new(hf_shared_lease_asset_definition.clone(), account_id),
+                    )
+                    .into(),
+                );
+            }
+
+            if !soracloud_validator_bootstrap.is_empty() {
+                genesis_post_topology_isi.push(soracloud_validator_bootstrap);
+            }
         }
 
         replace_da_enabled_parameter(&mut genesis_isi, da_enabled);
@@ -6520,6 +6568,10 @@ impl NetworkPeer {
         self.key_pair.public_key()
     }
 
+    pub fn account_id(&self) -> AccountId {
+        AccountId::new(self.streaming_public_key().clone())
+    }
+
     pub fn streaming_key_pair(&self) -> &KeyPair {
         &self.streaming_key_pair
     }
@@ -6552,7 +6604,7 @@ impl NetworkPeer {
         self.network_peer_id()
     }
 
-    /// [`PeerId`] representing the network identity (Ed25519) used for Torii/P2P.
+    /// [`PeerId`] representing the BLS peer identity used in topology and PoP validation.
     pub fn network_peer_id(&self) -> PeerId {
         PeerId::new(self.key_pair.public_key().clone())
     }
@@ -11276,14 +11328,11 @@ exit 0
         let fee_asset_definition_id: AssetDefinitionId = defaults::nexus::fees::fee_asset_id()
             .parse()
             .expect("default nexus fee asset id");
-        let first_validator_id = AccountId::new(
-            network
-                .peers()
-                .first()
-                .expect("validator peer")
-                .public_key()
-                .clone(),
-        );
+        let first_validator_id = network
+            .peers()
+            .first()
+            .expect("validator peer")
+            .account_id();
         let mut saw_definition = false;
         let mut saw_alice_mint = false;
         let mut saw_validator_mint = false;
@@ -11328,6 +11377,48 @@ exit 0
         assert!(
             saw_validator_mint,
             "npos bootstrap should fund validators with the default nexus fee asset"
+        );
+    }
+
+    #[test]
+    fn default_builder_grants_soracloud_management_to_validator_runtime_signers() {
+        init_instruction_registry();
+        let network = NetworkBuilder::new()
+            .with_peers(2)
+            .with_auto_populated_trusted_peers()
+            .build();
+        let genesis = network.genesis();
+        let validator_ids = network
+            .peers()
+            .iter()
+            .map(NetworkPeer::account_id)
+            .collect::<BTreeSet<_>>();
+        let mut granted = BTreeSet::new();
+
+        for tx in genesis.0.transactions_vec() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    let Some(grant) = instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::GrantBox>()
+                    else {
+                        continue;
+                    };
+                    let iroha_data_model::isi::GrantBox::Permission(grant) = grant else {
+                        continue;
+                    };
+                    if grant.object.name() == "CanManageSoracloud"
+                        && validator_ids.contains(&grant.destination)
+                    {
+                        granted.insert(grant.destination.clone());
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            granted, validator_ids,
+            "default test-network genesis should grant CanManageSoracloud to validator runtime signers"
         );
     }
 
@@ -11568,6 +11659,11 @@ exit 0
         let env = Environment::new();
         let peer = NetworkPeerBuilder::new().build(&env);
         assert_eq!(peer.id().public_key().algorithm(), Algorithm::BlsNormal);
+        assert_eq!(
+            peer.account_id(),
+            AccountId::new(peer.streaming_public_key().clone()),
+            "runtime account identity should use the streaming key"
+        );
         assert_eq!(
             peer.streaming_public_key().algorithm(),
             Algorithm::Ed25519,

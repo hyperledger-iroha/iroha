@@ -1593,7 +1593,7 @@ pub struct World {
         Storage<iroha_crypto::Hash, iroha_data_model::smart_contract::manifest::ContractManifest>,
     /// On-chain storage of compiled contract code bytes keyed by code hash.
     pub(crate) contract_code: Storage<iroha_crypto::Hash, Vec<u8>>,
-    /// Active contract instances bound to their canonical contract address.
+    /// Active contract instances bound to canonical contract addresses.
     pub(crate) contract_instances:
         Storage<iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
@@ -2000,7 +2000,7 @@ pub struct WorldBlock<'world> {
     >,
     /// Contract code bytes keyed by hash
     pub(crate) contract_code: StorageBlock<'world, iroha_crypto::Hash, Vec<u8>>,
-    /// Active contract instances
+    /// Active contract instances.
     pub(crate) contract_instances:
         StorageBlock<'world, iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
@@ -10112,14 +10112,13 @@ impl DetachedStateTransactionDelta {
                 let def = stx.world.asset_definition_mut(ad)?;
                 def.metadata_mut().insert(key.clone(), val.clone());
                 crate::sumeragi::witness::record_write_asset_def_kv(ad, key, val);
-                stx.world
-                    .emit_events(Some(AssetDefinitionEvent::MetadataInserted(
-                        MetadataChanged {
-                            target: ad.clone(),
-                            key: key.clone(),
-                            value: val.clone(),
-                        },
-                    )));
+                stx.world.emit_events(Some(DomainEvent::AssetDefinition(
+                    AssetDefinitionEvent::MetadataInserted(MetadataChanged {
+                        target: ad.clone(),
+                        key: key.clone(),
+                        value: val.clone(),
+                    }),
+                )));
             }
             for (ad, key_id) in &asset_def_kv_dels {
                 let key = self.name_intern.resolve(*key_id);
@@ -10129,14 +10128,13 @@ impl DetachedStateTransactionDelta {
                     })
                 })?;
                 crate::sumeragi::witness::record_delete_asset_def_kv(ad, key, &val);
-                stx.world
-                    .emit_events(Some(AssetDefinitionEvent::MetadataRemoved(
-                        MetadataChanged {
-                            target: ad.clone(),
-                            key: key.clone(),
-                            value: val,
-                        },
-                    )));
+                stx.world.emit_events(Some(DomainEvent::AssetDefinition(
+                    AssetDefinitionEvent::MetadataRemoved(MetadataChanged {
+                        target: ad.clone(),
+                        key: key.clone(),
+                        value: val,
+                    }),
+                )));
             }
 
             // Apply NFT creates/deletes
@@ -10237,13 +10235,12 @@ impl DetachedStateTransactionDelta {
                     )));
                 }
                 def.set_owned_by(to.clone());
-                stx.world
-                    .emit_events(Some(AssetDefinitionEvent::OwnerChanged(
-                        AssetDefinitionOwnerChanged {
-                            asset_definition: ad,
-                            new_owner: to,
-                        },
-                    )));
+                stx.world.emit_events(Some(DomainEvent::AssetDefinition(
+                    AssetDefinitionEvent::OwnerChanged(AssetDefinitionOwnerChanged {
+                        asset_definition: ad,
+                        new_owner: to,
+                    }),
+                )));
             }
 
             // Apply peer registrations/removals
@@ -11884,7 +11881,7 @@ pub trait WorldReadOnly {
     >;
     /// Get stored contract code bytes by hash (read-only)
     fn contract_code(&self) -> &impl StorageReadOnly<iroha_crypto::Hash, Vec<u8>>;
-    /// Contract instances mapping `contract_address` -> `code_hash` (read-only)
+    /// Contract instances mapping `contract_address -> code_hash` (read-only)
     fn contract_instances(
         &self,
     ) -> &impl StorageReadOnly<iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>;
@@ -15151,12 +15148,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             new_total
         );
 
-        self.emit_events(Some(AssetDefinitionEvent::TotalQuantityChanged(
-            AssetDefinitionTotalQuantityChanged {
-                asset_definition: definition_id.clone(),
-                total_amount: new_total,
-            },
-        )));
+        self.emit_events({
+            Some(DomainEvent::AssetDefinition(
+                AssetDefinitionEvent::TotalQuantityChanged(AssetDefinitionTotalQuantityChanged {
+                    asset_definition: definition_id.clone(),
+                    total_amount: new_total,
+                }),
+            ))
+        });
 
         Ok(())
     }
@@ -15197,12 +15196,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             new_total
         );
 
-        self.emit_events(Some(AssetDefinitionEvent::TotalQuantityChanged(
-            AssetDefinitionTotalQuantityChanged {
-                asset_definition: definition_id.clone(),
-                total_amount: new_total,
-            },
-        )));
+        self.emit_events({
+            Some(DomainEvent::AssetDefinition(
+                AssetDefinitionEvent::TotalQuantityChanged(AssetDefinitionTotalQuantityChanged {
+                    asset_definition: definition_id.clone(),
+                    total_amount: new_total,
+                }),
+            ))
+        });
 
         Ok(())
     }

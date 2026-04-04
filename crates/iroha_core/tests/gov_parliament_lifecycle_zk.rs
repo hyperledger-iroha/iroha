@@ -162,14 +162,19 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
     let abi_hash_hex = canonical_abi_hex();
     let manifest_provenance = manifest_provenance(&code_hash_hex, &abi_hash_hex, &proposer_kp);
 
-    let proposal_contract_id = "parliament.lifecycle.zk.contract".to_string();
+    let proposal_contract_address: iroha_data_model::smart_contract::ContractAddress =
+        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            .parse()
+            .expect("contract address");
 
     let header_1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block_1 = state.block(header_1);
     let mut stx_1 = block_1.transaction();
 
     let propose_perm: Permission = CanProposeContractDeployment {
-        contract_id: proposal_contract_id.clone(),
+        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            .parse()
+            .expect("contract address"),
     }
     .into();
     Grant::account_permission(propose_perm, proposer_id.clone())
@@ -230,8 +235,7 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
     .expect("persist council");
 
     ProposeDeployContract {
-        namespace: "sora".to_string(),
-        contract_id: proposal_contract_id.clone(),
+        contract_address: proposal_contract_address.clone(),
         code_hash_hex: code_hash_hex.clone(),
         abi_hash_hex: abi_hash_hex.clone(),
         abi_version: "1".to_string(),
@@ -464,7 +468,7 @@ fn sora_parliament_zk_lifecycle_with_20_citizens() {
             .view()
             .world()
             .contract_instances()
-            .get(&("sora".to_string(), proposal_contract_id))
+            .get(&proposal_contract_address)
             .is_some_and(|bound| *bound == code_hash),
         "contract instance should be bound to enacted hash"
     );

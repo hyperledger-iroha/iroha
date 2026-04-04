@@ -12528,7 +12528,8 @@ mod tests {
     }
 
     fn sample_rwa_id_literal() -> String {
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities".to_owned()
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal"
+            .to_owned()
     }
 
     const LIVE_EMAIL_CLAIM_SIGNATURE_HEX: &str = "9262CA8C755D47207ED0CD2E19892DFAA4612701A36DCAF87173D42CC754DFB6A66158856FDFD25974C2A11E9FC32940CA0DF18CAC25A38CB5DEDC4625E67900";

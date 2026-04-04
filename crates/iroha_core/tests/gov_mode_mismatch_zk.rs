@@ -76,7 +76,9 @@ fn zk_ballot_rejected_on_plain_referendum() {
     let mut stx = sblock.transaction();
     // Grant permissions to ALICE to propose and submit ballots
     let p1: Permission = CanProposeContractDeployment {
-        contract_id: "demo.contract".to_string(),
+        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            .parse()
+            .expect("contract address"),
     }
     .into();
     Grant::account_permission(p1, ALICE_ID.clone())
@@ -101,8 +103,9 @@ fn zk_ballot_rejected_on_plain_referendum() {
     .expect("register vk");
     // Propose a Plain-mode referendum; record any created rid
     let prop = ProposeDeployContract {
-        namespace: "apps".to_string(),
-        contract_id: "demo.contract".to_string(),
+        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+            .parse()
+            .expect("contract address"),
         code_hash_hex: "aa".repeat(32),
         abi_hash_hex: canonical_abi_hex(),
         abi_version: "1".to_string(),

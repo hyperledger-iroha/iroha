@@ -25,6 +25,7 @@ use iroha::data_model::{
     },
     query::account::prelude::FindAccounts,
     runtime::RuntimeUpgradeManifest,
+    smart_contract::ContractAddress,
 };
 use iroha_crypto::KeyPair;
 use iroha_executor_data_model::permission::governance::{
@@ -67,6 +68,21 @@ fn governance_asset_definition_id() -> AssetDefinitionId {
         DomainId::parse_fully_qualified(GOV_DOMAIN_ID).expect("governance domain id must parse"),
         "xor".parse().expect("governance asset name must parse"),
     )
+}
+
+fn governance_contract_address(contract_id: &str) -> ContractAddress {
+    let deploy_nonce = match contract_id {
+        FIRST_CONTRACT_ID => 1,
+        SECOND_CONTRACT_ID => 2,
+        other => panic!("unexpected governance test contract id `{other}`"),
+    };
+    ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &ALICE_ID,
+        deploy_nonce,
+        iroha::data_model::nexus::DataSpaceId::GLOBAL,
+    )
+    .expect("governance test contract address")
 }
 
 pub fn tune_client_timeouts(client: &mut Client) {
@@ -929,11 +945,11 @@ pub async fn setup_runtime_governance_fixture(
 
     let enact_perm: Permission = CanEnactGovernance.into();
     let runtime_propose_perm: Permission = CanProposeContractDeployment {
-        contract_id: FIRST_CONTRACT_ID.to_string(),
+        contract_address: governance_contract_address(FIRST_CONTRACT_ID),
     }
     .into();
     let secondary_propose_perm: Permission = CanProposeContractDeployment {
-        contract_id: SECOND_CONTRACT_ID.to_string(),
+        contract_address: governance_contract_address(SECOND_CONTRACT_ID),
     }
     .into();
     alice

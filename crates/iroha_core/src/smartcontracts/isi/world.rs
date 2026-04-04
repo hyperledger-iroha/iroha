@@ -138,21 +138,12 @@ pub mod isi {
                 "contract manifest missing code_hash for trigger registration".into(),
             ))
         })?;
-        let namespace =
-            contract_namespace_for_address(state_transaction, contract_address)?.to_owned();
-        let contract_alias = state_transaction
-            .world
-            .contract_alias_bindings
-            .get(contract_address)
-            .map(|binding| binding.alias.to_string());
 
         for entrypoint in entrypoints {
             for descriptor in &entrypoint.triggers {
                 let code_hash_string = code_hash.to_string();
                 let trigger_id_string = descriptor.id.to_string();
-                if let Some(ref target_ns) = descriptor.callback.namespace
-                    && target_ns != &namespace
-                {
+                if descriptor.callback.namespace.is_some() {
                     return Err(InstructionExecutionError::InvalidParameter(
                         InvalidParameterError::SmartContract(
                             "cross-contract trigger callbacks are not supported yet".into(),
@@ -161,22 +152,14 @@ pub mod isi {
                 }
                 let mut metadata = descriptor.metadata.clone();
                 let address_key = Name::from_str("contract_address").expect("static metadata key");
-                let alias_key = Name::from_str("contract_alias").expect("static metadata key");
                 let ep_key = Name::from_str("contract_entrypoint").expect("static metadata key");
                 let code_key = Name::from_str("contract_code_hash").expect("static metadata key");
                 let trigger_key = Name::from_str("contract_trigger_id").expect("static metadata");
                 ensure_metadata_value(
                     &mut metadata,
                     &address_key,
-                    iroha_primitives::json::Json::from(contract_address.as_ref()),
+                    iroha_primitives::json::Json::from(contract_address.as_str()),
                 )?;
-                if let Some(contract_alias) = contract_alias.as_deref() {
-                    ensure_metadata_value(
-                        &mut metadata,
-                        &alias_key,
-                        iroha_primitives::json::Json::from(contract_alias),
-                    )?;
-                }
                 ensure_metadata_value(
                     &mut metadata,
                     &ep_key,
@@ -305,21 +288,11 @@ pub mod isi {
             .unwrap_or_default()
     }
 
-    fn contract_namespace_requires_governance(
-        state_transaction: &StateTransaction<'_, '_>,
-        namespace: &str,
-    ) -> bool {
-        let namespace = namespace.trim();
-        !namespace.is_empty()
-            && protected_contract_namespaces(state_transaction).contains(namespace)
-    }
-
-    fn ensure_contract_namespace_governance(
+    fn ensure_contract_binding_governance(
         authority: &AccountId,
         state_transaction: &StateTransaction<'_, '_>,
-        namespace: &str,
     ) -> Result<(), Error> {
-        if contract_namespace_requires_governance(state_transaction, namespace)
+        if !protected_contract_namespaces(state_transaction).is_empty()
             && !has_permission(&state_transaction.world, authority, "CanEnactGovernance")
         {
             return Err(InstructionExecutionError::InvariantViolation(
@@ -327,36 +300,6 @@ pub mod isi {
             ));
         }
         Ok(())
-    }
-
-    fn contract_namespace_for_address<'a>(
-        state_transaction: &'a StateTransaction<'_, '_>,
-        contract_address: &iroha_data_model::smart_contract::ContractAddress,
-    ) -> Result<&'a str, Error> {
-        let dataspace_id = contract_address.dataspace_id().map_err(|err| {
-            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                format!("invalid contract_address dataspace: {err}"),
-            ))
-        })?;
-        state_transaction
-            .nexus
-            .dataspace_catalog
-            .by_id(dataspace_id)
-            .map(|entry| entry.alias.as_str())
-            .ok_or_else(|| {
-                InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
-                    "contract_address dataspace is unknown".into(),
-                ))
-            })
-    }
-
-    fn ensure_contract_address_governance(
-        authority: &AccountId,
-        state_transaction: &StateTransaction<'_, '_>,
-        contract_address: &iroha_data_model::smart_contract::ContractAddress,
-    ) -> Result<(), Error> {
-        let namespace = contract_namespace_for_address(state_transaction, contract_address)?;
-        ensure_contract_namespace_governance(authority, state_transaction, namespace)
     }
 
     #[allow(clippy::too_many_lines)]
@@ -1764,7 +1707,7 @@ pub mod isi {
                 ));
             }
             let contract_address = self.contract_address.clone();
-            let contract_address_literal = contract_address.as_ref().to_owned();
+            let contract_address_literal = contract_address.as_str();
 
             let (code_hash_hex_str, code_hash_bytes) =
                 canonical_hex32(&self.code_hash_hex, "code_hash")?;
@@ -1803,13 +1746,13 @@ pub mod isi {
                 })?;
 
             let mut id_input = Vec::with_capacity(
-                b"iroha:gov:proposal:v2|".len()
+                b"iroha:gov:proposal:v1|".len()
                     + core::mem::size_of::<u32>()
                     + contract_address_literal.len()
                     + code_hash_bytes.len()
                     + abi_hash_bytes.len(),
             );
-            id_input.extend_from_slice(b"iroha:gov:proposal:v2|");
+            id_input.extend_from_slice(b"iroha:gov:proposal:v1|");
             id_input.extend_from_slice(&contract_address_len.to_le_bytes());
             id_input.extend_from_slice(contract_address_literal.as_bytes());
             id_input.extend_from_slice(&code_hash_bytes);
@@ -3644,10 +3587,11 @@ pub mod isi {
         payload: &DeployContractProposal,
         key: iroha_crypto::Hash,
     ) -> Result<bool, Error> {
+        let contract_address = payload.contract_address.clone();
         if let Some(existing) = state_transaction
             .world
             .contract_instances
-            .get(&payload.contract_address)
+            .get(&contract_address)
         {
             if *existing != key {
                 return Err(InstructionExecutionError::InvariantViolation(
@@ -3659,7 +3603,7 @@ pub mod isi {
         state_transaction
             .world
             .contract_instances
-            .insert(payload.contract_address.clone(), key);
+            .insert(contract_address, key);
         Ok(true)
     }
 
@@ -3923,16 +3867,13 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_address_governance(
-                authority,
-                state_transaction,
-                &self.contract_address,
-            )?;
+            ensure_contract_binding_governance(authority, state_transaction)?;
             let key = *self.code_hash();
+            let contract_address = self.contract_address().clone();
             if let Some(existing) = state_transaction
                 .world
                 .contract_instances
-                .get(&self.contract_address)
+                .get(&contract_address)
             {
                 if *existing != key {
                     return Err(InstructionExecutionError::InvariantViolation(
@@ -3975,7 +3916,7 @@ pub mod isi {
                 register_manifest_triggers(
                     authority,
                     state_transaction,
-                    &self.contract_address,
+                    self.contract_address(),
                     &code_bytes,
                     &manifest,
                 )?;
@@ -3983,12 +3924,12 @@ pub mod isi {
             state_transaction
                 .world
                 .contract_instances
-                .insert(self.contract_address.clone(), key);
+                .insert(contract_address.clone(), key);
             state_transaction
                 .world
                 .emit_events(Some(SmartContractEvent::InstanceActivated(
                     ContractInstanceActivated {
-                        contract_address: self.contract_address.clone(),
+                        contract_address,
                         code_hash: *self.code_hash(),
                         activated_by: authority.clone(),
                     },
@@ -4003,15 +3944,12 @@ pub mod isi {
             authority: &AccountId,
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
-            ensure_contract_address_governance(
-                authority,
-                state_transaction,
-                &self.contract_address,
-            )?;
+            ensure_contract_binding_governance(authority, state_transaction)?;
+            let key = self.contract_address().clone();
             let Some(prev_hash) = state_transaction
                 .world
                 .contract_instances
-                .remove(self.contract_address.clone())
+                .remove(key.clone())
             else {
                 return Err(InstructionExecutionError::InvalidParameter(
                     InvalidParameterError::SmartContract("contract instance is not active".into()),
@@ -4057,7 +3995,7 @@ pub mod isi {
                 .world
                 .emit_events(Some(SmartContractEvent::InstanceDeactivated(
                     ContractInstanceDeactivated {
-                        contract_address: self.contract_address,
+                        contract_address: key,
                         previous_code_hash: prev_hash,
                         deactivated_by: authority.clone(),
                         reason,
@@ -13719,7 +13657,7 @@ pub mod isi {
 
             let proposal_id = [0xB7; 32];
             let kind = ProposalKind::DeployContract(DeployContractProposal {
-                contract_address: "tairac1qyqqqqqqqqqqqq9grgu03pwn7635qu0hz5y7dmywpcderfcn32tc3"
+                contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
                     .parse()
                     .expect("contract address"),
                 code_hash_hex: ContractCodeHash::new([0x31; 32]),
@@ -17561,8 +17499,6 @@ pub mod isi {
                 .expect("seed authority");
 
             let code_hash = Hash::new(b"public-contract");
-            let contract_address = ContractAddress::derive(0, &ALICE_ID, 0, DataSpaceId::GLOBAL)
-                .expect("public contract address");
             let manifest = ContractManifest {
                 code_hash: Some(code_hash),
                 abi_hash: None,
@@ -17574,6 +17510,14 @@ pub mod isi {
                 provenance: None,
             };
             stx.world.contract_manifests.insert(code_hash, manifest);
+
+            let contract_address = ContractAddress::derive(
+                iroha_data_model::account::address::chain_discriminant(),
+                &ALICE_ID,
+                0,
+                DataSpaceId::GLOBAL,
+            )
+            .expect("contract address");
 
             scode::ActivateContractInstance {
                 contract_address: contract_address.clone(),
@@ -17611,7 +17555,7 @@ pub mod isi {
                 iroha_data_model::parameter::custom::CustomParameterId(
                     "gov_protected_namespaces".parse().expect("parameter id"),
                 ),
-                Json::new(vec!["universal".to_owned()]),
+                Json::new(vec!["protected".to_owned()]),
             );
             stx.world
                 .parameters
@@ -17619,8 +17563,6 @@ pub mod isi {
                 .set_parameter(Parameter::Custom(protected));
 
             let code_hash = Hash::new(b"protected-contract");
-            let contract_address = ContractAddress::derive(0, &ALICE_ID, 0, DataSpaceId::GLOBAL)
-                .expect("protected contract address");
             let manifest = ContractManifest {
                 code_hash: Some(code_hash),
                 abi_hash: None,
@@ -17632,6 +17574,14 @@ pub mod isi {
                 provenance: None,
             };
             stx.world.contract_manifests.insert(code_hash, manifest);
+
+            let contract_address = ContractAddress::derive(
+                iroha_data_model::account::address::chain_discriminant(),
+                &ALICE_ID,
+                1,
+                DataSpaceId::GLOBAL,
+            )
+            .expect("contract address");
 
             let err = scode::ActivateContractInstance {
                 contract_address,

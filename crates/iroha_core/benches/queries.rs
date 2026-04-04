@@ -44,7 +44,7 @@ fn fixture_account_in_domain(label: &str, _domain_id: &DomainId) -> AccountId {
 }
 
 fn bench_domain_id() -> DomainId {
-    "bench".parse().expect("bench domain id")
+    DomainId::try_new("bench", "universal").expect("bench domain id")
 }
 
 fn bench_account(label: &str) -> AccountId {

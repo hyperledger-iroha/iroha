@@ -1865,8 +1865,7 @@ impl TieredStateBackend {
             let view = world.contract_instances.view();
             for (key, value) in view.iter() {
                 let key_handle = TieredKeyHandle::ContractInstance((*key).clone());
-                let key_payload = json::to_vec(key.as_ref())
-                    .wrap_err("failed to encode contract instance key for tiered snapshot")?;
+                let key_payload = norito::codec::Encode::encode(key);
                 self.collect_entry_with_encoded_key(
                     TieredSegment::ContractInstances,
                     &key_handle,
@@ -2520,6 +2519,7 @@ mod measured_bytes_impls {
             RuntimeUpgradeSbomDigest, RuntimeUpgradeStatus,
         },
         rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
+        smart_contract::ContractAddress,
         smart_contract::manifest::{
             AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
             KotobaTranslation, KotobaTranslationEntry, ManifestProvenance, TriggerCallback,
@@ -2717,6 +2717,12 @@ mod measured_bytes_impls {
                 total = total.saturating_add(self.len());
             }
             total
+        }
+    }
+
+    impl MeasuredBytes for ContractAddress {
+        fn measured_bytes(&self) -> usize {
+            size_of::<ContractAddress>().saturating_add(self.as_ref().len())
         }
     }
 
@@ -3460,7 +3466,7 @@ mod measured_bytes_impls {
     impl MeasuredBytes for DeployContractProposal {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<DeployContractProposal>();
-            total = total.saturating_add(self.contract_address.as_ref().len());
+            total = total.saturating_add(self.contract_address.measured_bytes_extra());
             total = total.saturating_add(self.code_hash_hex.measured_bytes_extra());
             total = total.saturating_add(self.abi_hash_hex.measured_bytes_extra());
             total = total.saturating_add(self.abi_version.measured_bytes_extra());
@@ -4465,8 +4471,7 @@ impl TieredKeyHandle {
 
     fn encode_key(&self) -> Result<Vec<u8>> {
         match self {
-            TieredKeyHandle::ContractInstance(key) => json::to_vec(key.as_ref())
-                .wrap_err("failed to encode contract instance key for tiered snapshot"),
+            TieredKeyHandle::ContractInstance(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Domain(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Account(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRekey(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4768,7 +4773,6 @@ mod tests {
     use iroha_crypto::{Hash, HashOf};
     use iroha_data_model::{
         account::OpaqueAccountId,
-        asset::AssetDefinitionId,
         block::BlockHeader,
         consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1},
         nexus::{LaneCatalog, LaneConfig, LaneId},
@@ -4811,18 +4815,6 @@ mod tests {
             std::mem::size_of::<Vec<u8>>() + value.capacity() * std::mem::size_of::<u8>();
         let measured = compute_hot_bytes(&value).expect("hot byte measurement");
         assert_eq!(measured, expected);
-    }
-
-    #[test]
-    fn measured_bytes_for_opaque_asset_definition_id_does_not_require_projection() {
-        let opaque = AssetDefinitionId::from_uuid_bytes([
-            0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0x4d, 0xef, 0x8a, 0xbc, 0xde, 0xf0, 0x12, 0x34,
-            0x56, 0x78,
-        ])
-        .expect("valid opaque asset definition id");
-        let measured = MeasuredBytes::measured_bytes(&opaque);
-
-        assert_eq!(measured, std::mem::size_of::<AssetDefinitionId>());
     }
 
     #[test]
@@ -4883,6 +4875,20 @@ mod tests {
         assert_eq!(
             MeasuredBytes::measured_bytes(&opaque),
             std::mem::size_of::<OpaqueAccountId>()
+        );
+    }
+
+    #[test]
+    fn measured_bytes_cover_opaque_asset_definition_id() {
+        use iroha_data_model::asset::AssetDefinitionId;
+
+        let opaque = AssetDefinitionId::from_uuid_bytes_unchecked([
+            0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0x4d, 0xef, 0x80, 0x11, 0x22, 0x33, 0x44, 0x55,
+            0x66, 0x77,
+        ]);
+        assert_eq!(
+            MeasuredBytes::measured_bytes(&opaque),
+            std::mem::size_of::<AssetDefinitionId>()
         );
     }
 

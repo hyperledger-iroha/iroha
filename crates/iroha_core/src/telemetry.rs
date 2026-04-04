@@ -12331,7 +12331,7 @@ mod tests {
 
         telemetry.record_manifest_activation(None, "manifest_inserted");
         let activation = GovernanceManifestActivation {
-            contract_address: "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s"
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
                 .to_string(),
             code_hash_hex: "deadbeef".to_string(),
             abi_hash_hex: Some("cafebabe".to_string()),

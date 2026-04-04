@@ -7566,14 +7566,14 @@ mod pointer_abi_tests {
         let (public_key, _) = kp.into_parts();
         let authority = AccountId::of(public_key);
         let mut host = CoreHost::new(authority);
+
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            iroha_data_model::account::address::chain_discriminant(),
             &host.authority,
-            1,
-            iroha_data_model::nexus::DataSpaceId::new(0),
+            0,
+            iroha_data_model::nexus::DataSpaceId::GLOBAL,
         )
         .expect("contract address");
-
         let request = scode::ActivateContractInstance {
             contract_address,
             code_hash: IrohaHash::new(b"payments-code"),
@@ -7597,14 +7597,14 @@ mod pointer_abi_tests {
         let (public_key, _) = kp.into_parts();
         let authority = AccountId::of(public_key);
         let mut host = CoreHost::new(authority);
+
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
-            0,
+            iroha_data_model::account::address::chain_discriminant(),
             &host.authority,
-            2,
-            iroha_data_model::nexus::DataSpaceId::new(0),
+            1,
+            iroha_data_model::nexus::DataSpaceId::GLOBAL,
         )
         .expect("contract address");
-
         let request = scode::DeactivateContractInstance {
             contract_address,
             reason: Some("compromised deployment".to_owned()),

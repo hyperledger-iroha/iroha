@@ -30,7 +30,10 @@ use iroha::data_model::{
     },
     query::account::prelude::FindAccounts,
     runtime::RuntimeUpgradeManifest,
-    smart_contract::manifest::{ContractManifest, ManifestProvenance},
+    smart_contract::{
+        ContractAddress,
+        manifest::{ContractManifest, ManifestProvenance},
+    },
 };
 use iroha_crypto::{Hash, KeyPair};
 use iroha_executor_data_model::permission::governance::{
@@ -87,6 +90,23 @@ fn governance_asset_definition_id() -> AssetDefinitionId {
         DomainId::parse_fully_qualified(GOV_DOMAIN_ID).expect("governance domain id must parse"),
         "xor".parse().expect("governance asset name must parse"),
     )
+}
+
+fn governance_contract_address(contract_id: &str) -> ContractAddress {
+    let deploy_nonce = match contract_id {
+        FIRST_CONTRACT_ID => 1,
+        SECOND_CONTRACT_ID => 2,
+        HOSTILE_DEPLOY_CONTRACT_ID => 3,
+        HOSTILE_RUNTIME_PERMISSION_CONTRACT_ID => 4,
+        other => panic!("unexpected governance smoke contract id `{other}`"),
+    };
+    ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &ALICE_ID,
+        deploy_nonce,
+        iroha::data_model::nexus::DataSpaceId::GLOBAL,
+    )
+    .expect("governance smoke contract address")
 }
 
 fn tune_client_timeouts(client: &mut Client) {
@@ -162,8 +182,7 @@ fn manifest_provenance(
 }
 
 fn compute_proposal_id(
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &ContractAddress,
     code_hash_hex: &str,
     abi_hash_hex: &str,
 ) -> [u8; 32] {
@@ -171,22 +190,20 @@ fn compute_proposal_id(
 
     let code_hash = parse_hex32(code_hash_hex);
     let abi_hash = parse_hex32(abi_hash_hex);
-    let namespace_len = u32::try_from(namespace.len()).expect("namespace length fits");
-    let contract_len = u32::try_from(contract_id.len()).expect("contract length fits");
+    let contract_address = contract_address.as_str();
+    let contract_address_len =
+        u32::try_from(contract_address.len()).expect("contract address length fits");
 
     let mut input = Vec::with_capacity(
-        b"iroha:gov:proposal:v1|".len()
-            + core::mem::size_of::<u32>() * 2
-            + namespace.len()
-            + contract_id.len()
+        b"iroha:gov:proposal:v2|".len()
+            + core::mem::size_of::<u32>()
+            + contract_address.len()
             + code_hash.len()
             + abi_hash.len(),
     );
-    input.extend_from_slice(b"iroha:gov:proposal:v1|");
-    input.extend_from_slice(&namespace_len.to_le_bytes());
-    input.extend_from_slice(namespace.as_bytes());
-    input.extend_from_slice(&contract_len.to_le_bytes());
-    input.extend_from_slice(contract_id.as_bytes());
+    input.extend_from_slice(b"iroha:gov:proposal:v2|");
+    input.extend_from_slice(&contract_address_len.to_le_bytes());
+    input.extend_from_slice(contract_address.as_bytes());
     input.extend_from_slice(&code_hash);
     input.extend_from_slice(&abi_hash);
 
@@ -1000,11 +1017,11 @@ async fn setup_hostile_fixture(
         .wrap_err("wait for governance asset definition registration in hostile fixture")?;
 
     let deploy_perm: Permission = CanProposeContractDeployment {
-        contract_id: HOSTILE_DEPLOY_CONTRACT_ID.to_owned(),
+        contract_address: governance_contract_address(HOSTILE_DEPLOY_CONTRACT_ID),
     }
     .into();
     let runtime_perm: Permission = CanProposeContractDeployment {
-        contract_id: HOSTILE_RUNTIME_PERMISSION_CONTRACT_ID.to_owned(),
+        contract_address: governance_contract_address(HOSTILE_RUNTIME_PERMISSION_CONTRACT_ID),
     }
     .into();
     let enact_perm: Permission = CanEnactGovernance.into();
@@ -1191,16 +1208,16 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         "generated citizen identities must be unique"
     );
 
-    let namespace = "sora";
     let contract_id = FIRST_CONTRACT_ID;
     let reject_contract_id = SECOND_CONTRACT_ID;
+    let contract_address = governance_contract_address(contract_id);
+    let reject_contract_address = governance_contract_address(reject_contract_id);
     let code_hash_hex = "dd".repeat(32);
     let reject_code_hash_hex = "ee".repeat(32);
     let abi_hash_hex = canonical_abi_hex();
-    let proposal_id = compute_proposal_id(namespace, contract_id, &code_hash_hex, &abi_hash_hex);
+    let proposal_id = compute_proposal_id(&contract_address, &code_hash_hex, &abi_hash_hex);
     let reject_proposal_id = compute_proposal_id(
-        namespace,
-        reject_contract_id,
+        &reject_contract_address,
         &reject_code_hash_hex,
         &abi_hash_hex,
     );
@@ -1229,11 +1246,11 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     eprintln!("sora smoke: governance domain + asset ready");
 
     let propose_perm: Permission = CanProposeContractDeployment {
-        contract_id: contract_id.to_string(),
+        contract_address: contract_address.clone(),
     }
     .into();
     let reject_propose_perm: Permission = CanProposeContractDeployment {
-        contract_id: reject_contract_id.to_string(),
+        contract_address: reject_contract_address.clone(),
     }
     .into();
     let enact_perm: Permission = CanEnactGovernance.into();
@@ -1453,8 +1470,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
 
     alice
         .submit(ProposeDeployContract {
-            namespace: namespace.to_string(),
-            contract_id: contract_id.to_string(),
+            contract_address: contract_address.clone(),
             code_hash_hex: code_hash_hex.clone(),
             abi_hash_hex: abi_hash_hex.clone(),
             abi_version: "1".to_string(),
@@ -1730,26 +1746,14 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         "approval votes should exceed rejection votes"
     );
 
-    let instances_payload = alice.get_gov_instances_by_ns_filtered_json(
-        namespace,
-        Some(contract_id),
-        None,
-        Some(0),
-        Some(50),
-        None,
-    )?;
-    let deployed_instance = instances_payload
-        .get("instances")
-        .and_then(norito::json::Value::as_array)
-        .and_then(|instances| {
-            instances.iter().find(|instance| {
-                instance
-                    .get("contract_id")
-                    .and_then(norito::json::Value::as_str)
-                    .is_some_and(|cid| cid == contract_id)
-            })
-        })
-        .ok_or_else(|| eyre!("expected deployed contract instance for `{contract_id}`"))?;
+    let deployed_instance = alice.get_gov_contract_json(&contract_address)?;
+    assert_eq!(
+        deployed_instance
+            .get("found")
+            .and_then(norito::json::Value::as_bool),
+        Some(true),
+        "expected governed contract binding for `{contract_address}`"
+    );
     assert_eq!(
         deployed_instance
             .get("code_hash_hex")
@@ -1781,8 +1785,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
 
     alice
         .submit(ProposeDeployContract {
-            namespace: namespace.to_string(),
-            contract_id: reject_contract_id.to_string(),
+            contract_address: reject_contract_address.clone(),
             code_hash_hex: reject_code_hash_hex.clone(),
             abi_hash_hex: abi_hash_hex.clone(),
             abi_version: "1".to_string(),
@@ -2057,23 +2060,17 @@ async fn sora_parliament_hostile_takeover_blocked_without_sortition_capture() ->
     .await
     .wrap_err("wait for honest-only parliament selection")?;
 
-    let namespace = "sora";
+    let contract_address = governance_contract_address(HOSTILE_DEPLOY_CONTRACT_ID);
     let code_hash_hex = HOSTILE_DEPLOY_CODE_HASH_HEX.to_owned();
     let abi_hash_hex = canonical_abi_hex();
-    let proposal_id = compute_proposal_id(
-        namespace,
-        HOSTILE_DEPLOY_CONTRACT_ID,
-        &code_hash_hex,
-        &abi_hash_hex,
-    );
+    let proposal_id = compute_proposal_id(&contract_address, &code_hash_hex, &abi_hash_hex);
     let proposal_id_hex = hex::encode(proposal_id);
     let referendum_id = proposal_id_hex.clone();
 
     fixture
         .alice
         .submit(ProposeDeployContract {
-            namespace: namespace.to_owned(),
-            contract_id: HOSTILE_DEPLOY_CONTRACT_ID.to_owned(),
+            contract_address: contract_address.clone(),
             code_hash_hex: code_hash_hex.clone(),
             abi_hash_hex: abi_hash_hex.clone(),
             abi_version: "1".to_owned(),
@@ -2225,15 +2222,10 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     .await
     .wrap_err("wait for attacker-captured parliament selection")?;
 
-    let namespace = "sora";
+    let contract_address = governance_contract_address(HOSTILE_DEPLOY_CONTRACT_ID);
     let code_hash_hex = HOSTILE_DEPLOY_CODE_HASH_HEX.to_owned();
     let abi_hash_hex = canonical_abi_hex();
-    let deploy_proposal_id = compute_proposal_id(
-        namespace,
-        HOSTILE_DEPLOY_CONTRACT_ID,
-        &code_hash_hex,
-        &abi_hash_hex,
-    );
+    let deploy_proposal_id = compute_proposal_id(&contract_address, &code_hash_hex, &abi_hash_hex);
     let deploy_proposal_id_hex = hex::encode(deploy_proposal_id);
     let deploy_referendum_id = deploy_proposal_id_hex.clone();
 
@@ -2252,8 +2244,7 @@ async fn sora_parliament_hostile_takeover_enacts_malicious_deploy_and_runtime_af
     fixture
         .alice
         .submit(ProposeDeployContract {
-            namespace: namespace.to_owned(),
-            contract_id: HOSTILE_DEPLOY_CONTRACT_ID.to_owned(),
+            contract_address: contract_address.clone(),
             code_hash_hex: code_hash_hex.clone(),
             abi_hash_hex: abi_hash_hex.clone(),
             abi_version: "1".to_owned(),

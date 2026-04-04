@@ -10,6 +10,7 @@ use std::{
 use eyre::{Context as _, ensure};
 use integration_tests::sandbox;
 use iroha::client::Client;
+use iroha::crypto::{Algorithm, KeyPair};
 use iroha::data_model::{
     Level,
     account::Account,
@@ -45,6 +46,14 @@ const COLLECTOR_POLL: Duration = Duration::from_millis(100);
 enum StakeActivationProfile {
     MinStakeFilter,
     EntityCorrelationCap,
+}
+
+fn validator_account_id_for_index(index: usize) -> AccountId {
+    let key_pair = KeyPair::from_seed(
+        format!("integration_tests::sumeragi_npos_stake_activation::{index}").into_bytes(),
+        Algorithm::Ed25519,
+    );
+    AccountId::new(key_pair.public_key().clone())
 }
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
@@ -98,8 +107,8 @@ fn stake_genesis_post_topology_transactions(
         Register::domain(Domain::new(nexus_domain.clone())).into(),
         Register::asset_definition(definition).into(),
     ];
-    for (index, peer) in topology.iter().enumerate() {
-        let validator_id = AccountId::new(peer.public_key().clone());
+    for (index, _peer) in topology.iter().enumerate() {
+        let validator_id = validator_account_id_for_index(index);
         let (stake, _) = profile_for_index(index, profile);
         if validator_id != genesis_account_id {
             bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
@@ -111,7 +120,7 @@ fn stake_genesis_post_topology_transactions(
 
     let mut validator_tx = Vec::new();
     for (index, peer) in topology.iter().enumerate() {
-        let validator_id = AccountId::new(peer.public_key().clone());
+        let validator_id = validator_account_id_for_index(index);
         let (stake, entity) = profile_for_index(index, profile);
         let mut metadata = Metadata::default();
         if let Some(entity_name) = entity {
