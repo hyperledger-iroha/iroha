@@ -424,7 +424,7 @@ const LOCALNET_NEXUS_DOMAIN: &str = "nexus.universal";
 const LOCALNET_IVM_DOMAIN: &str = "ivm.universal";
 const LOCALNET_UNIVERSAL_DOMAIN: &str = "universal.universal";
 const LOCALNET_STAKE_ASSET_NAME: &str = "xor";
-const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland";
+const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland.universal";
 pub(crate) const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
 const LOCALNET_GAS_ACCOUNT_SEED: &[u8] = b"localnet-gas-account";
 /// Default localnet client TTL (ms) to keep stress submissions from expiring prematurely.
@@ -2452,7 +2452,7 @@ fn copy_rans_tables(out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-const CLIENT_ACCOUNT_DOMAIN: &str = "wonderland";
+const CLIENT_ACCOUNT_DOMAIN: &str = "wonderland.universal";
 const CLIENT_ACCOUNT_PUBLIC: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const CLIENT_ACCOUNT_PRIVATE: &str =

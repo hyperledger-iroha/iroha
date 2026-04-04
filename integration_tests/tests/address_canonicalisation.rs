@@ -33,6 +33,7 @@ use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
 use reqwest::Client;
+use tempfile::tempdir;
 
 type SurfaceSpec<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
 
@@ -436,7 +437,9 @@ fn offline_allowance_genesis_helper_seeds_domain_once_and_names_asset_definition
         .try_name()
         .map(ToString::to_string)
         .unwrap_or_else(|| asset_definition_id.to_string());
-    let network = with_offline_allowance_genesis(NetworkBuilder::new(), &certificate).build();
+    let permit_dir = tempdir().expect("offline allowance permit dir");
+    let network = with_offline_allowance_genesis(NetworkBuilder::new(), &certificate)
+        .build_with_permit_dir(permit_dir.path());
     let genesis = network.genesis();
 
     let authority = SAMPLE_GENESIS_ACCOUNT_ID.clone();

@@ -19,10 +19,9 @@ the CLI.
   - `/Users/takemiyamakoto/dev/iroha/docs/source/bridge_proofs.md`
   - `/Users/takemiyamakoto/dev/iroha/status.md`
   - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
-- verification:
-  - isolated Cargo-home / target-dir reruns are in progress because the shared
-    `iroha/target` directory is currently locked by unrelated long-running
-    Cargo jobs in the same checkout.
+- verified with:
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-sccp-client-target cargo test --offline -p iroha get_sccp_ --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-cli-bridge-target cargo test --offline -p iroha_cli --features bridge --bin iroha bridge::tests:: -- --nocapture`
 
 Latest sync (2026-04-04 typed SCCP transparent proof artifacts):
 Generic SCCP `message` bundles no longer collapse into opaque transparent proof
@@ -15668,6 +15667,6 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 2. Completed: read-side overload no longer poisons Izanami submit routing. Confirmation / trigger-status query failures still fail over, but only submit-path failures can mark endpoints unhealthy.
 3. Completed: the Rust client confirmation loop now polls local pipeline status first and only falls back to committed lookup on local miss / ambiguity instead of on every `Queued` or `Approved` poll.
 4. Completed: Torii pipeline-status reads now use a dedicated in-process limiter instance separate from the general query limiter and tx ingress limiter, while reusing the existing query-rate numeric budget and a larger local status cache.
-5. Remaining open: add the shared sampled audit worker for throughput runs so correctness checks stay bounded without reintroducing per-transaction confirmation amplification.
-6. Remaining open: classify teardown-time status-read `connection refused` after clean peer exit as shutdown noise in Izanami accounting instead of a throughput failure signal.
+5. Completed: throughput runs now use one shared sampled audit worker with a deterministic `1%` sample rate and a hard cap of `100` confirmation reads per minute per endpoint, keeping sampled correctness bounded without reintroducing per-transaction blocking confirmation.
+6. Completed: teardown-time status-read `connection refused` is now classified as shutdown noise once Izanami has entered stop/shutdown, so late audit/status reads do not count as throughput failures.
 7. Remaining open: rerun the stepped single-host throughput sweep on the de-amplified harness, then repeat the multi-host NPoS/permissioned benchmark and compare the post-fix knees against the prior 25-50 TPS / 75-100 TPS baselines.

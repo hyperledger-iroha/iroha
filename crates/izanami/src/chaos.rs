@@ -1116,12 +1116,12 @@ impl IngressEndpointPool {
         });
     }
 
-    fn run_with_failover_preferred<T, F>(
+    fn run_with_failover_preferred_with_endpoint<T, F>(
         &self,
         op_name: &'static str,
         submitter_idx: usize,
         mut operation: F,
-    ) -> Result<T>
+    ) -> Result<(usize, T)>
     where
         F: FnMut(&NetworkPeer) -> Result<T>,
     {
@@ -1134,7 +1134,7 @@ impl IngressEndpointPool {
                 let endpoint = endpoints
                     .get(endpoint_idx)
                     .ok_or_else(|| eyre!("endpoint index {endpoint_idx} out of range"))?;
-                operation(&endpoint.peer)
+                operation(&endpoint.peer).map(|value| (endpoint_idx, value))
             },
         )
     }
@@ -1190,6 +1190,10 @@ impl IngressEndpointPool {
             })
     }
 
+    fn endpoint_count(&self) -> usize {
+        self.endpoints.len()
+    }
+
     fn submission_backpressure_delay(&self, now: Instant) -> Option<Duration> {
         self.health.submission_backpressure_delay_at(now)
     }
@@ -1240,6 +1244,19 @@ fn ingress_failure_affects_submit_health(op_name: &str) -> bool {
         classify_ingress_operation(op_name),
         IngressOperationClass::Submit
     )
+}
+
+fn is_shutdown_noise_status_read_failure(
+    op_name: &str,
+    error: &color_eyre::Report,
+    run_control: &RunControl,
+) -> bool {
+    run_control.stop_requested()
+        && matches!(
+            classify_ingress_operation(op_name),
+            IngressOperationClass::StatusRead
+        )
+        && ingress_error_message(error).contains("connection refused")
 }
 
 fn ingress_error_message(error: &color_eyre::Report) -> String {
@@ -1415,6 +1432,86 @@ where
                     std::thread::sleep(retry_in);
                 }
                 backoff = backoff.saturating_mul(2);
+            }
+            Err(err) => return Err(err),
+        }
+    }
+}
+
+fn run_with_queue_timeout_retry_with_policy_and_delay_result<T, F, G>(
+    plan_label: &'static str,
+    max_retry_attempts: u32,
+    initial_backoff: Duration,
+    mut no_endpoint_backpressure_delay: G,
+    mut submit: F,
+) -> Result<T>
+where
+    F: FnMut() -> Result<T>,
+    G: FnMut() -> Option<Duration>,
+{
+    let mut backoff = initial_backoff;
+    let mut retryable_attempts = 0_u32;
+    let mut endpoint_backpressure_retries = 0_u32;
+    let max_endpoint_backpressure_retries = max_retry_attempts
+        .saturating_mul(IZANAMI_QUEUE_TIMEOUT_ENDPOINT_BACKPRESSURE_RETRY_MULTIPLIER)
+        .max(1);
+    loop {
+        match submit() {
+            Ok(value) => return Ok(value),
+            Err(err) if is_ingress_queue_timeout_retryable(&err) => {
+                let error_message = ingress_error_message(&err);
+                let endpoint_backpressure =
+                    is_ingress_endpoint_backpressure_message(&error_message);
+                let retry_budget_available = if endpoint_backpressure {
+                    endpoint_backpressure_retries < max_endpoint_backpressure_retries
+                } else {
+                    retryable_attempts < max_retry_attempts
+                };
+                if !retry_budget_available {
+                    warn!(
+                        target: "izanami::workload",
+                        plan = plan_label,
+                        endpoint_backpressure,
+                        retryable_attempts,
+                        endpoint_backpressure_retries,
+                        max_retry_attempts,
+                        max_endpoint_backpressure_retries,
+                        ?err,
+                        "ingress queue timeout retry budget exhausted"
+                    );
+                    return Err(err);
+                }
+                if endpoint_backpressure {
+                    endpoint_backpressure_retries = endpoint_backpressure_retries.saturating_add(1);
+                } else {
+                    retryable_attempts = retryable_attempts.saturating_add(1);
+                }
+                let delay = no_endpoint_backpressure_delay().unwrap_or(backoff);
+                warn!(
+                    target: "izanami::workload",
+                    plan = plan_label,
+                    retryable_attempts,
+                    endpoint_backpressure_retries,
+                    max_retry_attempts,
+                    max_endpoint_backpressure_retries,
+                    delay_ms = delay.as_millis(),
+                    endpoint_backpressure,
+                    ?err,
+                    "retrying after ingress queue timeout"
+                );
+                std::thread::sleep(delay);
+                if !endpoint_backpressure {
+                    backoff = backoff.saturating_mul(2);
+                }
+            }
+            Err(err) if is_idempotent_duplicate_submission(&err) => {
+                warn!(
+                    target: "izanami::workload",
+                    plan = plan_label,
+                    ?err,
+                    "duplicate submission rejected because the caller requires a concrete outcome"
+                );
+                return Err(err);
             }
             Err(err) => return Err(err),
         }
@@ -2690,6 +2787,25 @@ impl IzanamiRunner {
             Arc::clone(&ingress_stats),
         ));
         let submission_counter = Arc::new(AtomicU64::new(0));
+        let submission_confirmation = submission_confirmation_mode(&self.config);
+        let confirmation_audit_seed = rng.next_u64();
+        let (confirmation_audit_tx, confirmation_audit_handle) = if matches!(
+            submission_confirmation,
+            SubmissionConfirmationMode::AcceptedByIngress
+        ) {
+            let (tx, rx) = mpsc::channel(IZANAMI_THROUGHPUT_CONFIRMATION_QUEUE_CAP);
+            (
+                Some(tx),
+                Some(self.spawn_confirmation_audit_worker(
+                    &metrics,
+                    &ingress_pool,
+                    &run_control,
+                    rx,
+                )),
+            )
+        } else {
+            (None, None)
+        };
 
         let faulty_handles =
             self.spawn_fault_tasks(&config_layers, &genesis, &run_control, &mut rng);
@@ -2699,7 +2815,10 @@ impl IzanamiRunner {
             &run_control,
             &mut rng,
             &submission_counter,
+            confirmation_audit_tx.clone(),
+            confirmation_audit_seed,
         );
+        drop(confirmation_audit_tx);
 
         let soft_target_kpi =
             self.config.target_blocks.is_some() && is_shared_host_stable_soak(&self.config);
@@ -2771,6 +2890,9 @@ impl IzanamiRunner {
             Duration::from_secs(IZANAMI_WORKER_SHUTDOWN_TIMEOUT_SECS)
         };
         await_worker_shutdown_with_timeout(load_handles, "load", shutdown_timeout).await;
+        if let Some(handle) = confirmation_audit_handle {
+            await_worker_shutdown_with_timeout(vec![handle], "audit", shutdown_timeout).await;
+        }
         await_worker_shutdown_with_timeout(faulty_handles, "fault", shutdown_timeout).await;
         if run_error.is_none() {
             self.network.shutdown().await;
@@ -2785,6 +2907,14 @@ impl IzanamiRunner {
                 offered = snapshot.offered,
                 ingress_accepted = snapshot.ingress_accepted,
                 blocking_applied_success = snapshot.blocking_applied_success,
+                confirmation_sampled = snapshot.confirmation_sampled,
+                confirmation_applied = snapshot.confirmation_applied,
+                confirmation_rejected = snapshot.confirmation_rejected,
+                confirmation_expired = snapshot.confirmation_expired,
+                confirmation_failed = snapshot.confirmation_failed,
+                confirmation_budget_skipped = snapshot.confirmation_budget_skipped,
+                confirmation_queue_dropped = snapshot.confirmation_queue_dropped,
+                confirmation_shutdown_noise = snapshot.confirmation_shutdown_noise,
                 successes = snapshot.successes,
                 failures = snapshot.failures,
                 expected_failures = snapshot.expected_failures,
@@ -2807,6 +2937,14 @@ impl IzanamiRunner {
                 offered = snapshot.offered,
                 ingress_accepted = snapshot.ingress_accepted,
                 blocking_applied_success = snapshot.blocking_applied_success,
+                confirmation_sampled = snapshot.confirmation_sampled,
+                confirmation_applied = snapshot.confirmation_applied,
+                confirmation_rejected = snapshot.confirmation_rejected,
+                confirmation_expired = snapshot.confirmation_expired,
+                confirmation_failed = snapshot.confirmation_failed,
+                confirmation_budget_skipped = snapshot.confirmation_budget_skipped,
+                confirmation_queue_dropped = snapshot.confirmation_queue_dropped,
+                confirmation_shutdown_noise = snapshot.confirmation_shutdown_noise,
                 successes = snapshot.successes,
                 failures = snapshot.failures,
                 expected_failures = snapshot.expected_failures,
@@ -2894,6 +3032,8 @@ impl IzanamiRunner {
         run_control: &Arc<RunControl>,
         rng: &mut StdRng,
         submission_counter: &Arc<AtomicU64>,
+        confirmation_audit_tx: Option<mpsc::Sender<SubmissionAuditCandidate>>,
+        confirmation_audit_seed: u64,
     ) -> Vec<JoinHandle<()>> {
         let submission_confirmation = submission_confirmation_mode(&self.config);
         let workload = Arc::clone(&self.workload);
@@ -2914,6 +3054,7 @@ impl IzanamiRunner {
                 let submission_counter = Arc::clone(submission_counter);
                 let workload = Arc::clone(&workload);
                 let semaphore = Arc::clone(&semaphore);
+                let confirmation_audit_tx = confirmation_audit_tx.clone();
                 tokio::spawn(async move {
                     let start = Instant::now();
                     let mut next_tick = start + phase_delay;
@@ -2974,6 +3115,7 @@ impl IzanamiRunner {
                         let submission_counter = Arc::clone(&submission_counter);
                         let workload = Arc::clone(&workload);
                         let semaphore = Arc::clone(&semaphore);
+                        let confirmation_audit_tx = confirmation_audit_tx.clone();
                         submissions.spawn(async move {
                             let _backlog_guard = BacklogGuard::new(Arc::clone(&metrics));
                             submit_plan(
@@ -2985,6 +3127,8 @@ impl IzanamiRunner {
                                 &submission_counter,
                                 &workload,
                                 submitter_idx,
+                                confirmation_audit_tx,
+                                confirmation_audit_seed,
                             )
                             .await;
                         });
@@ -2996,6 +3140,47 @@ impl IzanamiRunner {
                 })
             })
             .collect()
+    }
+
+    fn spawn_confirmation_audit_worker(
+        &self,
+        metrics: &Arc<Metrics>,
+        ingress_pool: &Arc<IngressEndpointPool>,
+        run_control: &Arc<RunControl>,
+        mut confirmation_audit_rx: mpsc::Receiver<SubmissionAuditCandidate>,
+    ) -> JoinHandle<()> {
+        let metrics = Arc::clone(metrics);
+        let ingress_pool = Arc::clone(ingress_pool);
+        let run_control = Arc::clone(run_control);
+        tokio::spawn(async move {
+            let mut budgets = vec![SubmissionAuditBudget::default(); ingress_pool.endpoint_count()];
+            while let Some(candidate) = confirmation_audit_rx.recv().await {
+                let now = Instant::now();
+                let Some(budget) = budgets.get_mut(candidate.endpoint_idx) else {
+                    metrics.record_confirmation_audit_failed();
+                    warn!(
+                        target: "izanami::audit",
+                        endpoint_idx = candidate.endpoint_idx,
+                        hash = %candidate.hash,
+                        plan = candidate.plan_label,
+                        "skipping sampled confirmation because the ingress endpoint index is invalid"
+                    );
+                    continue;
+                };
+                if !budget.acquire_at(now) {
+                    metrics.record_confirmation_audit_budget_skipped();
+                    debug!(
+                        target: "izanami::audit",
+                        endpoint_idx = candidate.endpoint_idx,
+                        hash = %candidate.hash,
+                        plan = candidate.plan_label,
+                        "skipping sampled confirmation because the per-endpoint budget is exhausted"
+                    );
+                    continue;
+                }
+                audit_submitted_transaction(&ingress_pool, &run_control, &metrics, candidate).await;
+            }
+        })
     }
 }
 
@@ -3568,6 +3753,9 @@ async fn wait_for_target_blocks(
                     offered = progress_metrics.offered,
                     ingress_accepted = progress_metrics.ingress_accepted,
                     blocking_applied_success = progress_metrics.blocking_applied_success,
+                    confirmation_sampled = progress_metrics.confirmation_sampled,
+                    confirmation_applied = progress_metrics.confirmation_applied,
+                    confirmation_failed = progress_metrics.confirmation_failed,
                     inflight_current = progress_metrics.inflight_current,
                     backlog_depth = progress_metrics.backlog_depth,
                     submitters = progress_metrics.submitters,
@@ -3621,6 +3809,9 @@ async fn wait_for_target_blocks(
                     offered = progress_metrics.offered,
                     ingress_accepted = progress_metrics.ingress_accepted,
                     blocking_applied_success = progress_metrics.blocking_applied_success,
+                    confirmation_sampled = progress_metrics.confirmation_sampled,
+                    confirmation_applied = progress_metrics.confirmation_applied,
+                    confirmation_failed = progress_metrics.confirmation_failed,
                     inflight_current = progress_metrics.inflight_current,
                     backlog_depth = progress_metrics.backlog_depth,
                     submitters = progress_metrics.submitters,
@@ -3683,6 +3874,9 @@ async fn wait_for_target_blocks(
                 offered = progress_metrics.offered,
                 ingress_accepted = progress_metrics.ingress_accepted,
                 blocking_applied_success = progress_metrics.blocking_applied_success,
+                confirmation_sampled = progress_metrics.confirmation_sampled,
+                confirmation_applied = progress_metrics.confirmation_applied,
+                confirmation_failed = progress_metrics.confirmation_failed,
                 inflight_current = progress_metrics.inflight_current,
                 backlog_depth = progress_metrics.backlog_depth,
                 submitters = progress_metrics.submitters,
@@ -3769,6 +3963,9 @@ async fn wait_for_target_blocks(
                 offered = progress_metrics.offered,
                 ingress_accepted = progress_metrics.ingress_accepted,
                 blocking_applied_success = progress_metrics.blocking_applied_success,
+                confirmation_sampled = progress_metrics.confirmation_sampled,
+                confirmation_applied = progress_metrics.confirmation_applied,
+                confirmation_failed = progress_metrics.confirmation_failed,
                 inflight_current = progress_metrics.inflight_current,
                 backlog_depth = progress_metrics.backlog_depth,
                 submitters = progress_metrics.submitters,
@@ -3824,6 +4021,104 @@ fn submission_metadata(counter: &AtomicU64) -> Metadata {
     let mut metadata = Metadata::default();
     metadata.insert(key.clone(), counter.fetch_add(1, Ordering::Relaxed));
     metadata
+}
+
+#[derive(Clone)]
+struct SubmissionAuditCandidate {
+    endpoint_idx: usize,
+    signer: AccountRecord,
+    hash: HashOf<SignedTransaction>,
+    plan_label: &'static str,
+}
+
+#[derive(Clone, Copy)]
+struct SubmissionAuditBudget {
+    window_started_at: Option<Instant>,
+    confirmations_in_window: u32,
+}
+
+impl SubmissionAuditBudget {
+    fn acquire_at(&mut self, now: Instant) -> bool {
+        match self.window_started_at {
+            Some(start)
+                if now.saturating_duration_since(start)
+                    < Duration::from_secs(IZANAMI_THROUGHPUT_CONFIRMATION_WINDOW_SECS) =>
+            {
+                if self.confirmations_in_window
+                    >= IZANAMI_THROUGHPUT_CONFIRMATION_CAP_PER_MINUTE_PER_ENDPOINT
+                {
+                    return false;
+                }
+            }
+            _ => {
+                self.window_started_at = Some(now);
+                self.confirmations_in_window = 0;
+            }
+        }
+        self.confirmations_in_window = self.confirmations_in_window.saturating_add(1);
+        true
+    }
+}
+
+impl Default for SubmissionAuditBudget {
+    fn default() -> Self {
+        Self {
+            window_started_at: None,
+            confirmations_in_window: 0,
+        }
+    }
+}
+
+struct SubmissionOutcome {
+    endpoint_idx: usize,
+    hash: HashOf<SignedTransaction>,
+}
+
+fn should_audit_throughput_confirmation(
+    confirmation_mode: SubmissionConfirmationMode,
+    expect_success: bool,
+) -> bool {
+    expect_success
+        && matches!(
+            confirmation_mode,
+            SubmissionConfirmationMode::AcceptedByIngress
+        )
+}
+
+fn should_sample_throughput_confirmation(hash: &HashOf<SignedTransaction>, seed: u64) -> bool {
+    should_sample_throughput_confirmation_bytes(hash.as_ref(), seed)
+}
+
+fn should_sample_throughput_confirmation_bytes(hash_bytes: &[u8], seed: u64) -> bool {
+    throughput_confirmation_sample_bucket(hash_bytes, seed)
+        < IZANAMI_THROUGHPUT_CONFIRMATION_SAMPLE_PERCENT
+}
+
+fn throughput_confirmation_sample_bucket(hash_bytes: &[u8], seed: u64) -> u64 {
+    let mut mixed = seed ^ 0x9E37_79B9_7F4A_7C15;
+    for chunk in hash_bytes.chunks(8) {
+        let mut padded = [0_u8; 8];
+        padded[..chunk.len()].copy_from_slice(chunk);
+        mixed ^= u64::from_le_bytes(padded).rotate_left(13);
+        mixed = mixed.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+    mixed % 100
+}
+
+fn try_schedule_submission_audit(
+    confirmation_audit_tx: &mpsc::Sender<SubmissionAuditCandidate>,
+    metrics: &Metrics,
+    candidate: SubmissionAuditCandidate,
+) {
+    match confirmation_audit_tx.try_send(candidate) {
+        Ok(()) => metrics.record_confirmation_audit_sampled(),
+        Err(mpsc::error::TrySendError::Full(_)) => {
+            metrics.record_confirmation_audit_queue_dropped();
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => {
+            metrics.record_confirmation_audit_queue_dropped();
+        }
+    }
 }
 
 fn repetitions_from_repeats(repeats: Repeats) -> Option<u32> {
@@ -3906,6 +4201,8 @@ async fn submit_plan(
     submission_counter: &Arc<AtomicU64>,
     workload: &Arc<WorkloadEngine>,
     submitter_idx: usize,
+    confirmation_audit_tx: Option<mpsc::Sender<SubmissionAuditCandidate>>,
+    confirmation_audit_seed: u64,
 ) {
     let ingress_pool = Arc::clone(ingress_pool);
     let signer = plan.signer.clone();
@@ -4105,7 +4402,7 @@ async fn submit_plan(
     metrics.record_inflight_acquired();
     let _inflight_guard = InflightGuard::new(Arc::clone(&metrics), permit);
 
-    let submission_result: Result<Option<usize>> = if let Some(endpoint_idx) =
+    let submission_result: Result<SubmissionOutcome> = if let Some(endpoint_idx) =
         pinned_trigger_endpoint
     {
         let ingress_pool_for_submit = Arc::clone(&ingress_pool);
@@ -4126,7 +4423,6 @@ async fn submit_plan(
                     effective_submission_confirmation,
                     submission_counter_for_submit.as_ref(),
                 )
-                .map(Some)
             },
         )
         .await
@@ -4142,7 +4438,7 @@ async fn submit_plan(
             effective_submission_confirmation,
             move || {
                 let ingress_pool_for_retry_delay = Arc::clone(&ingress_pool_for_submit);
-                run_with_queue_timeout_retry_with_policy_and_delay(
+                run_with_queue_timeout_retry_with_policy_and_delay_result(
                     plan_label,
                     IZANAMI_QUEUE_TIMEOUT_RETRY_ATTEMPTS,
                     Duration::from_millis(IZANAMI_QUEUE_TIMEOUT_RETRY_BACKOFF_MS),
@@ -4150,49 +4446,67 @@ async fn submit_plan(
                         ingress_pool_for_retry_delay.submission_backpressure_delay(Instant::now())
                     },
                     || {
-                        ingress_pool_for_submit.run_with_failover_preferred(
-                            "submit_transaction_plan",
-                            submitter_idx,
-                            |peer| {
-                                let client = tune_ingress_client(
-                                    peer.client_for(
-                                        &signer_for_submit.id,
-                                        signer_for_submit.key_pair.private_key().clone(),
-                                    ),
-                                    effective_submission_confirmation,
-                                );
-                                let metadata =
-                                    submission_metadata(submission_counter_for_submit.as_ref());
-                                match effective_submission_confirmation {
-                                    SubmissionConfirmationMode::BlockingApplied => client
-                                        .submit_all_blocking_with_metadata(
-                                            instructions_for_submit.clone(),
-                                            metadata,
-                                        )
-                                        .map(|_| ()),
-                                    SubmissionConfirmationMode::AcceptedByIngress => client
-                                        .submit_all_with_metadata(
-                                            instructions_for_submit.clone(),
-                                            metadata,
-                                        )
-                                        .map(|_| ()),
-                                }
-                            },
-                        )
+                        ingress_pool_for_submit
+                            .run_with_failover_preferred_with_endpoint(
+                                "submit_transaction_plan",
+                                submitter_idx,
+                                |peer| {
+                                    let client = tune_ingress_client(
+                                        peer.client_for(
+                                            &signer_for_submit.id,
+                                            signer_for_submit.key_pair.private_key().clone(),
+                                        ),
+                                        effective_submission_confirmation,
+                                    );
+                                    let metadata =
+                                        submission_metadata(submission_counter_for_submit.as_ref());
+                                    match effective_submission_confirmation {
+                                        SubmissionConfirmationMode::BlockingApplied => client
+                                            .submit_all_blocking_with_metadata(
+                                                instructions_for_submit.clone(),
+                                                metadata,
+                                            )
+                                            .map(|hash| hash),
+                                        SubmissionConfirmationMode::AcceptedByIngress => client
+                                            .submit_all_with_metadata(
+                                                instructions_for_submit.clone(),
+                                                metadata,
+                                            )
+                                            .map(|hash| hash),
+                                    }
+                                },
+                            )
+                            .map(|(endpoint_idx, hash)| SubmissionOutcome { endpoint_idx, hash })
                     },
                 )
             },
         )
         .await
-        .map(|()| None)
     };
 
     match submission_result {
-        Ok(submission_endpoint_idx) => {
-            if let Some(resolved_endpoint_idx) = submission_endpoint_idx {
-                pinned_trigger_endpoint = Some(resolved_endpoint_idx);
-            }
+        Ok(submission_outcome) => {
+            pinned_trigger_endpoint = Some(submission_outcome.endpoint_idx);
             workload.record_result(&plan, true).await;
+            if should_audit_throughput_confirmation(
+                effective_submission_confirmation,
+                expect_success,
+            ) && should_sample_throughput_confirmation(
+                &submission_outcome.hash,
+                confirmation_audit_seed,
+            ) && let Some(confirmation_audit_tx) = confirmation_audit_tx.as_ref()
+            {
+                try_schedule_submission_audit(
+                    confirmation_audit_tx,
+                    metrics.as_ref(),
+                    SubmissionAuditCandidate {
+                        endpoint_idx: submission_outcome.endpoint_idx,
+                        signer: signer.clone(),
+                        hash: submission_outcome.hash,
+                        plan_label,
+                    },
+                );
+            }
             if let (Some(endpoint_idx), Some(trigger_id)) =
                 (pinned_trigger_endpoint, repeatable_trigger_target.as_ref())
             {
@@ -4282,7 +4596,7 @@ fn submit_repeatable_trigger_plan_on_endpoint(
     instructions: &[InstructionBox],
     submission_confirmation: SubmissionConfirmationMode,
     submission_counter: &AtomicU64,
-) -> Result<usize> {
+) -> Result<SubmissionOutcome> {
     match ingress_pool.run_on_endpoint("submit_repeatable_trigger_plan", endpoint_idx, |peer| {
         let client = tune_ingress_client(
             peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
@@ -4292,13 +4606,13 @@ fn submit_repeatable_trigger_plan_on_endpoint(
         match submission_confirmation {
             SubmissionConfirmationMode::BlockingApplied => client
                 .submit_all_blocking_with_metadata(instructions.to_vec(), metadata)
-                .map(|_| ()),
+                .map(|hash| SubmissionOutcome { endpoint_idx, hash }),
             SubmissionConfirmationMode::AcceptedByIngress => client
                 .submit_all_with_metadata(instructions.to_vec(), metadata)
-                .map(|_| ()),
+                .map(|hash| SubmissionOutcome { endpoint_idx, hash }),
         }
     }) {
-        Ok(()) => Ok(endpoint_idx),
+        Ok(outcome) => Ok(outcome),
         Err(err) if is_route_unavailable_error(&err) => {
             warn!(
                 target: "izanami::workload",
@@ -4319,14 +4633,17 @@ fn submit_repeatable_trigger_plan_on_endpoint(
                         match submission_confirmation {
                             SubmissionConfirmationMode::BlockingApplied => client
                                 .submit_all_blocking_with_metadata(instructions.to_vec(), metadata)
-                                .map(|_| ()),
+                                .map(|hash| hash),
                             SubmissionConfirmationMode::AcceptedByIngress => client
                                 .submit_all_with_metadata(instructions.to_vec(), metadata)
-                                .map(|_| ()),
+                                .map(|hash| hash),
                         }
                     },
                 )
-                .map(|(resolved_endpoint_idx, ())| resolved_endpoint_idx)
+                .map(|(resolved_endpoint_idx, hash)| SubmissionOutcome {
+                    endpoint_idx: resolved_endpoint_idx,
+                    hash,
+                })
         }
         Err(err) => Err(err),
     }
@@ -4364,6 +4681,98 @@ async fn reconcile_repeatable_trigger_with_endpoint(
                 "failed to reconcile repeatable trigger state from pinned ingress endpoint"
             );
             workload.mark_trigger_unknown(trigger_id).await;
+        }
+    }
+}
+
+fn confirmation_audit_wait_options() -> TransactionWaitOptions {
+    TransactionWaitOptions {
+        timeout: Duration::from_millis(IZANAMI_INGRESS_STATUS_TIMEOUT_MS),
+        poll_interval: Duration::from_millis(IZANAMI_THROUGHPUT_CONFIRMATION_POLL_INTERVAL_MS),
+        terminal_statuses: vec![
+            TransactionWaitTerminalStatus::Applied,
+            TransactionWaitTerminalStatus::Rejected,
+            TransactionWaitTerminalStatus::Expired,
+        ],
+    }
+}
+
+async fn audit_submitted_transaction(
+    ingress_pool: &Arc<IngressEndpointPool>,
+    run_control: &Arc<RunControl>,
+    metrics: &Arc<Metrics>,
+    candidate: SubmissionAuditCandidate,
+) {
+    let SubmissionAuditCandidate {
+        endpoint_idx,
+        signer,
+        hash,
+        plan_label,
+    } = candidate;
+    let log_hash = hash.clone();
+    let ingress_pool = Arc::clone(ingress_pool);
+    let run_control = Arc::clone(run_control);
+    let metrics = Arc::clone(metrics);
+    let result = spawn_blocking(move || {
+        ingress_pool.run_on_endpoint("audit_confirmation", endpoint_idx, |peer| {
+            let client = tune_ingress_client(
+                peer.client_for(&signer.id, signer.key_pair.private_key().clone()),
+                SubmissionConfirmationMode::AcceptedByIngress,
+            );
+            client.wait_for_transaction_terminal_status(hash, confirmation_audit_wait_options())
+        })
+    })
+    .await;
+    match result {
+        Ok(Ok(outcome)) => match outcome.terminal_kind.as_str() {
+            "Applied" => metrics.record_confirmation_audit_applied(),
+            "Rejected" => metrics.record_confirmation_audit_rejected(),
+            "Expired" => metrics.record_confirmation_audit_expired(),
+            other => {
+                metrics.record_confirmation_audit_failed();
+                warn!(
+                    target: "izanami::audit",
+                    endpoint_idx,
+                    hash = %log_hash,
+                    plan = plan_label,
+                    terminal_kind = other,
+                    "sampled confirmation ended in an unsupported terminal state"
+                );
+            }
+        },
+        Ok(Err(err)) => {
+            if is_shutdown_noise_status_read_failure("audit_confirmation", &err, &run_control) {
+                metrics.record_confirmation_audit_shutdown_noise();
+                debug!(
+                    target: "izanami::audit",
+                    endpoint_idx,
+                    hash = %log_hash,
+                    plan = plan_label,
+                    ?err,
+                    "ignoring sampled confirmation failure during shutdown"
+                );
+            } else {
+                metrics.record_confirmation_audit_failed();
+                warn!(
+                    target: "izanami::audit",
+                    endpoint_idx,
+                    hash = %log_hash,
+                    plan = plan_label,
+                    ?err,
+                    "sampled confirmation failed"
+                );
+            }
+        }
+        Err(err) => {
+            metrics.record_confirmation_audit_failed();
+            warn!(
+                target: "izanami::audit",
+                endpoint_idx,
+                hash = %log_hash,
+                plan = plan_label,
+                ?err,
+                "sampled confirmation worker panicked"
+            );
         }
     }
 }
@@ -4443,6 +4852,14 @@ struct Metrics {
     offered: AtomicU64,
     ingress_accepted: AtomicU64,
     blocking_applied_success: AtomicU64,
+    confirmation_sampled: AtomicU64,
+    confirmation_applied: AtomicU64,
+    confirmation_rejected: AtomicU64,
+    confirmation_expired: AtomicU64,
+    confirmation_failed: AtomicU64,
+    confirmation_budget_skipped: AtomicU64,
+    confirmation_queue_dropped: AtomicU64,
+    confirmation_shutdown_noise: AtomicU64,
     successes: AtomicU64,
     failures: AtomicU64,
     expected_failures: AtomicU64,
@@ -4469,6 +4886,41 @@ impl Metrics {
 
     fn record_blocking_applied_success(&self) {
         self.blocking_applied_success
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_confirmation_audit_sampled(&self) {
+        self.confirmation_sampled.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_confirmation_audit_applied(&self) {
+        self.confirmation_applied.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_confirmation_audit_rejected(&self) {
+        self.confirmation_rejected.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_confirmation_audit_expired(&self) {
+        self.confirmation_expired.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_confirmation_audit_failed(&self) {
+        self.confirmation_failed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_confirmation_audit_budget_skipped(&self) {
+        self.confirmation_budget_skipped
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_confirmation_audit_queue_dropped(&self) {
+        self.confirmation_queue_dropped
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_confirmation_audit_shutdown_noise(&self) {
+        self.confirmation_shutdown_noise
             .fetch_add(1, Ordering::Relaxed);
     }
 
@@ -4511,6 +4963,14 @@ impl Metrics {
             offered: self.offered.load(Ordering::Relaxed),
             ingress_accepted: self.ingress_accepted.load(Ordering::Relaxed),
             blocking_applied_success: self.blocking_applied_success.load(Ordering::Relaxed),
+            confirmation_sampled: self.confirmation_sampled.load(Ordering::Relaxed),
+            confirmation_applied: self.confirmation_applied.load(Ordering::Relaxed),
+            confirmation_rejected: self.confirmation_rejected.load(Ordering::Relaxed),
+            confirmation_expired: self.confirmation_expired.load(Ordering::Relaxed),
+            confirmation_failed: self.confirmation_failed.load(Ordering::Relaxed),
+            confirmation_budget_skipped: self.confirmation_budget_skipped.load(Ordering::Relaxed),
+            confirmation_queue_dropped: self.confirmation_queue_dropped.load(Ordering::Relaxed),
+            confirmation_shutdown_noise: self.confirmation_shutdown_noise.load(Ordering::Relaxed),
             successes: self.successes.load(Ordering::Relaxed),
             failures: self.failures.load(Ordering::Relaxed),
             expected_failures: self.expected_failures.load(Ordering::Relaxed),
@@ -4571,6 +5031,14 @@ struct MetricsSnapshot {
     offered: u64,
     ingress_accepted: u64,
     blocking_applied_success: u64,
+    confirmation_sampled: u64,
+    confirmation_applied: u64,
+    confirmation_rejected: u64,
+    confirmation_expired: u64,
+    confirmation_failed: u64,
+    confirmation_budget_skipped: u64,
+    confirmation_queue_dropped: u64,
+    confirmation_shutdown_noise: u64,
     successes: u64,
     failures: u64,
     expected_failures: u64,
@@ -7962,6 +8430,14 @@ mod tests {
         metrics.record_offered();
         metrics.record_ingress_accepted();
         metrics.record_blocking_applied_success();
+        metrics.record_confirmation_audit_sampled();
+        metrics.record_confirmation_audit_applied();
+        metrics.record_confirmation_audit_rejected();
+        metrics.record_confirmation_audit_expired();
+        metrics.record_confirmation_audit_failed();
+        metrics.record_confirmation_audit_budget_skipped();
+        metrics.record_confirmation_audit_queue_dropped();
+        metrics.record_confirmation_audit_shutdown_noise();
         metrics.record_backlog_spawn();
         metrics.record_inflight_acquired();
         metrics.record_success();
@@ -7976,6 +8452,14 @@ mod tests {
         assert_eq!(snapshot.offered, 1);
         assert_eq!(snapshot.ingress_accepted, 1);
         assert_eq!(snapshot.blocking_applied_success, 1);
+        assert_eq!(snapshot.confirmation_sampled, 1);
+        assert_eq!(snapshot.confirmation_applied, 1);
+        assert_eq!(snapshot.confirmation_rejected, 1);
+        assert_eq!(snapshot.confirmation_expired, 1);
+        assert_eq!(snapshot.confirmation_failed, 1);
+        assert_eq!(snapshot.confirmation_budget_skipped, 1);
+        assert_eq!(snapshot.confirmation_queue_dropped, 1);
+        assert_eq!(snapshot.confirmation_shutdown_noise, 1);
         assert_eq!(snapshot.successes, 2);
         assert_eq!(snapshot.failures, 1);
         assert_eq!(snapshot.expected_failures, 1);
@@ -7985,6 +8469,63 @@ mod tests {
         assert_eq!(snapshot.backlog_depth, 0);
         assert_eq!(snapshot.backlog_peak, 1);
         assert_eq!(snapshot.submitters, 3);
+    }
+
+    #[test]
+    fn throughput_confirmation_sampling_is_deterministic_for_seed() {
+        let hash = [0x5Au8; 32];
+        let first = throughput_confirmation_sample_bucket(&hash, 7);
+        let second = throughput_confirmation_sample_bucket(&hash, 7);
+        assert_eq!(
+            first, second,
+            "same seed must produce the same sample bucket"
+        );
+        assert!(
+            first < 100,
+            "sample bucket must stay within the fixed percentage range"
+        );
+    }
+
+    #[test]
+    fn submission_audit_budget_caps_then_resets() {
+        let mut budget = SubmissionAuditBudget::default();
+        let start = Instant::now();
+        for offset in 0..IZANAMI_THROUGHPUT_CONFIRMATION_CAP_PER_MINUTE_PER_ENDPOINT {
+            assert!(
+                budget.acquire_at(start + Duration::from_millis(u64::from(offset))),
+                "budget should admit confirmations before the cap"
+            );
+        }
+        assert!(
+            !budget.acquire_at(start + Duration::from_secs(1)),
+            "budget should reject confirmations after the cap is reached"
+        );
+        assert!(
+            budget.acquire_at(
+                start + Duration::from_secs(IZANAMI_THROUGHPUT_CONFIRMATION_WINDOW_SECS + 1)
+            ),
+            "budget should reset after the window expires"
+        );
+    }
+
+    #[test]
+    fn shutdown_noise_only_applies_to_status_reads_after_stop() {
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let run_control = RunControl::new(deadline);
+        let err = eyre!("connection refused");
+        assert!(
+            !is_shutdown_noise_status_read_failure("audit_confirmation", &err, &run_control),
+            "status reads should not be ignored before shutdown starts"
+        );
+        run_control.stop();
+        assert!(
+            is_shutdown_noise_status_read_failure("audit_confirmation", &err, &run_control),
+            "status reads should be ignored during shutdown"
+        );
+        assert!(
+            !is_shutdown_noise_status_read_failure("submit_transaction_plan", &err, &run_control),
+            "submit-path failures must remain visible during shutdown"
+        );
     }
 
     #[test]

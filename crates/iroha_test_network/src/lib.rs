@@ -1812,10 +1812,14 @@ fn network_permit_wait_timeout() -> Option<Duration> {
 }
 
 fn try_acquire_file_permit(limit: usize) -> Option<FilePermit> {
+    let dir = permit_dir();
+    try_acquire_file_permit_in(&dir, limit)
+}
+
+fn try_acquire_file_permit_in(dir: &Path, limit: usize) -> Option<FilePermit> {
     if limit == 0 {
         return None;
     }
-    let dir = permit_dir();
     fs::create_dir_all(&dir).expect("failed to create network permit directory");
     let pid = std::process::id();
     let started = SystemTime::now()
@@ -4686,6 +4690,28 @@ impl NetworkBuilder {
     /// Build the [`Network`]. Doesn't start it.
     pub fn build(self) -> Network {
         let permit = acquire_network_permit();
+        self.build_with_permit(permit)
+    }
+
+    /// Build the [`Network`] using permit files rooted under `dir`.
+    ///
+    /// This is useful for tests that need an isolated permit namespace while unrelated
+    /// workspace tests are building other networks concurrently.
+    pub fn build_with_permit_dir(self, dir: impl AsRef<Path>) -> Network {
+        let dir = dir.as_ref();
+        let limit = network_parallelism_limit();
+        let file_permit = try_acquire_file_permit_in(dir, limit).unwrap_or_else(|| {
+            panic!(
+                "failed to acquire network permit in isolated dir {} (limit={limit})",
+                dir.display()
+            )
+        });
+        self.build_with_permit(NetworkPermit {
+            _file_permit: file_permit,
+        })
+    }
+
+    fn build_with_permit(self, permit: NetworkPermit) -> Network {
         let NetworkBuilder {
             env,
             n_peers,

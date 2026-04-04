@@ -512,20 +512,6 @@ mod tests {
         }
     }
 
-    fn sample_sccp_proof_manifests() -> SccpProofManifestSet {
-        SccpProofManifestSet {
-            local_domain: iroha_sccp::SCCP_DOMAIN_SORA,
-            local_chain: "sora".to_owned(),
-            proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
-            manifests: vec![
-                iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON)
-                    .expect("ton manifest"),
-                iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TRON)
-                    .expect("tron manifest"),
-            ],
-        }
-    }
-
     fn sample_sccp_proof_manifests_json() -> JsonValue {
         JsonValue::Object(norito::json::Map::from_iter([
             (

@@ -21,9 +21,11 @@ Last updated: 2026-04-04
 - Text output now renders concise summaries for the capability snapshot, the
   per-chain manifest table, and typed SCCP message artifacts; JSON output keeps
   the raw payload path for machine consumers.
-- Validation in progress on isolated Cargo homes / target dirs because the
-  shared repo target directory is currently occupied by unrelated long-running
-  cargo jobs in the same checkout.
+- Focused validation completed on isolated Cargo homes / target dirs so the new
+  SCCP tests did not contend with unrelated long-running Cargo jobs in the same
+  checkout:
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-sccp-client-target cargo test --offline -p iroha get_sccp_ --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-cli-bridge-target cargo test --offline -p iroha_cli --features bridge --bin iroha bridge::tests:: -- --nocapture`
 
 ## 2026-04-04 Follow-up: SDKs and the Rust client now fetch typed SCCP message-proof artifacts
 - Added first-class SCCP message-artifact fetch helpers to the Rust, Python,
@@ -19919,3 +19921,12 @@ Last updated: 2026-04-04
   - `cargo test -p iroha_torii pipeline_status_handler_uses_dedicated_rate_limiter -- --nocapture`
 - Additional note:
   - a broader `cargo test -p iroha_torii pipeline_status_handler_ -- --nocapture` run compiled and exercised the new limiter tests successfully, but it also surfaced an unrelated existing failure in `tests_runtime_handlers::pipeline_status_handler_encodes_rejection_as_base64`, which is outside this throughput pass.
+
+## 2026-04-04 Always-On Throughput Second Pass
+- Completed the remaining Izanami throughput de-amplification work in [`crates/izanami/src/chaos.rs`](/Users/takemiyamakoto/dev/iroha/crates/izanami/src/chaos.rs):
+  - accepted-by-ingress throughput submissions now hand a deterministic `1%` sample of transaction hashes to one shared audit worker per run;
+  - sampled audits are capped at `100` confirmations per minute per endpoint and stay on the same ingress endpoint that accepted the transaction;
+  - sampled audits use the local pipeline-status wait path and record applied / rejected / expired outcomes separately from ingress acceptance.
+- Teardown-time read-side `connection refused` is now treated as shutdown noise once Izanami has entered stop/shutdown, so late audit/status reads no longer pollute throughput failure accounting.
+- Validation completed:
+  - `CARGO_TARGET_DIR=/tmp/iroha_codex_throughput_20260404 cargo test -p izanami --bin izanami -- --nocapture`
