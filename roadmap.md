@@ -2,6 +2,46 @@
 
 Last updated: 2026-04-04
 
+Latest sync (2026-04-04 Taira fresh-reset signed rollout canary is self-healing again):
+the local/public Taira convenience rollout is green again after fixing the
+fresh-reset bootstrap path. `check_mcp_rollout.sh` now defers commit-QC
+enforcement until after the signed write canary on a genesis-only reset,
+retries through the early `/status` startup window where `peers=0`, and no
+longer requires the removed `/v1/contracts/instances/{ns}` route. In parallel,
+`crates/iroha_kagami/src/localnet.rs` now always funds the generated
+`client.toml` signer with the local fee asset, so a freshly regenerated
+`dist/taira-localnet` can pass the signed rollout smoke without manual faucet
+or bootstrap pings. The final reset on this host passed the signed canary on
+both `http://127.0.0.1:29080` and `https://taira.sora.org`, with
+`commit_qc_height=2` and `commit_qc_validator_set_len=4` afterward.
+
+- shipped in:
+  - `/Users/administrator/dev/iroha/configs/soranexus/taira/check_mcp_rollout.sh`
+  - `/Users/administrator/dev/iroha/configs/soranexus/taira/README.md`
+  - `/Users/administrator/dev/iroha/crates/iroha_kagami/src/localnet.rs`
+  - `/Users/administrator/dev/iroha/status.md`
+  - `/Users/administrator/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh`
+  - `cargo test -p iroha_kagami client_config_is_written_and_parsable -- --nocapture`
+  - `cargo test -p iroha_kagami generated_nexus_localnet_mints_fee_asset_to_client_signer -- --nocapture`
+  - `cargo test -p iroha_kagami generated_sora_profile_peer_config_includes_mcp_writer_profile -- --nocapture`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:29080 --skip-write-canary`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary`
+  - fresh-reset proof:
+    `IROHA_LOCALNET_CHAIN_ID=809574f5-fee7-5e69-bfcf-52451e42d50f ./target/release/kagami localnet --build-line iroha3 --sora-profile nexus --consensus-mode npos --peers 4 --seed Iroha --bind-host 127.0.0.1 --public-host 127.0.0.1 --base-api-port 29080 --base-p2p-port 33337 --out-dir dist/taira-localnet`
+    `IROHA_TAIRA_LOCALNET_SEED=Iroha bash configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+    `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:29080 --write-config dist/taira-localnet/client.toml --write-target local --iroha-bin ./target/release/iroha`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --write-config dist/taira-localnet/client.toml --write-target public --iroha-bin ./target/release/iroha`
+- open work for this slice now remains:
+  - publish real per-validator DNS/TLS hostnames and make at least one direct
+    public node resolvable from outside the operator host;
+  - move public operator validation and app smokes off the convenience
+    `https://taira.sora.org` host and onto those direct per-node hostnames; and
+  - finish the true public XOR-stake cutover so the live convenience deployment
+    stops depending on the localnet-style fee/stake bootstrap assets.
+
 Latest sync (2026-04-04 Taira public-node hardening landed in repo tooling/docs):
 the repo-side Taira rollout contract no longer treats
 `https://taira.sora.org` as the canonical public API. The rollout smoke now

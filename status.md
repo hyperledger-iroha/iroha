@@ -2,6 +2,52 @@
 
 Last updated: 2026-04-04
 
+## 2026-04-04 Follow-up: Taira fresh-reset rollout is green again without manual bootstrap writes
+- Fixed the remaining fresh-reset rollout regressions that showed up after the
+  direct-node hardening slice:
+  - `configs/soranexus/taira/check_mcp_rollout.sh` no longer requires the
+    non-existent `/v1/contracts/instances/{ns}` route;
+  - the same script now tolerates the expected startup window on a fresh reset
+    where `/status` reaches HTTP 200 before peer connectivity and commit-QC
+    telemetry settle, then re-checks `/status` strictly after the signed write
+    canary;
+  - `crates/iroha_kagami/src/localnet.rs` now always funds the generated local
+    `client.toml` signer with the local fee asset instead of relying on
+    historical `ALICE_ID` discovery from prior genesis instructions; and
+  - `configs/soranexus/taira/README.md` now matches the current contract-route
+    set and no longer documents `/v1/contracts/instances/universal` as part of
+    the rollout contract.
+- Rebuilt the relevant release binaries from the current tree (`irohad`,
+  `iroha`, `kagami`, and the `taira_kaigi_localnet` helper), regenerated
+  `dist/taira-localnet` from the patched `kagami`, re-applied the Kaigi/Taira
+  overlay, and verified that the signed local rollout smoke now succeeds
+  directly after a fresh reset without any manual faucet claim or manual
+  bootstrap ping.
+- Live validation on the final reset:
+  - local `http://127.0.0.1:29080` passes the strengthened signed rollout
+    canary directly from fresh genesis:
+    `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:29080 --write-config dist/taira-localnet/client.toml --write-target local --iroha-bin ./target/release/iroha`
+  - public convenience ingress `https://taira.sora.org` also passes the same
+    signed canary on the final deployment:
+    `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --write-config dist/taira-localnet/client.toml --write-target public --iroha-bin ./target/release/iroha`
+  - the final live `/status` on both loopback and convenience ingress reports a
+    committed post-genesis block with `commit_qc_height=2` and
+    `commit_qc_validator_set_len=4`.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh`
+  - `cargo test -p iroha_kagami client_config_is_written_and_parsable -- --nocapture`
+  - `cargo test -p iroha_kagami generated_nexus_localnet_mints_fee_asset_to_client_signer -- --nocapture`
+  - `cargo test -p iroha_kagami generated_sora_profile_peer_config_includes_mcp_writer_profile -- --nocapture`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:29080 --skip-write-canary`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:29080 --write-config dist/taira-localnet/client.toml --write-target local --iroha-bin ./target/release/iroha`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --write-config dist/taira-localnet/client.toml --write-target public --iroha-bin ./target/release/iroha`
+- Remaining live boundary:
+  - `https://taira-validator-1.sora.org` still does not resolve from this host,
+    so the repo-side hardening and convenience ingress rollout are green, but
+    the direct per-validator DNS/TLS cutover is still pending.
+
 ## 2026-04-04 Follow-up: Taira hardening now targets direct public nodes and stake-driven validator admission
 - Reworked the checked-in Taira rollout/docs surface away from treating
   `https://taira.sora.org` as the canonical API:

@@ -2140,6 +2140,7 @@ fn append_localnet_npos_bootstrap(
     let universal_domain = DomainId::parse_fully_qualified(LOCALNET_UNIVERSAL_DOMAIN)?;
     let stake_asset_id = localnet_stake_asset_definition_id();
     let fee_asset_id = localnet_fee_asset_definition_id();
+    let client_account_id = localnet_client_account_id();
     let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
 
     let mut builder = genesis.into_builder().next_transaction();
@@ -2193,12 +2194,15 @@ fn append_localnet_npos_bootstrap(
             AssetId::new(fee_asset_id.clone(), validator_id.clone()),
         ));
     }
-    if registrations.accounts.contains(&ALICE_ID) {
-        builder = builder.append_instruction(Mint::asset_numeric(
-            stake_amount,
-            AssetId::new(fee_asset_id, ALICE_ID.clone()),
-        ));
+    if !registrations.accounts.contains(&client_account_id) {
+        builder =
+            builder.append_instruction(Register::account(Account::new(client_account_id.clone())));
+        registrations.accounts.insert(client_account_id.clone());
     }
+    builder = builder.append_instruction(Mint::asset_numeric(
+        stake_amount,
+        AssetId::new(fee_asset_id, client_account_id),
+    ));
 
     let mut builder = builder.next_transaction();
     for peer in peers {
@@ -2457,6 +2461,13 @@ const CLIENT_ACCOUNT_PUBLIC: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const CLIENT_ACCOUNT_PRIVATE: &str =
     "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53";
+
+fn localnet_client_account_id() -> AccountId {
+    let public_key = CLIENT_ACCOUNT_PUBLIC
+        .parse()
+        .expect("localnet client public key must parse");
+    AccountId::new(public_key)
+}
 
 fn write_client_config(
     out_dir: &Path,
@@ -4346,6 +4357,49 @@ mod tests {
         assert_eq!(
             account.get("domain").and_then(toml::Value::as_str),
             Some(CLIENT_ACCOUNT_DOMAIN)
+        );
+    }
+
+    #[test]
+    fn generated_nexus_localnet_mints_fee_asset_to_client_signer() {
+        let temp = tempfile::tempdir().expect("make temp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: Some(SoraProfile::Nexus),
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("Iroha".to_owned()),
+            bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29080,
+            base_p2p_port: 33337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
+
+        let contents =
+            fs::read_to_string(temp.path().join("genesis.json")).expect("read generated genesis");
+        let client_account_id = account_id_runtime_literal(
+            &localnet_client_account_id(),
+            /* chain_discriminant */ None,
+        );
+        let expected_mint = format!(
+            "\"destination\": \"{}#{}\"",
+            localnet_fee_asset_literal(),
+            client_account_id
+        );
+        assert!(
+            contents.contains(&expected_mint),
+            "generated genesis should fund the client signer fee asset"
         );
     }
 

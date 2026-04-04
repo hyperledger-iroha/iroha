@@ -18,6 +18,8 @@ SKIP_LOCAL=0
 SKIP_PUBLIC=0
 SKIP_WRITE_CANARY=0
 IROHA_RUNNER=()
+CHECKED_LABELS=()
+CHECKED_ROOTS=()
 
 usage() {
   cat <<'EOF'
@@ -308,6 +310,7 @@ check_route_status() {
 check_status_snapshot() {
   local label="$1"
   local status_url="$2"
+  local allow_pending_commit_qc="${3:-0}"
 
   echo "==> ${label}: GET ${status_url}"
   http_request GET "$status_url"
@@ -316,13 +319,14 @@ check_status_snapshot() {
     sed -n '1,20p' "$last_headers" >&2 || true
     exit 1
   fi
-  python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" <<'PY'
+  python3 - "$label" "$last_body" "$MIN_VALIDATOR_SET_LEN" "$allow_pending_commit_qc" <<'PY'
 import json
 import sys
 
 label = sys.argv[1]
 path = sys.argv[2]
 min_validator_set_len = int(sys.argv[3])
+allow_pending_commit_qc = sys.argv[4] == "1"
 with open(path, "r", encoding="utf-8") as handle:
     payload = json.load(handle)
 
@@ -337,6 +341,13 @@ if not isinstance(blocks, int) or blocks < 1:
     print(f"{label}: /status reported an unhealthy block height: {blocks!r}", file=sys.stderr)
     sys.exit(1)
 if not isinstance(validator_set_len, int) or validator_set_len < 1:
+    if allow_pending_commit_qc:
+        print(
+            f"{label}: /status is still missing a commit QC snapshot; "
+            "deferring validator-set enforcement until after the signed write canary",
+            file=sys.stderr,
+        )
+        sys.exit(10)
     print(
         f"{label}: /status reported an empty Sumeragi commit validator set: {validator_set_len!r}",
         file=sys.stderr,
@@ -352,6 +363,31 @@ if validator_set_len < min_validator_set_len:
     )
     sys.exit(1)
 PY
+}
+
+check_status_snapshot_with_retry() {
+  local label="$1"
+  local status_url="$2"
+  local allow_pending_commit_qc="${3:-0}"
+  local attempts="${4:-10}"
+  local delay_seconds="${5:-2}"
+  local attempt rc
+
+  for ((attempt = 1; attempt <= attempts; attempt++)); do
+    if check_status_snapshot "$label" "$status_url" "$allow_pending_commit_qc"; then
+      return 0
+    fi
+    rc=$?
+    if [[ $rc -eq 10 ]]; then
+      return 10
+    fi
+    if [[ $attempt -eq $attempts ]]; then
+      return "$rc"
+    fi
+    sleep "$delay_seconds"
+  done
+
+  return 1
 }
 
 check_route_parity() {
@@ -373,8 +409,6 @@ check_route_parity() {
     "public-lane validator snapshot route"
   check_route_status "$label" GET "${root_url}/v1/nexus/public_lanes/${lane_id}/stake" "200" \
     "public-lane stake snapshot route"
-  check_route_status "$label" GET "${root_url}/v1/contracts/instances/${namespace}" "200" \
-    "contract instance listing route"
   check_route_status "$label" GET "${root_url}/v1/contracts/state" "400" \
     "contract state route should be mounted and reject missing query selectors"
   check_route_status "$label" POST "${root_url}/v1/contracts/deploy" "400 401 403 415 422" \
@@ -387,6 +421,8 @@ check_endpoint() {
   local label="$1"
   local url="$2"
   local root_url
+  local allow_pending_commit_qc=0
+  local status_rc=0
 
   echo "==> ${label}: GET ${url}"
   http_request GET "$url"
@@ -416,7 +452,19 @@ check_endpoint() {
   check_required_tools "$label"
 
   root_url="$(mcp_root_from_url "$url")"
-  check_status_snapshot "$label" "${root_url}/status"
+  CHECKED_LABELS+=("$label")
+  CHECKED_ROOTS+=("$root_url")
+  if [[ -n "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 0 ]]; then
+    allow_pending_commit_qc=1
+  fi
+  if check_status_snapshot_with_retry "$label" "${root_url}/status" "$allow_pending_commit_qc"; then
+    :
+  else
+    status_rc=$?
+    if [[ $status_rc -ne 10 ]]; then
+      exit "$status_rc"
+    fi
+  fi
   check_route_parity "$label" "$root_url" "$PUBLIC_LANE_ID" "$CONTRACT_NAMESPACE"
 }
 
@@ -717,6 +765,25 @@ run_write_canary() {
   trap cleanup EXIT
 }
 
+recheck_status_targets_after_write_canary() {
+  local idx label root_url attempt
+
+  for idx in "${!CHECKED_LABELS[@]}"; do
+    label="${CHECKED_LABELS[$idx]}"
+    root_url="${CHECKED_ROOTS[$idx]}"
+    for ((attempt = 1; attempt <= 10; attempt++)); do
+      if check_status_snapshot "$label" "${root_url}/status" 0; then
+        break
+      fi
+      if [[ $attempt -eq 10 ]]; then
+        echo "${label}: /status still did not publish a commit QC snapshot after the signed write canary" >&2
+        exit 1
+      fi
+      sleep 2
+    done
+  done
+}
+
 if [[ $SKIP_LOCAL -eq 0 ]]; then
   check_endpoint "local" "$LOCAL_MCP_URL"
 fi
@@ -727,6 +794,7 @@ fi
 
 if [[ -n "$WRITE_CONFIG" ]]; then
   run_write_canary "$(resolve_write_target_url)"
+  recheck_status_targets_after_write_canary
 elif [[ $SKIP_PUBLIC -eq 0 ]]; then
   echo "read-only checks passed; signed write canary was explicitly skipped" >&2
 fi

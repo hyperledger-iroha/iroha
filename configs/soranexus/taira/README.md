@@ -249,6 +249,11 @@ both the public endpoint and a runtime-only canary signer config:
 
 - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
 
+On a freshly reset local bundle, the same signed canary now tolerates the brief
+startup window where `/status` has no commit QC yet, submits the first
+post-genesis write, and then re-checks `/status` strictly after that write
+lands.
+
 The rollout script now also requires the live `/status` snapshot to show at
 least 4 validators in the commit QC set. If it fails that check, rebuild the
 validator configs from the shared roster before debugging ingress or MCP.
@@ -262,7 +267,6 @@ It also verifies that the same direct node serves:
 - `/v1/bridge/messages` preflight
 - `/v1/contracts/deploy`
 - `/v1/contracts/state`
-- `/v1/contracts/instances/universal`
 
 That config must be a normal `iroha` client TOML for a low-risk signer that
 already exists on Taira. Start from `taira-canary-client.example.toml`, not
@@ -354,9 +358,9 @@ away from the shipped MCP-enabled config:
 7. After the public node is back, prove the direct hostname is healthy before
    any convenience host or client cutover:
    - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
-   - if the contract instance count is still `0`, redeploy SoraSwap with the
-     updated `../soraswap` `deploy-testnet` flow before blaming the frontend:
-     `curl -sS "${PUBLIC_TORII_ROOT}/v1/contracts/instances/universal" | jq '.total'`
+   - if contract deploy/view health still fails after the route checks pass,
+     redeploy SoraSwap with the updated `../soraswap` `deploy-testnet` flow
+     before blaming the frontend
 8. Before declaring public Codex/Torii rollout complete, require the signed
    write canary on the direct node to pass:
    - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
