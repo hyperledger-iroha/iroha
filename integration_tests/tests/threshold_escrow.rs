@@ -143,13 +143,21 @@ async fn deploy_threshold_escrow(
     let baseline = client.get_status()?.txs_approved;
     let code_b64 = base64::engine::general_purpose::STANDARD
         .encode(load_sample_ivm("threshold_escrow").as_ref());
+    let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
+        "threshold_escrow",
+        None,
+        "universal",
+    )
+    .expect("threshold escrow alias");
     let deploy = tokio::task::spawn_blocking({
         let client = client.clone();
+        let contract_alias = contract_alias.clone();
         move || {
             client.post_contract_deploy_json(
                 &ALICE_ID.clone(),
                 ALICE_KEYPAIR.private_key(),
                 &code_b64,
+                &contract_alias,
                 None,
             )
         }

@@ -1,13 +1,24 @@
-# Sora Taira testnet (MVP bootstrap)
+# Sora Taira public NPoS bootstrap
 
 Taira is the Sora Nexus public testnet. This directory
-contains a minimum-viable NPoS bootstrap bundle so operators can bring a usable
-network online quickly.
+contains the repo-shipped bootstrap bundle for a public, stake-elected NPoS
+deployment.
 
 ## Network identity
 
 - Public chain ID: `809574f5-fee7-5e69-bfcf-52451e42d50f`
 - Address chain discriminant: `369` (this is what drives canonical I105 literals such as `testu...`)
+
+## Public API contract
+
+For the examples below, replace `PUBLIC_TORII_ROOT` with the direct public
+Torii URL of the node you are validating, for example:
+
+- `PUBLIC_TORII_ROOT=https://taira-validator-1.sora.org`
+
+`https://taira.sora.org` may still exist as a convenience endpoint or landing
+page, but it is not the canonical API target for rollout, canaries, or client
+defaults.
 
 ## Included artifacts
 
@@ -19,7 +30,9 @@ network online quickly.
   private keys. Keep the populated file user-local.
 - `genesis.json`: NPoS genesis with DA enabled.
 - `dns_records.json`: DNS targets for public Torii + Explorer hostnames.
-- `explorer.runtime-config.json`: runtime config for the Explorer frontend.
+- `explorer.runtime-config.json`: runtime config example for the Explorer
+  frontend; point it at the explicit public Torii base URL you want the UI to
+  query.
 - `sorafs_sites.json`: host-to-manifest bindings for Torii-served static sites.
 - `sorafs_gateway_denylist.catalog.json`: default-on SoraFS denylist pack catalog.
 - `sorafs_gateway_denylist.global-core.json`: baseline governance-backed illegal-content pack.
@@ -50,8 +63,8 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
 2. Copy `validator_secrets.example.toml` to a user-local path such as
    `configs/soranexus/taira/validator_secrets.local.toml`.
 3. Fill in every validator's real `public_key`, `pop_hex`, and
-   `public_address` in the public roster, then put the matching
-   `private_key` values in the secrets file.
+   `public_address` plus its own direct `torii_public_address` in the public
+   roster, then put the matching `private_key` values in the secrets file.
 3. Render the per-validator bundle:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
 4. Point each validator host at its own generated
@@ -59,7 +72,9 @@ Do not hand-edit `config.toml` into multiple validator copies. Instead:
 
 The renderer rewrites the checked-in peer-1 baseline with the full
 `trusted_peers` / `trusted_peers_pop` roster so every validator starts from the
-same source of truth.
+same bootstrap source of truth. It now requires explicit per-validator
+`torii_public_address` values so direct public Torii hostnames are part of the
+checked operator input instead of a hard-coded shared edge default.
 
 ## Minimum viable topology
 
@@ -73,14 +88,52 @@ Suggested validator hostnames:
 - `taira-validator-3.sora.org`
 - `taira-validator-4.sora.org`
 
+## Bootstrap peers vs active validators
+
+- `trusted_peers` and `trusted_peers_pop` are bootstrap discovery inputs, not
+  the validator-admission policy.
+- `config.toml` explicitly sets `sumeragi.npos.use_stake_snapshot_roster = true`
+  and `nexus.staking.public_validator_mode = "stake_elected"`, so the active
+  validator roster comes from on-chain public-lane staking state.
+- The checked-in/public roster file is therefore a deploy/bootstrap artifact.
+  It helps nodes find each other and agree on the bootstrap set after genesis,
+  but it does not decide which operators stay active validators over time.
+- Taira resets should seed only the minimum bootstrap validators needed to
+  start the chain. After genesis, validator-set growth is driven by XOR stake
+  plus the active-validator snapshot views.
+
+## Public validator join flow
+
+Use the public-lane staking flow for validator candidacy instead of manual
+allowlisting:
+
+1. Render a per-validator config with the node's own `public_address` and
+   `torii_public_address`, then start `irohad` against the published seed peers.
+2. Wait for the node to sync and confirm lane mode:
+   - `iroha app nexus lane-report --summary`
+   - `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq .`
+3. Fund the candidate account with `xor#universal`.
+4. Register the validator on the public lane with its live peer identity:
+   - `iroha app staking register --lane-id 0 --validator <i105-account-id> --peer-id <peer-id> --initial-stake <amount>`
+5. When the activation boundary is reached, activate the candidacy if needed:
+   - `iroha app staking activate --lane-id 0 --validator <i105-account-id>`
+6. Verify that the node is visible through on-chain staking and validator-set
+   views rather than a static file roster:
+   - `iroha app nexus public-lane validators --lane 0 --summary`
+   - `iroha app nexus public-lane stake --lane 0 --validator <i105-account-id> --summary`
+   - `curl -sS "${PUBLIC_TORII_ROOT}/v1/nexus/public_lanes/0/validators" | jq .`
+   - `curl -sS "${PUBLIC_TORII_ROOT}/v1/sumeragi/validator-sets" | jq .`
+
 ## Public endpoints
 
-- `https://taira.sora.org` is the public Torii endpoint, served through the
-  shared nginx edge host from `dns_records.json`.
+- Every public validator should expose Torii directly on its own TLS hostname
+  and advertise that URL through `[torii].public_address`.
+- `https://taira.sora.org` is optional convenience ingress only. Keep it if you
+  want a shared landing page or one extra public API endpoint, but do not treat
+  it as the canonical network API.
 - `https://taira-explorer.sora.org` points to the Iroha 2 Explorer instance.
-- The validator itself should only expose Torii on its private upstream
-  address (`127.0.0.1:18080` in `taira-explorer.nginx.conf`) and should not be
-  treated as the public TLS endpoint.
+- Shared nginx edge configs such as `taira-explorer.nginx.conf` are optional
+  convenience infrastructure, not the primary public API design.
 
 ### SoraFS CID gateway
 
@@ -93,9 +146,9 @@ gateway paths on the Torii origin:
 
 For the Polkaswap static bundle, the browser URL is:
 
-- `https://taira.sora.org/sorafs/cid/<cid>/`
+- `${PUBLIC_TORII_ROOT}/sorafs/cid/<cid>/`
 
-This keeps `https://taira.sora.org/` as the Torii/API origin while giving every
+This keeps the chosen public node as the Torii/API origin while giving every
 public Torii node an IPFS-style address surface for static content.
 
 Gateway behavior:
@@ -136,7 +189,7 @@ Parliament flow and the examples already shipped in the repo:
 Taira's public edge also needs to accept the storage payload upload that
 precedes root serving. The current SoraFS storage pin API sends the full staged
 site in one JSON request (`payload_b64`), so the nginx host serving
-`taira.sora.org` must keep `client_max_body_size 64m;` from
+the chosen public Torii hostname must keep `client_max_body_size 64m;` from
 `taira-explorer.nginx.conf`. Without that, `yarn taira:publish` fails at
 `POST /v1/sorafs/storage/pin` with `413 Payload Too Large` before Torii sees
 the request. Torii must also run with `torii.max_content_len` high enough for
@@ -150,7 +203,7 @@ generic `4/hour` storage-pin quota inherited from the global default.
 After every Taira reset or `irohad` rebuild, verify the manifest-registration
 ingress before retrying `yarn taira:publish`:
 
-- `curl -sSki -X POST https://taira.sora.org/v1/sorafs/pin/register -H 'content-type: application/json' --data '{}'`
+- `curl -sSki -X POST "${PUBLIC_TORII_ROOT}/v1/sorafs/pin/register" -H 'content-type: application/json' --data '{}'`
 
 Expected result:
 
@@ -167,7 +220,8 @@ handler.
 
 ### Codex / MCP rollout
 
-Taira's public Torii host is also the native MCP endpoint once the validator is
+Each public Taira node should expose native MCP on the same direct Torii root
+once the validator is
 redeployed with the shipped `[torii.mcp]` block from `config.toml`:
 
 - `torii.mcp.enabled = true`
@@ -179,24 +233,36 @@ This intentionally exposes only curated `iroha.*` tools on the public network
 so Codex sees the stable live-network aliases and not the full raw `torii.*`
 OpenAPI-derived surface.
 
-After rollout, verify the public MCP endpoint directly:
+After rollout, verify the chosen public node directly:
 
-- `curl -sS https://taira.sora.org/v1/mcp | jq .`
-- `curl -sS https://taira.sora.org/v1/mcp -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq .`
-- `curl -sS https://taira.sora.org/status | jq .`
+- `curl -sS "${PUBLIC_TORII_ROOT}/v1/mcp" | jq .`
+- `curl -sS "${PUBLIC_TORII_ROOT}/v1/mcp" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | jq .`
+- `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq .`
 
-The repo-local Codex plugin under `plugins/iroha/` points at this URL by
-default. Future Nexus/Torii deployments should expose the same `/v1/mcp` path
-and be added as user-local MCP servers rather than committed to this repo.
+The repo-local Codex plugin and Taira skill now expect an explicit direct-node
+MCP URL rather than a canonical committed live host. Future Nexus/Torii
+deployments should expose the same `/v1/mcp` path and be added as user-local
+MCP servers rather than committed to this repo with one fixed public hostname.
 
 For final public rollout, do not stop at MCP discovery. Run the repo smoke with
 both the public endpoint and a runtime-only canary signer config:
 
-- `bash configs/soranexus/taira/check_mcp_rollout.sh --write-config /run/secrets/taira-canary-client.toml`
+- `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
 
 The rollout script now also requires the live `/status` snapshot to show at
 least 4 validators in the commit QC set. If it fails that check, rebuild the
 validator configs from the shared roster before debugging ingress or MCP.
+It also verifies that the same direct node serves:
+
+- `/v1/sccp/capabilities`
+- `/v1/sccp/manifests`
+- `/v1/zk/proofs/count`
+- `/v1/sumeragi/validator-sets`
+- `/v1/nexus/public_lanes/0/{validators,stake}`
+- `/v1/bridge/messages` preflight
+- `/v1/contracts/deploy`
+- `/v1/contracts/state`
+- `/v1/contracts/instances/universal`
 
 That config must be a normal `iroha` client TOML for a low-risk signer that
 already exists on Taira. Start from `taira-canary-client.example.toml`, not
@@ -280,17 +346,20 @@ away from the shipped MCP-enabled config:
    - `sudo journalctl -u taira-irohad.service -n 200 --no-pager`
    - `cd /opt/iroha && /usr/local/bin/irohad --sora --config "${IROHA_TAIRA_CONFIG:-configs/soranexus/taira/config.toml}" --genesis "${IROHA_TAIRA_GENESIS:-configs/soranexus/taira/genesis.json}" --trace-config | tee /tmp/taira-trace-config.txt`
    - verify `/tmp/taira-trace-config.txt` includes `nexus.fees.fee_asset_id = "xor#universal"`
-6. Prove the validator's loopback Torii endpoint exposes MCP before reloading
-   nginx or cutting public traffic:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public`
+6. Prove the validator's loopback Torii endpoint exposes MCP and the expected
+   direct-ingress routes before any public cutover:
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --skip-write-canary`
    - for a full local write-path check, use a runtime-only canary signer:
-     `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --write-config /run/secrets/taira-canary-client.toml --write-target local`
-7. After the public node is back, prove contract lifecycle writes can commit:
-   - `curl -sS https://taira.sora.org/v1/contracts/instances/universal | jq '.total'`
-   - if the total is `0`, redeploy SoraSwap with the updated `../soraswap` `deploy-testnet` flow before blaming the frontend
+     `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --write-config /run/secrets/taira-canary-client.toml --write-target local`
+7. After the public node is back, prove the direct hostname is healthy before
+   any convenience host or client cutover:
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
+   - if the contract instance count is still `0`, redeploy SoraSwap with the
+     updated `../soraswap` `deploy-testnet` flow before blaming the frontend:
+     `curl -sS "${PUBLIC_TORII_ROOT}/v1/contracts/instances/universal" | jq '.total'`
 8. Before declaring public Codex/Torii rollout complete, require the signed
-   write canary to pass:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh --write-config /run/secrets/taira-canary-client.toml`
+   write canary on the direct node to pass:
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
    - the script now auto-discovers `${REPO_ROOT}/target/{debug,release}/iroha`
      and falls back to `cargo run -p iroha_cli --bin iroha -- ...` if `iroha`
      is not already installed on `PATH`
@@ -303,6 +372,8 @@ From `../iroha2-block-explorer-web`:
 
 1. Copy this file to runtime config:
    - `cp ../iroha/configs/soranexus/taira/explorer.runtime-config.json public/config.json`
+   - update `toriiBaseUrl` if you want the explorer to query a different
+     public node than the checked-in example
 2. Build and deploy static assets:
    - `corepack enable && pnpm i && pnpm build`
 3. Install the nginx snippet from
@@ -356,7 +427,7 @@ From `../iroha2-block-explorer-web`:
    - on the shared macOS/Homebrew host, use `nginx -t && nginx -s reload`
 6. Run the MCP rollout smoke from any host that can see the validator loopback
    and the public endpoint:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh`
+   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}"`
    - the public check now requires `--write-config /run/secrets/taira-canary-client.toml`
      unless you explicitly opt into read-only mode with `--skip-write-canary`
 7. Verify that SNI now serves the correct cert for each host and that both MCP
@@ -364,25 +435,27 @@ From `../iroha2-block-explorer-web`:
    - `curl -vI https://taira.sora.org`
    - `curl -vI https://taira-explorer.sora.org`
    - `echo | openssl s_client -connect taira-explorer.sora.org:443 -servername taira-explorer.sora.org 2>/dev/null | openssl x509 -noout -subject -issuer -ext subjectAltName`
-   - verify MCP over the public host:
-     `curl -sS https://taira.sora.org/v1/mcp | jq .`
+   - verify MCP over the direct node host:
+     `curl -sS "${PUBLIC_TORII_ROOT}/v1/mcp" | jq .`
    - verify curated `iroha.*` exposure:
-     `curl -sS https://taira.sora.org/v1/mcp -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | jq .`
+     `curl -sS "${PUBLIC_TORII_ROOT}/v1/mcp" -H 'content-type: application/json' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | jq .`
    - verify the native status snapshot is healthy before trusting public writes:
-     `curl -sS https://taira.sora.org/status | jq '.peers, .blocks, .sumeragi.commit_qc_validator_set_len'`
+     `curl -sS "${PUBLIC_TORII_ROOT}/status" | jq '.peers, .blocks, .sumeragi.commit_qc_validator_set_len'`
    - create a Connect session through the proxy and ask explicitly for JSON:
-     `curl -sS -X POST https://taira.sora.org/v1/connect/session -H 'content-type: application/json' -H 'accept: application/json' -d '{"sid":"<32-byte-base64url-sid>"}'`
+     `curl -sS -X POST "${PUBLIC_TORII_ROOT}/v1/connect/session" -H 'content-type: application/json' -H 'accept: application/json' -d '{"sid":"<32-byte-base64url-sid>"}'`
    - verify Connect websocket upgrades on both public hostnames with the
      returned `sid` and app token:
-     `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' 'https://taira.sora.org/v1/connect/ws?sid=<sid>&role=app'`
+     `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' "${PUBLIC_TORII_ROOT}/v1/connect/ws?sid=<sid>&role=app"`
      `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' 'https://taira-explorer.sora.org/v1/connect/ws?sid=<sid>&role=app'`
    - if those websocket probes now return a Torii-generated app error
      (`400/401/...`) instead of a proxy-layer `404` / missing-upgrade failure,
      the reverse-proxy websocket hop is working and any remaining error is in
      Connect session or token handling rather than nginx.
 
-The Explorer runtime config targets `https://taira.sora.org`, so both UI reads
-and `/v1/*` proxy traffic follow the Taira Torii endpoint.
+The Explorer runtime config should target an explicit public node URL. The
+checked-in example uses `https://taira-validator-1.sora.org`, so both UI reads
+and `/v1/*` proxy traffic follow that direct Taira Torii endpoint unless you
+override it at deploy time.
 
 ## Local Kaigi bootstrap
 

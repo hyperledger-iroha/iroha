@@ -118,6 +118,113 @@ pub(crate) const APPLICATION_NORITO: &str = "application/x-norito";
 // Integration scenarios involving DA/RBC can legitimately spend a few seconds
 // in the mempool before proposal assembly starts; keep the queue grace period
 // generous enough to avoid spurious timeouts.
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Public SCCP codec capability advertised by the node.
+pub struct SccpCodecCapability {
+    /// Numeric SCCP codec identifier.
+    pub id: u8,
+    /// Stable logical codec key.
+    pub key: String,
+    /// Human-readable description of the codec family.
+    pub description: String,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Public SCCP counterparty capability advertised by the node.
+pub struct SccpCounterpartyCapability {
+    /// Numeric SCCP domain identifier for the remote chain.
+    pub domain: u32,
+    /// Stable logical key for the remote chain.
+    pub chain: String,
+    /// Backend label used for transparent SCCP message proofs for this chain.
+    pub message_backend: String,
+    /// Backend label used for SCCP registry proofs for this chain.
+    pub registry_backend: String,
+    /// Numeric SCCP codec identifier expected for remote account payloads.
+    pub counterparty_account_codec: u8,
+    /// Stable logical codec key expected for remote account payloads.
+    pub counterparty_account_codec_key: String,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Public SCCP capability snapshot advertised by the node.
+pub struct SccpCapabilities {
+    /// Numeric SCCP domain identifier for the local Nexus chain.
+    pub local_domain: u32,
+    /// Stable logical key for the local chain.
+    pub local_chain: String,
+    /// Canonical transparent-ZK proof family for generic SCCP message proofs.
+    pub proof_family: String,
+    /// Legacy burn-bundle fetch path.
+    pub burn_bundle_path: String,
+    /// Legacy governance-bundle fetch path.
+    pub governance_bundle_path: String,
+    /// Generic SCCP message-bundle fetch path.
+    pub message_bundle_path: String,
+    /// Generic SCCP typed proof-artifact fetch path.
+    pub message_proof_path: String,
+    /// SCCP proof-manifest discovery path.
+    pub proof_manifest_path: String,
+    /// Registry backend label used by legacy burn proofs.
+    pub legacy_burn_registry_backend: String,
+    /// Registry backend label used by legacy governance proofs.
+    pub legacy_governance_registry_backend: String,
+    /// Optional Torii path for outbound proof registration.
+    #[norito(default)]
+    pub proof_submit_path: Option<String>,
+    /// Optional Torii path for inbound verified message submission.
+    #[norito(default)]
+    pub message_submit_path: Option<String>,
+    /// Supported generic SCCP payload kinds.
+    pub message_payload_kinds: Vec<String>,
+    /// Supported SCCP codec families.
+    pub codecs: Vec<SccpCodecCapability>,
+    /// Supported non-SORA counterparties.
+    pub counterparties: Vec<SccpCounterpartyCapability>,
+}
+
+#[derive(
+    Clone, Debug, PartialEq, Eq, norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize,
+)]
+/// Public SCCP proof-manifest snapshot advertised by the node.
+pub struct SccpProofManifestSet {
+    /// Numeric SCCP domain identifier for the local Nexus chain.
+    pub local_domain: u32,
+    /// Stable logical key for the local chain.
+    pub local_chain: String,
+    /// Canonical transparent-ZK proof family for generic SCCP message proofs.
+    pub proof_family: String,
+    /// Chain-specific proof manifests keyed by counterparty domain.
+    pub manifests: Vec<iroha_sccp::SccpProofManifestV1>,
+}
 const DEFAULT_MAX_QUEUED_DURATION: Duration = Duration::from_secs(60);
 const HEADER_SORA_PROOF: &str = "sora-proof";
 const HEADER_SORA_NAME: &str = "sora-name";
@@ -627,6 +734,21 @@ fn normalize_block_hash_hex(value: &str) -> Result<String> {
         ));
     }
     Hash::from_str(trimmed).map_err(|err| eyre!("invalid block hash: {err}"))?;
+    Ok(trimmed.to_ascii_lowercase())
+}
+
+fn normalize_message_id_hex(value: &str) -> Result<String> {
+    let trimmed = value
+        .trim()
+        .trim_start_matches("0x")
+        .trim_start_matches("0X");
+    if trimmed.len() != 64 {
+        return Err(eyre!(
+            "message id must contain 64 hexadecimal characters (got {})",
+            trimmed.len()
+        ));
+    }
+    hex::decode(trimmed).map_err(|err| eyre!("invalid message id: {err}"))?;
     Ok(trimmed.to_ascii_lowercase())
 }
 
@@ -4474,11 +4596,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn pipeline_status_404_falls_back_to_committed_query() {
-        use iroha_data_model::query::{
-            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
-        };
-
+    fn pipeline_status_404_returns_none_without_committed_query() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
             let store = Arc::clone(&store);
@@ -4487,16 +4605,6 @@ mod evidence_http_tests {
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
                     "/v1/pipeline/transactions/status" => Ok(empty_response(StatusCode::NOT_FOUND)),
-                    "/query" => {
-                        let response = QueryResponse::Iterable(QueryOutput {
-                            batch: QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
-                            },
-                            remaining_items: 0,
-                            continue_cursor: None,
-                        });
-                        Ok(norito_response(StatusCode::OK, &response))
-                    }
                     path => Err(eyre::eyre!("unexpected request path: {path}")),
                 }
             }
@@ -4518,9 +4626,16 @@ mod evidence_http_tests {
         assert!(status.is_none());
 
         let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(snapshots[1].url.path(), "/query");
+        assert_eq!(
+            snapshots[0]
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.to_string()),
+            Some("local".to_owned())
+        );
     }
 
     #[test]
@@ -4574,11 +4689,7 @@ mod evidence_http_tests {
     }
 
     #[test]
-    fn pipeline_status_queued_checks_committed_query() {
-        use iroha_data_model::query::{
-            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
-        };
-
+    fn pipeline_status_queued_stays_local_without_committed_query() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let payload = norito::json!({
             "hash": "deadbeef",
@@ -4595,16 +4706,6 @@ mod evidence_http_tests {
                 match path.as_str() {
                     "/v1/pipeline/transactions/status" => {
                         Ok(json_response(StatusCode::OK, &status_body))
-                    }
-                    "/query" => {
-                        let response = QueryResponse::Iterable(QueryOutput {
-                            batch: QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
-                            },
-                            remaining_items: 0,
-                            continue_cursor: None,
-                        });
-                        Ok(norito_response(StatusCode::OK, &response))
                     }
                     path => Err(eyre::eyre!("unexpected request path: {path}")),
                 }
@@ -4628,13 +4729,20 @@ mod evidence_http_tests {
             Some(super::TxConfirmationStatus::Queued)
         );
         let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(snapshots[1].url.path(), "/query");
+        assert_eq!(
+            snapshots[0]
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.to_string()),
+            Some("local".to_owned())
+        );
     }
 
     #[test]
-    fn pipeline_status_queued_prefers_committed_result() {
+    fn pipeline_status_queued_does_not_preemptively_query_committed_state() {
         use iroha_data_model::query::{
             QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
         };
@@ -4716,20 +4824,23 @@ mod evidence_http_tests {
 
         assert_eq!(
             result.expect("confirmation status query"),
-            Some(super::TxConfirmationStatus::Applied)
+            Some(super::TxConfirmationStatus::Queued)
         );
         let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(snapshots[1].url.path(), "/query");
+        assert_eq!(
+            snapshots[0]
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.to_string()),
+            Some("local".to_owned())
+        );
     }
 
     #[test]
-    fn pipeline_status_approved_with_height_checks_committed_query() {
-        use iroha_data_model::query::{
-            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
-        };
-
+    fn pipeline_status_approved_with_height_stays_local() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let payload = norito::json!({
             "hash": "deadbeef",
@@ -4746,16 +4857,6 @@ mod evidence_http_tests {
                 match path.as_str() {
                     "/v1/pipeline/transactions/status" => {
                         Ok(json_response(StatusCode::OK, &status_body))
-                    }
-                    "/query" => {
-                        let response = QueryResponse::Iterable(QueryOutput {
-                            batch: QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
-                            },
-                            remaining_items: 0,
-                            continue_cursor: None,
-                        });
-                        Ok(norito_response(StatusCode::OK, &response))
                     }
                     path => Err(eyre::eyre!("unexpected request path: {path}")),
                 }
@@ -4781,17 +4882,20 @@ mod evidence_http_tests {
             ))
         );
         let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(snapshots[1].url.path(), "/query");
+        assert_eq!(
+            snapshots[0]
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.to_string()),
+            Some("local".to_owned())
+        );
     }
 
     #[test]
-    fn pipeline_status_approved_without_height_falls_back_to_committed_query() {
-        use iroha_data_model::query::{
-            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
-        };
-
+    fn pipeline_status_approved_without_height_stays_local() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let payload = norito::json!({
             "hash": "deadbeef",
@@ -4808,16 +4912,6 @@ mod evidence_http_tests {
                 match path.as_str() {
                     "/v1/pipeline/transactions/status" => {
                         Ok(json_response(StatusCode::OK, &status_body))
-                    }
-                    "/query" => {
-                        let response = QueryResponse::Iterable(QueryOutput {
-                            batch: QueryOutputBatchBoxTuple {
-                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
-                            },
-                            remaining_items: 0,
-                            continue_cursor: None,
-                        });
-                        Ok(norito_response(StatusCode::OK, &response))
                     }
                     path => Err(eyre::eyre!("unexpected request path: {path}")),
                 }
@@ -4841,9 +4935,16 @@ mod evidence_http_tests {
             Some(super::TxConfirmationStatus::Approved(None))
         );
         let snapshots = store.lock().expect("snapshot lock");
-        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots.len(), 1);
         assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
-        assert_eq!(snapshots[1].url.path(), "/query");
+        assert_eq!(
+            snapshots[0]
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.to_string()),
+            Some("local".to_owned())
+        );
     }
 
     #[test]
@@ -4937,6 +5038,18 @@ mod evidence_http_tests {
             result.expect("confirmation status query"),
             Some(super::TxConfirmationStatus::Rejected(Some(reason)))
         );
+        let snapshots = store.lock().expect("snapshot lock");
+        assert_eq!(snapshots.len(), 2);
+        assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        assert_eq!(snapshots[1].url.path(), "/query");
+        assert_eq!(
+            snapshots[0]
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.to_string()),
+            Some("local".to_owned())
+        );
     }
 
     #[test]
@@ -4984,6 +5097,10 @@ mod evidence_http_tests {
                 name.eq_ignore_ascii_case("accept") && value == APPLICATION_JSON
             }),
             "request should set Accept: application/json"
+        );
+        assert!(
+            snapshot.url.query_pairs().all(|(key, _)| key != "scope"),
+            "generic status lookups should keep the public auto-scope behavior"
         );
     }
 
@@ -5163,29 +5280,28 @@ mod evidence_http_tests {
             "should not fall back to committed query"
         );
         assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
+        assert_eq!(
+            snapshots[0]
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.to_string()),
+            Some("local".to_owned())
+        );
     }
 
     #[test]
-    fn transaction_confirmation_status_stops_on_connection_refused_committed_lookup() {
+    fn transaction_confirmation_status_stops_on_connection_refused_committed_fallback() {
         use std::io::{Error, ErrorKind};
 
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let payload = norito::json!({
-            "hash": "deadbeef",
-            "status": { "kind": "Queued" },
-            "scope": "auto",
-            "resolved_from": "queue",
-        });
-        let status_body = norito::json::to_string(&payload).expect("status payload");
         let responder = {
             let store = Arc::clone(&store);
             move |snapshot: RequestSnapshot| {
                 let path = snapshot.url.path().to_string();
                 store.lock().expect("lock snapshot store").push(snapshot);
                 match path.as_str() {
-                    "/v1/pipeline/transactions/status" => {
-                        Ok(json_response(StatusCode::OK, &status_body))
-                    }
+                    "/v1/pipeline/transactions/status" => Ok(empty_response(StatusCode::NOT_FOUND)),
                     "/query" => Err(eyre::Report::from(Error::new(
                         ErrorKind::ConnectionRefused,
                         "torii down",
@@ -5216,6 +5332,14 @@ mod evidence_http_tests {
         assert_eq!(snapshots.len(), 2);
         assert_eq!(snapshots[0].url.path(), "/v1/pipeline/transactions/status");
         assert_eq!(snapshots[1].url.path(), "/query");
+        assert_eq!(
+            snapshots[0]
+                .url
+                .query_pairs()
+                .find(|(key, _)| key == "scope")
+                .map(|(_, value)| value.to_string()),
+            Some("local".to_owned())
+        );
     }
 }
 
@@ -6516,22 +6640,16 @@ impl Client {
         entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<Option<TxConfirmationStatus>> {
         match self.transaction_pipeline_status(hash, entry_hash) {
-            Ok(Some(status)) => {
-                match status {
-                    TxConfirmationStatus::Queued
-                    | TxConfirmationStatus::Approved(_)
-                    | TxConfirmationStatus::Rejected(None) => {
-                        let committed = self.transaction_committed(hash, entry_hash).map_err(|err| {
-                        mark_tx_confirmation_transport_error_final(
-                            err,
-                            "committed transaction query failed because Torii is unreachable",
-                        )
-                    })?;
-                        Ok(committed.or(Some(status)))
-                    }
-                    _ => Ok(Some(status)),
-                }
-            }
+            Ok(Some(TxConfirmationStatus::Rejected(None))) => self
+                .transaction_committed(hash, entry_hash)
+                .map(|committed| committed.or(Some(TxConfirmationStatus::Rejected(None))))
+                .map_err(|err| {
+                    mark_tx_confirmation_transport_error_final(
+                        err,
+                        "committed transaction query failed because Torii is unreachable",
+                    )
+                }),
+            Ok(Some(status)) => Ok(Some(status)),
             Ok(None) => self.transaction_committed(hash, entry_hash).map_err(|err| {
                 mark_tx_confirmation_transport_error_final(
                     err,
@@ -6562,59 +6680,32 @@ impl Client {
     fn transaction_pipeline_status(
         &self,
         hash: HashOf<SignedTransaction>,
-        entry_hash: HashOf<TransactionEntrypoint>,
+        _entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<Option<TxConfirmationStatus>> {
-        let hash_hex = bytes_to_hex(hash.as_ref());
-        let url = join_torii_url(&self.torii_url, "v1/pipeline/transactions/status");
-        let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
-                .param("hash", &hash_hex)
-                .header("Accept", APPLICATION_JSON),
-        )?;
-        match resp.status() {
-            StatusCode::OK | StatusCode::ACCEPTED => {
-                if resp.body().is_empty() {
-                    return Ok(None);
-                }
-                let payload: PipelineTransactionStatusResponse =
-                    Self::parse_typed_json_ok_response(
-                        &resp,
-                        "Failed to get pipeline transaction status",
-                    )?;
-                Ok(tx_confirmation_status_from_pipeline_response(&payload))
-            }
-            StatusCode::NO_CONTENT => Ok(None),
-            StatusCode::NOT_FOUND => {
-                debug!(
-                    %hash,
-                    "pipeline status query returned 404; falling back to committed query"
-                );
-                self.transaction_committed(hash, entry_hash)
-            }
-            status => Err(eyre!(
-                "Failed to get pipeline transaction status: {} {}",
-                status,
-                std::str::from_utf8(resp.body()).unwrap_or("")
-            )),
+        match self.get_transaction_status_response_with_scope(hash, Some("local")) {
+            Ok(Some(payload)) => Ok(tx_confirmation_status_from_pipeline_response(&payload)),
+            Ok(None) => Ok(None),
+            Err(err) => Err(err),
         }
     }
 
-    /// GET `/v1/pipeline/transactions/status` — typed pipeline status lookup by signed transaction hash.
-    ///
-    /// # Errors
-    /// Returns an error if the HTTP request fails, the response has an unexpected content type,
-    /// or the typed JSON payload cannot be decoded.
-    pub fn get_transaction_status_response(
+    fn get_transaction_status_response_with_scope(
         &self,
         hash: HashOf<SignedTransaction>,
+        scope: Option<&str>,
     ) -> Result<Option<PipelineTransactionStatusResponse>> {
         let hash_hex = bytes_to_hex(hash.as_ref());
         let url = join_torii_url(&self.torii_url, "v1/pipeline/transactions/status");
-        let resp = self.send_builder(
-            self.default_request(HttpMethod::GET, url)
-                .param("hash", &hash_hex)
-                .header("Accept", APPLICATION_JSON),
-        )?;
+        let builder = self
+            .default_request(HttpMethod::GET, url)
+            .param("hash", &hash_hex)
+            .header("Accept", APPLICATION_JSON);
+        let builder = if let Some(scope) = scope {
+            builder.param("scope", scope)
+        } else {
+            builder
+        };
+        let resp = self.send_builder(builder)?;
         match resp.status() {
             StatusCode::OK | StatusCode::ACCEPTED => {
                 if resp.body().is_empty() {
@@ -6634,6 +6725,18 @@ impl Client {
                 std::str::from_utf8(resp.body()).unwrap_or("")
             )),
         }
+    }
+
+    /// GET `/v1/pipeline/transactions/status` — typed pipeline status lookup by signed transaction hash.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response has an unexpected content type,
+    /// or the typed JSON payload cannot be decoded.
+    pub fn get_transaction_status_response(
+        &self,
+        hash: HashOf<SignedTransaction>,
+    ) -> Result<Option<PipelineTransactionStatusResponse>> {
+        self.get_transaction_status_response_with_scope(hash, None)
     }
 
     /// GET `/v1/pipeline/transactions/status` — convenience status lookup mapped to [`TxConfirmationStatus`].
@@ -6695,7 +6798,9 @@ impl Client {
 
         loop {
             attempts = attempts.saturating_add(1);
-            if let Some(response) = self.get_transaction_status_response(hash)? {
+            if let Some(response) =
+                self.get_transaction_status_response_with_scope(hash, Some("local"))?
+            {
                 let kind = response.status.kind.as_str();
                 if tx_confirmation_status_from_pipeline_response(&response).is_none() {
                     return Err(eyre!("unsupported pipeline status kind `{kind}`"));
@@ -9262,7 +9367,7 @@ impl Client {
     }
 
     /// POST `/v1/contracts/deploy` with JSON body
-    /// `{ authority, private_key, code_b64, dataspace? }`.
+    /// `{ authority, private_key, code_b64, contract_alias, lease_expiry_ms? }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn post_contract_deploy_json(
@@ -9270,7 +9375,8 @@ impl Client {
         authority: &iroha_data_model::account::AccountId,
         private_key: &iroha_crypto::PrivateKey,
         code_b64: &str,
-        dataspace: Option<&str>,
+        contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+        lease_expiry_ms: Option<u64>,
     ) -> Result<norito::json::Value> {
         let url = join_torii_url(&self.torii_url, "v1/contracts/deploy");
         let mut payload = norito::json::Map::new();
@@ -9282,8 +9388,12 @@ impl Client {
             ))?,
         );
         payload.insert("code_b64".into(), code_b64.into());
-        if let Some(dataspace) = dataspace {
-            payload.insert("dataspace".into(), dataspace.into());
+        payload.insert(
+            "contract_alias".into(),
+            norito::json::to_value(contract_alias)?,
+        );
+        if let Some(lease_expiry_ms) = lease_expiry_ms {
+            payload.insert("lease_expiry_ms".into(), lease_expiry_ms.into());
         }
         let body = norito::json::to_vec(&norito::json::Value::from(payload))?;
         let resp = self
@@ -9807,6 +9917,141 @@ impl Client {
             ));
         }
         Ok(norito::json::from_slice(resp.body())?)
+    }
+
+    /// GET `/v1/sccp/capabilities`.
+    /// Returns the public SCCP capability snapshot as JSON.
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
+    pub fn get_sccp_capabilities_json(&self) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/sccp/capabilities");
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get SCCP capabilities: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        Ok(norito::json::from_slice(resp.body())?)
+    }
+
+    /// GET `/v1/sccp/capabilities`.
+    /// Returns the public SCCP capability snapshot as a typed Norito payload.
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or the Norito payload
+    /// cannot be decoded into the typed SCCP capability structure.
+    pub fn get_sccp_capabilities(&self) -> Result<SccpCapabilities> {
+        let url = join_torii_url(&self.torii_url, "v1/sccp/capabilities");
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_NORITO),
+        )?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get SCCP capabilities: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        norito::decode_from_bytes(resp.body()).wrap_err("failed to decode SCCP capabilities")
+    }
+
+    /// GET `/v1/sccp/manifests`.
+    /// Returns the SCCP proof-manifest collection as JSON.
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
+    pub fn get_sccp_proof_manifests_json(&self) -> Result<norito::json::Value> {
+        let url = join_torii_url(&self.torii_url, "v1/sccp/manifests");
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get SCCP proof manifests: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        Ok(norito::json::from_slice(resp.body())?)
+    }
+
+    /// GET `/v1/sccp/manifests`.
+    /// Returns the SCCP proof-manifest collection as a typed Norito payload.
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or the Norito payload
+    /// cannot be decoded into the typed SCCP proof-manifest set.
+    pub fn get_sccp_proof_manifests(&self) -> Result<SccpProofManifestSet> {
+        let url = join_torii_url(&self.torii_url, "v1/sccp/manifests");
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_NORITO),
+        )?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get SCCP proof manifests: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        norito::decode_from_bytes(resp.body()).wrap_err("failed to decode SCCP proof manifests")
+    }
+
+    /// GET `/v1/sccp/artifacts/message/{message_id}`.
+    /// Returns the typed transparent SCCP message-proof artifact as JSON.
+    /// # Errors
+    /// Returns an error if the message id is malformed, the HTTP request fails, the response is
+    /// non-OK, or JSON deserialization fails.
+    pub fn get_sccp_message_proof_artifact_json(
+        &self,
+        message_id_hex: &str,
+    ) -> Result<norito::json::Value> {
+        let message_id_hex = normalize_message_id_hex(message_id_hex)?;
+        let path = format!("v1/sccp/artifacts/message/{message_id_hex}");
+        let url = join_torii_url(&self.torii_url, &path);
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get SCCP message proof artifact: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        Ok(norito::json::from_slice(resp.body())?)
+    }
+
+    /// GET `/v1/sccp/artifacts/message/{message_id}`.
+    /// Returns the typed transparent SCCP message-proof artifact.
+    /// # Errors
+    /// Returns an error if the message id is malformed, the HTTP request fails, the response is
+    /// non-OK, or the Norito artifact cannot be decoded into the typed SCCP structure.
+    pub fn get_sccp_message_proof_artifact(
+        &self,
+        message_id_hex: &str,
+    ) -> Result<iroha_sccp::NexusSccpMessageTransparentProofV1> {
+        let message_id_hex = normalize_message_id_hex(message_id_hex)?;
+        let path = format!("v1/sccp/artifacts/message/{message_id_hex}");
+        let url = join_torii_url(&self.torii_url, &path);
+        let resp = self.send_builder(
+            self.default_request(HttpMethod::GET, url)
+                .header("Accept", APPLICATION_NORITO),
+        )?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get SCCP message proof artifact: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        norito::decode_from_bytes(resp.body())
+            .wrap_err("failed to decode SCCP message proof artifact")
     }
 
     /// GET `/v1/runtime/metrics`
@@ -17549,6 +17794,254 @@ mod tests {
         let payload = vec![0xAB; 32];
         let bundle = manifest_bundle_from_payload(&payload);
         (bundle, payload)
+    }
+
+    fn sample_sccp_message_proof_artifact() -> iroha_sccp::NexusSccpMessageTransparentProofV1 {
+        use iroha_sccp::{
+            NexusBridgeFinalityProofV1, NexusCommitQcV1, NexusConsensusPhaseV1,
+            NexusSccpMessageProofV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
+            SccpPayloadV1, TransferPayloadV1, build_nexus_sccp_message_transparent_proof,
+            canonical_sccp_payload_bytes, merkle_root_from_commitment, payload_hash,
+            sccp_message_id,
+        };
+
+        let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_TON,
+            nonce: 21,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_TON_RAW,
+            recipient: b"0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:ton:xor".to_vec(),
+        });
+        let commitment = SccpHubCommitmentV1 {
+            version: 1,
+            kind: SccpHubMessageKind::Transfer,
+            target_domain: iroha_sccp::SCCP_DOMAIN_TON,
+            message_id: sccp_message_id(&payload),
+            payload_hash: payload_hash(&canonical_sccp_payload_bytes(&payload)),
+            parliament_certificate_hash: None,
+        };
+        let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
+        let commitment_root = merkle_root_from_commitment(&commitment, &merkle_proof);
+        let finality_proof = NexusBridgeFinalityProofV1 {
+            version: 1,
+            chain_id: "taira".to_owned(),
+            height: 19,
+            block_hash: [0x44; 32],
+            commitment_root,
+            block_header_bytes: vec![0x01, 0x02, 0x03],
+            commit_qc: NexusCommitQcV1 {
+                version: 1,
+                phase: NexusConsensusPhaseV1::Commit,
+                height: 19,
+                view: 1,
+                epoch: 1,
+                mode_tag: "normal".to_owned(),
+                subject_block_hash: [0x44; 32],
+                validator_set_hash_version: 1,
+                validator_public_keys: vec!["validator-1".to_owned()],
+                validator_set_pops: vec![vec![0xAA]],
+                signers_bitmap: vec![0x01],
+                bls_aggregate_signature: vec![0xBB],
+            },
+        };
+        let bundle = NexusSccpMessageProofV1 {
+            version: 1,
+            commitment_root,
+            commitment,
+            merkle_proof,
+            payload,
+            finality_proof: norito::to_bytes(&finality_proof).expect("encode finality proof"),
+        };
+        build_nexus_sccp_message_transparent_proof(&bundle).expect("build SCCP message artifact")
+    }
+
+    fn sample_sccp_capabilities() -> SccpCapabilities {
+        SccpCapabilities {
+            local_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            local_chain: "sora".to_owned(),
+            proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
+            burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}".to_owned(),
+            governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}".to_owned(),
+            message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
+            message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
+            proof_manifest_path: "/v1/sccp/manifests".to_owned(),
+            legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
+            legacy_governance_registry_backend: "bridge/sccp/governance-v1".to_owned(),
+            proof_submit_path: Some("/v1/bridge/proofs/submit".to_owned()),
+            message_submit_path: Some("/v1/bridge/messages".to_owned()),
+            message_payload_kinds: vec![
+                "asset_register".to_owned(),
+                "route_activate".to_owned(),
+                "transfer".to_owned(),
+            ],
+            codecs: vec![
+                SccpCodecCapability {
+                    id: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+                    key: "text_utf8".to_owned(),
+                    description: "Logical UTF-8 identifiers for SORA and route-local names."
+                        .to_owned(),
+                },
+                SccpCodecCapability {
+                    id: iroha_sccp::SCCP_CODEC_TON_RAW,
+                    key: "ton_raw".to_owned(),
+                    description: "TON raw addresses in workchain:account_hex form.".to_owned(),
+                },
+            ],
+            counterparties: vec![
+                SccpCounterpartyCapability {
+                    domain: iroha_sccp::SCCP_DOMAIN_TON,
+                    chain: "ton".to_owned(),
+                    message_backend: "bridge/sccp/stark-fri-v1/ton".to_owned(),
+                    registry_backend: "bridge/sccp/registry-v1/ton".to_owned(),
+                    counterparty_account_codec: iroha_sccp::SCCP_CODEC_TON_RAW,
+                    counterparty_account_codec_key: "ton_raw".to_owned(),
+                },
+                SccpCounterpartyCapability {
+                    domain: iroha_sccp::SCCP_DOMAIN_ETH,
+                    chain: "eth".to_owned(),
+                    message_backend: "bridge/sccp/stark-fri-v1/eth".to_owned(),
+                    registry_backend: "bridge/sccp/registry-v1/eth".to_owned(),
+                    counterparty_account_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+                    counterparty_account_codec_key: "evm_hex".to_owned(),
+                },
+            ],
+        }
+    }
+
+    fn sample_sccp_proof_manifests() -> SccpProofManifestSet {
+        SccpProofManifestSet {
+            local_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            local_chain: "sora".to_owned(),
+            proof_family: iroha_sccp::SCCP_STARK_FRI_PROOF_FAMILY_V1.to_owned(),
+            manifests: vec![
+                iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON)
+                    .expect("ton manifest"),
+                iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_SOL)
+                    .expect("solana manifest"),
+            ],
+        }
+    }
+
+    #[test]
+    fn get_sccp_capabilities_requests_norito_and_decodes_typed_payload() {
+        let payload = sample_sccp_capabilities();
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&payload).expect("encode norito response"))
+            .expect("response build");
+
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client.get_sccp_capabilities()
+        })
+        .expect("sccp capabilities");
+
+        assert_eq!(decoded, payload);
+        let snapshot = store
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("capabilities snapshot");
+        assert_eq!(snapshot.url.path(), "/v1/sccp/capabilities");
+        assert!(
+            snapshot.headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("accept") && value == APPLICATION_NORITO
+            }),
+            "request should set Accept: {APPLICATION_NORITO}"
+        );
+    }
+
+    #[test]
+    fn get_sccp_proof_manifests_requests_norito_and_decodes_typed_payload() {
+        let payload = sample_sccp_proof_manifests();
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&payload).expect("encode norito response"))
+            .expect("response build");
+
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client.get_sccp_proof_manifests()
+        })
+        .expect("sccp proof manifests");
+
+        assert_eq!(decoded, payload);
+        let snapshot = store
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("manifests snapshot");
+        assert_eq!(snapshot.url.path(), "/v1/sccp/manifests");
+        assert!(
+            snapshot.headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("accept") && value == APPLICATION_NORITO
+            }),
+            "request should set Accept: {APPLICATION_NORITO}"
+        );
+    }
+
+    #[test]
+    fn get_sccp_message_proof_artifact_requests_norito_and_decodes_typed_payload() {
+        let payload = sample_sccp_message_proof_artifact();
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = HttpResponse::builder()
+            .status(StatusCode::OK)
+            .header("content-type", APPLICATION_NORITO)
+            .body(norito::to_bytes(&payload).expect("encode norito response"))
+            .expect("response build");
+        let message_id_hex = hex::encode(payload.public_inputs.message_id);
+
+        let decoded = with_mock_http(respond_with(&store, response), || {
+            let client = client_with_base_url(base_url());
+            client.get_sccp_message_proof_artifact(&format!("0x{message_id_hex}"))
+        })
+        .expect("sccp message proof artifact");
+
+        assert_eq!(decoded, payload);
+        let snapshot = store
+            .lock()
+            .expect("snapshot lock")
+            .first()
+            .cloned()
+            .expect("artifact snapshot");
+        assert_eq!(
+            snapshot.url.path(),
+            format!("/v1/sccp/artifacts/message/{message_id_hex}")
+        );
+        assert!(
+            snapshot.headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("accept") && value == APPLICATION_NORITO
+            }),
+            "request should set Accept: {APPLICATION_NORITO}"
+        );
+    }
+
+    #[test]
+    fn get_sccp_message_proof_artifact_rejects_invalid_message_id_hex() {
+        let client = client_with_base_url(base_url());
+        let err = client
+            .get_sccp_message_proof_artifact("xyz")
+            .expect_err("invalid message id must fail");
+        assert!(
+            err.to_string().contains("message id"),
+            "unexpected error: {err:?}"
+        );
     }
 
     fn manifest_bundle_response(bundle: &mut DaManifestBundle) -> HttpResponse<Vec<u8>> {

@@ -109,6 +109,7 @@ class _MockState:
         self.gov_locks: Dict[str, Dict[str, Any]] = {}
         self.gov_tallies: Dict[str, Dict[str, Any]] = {}
         self.gov_unlock_stats: Dict[str, Any] = {}
+        self.sccp_message_artifacts: Dict[str, Dict[str, Any]] = {}
         self.reset()
 
     # ------------------------------------------------------------------
@@ -209,12 +210,21 @@ class _MockState:
             return _json_response(HTTPStatus.OK, self.sumeragi_rbc_sessions)
         if method == "GET" and path == "/v1/node/capabilities":
             return _json_response(HTTPStatus.OK, self.node_capabilities)
+        if method == "GET" and path == "/v1/sccp/capabilities":
+            return _json_response(HTTPStatus.OK, self.sccp_capabilities)
+        if method == "GET" and path == "/v1/sccp/manifests":
+            return _json_response(HTTPStatus.OK, self.sccp_proof_manifests)
+        if method == "GET" and path.startswith("/v1/sccp/artifacts/message/"):
+            message_id = path.split("/")[-1].lower()
+            return self._sccp_message_artifact_get(message_id)
         if method == "POST" and path == "/__mock__/pipeline/config":
             return self._pipeline_config(body)
         if method == "POST" and path == "/__mock__/accounts/config":
             return self._account_config(body)
         if method == "POST" and path == "/__mock__/gov/config":
             return self._gov_config(body)
+        if method == "POST" and path == "/__mock__/sccp/config":
+            return self._sccp_config(body)
         if method == "POST" and path == "/__mock__/reset":
             self.reset()
             return _Response(HTTPStatus.OK, body=b"{}", headers={"Content-Type": "application/json"})
@@ -261,8 +271,71 @@ class _MockState:
                 "abi_version": 1,
                 "data_model_version": 1,
             }
+            self.sccp_capabilities = {
+                "local_domain": 0,
+                "local_chain": "sora",
+                "proof_family": "stark-fri-v1",
+                "burn_bundle_path": "/v1/sccp/proofs/burn/{message_id}",
+                "governance_bundle_path": "/v1/sccp/proofs/governance/{message_id}",
+                "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
+                "message_proof_path": "/v1/sccp/artifacts/message/{message_id}",
+                "proof_manifest_path": "/v1/sccp/manifests",
+                "legacy_burn_registry_backend": "bridge/sccp/burn-v1",
+                "legacy_governance_registry_backend": "bridge/sccp/governance-v1",
+                "proof_submit_path": "/v1/bridge/proofs/submit",
+                "message_submit_path": "/v1/bridge/messages",
+                "message_payload_kinds": ["asset_register", "route_activate", "transfer"],
+                "codecs": [],
+                "counterparties": [],
+            }
+            self.sccp_proof_manifests = {
+                "local_domain": 0,
+                "local_chain": "sora",
+                "proof_family": "stark-fri-v1",
+                "manifests": [],
+            }
+            self.sccp_message_artifacts = {}
             self._seed_reports()
             self._seed_sumeragi()
+
+    def _sccp_config(self, body: bytes) -> _Response:
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except json.JSONDecodeError as err:
+            raise ValueError(f"invalid sccp config: {err}") from err
+        if not isinstance(payload, dict):
+            raise ValueError("sccp config must be an object")
+
+        capabilities = payload.get("capabilities")
+        if capabilities is not None:
+            if not isinstance(capabilities, dict):
+                raise ValueError("capabilities must be an object")
+            self.sccp_capabilities = dict(capabilities)
+
+        manifests = payload.get("manifests")
+        if manifests is not None:
+            if not isinstance(manifests, dict):
+                raise ValueError("manifests must be an object")
+            self.sccp_proof_manifests = dict(manifests)
+
+        artifacts = payload.get("message_artifacts")
+        if artifacts is not None:
+            if not isinstance(artifacts, dict):
+                raise ValueError("message_artifacts must be an object")
+            normalized_artifacts: Dict[str, Dict[str, Any]] = {}
+            for message_id, artifact in artifacts.items():
+                if not isinstance(artifact, dict):
+                    raise ValueError("message_artifacts entry must be an object")
+                normalized_artifacts[str(message_id).lower()] = dict(artifact)
+            self.sccp_message_artifacts = normalized_artifacts
+
+        return _json_response(HTTPStatus.OK, {"ok": True})
+
+    def _sccp_message_artifact_get(self, message_id: str) -> _Response:
+        payload = self.sccp_message_artifacts.get(message_id)
+        if payload is None:
+            return _json_response(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        return _json_response(HTTPStatus.OK, payload)
 
     # ------------------------------------------------------------------
     # Governance endpoints

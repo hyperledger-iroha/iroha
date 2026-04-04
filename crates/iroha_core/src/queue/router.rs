@@ -233,7 +233,7 @@ fn dataspace_scoped_permission_routing_decision(
                 }
             }
         }
-        Executable::Ivm(_) => {}
+        Executable::ContractCall(_) | Executable::Ivm(_) => {}
         Executable::IvmProved(proved) => {
             for instruction in &proved.overlay {
                 let Some(dataspace_id) =
@@ -294,7 +294,7 @@ fn account_permission_holder_routing_target<'tx>(
         Executable::Instructions(instructions) => account_permission_holder_from_instructions(
             instructions.iter().map(|instruction| &**instruction),
         ),
-        Executable::Ivm(_) => None,
+        Executable::ContractCall(_) | Executable::Ivm(_) => None,
         Executable::IvmProved(proved) => account_permission_holder_from_instructions(
             proved.overlay.iter().map(|instruction| &**instruction),
         ),

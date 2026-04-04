@@ -3,13 +3,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "${SCRIPT_DIR}/../../.." && pwd)"
-LOCAL_MCP_URL="${LOCAL_MCP_URL:-http://127.0.0.1:18080/v1/mcp}"
-PUBLIC_MCP_URL="${PUBLIC_MCP_URL:-https://taira.sora.org/v1/mcp}"
+LOCAL_TORII_ROOT="${LOCAL_TORII_ROOT:-http://127.0.0.1:18080}"
+PUBLIC_TORII_ROOT="${PUBLIC_TORII_ROOT:-}"
+LOCAL_MCP_URL="${LOCAL_MCP_URL:-}"
+PUBLIC_MCP_URL="${PUBLIC_MCP_URL:-}"
 IROHA_BIN="${IROHA_BIN:-}"
 WRITE_CONFIG="${WRITE_CONFIG:-}"
 WRITE_TARGET="${WRITE_TARGET:-}"
 WRITE_MESSAGE_PREFIX="${WRITE_MESSAGE_PREFIX:-taira-rollout-canary}"
 MIN_VALIDATOR_SET_LEN="${MIN_VALIDATOR_SET_LEN:-4}"
+PUBLIC_LANE_ID="${PUBLIC_LANE_ID:-0}"
+CONTRACT_NAMESPACE="${CONTRACT_NAMESPACE:-universal}"
 SKIP_LOCAL=0
 SKIP_PUBLIC=0
 SKIP_WRITE_CANARY=0
@@ -17,7 +21,8 @@ IROHA_RUNNER=()
 
 usage() {
   cat <<'EOF'
-Usage: check_mcp_rollout.sh [--local-url URL] [--public-url URL] [--skip-local] [--skip-public]
+Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url URL] [--public-url URL]
+                            [--skip-local] [--skip-public]
                             [--write-config PATH] [--write-target local|public|URL]
                             [--iroha-bin PATH] [--skip-write-canary]
 
@@ -29,6 +34,8 @@ The check fails unless:
   - the tool list does not expose raw torii.* names
   - GET /status returns healthy Torii/Sumeragi counters
   - /status reports at least 4 validators in the commit QC set
+  - direct public Torii ingress also exposes SCCP, ZK, bridge, validator-set,
+    public-lane, and contract routes on the same node URL
 
 For final public rollout, also pass --write-config with a runtime-only
 canary signer config. The signer must already exist on Taira; if it is missing
@@ -36,11 +43,31 @@ the faucet asset, this script will try to bootstrap it through
 POST /v1/accounts/faucet before retrying the write canary. Without
 --write-config, public checks are rejected
 unless --skip-write-canary is provided explicitly for read-only validation.
+
+Public checks intentionally require an explicit public node URL
+(`--public-root https://<taira-node>` or `--public-url https://<taira-node>/v1/mcp`).
+`https://taira.sora.org` is convenience-only and is no longer assumed here.
 EOF
 }
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
+    --local-root)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --local-root" >&2
+        exit 1
+      }
+      LOCAL_TORII_ROOT="$2"
+      shift 2
+      ;;
+    --public-root)
+      [[ $# -ge 2 ]] || {
+        echo "missing value for --public-root" >&2
+        exit 1
+      }
+      PUBLIC_TORII_ROOT="$2"
+      shift 2
+      ;;
     --local-url)
       [[ $# -ge 2 ]] || {
         echo "missing value for --local-url" >&2
@@ -151,9 +178,44 @@ cleanup() {
 
 trap cleanup EXIT
 
+normalize_root_url() {
+  local url="$1"
+  printf '%s\n' "${url%/}"
+}
+
+mcp_url_from_root() {
+  local root_url
+  root_url="$(normalize_root_url "$1")"
+  printf '%s/v1/mcp\n' "$root_url"
+}
+
 mcp_root_from_url() {
   local url="$1"
   printf '%s\n' "${url%/v1/mcp}"
+}
+
+if [[ -z "$LOCAL_MCP_URL" ]]; then
+  LOCAL_MCP_URL="$(mcp_url_from_root "$LOCAL_TORII_ROOT")"
+fi
+
+if [[ $SKIP_PUBLIC -eq 0 && -z "$PUBLIC_MCP_URL" ]]; then
+  if [[ -z "$PUBLIC_TORII_ROOT" ]]; then
+    echo "public rollout checks require an explicit --public-root or --public-url; do not rely on https://taira.sora.org as the canonical API target" >&2
+    exit 1
+  fi
+  PUBLIC_MCP_URL="$(mcp_url_from_root "$PUBLIC_TORII_ROOT")"
+fi
+
+status_is_one_of() {
+  local actual="$1"
+  shift
+  local expected
+  for expected in "$@"; do
+    if [[ "$actual" == "$expected" ]]; then
+      return 0
+    fi
+  done
+  return 1
 }
 
 http_request() {
@@ -223,6 +285,26 @@ if raw:
 PY
 }
 
+check_route_status() {
+  local label="$1"
+  local method="$2"
+  local url="$3"
+  local expected_statuses="$4"
+  local description="$5"
+  local payload="${6:-}"
+  local -a expected_codes=()
+
+  read -r -a expected_codes <<< "$expected_statuses"
+  echo "==> ${label}: ${method} ${url}"
+  http_request "$method" "$url" "$payload"
+  if ! status_is_one_of "$last_status" "${expected_codes[@]}"; then
+    echo "${label}: ${description} failed with HTTP ${last_status}; expected one of: ${expected_statuses}" >&2
+    sed -n '1,20p' "$last_headers" >&2 || true
+    sed -n '1,40p' "$last_body" >&2 || true
+    exit 1
+  fi
+}
+
 check_status_snapshot() {
   local label="$1"
   local status_url="$2"
@@ -272,6 +354,35 @@ if validator_set_len < min_validator_set_len:
 PY
 }
 
+check_route_parity() {
+  local label="$1"
+  local root_url="$2"
+  local lane_id="$3"
+  local namespace="$4"
+
+  root_url="$(normalize_root_url "$root_url")"
+  check_route_status "$label" GET "${root_url}/v1/sccp/capabilities" "200" \
+    "SCCP capability discovery route"
+  check_route_status "$label" GET "${root_url}/v1/sccp/manifests" "200" \
+    "SCCP manifest discovery route"
+  check_route_status "$label" GET "${root_url}/v1/zk/proofs/count" "200" \
+    "ZK proof count route"
+  check_route_status "$label" GET "${root_url}/v1/sumeragi/validator-sets" "200" \
+    "validator-set snapshot route"
+  check_route_status "$label" GET "${root_url}/v1/nexus/public_lanes/${lane_id}/validators" "200" \
+    "public-lane validator snapshot route"
+  check_route_status "$label" GET "${root_url}/v1/nexus/public_lanes/${lane_id}/stake" "200" \
+    "public-lane stake snapshot route"
+  check_route_status "$label" GET "${root_url}/v1/contracts/instances/${namespace}" "200" \
+    "contract instance listing route"
+  check_route_status "$label" GET "${root_url}/v1/contracts/state" "400" \
+    "contract state route should be mounted and reject missing query selectors"
+  check_route_status "$label" POST "${root_url}/v1/contracts/deploy" "400 401 403 415 422" \
+    "contract deploy route should reject an empty preflight body, not be missing" '{}'
+  check_route_status "$label" POST "${root_url}/v1/bridge/messages" "400 401 403 415 422" \
+    "bridge message preflight should hit the mounted route, not return 404/405" '{}'
+}
+
 check_endpoint() {
   local label="$1"
   local url="$2"
@@ -306,6 +417,7 @@ check_endpoint() {
 
   root_url="$(mcp_root_from_url "$url")"
   check_status_snapshot "$label" "${root_url}/status"
+  check_route_parity "$label" "$root_url" "$PUBLIC_LANE_ID" "$CONTRACT_NAMESPACE"
 }
 
 resolve_write_target_url() {

@@ -59,6 +59,12 @@ fn inspect_transactions(block: &SignedBlock) {
 
                 // Per-instruction decoding is skipped for now to avoid aborting on malformed items.
             }
+            Executable::ContractCall(call) => {
+                println!(
+                    "tx#{tx_idx}: executable carries contract call {}::{} (skipping instruction probe)",
+                    call.contract_address, call.entrypoint
+                );
+            }
             Executable::Ivm(_) => {
                 println!(
                     "tx#{tx_idx}: executable carries IVM bytecode (skipping instruction probe)"

@@ -2,11 +2,17 @@
 //! Integration tests of the Iroha Client CLI
 
 use std::{
+    collections::BTreeMap,
+    net::{TcpListener, TcpStream},
     num::NonZeroU32,
     path::{Path, PathBuf},
     process::Command as ProcessCommand,
-    sync::Once,
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    sync::{
+        Arc, Once,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use integration_tests::sandbox;
@@ -33,6 +39,10 @@ use iroha_test_network::NetworkBuilder;
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR, sample_ivm_path};
 use norito::json::{self, Value};
 use reqwest::Url;
+
+const SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS: &str = "60";
+const SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION: &str = "main";
+const SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES: usize = 4_096;
 
 fn program() -> PathBuf {
     prepare_iroha_cli_test_environment();
@@ -88,10 +98,13 @@ fn configure_program_overrides_from_existing_binaries() {
         }
 
         if std::env::var_os(TEST_NETWORK_BIN_IROHAD).is_none()
-            && let Some(path) = cli_path
-                .as_deref()
-                .and_then(matching_irohad_binary_path_from_cli_path)
+            && let Some(path) = find_primary_target_irohad_binary_path()
                 .or_else(find_existing_irohad_binary_path)
+                .or_else(|| {
+                    cli_path
+                        .as_deref()
+                        .and_then(matching_irohad_binary_path_from_cli_path)
+                })
         {
             let value = path.to_string_lossy().into_owned();
             set_env_var(TEST_NETWORK_BIN_IROHAD, &value);
@@ -171,9 +184,79 @@ fn find_existing_irohad_binary_path() -> Option<PathBuf> {
     find_existing_binary_path_from_roots(&target_roots, &profiles, irohad_binary_name())
 }
 
+fn current_test_binary_target_root() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let mut directory = exe.parent()?;
+    if directory.file_name().is_some_and(|value| value == "deps") {
+        directory = directory.parent()?;
+    }
+    directory.parent().map(Path::to_path_buf)
+}
+
+fn find_primary_target_irohad_binary_path() -> Option<PathBuf> {
+    let mut target_roots = Vec::new();
+    if let Some(target_root) = current_test_binary_target_root() {
+        target_roots.push(target_root);
+    }
+    if let Some(target_root) = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from)
+        && !target_roots.contains(&target_root)
+    {
+        target_roots.push(target_root);
+    }
+    let workspace_target = workspace_root().join("target");
+    if !target_roots.contains(&workspace_target) {
+        target_roots.push(workspace_target);
+    }
+
+    let mut profiles = Vec::new();
+    if let Ok(profile) = std::env::var("PROFILE")
+        && !profile.trim().is_empty()
+    {
+        profiles.push(profile);
+    }
+    if !profiles.iter().any(|value| value == "debug") {
+        profiles.push("debug".to_owned());
+    }
+    if !profiles.iter().any(|value| value == "release") {
+        profiles.push("release".to_owned());
+    }
+
+    find_existing_binary_path_from_roots(&target_roots, &profiles, irohad_binary_name())
+}
+
 fn matching_irohad_binary_path_from_cli_path(path: &Path) -> Option<PathBuf> {
     let candidate = path.parent()?.join(irohad_binary_name());
     candidate.is_file().then_some(candidate)
+}
+
+fn binary_modified_at(path: &Path) -> Option<SystemTime> {
+    std::fs::metadata(path).ok()?.modified().ok()
+}
+
+fn newest_existing_binary_path(
+    paths: impl IntoIterator<Item = Option<PathBuf>>,
+) -> Option<PathBuf> {
+    let mut first_match = None;
+    let mut newest_match: Option<(SystemTime, PathBuf)> = None;
+
+    for candidate in paths.into_iter().flatten() {
+        if !candidate.is_file() {
+            continue;
+        }
+        if first_match.is_none() {
+            first_match = Some(candidate.clone());
+        }
+        if let Some(modified_at) = binary_modified_at(&candidate) {
+            let replace = newest_match
+                .as_ref()
+                .is_none_or(|(current_modified_at, _)| modified_at > *current_modified_at);
+            if replace {
+                newest_match = Some((modified_at, candidate));
+            }
+        }
+    }
+
+    newest_match.map(|(_, path)| path).or(first_match)
 }
 
 fn find_existing_binary_path_from_roots(
@@ -181,15 +264,11 @@ fn find_existing_binary_path_from_roots(
     profiles: &[String],
     binary_name: &str,
 ) -> Option<PathBuf> {
-    for target_root in target_roots {
-        for profile in profiles {
-            let candidate = target_root.join(profile).join(binary_name);
-            if candidate.is_file() {
-                return Some(candidate);
-            }
-        }
-    }
-    None
+    newest_existing_binary_path(target_roots.iter().flat_map(|target_root| {
+        profiles
+            .iter()
+            .map(move |profile| Some(target_root.join(profile).join(binary_name)))
+    }))
 }
 
 const fn cli_binary_name() -> &'static str {
@@ -356,6 +435,43 @@ fn find_existing_binary_path_from_roots_returns_daemon_match() {
         irohad_binary_name(),
     );
     assert_eq!(found, Some(expected));
+}
+
+#[test]
+fn find_existing_binary_path_from_roots_prefers_newer_match() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let root_a = temp.path().join("target-a");
+    let root_b = temp.path().join("target-b");
+    let older = root_a.join("debug").join(irohad_binary_name());
+    let newer = root_b.join("debug").join(irohad_binary_name());
+    std::fs::create_dir_all(older.parent().expect("older parent")).expect("create older dirs");
+    std::fs::create_dir_all(newer.parent().expect("newer parent")).expect("create newer dirs");
+    std::fs::write(&older, b"older").expect("write older binary");
+    std::thread::sleep(Duration::from_secs(1));
+    std::fs::write(&newer, b"newer").expect("write newer binary");
+
+    let profiles = vec!["debug".to_owned(), "release".to_owned()];
+    let found =
+        find_existing_binary_path_from_roots(&[root_a, root_b], &profiles, irohad_binary_name());
+    assert_eq!(found, Some(newer));
+}
+
+#[test]
+fn newest_existing_binary_path_prefers_fresher_daemon_over_cli_sibling() {
+    let temp = tempfile::tempdir().expect("tempdir");
+    let stale = temp
+        .path()
+        .join("iroha-test-network/debug")
+        .join(irohad_binary_name());
+    let fresh = temp.path().join("debug").join(irohad_binary_name());
+    std::fs::create_dir_all(stale.parent().expect("stale parent")).expect("create stale dirs");
+    std::fs::create_dir_all(fresh.parent().expect("fresh parent")).expect("create fresh dirs");
+    std::fs::write(&stale, b"stale").expect("write stale daemon");
+    std::thread::sleep(Duration::from_secs(1));
+    std::fs::write(&fresh, b"fresh").expect("write fresh daemon");
+
+    let selected = newest_existing_binary_path([Some(stale), Some(fresh.clone())]);
+    assert_eq!(selected, Some(fresh));
 }
 
 #[test]
@@ -552,14 +668,281 @@ async fn run_soracloud_command(
     config: &ProgramConfig,
     args: &[&str],
 ) -> eyre::Result<std::process::Output> {
+    let effective_args = soracloud_command_args(args);
     Ok(tokio::process::Command::new(program())
         .current_dir(cwd)
         .arg("app")
         .arg("soracloud")
-        .args(args)
+        .args(&effective_args)
         .envs(config.envs())
         .output()
         .await?)
+}
+
+fn soracloud_command_args(args: &[&str]) -> Vec<String> {
+    let mut effective_args = args.iter().map(|arg| (*arg).to_owned()).collect::<Vec<_>>();
+    if !args.contains(&"--timeout-secs") {
+        effective_args.push("--timeout-secs".to_owned());
+        effective_args.push(SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS.to_owned());
+    }
+    effective_args
+}
+
+#[test]
+fn soracloud_command_args_append_timeout_once() {
+    assert_eq!(
+        soracloud_command_args(&["hf-deploy", "--repo-id", "openai/gpt-oss"]),
+        vec![
+            "hf-deploy".to_owned(),
+            "--repo-id".to_owned(),
+            "openai/gpt-oss".to_owned(),
+            "--timeout-secs".to_owned(),
+            SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS.to_owned(),
+        ]
+    );
+    assert_eq!(
+        soracloud_command_args(&[
+            "hf-status",
+            "--repo-id",
+            "openai/gpt-oss",
+            "--timeout-secs",
+            "15",
+        ]),
+        vec![
+            "hf-status".to_owned(),
+            "--repo-id".to_owned(),
+            "openai/gpt-oss".to_owned(),
+            "--timeout-secs".to_owned(),
+            "15".to_owned(),
+        ]
+    );
+}
+
+#[derive(Clone)]
+struct MockHttpResponse {
+    content_type: &'static str,
+    body: Vec<u8>,
+}
+
+struct MockHttpServer {
+    base_url: String,
+    address: String,
+    stop: Arc<AtomicBool>,
+    handle: Option<thread::JoinHandle<()>>,
+}
+
+impl MockHttpServer {
+    fn start(routes: BTreeMap<String, MockHttpResponse>) -> Self {
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind mock HTTP server");
+        listener
+            .set_nonblocking(true)
+            .expect("set mock listener nonblocking");
+        let address = listener
+            .local_addr()
+            .expect("mock listener address")
+            .to_string();
+        let base_url = format!("http://{address}");
+        let routes = Arc::new(routes);
+        let stop = Arc::new(AtomicBool::new(false));
+        let stop_flag = Arc::clone(&stop);
+        let handle = thread::spawn(move || {
+            while !stop_flag.load(Ordering::SeqCst) {
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
+                        let stop_flag = Arc::clone(&stop_flag);
+                        let routes = Arc::clone(&routes);
+                        thread::spawn(move || {
+                            let path = read_mock_http_request_path(&mut stream);
+                            if stop_flag.load(Ordering::SeqCst) && path.is_empty() {
+                                return;
+                            }
+                            let response = routes.get(&path).cloned().unwrap_or(MockHttpResponse {
+                                content_type: "text/plain",
+                                body: b"not found".to_vec(),
+                            });
+                            let status = if routes.contains_key(&path) {
+                                "200 OK"
+                            } else {
+                                "404 Not Found"
+                            };
+                            let headers = format!(
+                                "HTTP/1.1 {status}\r\nContent-Length: {}\r\nContent-Type: {}\r\nConnection: close\r\n\r\n",
+                                response.body.len(),
+                                response.content_type
+                            );
+                            let _ = std::io::Write::write_all(&mut stream, headers.as_bytes());
+                            let _ = std::io::Write::write_all(&mut stream, &response.body);
+                        });
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(error)
+                        if matches!(
+                            error.kind(),
+                            std::io::ErrorKind::Interrupted
+                                | std::io::ErrorKind::ConnectionAborted
+                                | std::io::ErrorKind::TimedOut
+                        ) => {}
+                    Err(error) => {
+                        eprintln!("mock HTTP server accept error: {error}");
+                        thread::sleep(Duration::from_millis(50));
+                    }
+                }
+            }
+        });
+        Self {
+            base_url,
+            address,
+            stop,
+            handle: Some(handle),
+        }
+    }
+
+    fn api_base_url(&self) -> String {
+        format!("{}/api", self.base_url)
+    }
+}
+
+impl Drop for MockHttpServer {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::SeqCst);
+        let _ = TcpStream::connect(&self.address);
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+fn read_mock_http_request_path(stream: &mut TcpStream) -> String {
+    let mut request = Vec::new();
+    let mut buffer = [0_u8; 1024];
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match std::io::Read::read(stream, &mut buffer) {
+            Ok(0) => break,
+            Ok(read) => {
+                request.extend_from_slice(&buffer[..read]);
+                if request.windows(4).any(|window| window == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                ) =>
+            {
+                if Instant::now() >= deadline {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => panic!("read mock HTTP request failed: {error}"),
+        }
+    }
+
+    let target = String::from_utf8_lossy(&request)
+        .lines()
+        .next()
+        .and_then(|line| line.split_whitespace().nth(1))
+        .unwrap_or_default()
+        .to_owned();
+    if let Ok(url) = Url::parse(&target) {
+        return url.path().to_owned();
+    }
+    target.split('?').next().unwrap_or_default().to_owned()
+}
+
+fn start_mock_hf_source_server() -> MockHttpServer {
+    let repo_id = SORACLOUD_LIVE_HF_TEST_REPO_ID;
+    let revision = SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION;
+    let weight_path = format!("/{repo_id}/resolve/{revision}/model.safetensors");
+    let info_path = format!("/api/models/{repo_id}/revision/{revision}");
+    let model_info = norito::json!({
+        "siblings": [
+            { "rfilename": "model.safetensors" }
+        ]
+    });
+    MockHttpServer::start(BTreeMap::from([
+        (
+            info_path,
+            MockHttpResponse {
+                content_type: "application/json",
+                body: json::to_vec(&model_info).expect("encode mock HF model info"),
+            },
+        ),
+        (
+            weight_path,
+            MockHttpResponse {
+                content_type: "application/octet-stream",
+                body: vec![7_u8; SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES],
+            },
+        ),
+    ]))
+}
+
+#[tokio::test]
+async fn mock_hf_source_server_serves_profile_routes() -> eyre::Result<()> {
+    let server = start_mock_hf_source_server();
+    let client = reqwest::Client::new();
+
+    let info = client
+        .get(format!(
+            "{}/api/models/{}/revision/{}",
+            server.base_url,
+            SORACLOUD_LIVE_HF_TEST_REPO_ID,
+            SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION
+        ))
+        .send()
+        .await?;
+    assert!(info.status().is_success());
+    let info_payload: Value = json::from_slice(&info.bytes().await?)?;
+    assert_eq!(
+        info_payload
+            .get("siblings")
+            .and_then(Value::as_array)
+            .and_then(|siblings| siblings.first())
+            .and_then(Value::as_object)
+            .and_then(|entry| entry.get("rfilename"))
+            .and_then(Value::as_str),
+        Some("model.safetensors")
+    );
+
+    let weights = client
+        .head(format!(
+            "{}/{}/resolve/{}/model.safetensors",
+            server.base_url,
+            SORACLOUD_LIVE_HF_TEST_REPO_ID,
+            SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION
+        ))
+        .send()
+        .await?;
+    assert!(weights.status().is_success());
+    assert_eq!(
+        weights
+            .headers()
+            .get(reqwest::header::CONTENT_LENGTH)
+            .and_then(|value| value.to_str().ok()),
+        Some("4096")
+    );
+
+    let repeated_info = client
+        .get(format!(
+            "{}/api/models/{}/revision/{}",
+            server.base_url,
+            SORACLOUD_LIVE_HF_TEST_REPO_ID,
+            SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION
+        ))
+        .send()
+        .await?;
+    assert!(
+        repeated_info.status().is_success(),
+        "mock HF server should continue serving later profile requests"
+    );
+
+    Ok(())
 }
 
 fn validator_program_config(
@@ -1836,9 +2219,12 @@ async fn soracloud_training_and_model_weight_lifecycle_use_live_torii_control_pl
 async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
+    let hf_source_server = start_mock_hf_source_server();
+    let hf_hub_base_url = hf_source_server.base_url.clone();
+    let hf_api_base_url = hf_source_server.api_base_url();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
-        .with_config_layer(|layer| {
+        .with_config_layer(move |layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
@@ -1846,7 +2232,15 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
                 )
-                .write(["sumeragi", "consensus_mode"], "npos");
+                .write(["sumeragi", "consensus_mode"], "npos")
+                .write(
+                    ["soracloud_runtime", "hf", "hub_base_url"],
+                    hf_hub_base_url.clone(),
+                )
+                .write(
+                    ["soracloud_runtime", "hf", "api_base_url"],
+                    hf_api_base_url.clone(),
+                );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -2266,9 +2660,12 @@ async fn soracloud_hf_shared_lease_commands_use_live_torii_control_plane() -> ey
 async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
+    let hf_source_server = start_mock_hf_source_server();
+    let hf_hub_base_url = hf_source_server.base_url.clone();
+    let hf_api_base_url = hf_source_server.api_base_url();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
-        .with_config_layer(|layer| {
+        .with_config_layer(move |layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
@@ -2276,7 +2673,15 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
                 )
-                .write(["sumeragi", "consensus_mode"], "npos");
+                .write(["sumeragi", "consensus_mode"], "npos")
+                .write(
+                    ["soracloud_runtime", "hf", "hub_base_url"],
+                    hf_hub_base_url.clone(),
+                )
+                .write(
+                    ["soracloud_runtime", "hf", "api_base_url"],
+                    hf_api_base_url.clone(),
+                );
         });
     let Some(network) = sandbox::start_network_async_or_skip(
         builder,
@@ -2306,7 +2711,7 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
     let queued_service_name = "hf_queue_next";
     let promoted_service_name = "hf_queue_promoted";
     let renewed_model_name = "tiny-random-gpt2-renewed";
-    let lease_term_ms_value = 10_000_u64;
+    let lease_term_ms_value = 30_000_u64;
     let lease_term_ms = lease_term_ms_value.to_string();
     let base_fee_nanos = "10000".to_string();
     let renewed_fee_nanos = "12000".to_string();
@@ -2590,9 +2995,12 @@ async fn soracloud_hf_pre_expiry_renewal_queues_and_promotes_next_window() -> ey
 async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -> eyre::Result<()> {
     prepare_iroha_cli_test_environment();
     let lease_asset_definition = soracloud_hf_lease_asset_definition();
+    let hf_source_server = start_mock_hf_source_server();
+    let hf_hub_base_url = hf_source_server.base_url.clone();
+    let hf_api_base_url = hf_source_server.api_base_url();
     let builder = NetworkBuilder::new()
         .with_min_peers(4)
-        .with_config_layer(|layer| {
+        .with_config_layer(move |layer| {
             layer
                 .write("telemetry_enabled", true)
                 .write("telemetry_profile", "full")
@@ -2600,7 +3008,15 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
                     ["crypto", "allowed_signing"],
                     soracloud_live_hf_allowed_signing(),
                 )
-                .write(["sumeragi", "consensus_mode"], "npos");
+                .write(["sumeragi", "consensus_mode"], "npos")
+                .write(
+                    ["soracloud_runtime", "hf", "hub_base_url"],
+                    hf_hub_base_url.clone(),
+                )
+                .write(
+                    ["soracloud_runtime", "hf", "api_base_url"],
+                    hf_api_base_url.clone(),
+                );
         })
         .with_genesis_instruction(Grant::account_permission(
             Permission::new("CanManageSoracloud".into(), Json::new(())),

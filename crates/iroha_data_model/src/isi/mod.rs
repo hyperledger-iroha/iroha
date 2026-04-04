@@ -140,6 +140,11 @@ impl From<crate::isi::bridge::RecordBridgeReceipt> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::bridge::RecordSccpMessage> for InstructionBox {
+    fn from(i: crate::isi::bridge::RecordSccpMessage) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::asset_alias::SetAssetDefinitionAlias> for InstructionBox {
     fn from(i: crate::isi::asset_alias::SetAssetDefinitionAlias) -> Self {
         InstructionBox(Box::new(i))
@@ -2786,7 +2791,7 @@ pub mod prelude {
         asset_transfer_control::{
             SetAssetTransferBlacklist, SetAssetTransferControl, SetAssetTransferFreeze,
         },
-        bridge::{RecordBridgeReceipt, SubmitBridgeProof},
+        bridge::{RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof},
         confidential::{
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,
             SetPoseidonParamsLifecycle,
@@ -2912,6 +2917,29 @@ mod tests {
     fn decode_unregistered_instruction() {
         let registry = InstructionRegistry::new();
         assert!(registry.decode("missing", &[]).is_none());
+    }
+
+    #[test]
+    fn record_sccp_message_registry_roundtrip_preserves_payload_bytes() {
+        let registry = InstructionRegistry::new().register::<RecordSccpMessage>();
+        let instruction = RecordSccpMessage::new(vec![0xAA, 0xBB, 0xCC]);
+        let bytes = instruction.encode();
+        let framed = registry
+            .frame_payload_for_type(std::any::type_name::<RecordSccpMessage>(), &bytes)
+            .expect("record sccp message must be registered")
+            .expect("record sccp message must frame");
+        let decoded = InstructionRegistry::decode(
+            &registry,
+            std::any::type_name::<RecordSccpMessage>(),
+            &framed,
+        )
+        .expect("record sccp message must be registered")
+        .expect("record sccp message must decode");
+        let decoded = decoded
+            .as_any()
+            .downcast_ref::<RecordSccpMessage>()
+            .expect("decoded instruction type");
+        assert_eq!(decoded.payload_bytes, vec![0xAA, 0xBB, 0xCC]);
     }
 
     #[test]

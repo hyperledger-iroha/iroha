@@ -1052,6 +1052,11 @@ impl Actor {
                     ));
                 }
                 builder = builder.with_previous_roster_evidence(previous_roster_evidence.clone());
+                let sccp_messages =
+                    crate::bridge::collect_sccp_messages_from_accepted_transactions(&tx_batch);
+                builder = builder.with_sccp_commitment_root(
+                    crate::bridge::sccp_commitment_root_from_messages(&sccp_messages),
+                );
 
                 let receipt_plan = if nexus_enabled {
                     let cursor_snapshot = self.state.da_receipt_cursor_snapshot();

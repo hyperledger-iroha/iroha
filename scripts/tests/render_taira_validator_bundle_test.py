@@ -32,7 +32,7 @@ public_address = "taira-validator-1.sora.org:1337"
 
 [torii]
 address = "0.0.0.0:18080"
-public_address = "https://taira.sora.org"
+public_address = "https://taira-validator-1.sora.org"
 
 [torii.mcp]
 enabled = true
@@ -53,18 +53,13 @@ def _write_roster(path: Path, validator_count: int = 4, inline_private_keys: boo
             [
                 f'pop_hex = "peer-{index}-pop"',
                 f'public_address = "taira-validator-{index}.sora.org:1337"',
+                f'torii_public_address = "https://taira-validator-{index}.sora.org"',
                 "",
             ]
         )
         validators.extend(entry)
     path.write_text(
-        "\n".join(
-            [
-                'torii_public_address = "https://taira.sora.org"',
-                "",
-                *validators,
-            ]
-        ),
+        "\n".join(validators),
         encoding="utf-8",
     )
 
@@ -103,6 +98,52 @@ def test_render_bundle_rewrites_peer_specific_sections(tmp_path: Path) -> None:
     )
     assert '"peer-4-public@taira-validator-4.sora.org:1337"' in config
     assert '{ public_key = "peer-2-public", pop_hex = "peer-2-pop" }' in config
+
+
+def test_load_roster_requires_explicit_direct_torii_hostname(tmp_path: Path) -> None:
+    roster_path = tmp_path / "validator_roster.toml"
+    roster_path.write_text(
+        "\n".join(
+            [
+                "[[validators]]",
+                'slug = "taira-validator-1"',
+                'public_key = "peer-1-public"',
+                'private_key = "peer-1-private"',
+                'pop_hex = "peer-1-pop"',
+                'public_address = "taira-validator-1.sora.org:1337"',
+                "",
+                "[[validators]]",
+                'slug = "taira-validator-2"',
+                'public_key = "peer-2-public"',
+                'private_key = "peer-2-private"',
+                'pop_hex = "peer-2-pop"',
+                'public_address = "taira-validator-2.sora.org:1337"',
+                "",
+                "[[validators]]",
+                'slug = "taira-validator-3"',
+                'public_key = "peer-3-public"',
+                'private_key = "peer-3-private"',
+                'pop_hex = "peer-3-pop"',
+                'public_address = "taira-validator-3.sora.org:1337"',
+                "",
+                "[[validators]]",
+                'slug = "taira-validator-4"',
+                'public_key = "peer-4-public"',
+                'private_key = "peer-4-private"',
+                'pop_hex = "peer-4-pop"',
+                'public_address = "taira-validator-4.sora.org:1337"',
+                "",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    try:
+        MODULE.load_roster(roster_path)
+    except ValueError as error:
+        assert "must set `torii_public_address` explicitly" in str(error)
+    else:  # pragma: no cover - defensive assertion
+        raise AssertionError("load_roster accepted a roster without public Torii URLs")
 
 
 def test_load_roster_requires_four_validators(tmp_path: Path) -> None:

@@ -9,6 +9,8 @@ import {
   openConnectWebSocket,
   registerConnectSession,
   resolveConnectLaunchUri,
+  resolveConnectLaunchUriForProtocol,
+  rewriteConnectUriProtocol,
   toHex,
 } from "../src/connect.browser.js";
 
@@ -114,6 +116,39 @@ test("resolveConnectLaunchUri prefers canonical session deeplinks", () => {
       },
     ),
     "iroha://connect?sid=session&role=wallet&token=wallet-token",
+  );
+});
+
+test("rewriteConnectUriProtocol swaps the scheme without changing the session payload", () => {
+  assert.equal(
+    rewriteConnectUriProtocol(
+      "iroha://connect?sid=session&role=wallet&token=wallet-token",
+    ),
+    "irohaconnect://connect?sid=session&role=wallet&token=wallet-token",
+  );
+  assert.equal(
+    rewriteConnectUriProtocol(
+      "iroha://connect?sid=session&role=wallet&token=wallet-token",
+      "irohaconnect:",
+    ),
+    "irohaconnect://connect?sid=session&role=wallet&token=wallet-token",
+  );
+});
+
+test("resolveConnectLaunchUriForProtocol rewrites the selected launch URI", () => {
+  assert.equal(
+    resolveConnectLaunchUriForProtocol(
+      "wallet",
+      {
+        walletUri: "iroha://connect?sid=preview&role=wallet",
+        appUri: "iroha://connect?sid=preview&role=app",
+      },
+      {
+        wallet_uri: "iroha://connect?sid=session&role=wallet&token=wallet-token",
+        app_uri: "iroha://connect?sid=session&role=app&token=app-token",
+      },
+    ),
+    "irohaconnect://connect?sid=session&role=wallet&token=wallet-token",
   );
 });
 

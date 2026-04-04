@@ -70,6 +70,7 @@ use crate::telemetry::{DataspaceTeuGaugeUpdate, LaneTeuGaugeUpdate};
 use crate::{
     EventsSender,
     compliance::{LaneComplianceContext, LaneComplianceEngine, LaneComplianceEvaluation},
+    executor::{NexusFeeAdmissionError, check_external_nexus_fee_admission},
     gas,
     governance::manifest::{
         GovernanceGuardError, GovernanceRules, LaneManifestRegistry, LaneManifestRegistryHandle,
@@ -492,6 +493,16 @@ pub enum Error {
         /// Reason describing why the privacy proof failed.
         reason: String,
     },
+    /// Nexus fee admission rejected the transaction before queueing: {reason}
+    NexusFeeAdmissionRejected {
+        /// Reason describing why the transaction could not cover the Nexus fee bound.
+        reason: String,
+    },
+    /// Nexus fee admission encountered invalid node configuration: {reason}
+    NexusFeeAdmissionConfigInvalid {
+        /// Reason describing which Nexus fee configuration entry is invalid.
+        reason: String,
+    },
 }
 
 /// Failure that can pop up when pushing transaction into the queue
@@ -619,28 +630,29 @@ impl Queue {
             iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
                 match signed.instructions() {
                     Executable::Instructions(batch) => gas::meter_instructions(batch.as_ref()),
+                    Executable::ContractCall(_) | Executable::Ivm(_) => {
+                        match crate::executor::parse_gas_limit(signed.metadata()) {
+                            Ok(Some(limit)) => limit,
+                            Ok(None) => {
+                                warn!(
+                                    tx = %tx.hash(),
+                                    "missing gas_limit metadata while deriving proposal gas cost"
+                                );
+                                0
+                            }
+                            Err(err) => {
+                                warn!(
+                                    ?err,
+                                    tx = %tx.hash(),
+                                    "invalid gas_limit metadata while deriving proposal gas cost"
+                                );
+                                0
+                            }
+                        }
+                    }
                     Executable::IvmProved(proved) => {
                         gas::meter_instructions(proved.overlay.as_ref())
                     }
-                    Executable::Ivm(_) => match crate::executor::parse_gas_limit(signed.metadata())
-                    {
-                        Ok(Some(limit)) => limit,
-                        Ok(None) => {
-                            warn!(
-                                tx = %tx.hash(),
-                                "missing gas_limit metadata while deriving proposal gas cost"
-                            );
-                            0
-                        }
-                        Err(err) => {
-                            warn!(
-                                ?err,
-                                tx = %tx.hash(),
-                                "invalid gas_limit metadata while deriving proposal gas cost"
-                            );
-                            0
-                        }
-                    },
                 }
             }
             iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
@@ -942,30 +954,36 @@ impl Queue {
 
         let mut contract_targets = BTreeSet::new();
         let mut register_code_seen = false;
-        if let Executable::Instructions(instructions) = signed.instructions() {
-            for instruction in instructions {
-                if let Some(activate) = instruction
-                    .as_any()
-                    .downcast_ref::<ActivateContractInstance>()
-                {
-                    contract_targets.insert(activate.contract_address().clone());
-                } else if let Some(deactivate) = instruction
-                    .as_any()
-                    .downcast_ref::<DeactivateContractInstance>()
-                {
-                    contract_targets.insert(deactivate.contract_address().clone());
-                } else {
-                    let modifies_contract_code = {
-                        let any = instruction.as_any();
-                        any.is::<RegisterSmartContractCode>()
-                            || any.is::<RegisterSmartContractBytes>()
-                            || any.is::<RemoveSmartContractBytes>()
-                    };
-                    if modifies_contract_code {
-                        register_code_seen = true;
+        match signed.instructions() {
+            Executable::Instructions(instructions) => {
+                for instruction in instructions {
+                    if let Some(activate) = instruction
+                        .as_any()
+                        .downcast_ref::<ActivateContractInstance>()
+                    {
+                        contract_targets.insert(activate.contract_address().clone());
+                    } else if let Some(deactivate) = instruction
+                        .as_any()
+                        .downcast_ref::<DeactivateContractInstance>()
+                    {
+                        contract_targets.insert(deactivate.contract_address().clone());
+                    } else {
+                        let modifies_contract_code = {
+                            let any = instruction.as_any();
+                            any.is::<RegisterSmartContractCode>()
+                                || any.is::<RegisterSmartContractBytes>()
+                                || any.is::<RemoveSmartContractBytes>()
+                        };
+                        if modifies_contract_code {
+                            register_code_seen = true;
+                        }
                     }
                 }
             }
+            Executable::ContractCall(call) => {
+                contract_targets.insert(call.contract_address.clone());
+            }
+            Executable::Ivm(_) | Executable::IvmProved(_) => {}
         }
 
         if let Some(contract_address) = metadata_governance_contract_address.clone() {
@@ -979,7 +997,10 @@ impl Queue {
         let contract_instr_seen =
             register_code_seen || !contract_targets.is_empty() || ivm_with_contract_metadata;
 
-        if contract_instr_seen && metadata_governance_contract_address.is_none() {
+        if contract_instr_seen
+            && metadata_governance_contract_address.is_none()
+            && !matches!(signed.instructions(), Executable::ContractCall(_))
+        {
             return Err(Self::enforcement_error(
                 alias,
                 "transactions with contract operations must set `gov_contract_address` metadata when lane governance protects namespaces",
@@ -1300,13 +1321,64 @@ impl Queue {
     /// Checks if the transaction is expired at a specific time.
     fn is_expired_at(&self, tx: &AcceptedTransaction<'static>, now: Duration) -> bool {
         let tx_creation_time = tx.creation_time();
-
-        let time_limit = tx.time_to_live().map_or_else(
-            || self.tx_time_to_live,
-            |tx_time_to_live| core::cmp::min(self.tx_time_to_live, tx_time_to_live),
-        );
+        let time_limit = self.effective_tx_time_to_live(tx);
 
         now.saturating_sub(tx_creation_time) > time_limit
+    }
+
+    fn effective_tx_time_to_live(&self, tx: &AcceptedTransaction<'_>) -> Duration {
+        tx.time_to_live().map_or_else(
+            || self.tx_time_to_live,
+            |tx_time_to_live| core::cmp::min(self.tx_time_to_live, tx_time_to_live),
+        )
+    }
+
+    fn nexus_fee_admission_observation_time_ms(&self, tx: &AcceptedTransaction<'_>) -> u64 {
+        let deadline = tx
+            .creation_time()
+            .saturating_add(self.effective_tx_time_to_live(tx));
+        Self::duration_to_millis(deadline)
+    }
+
+    fn map_nexus_fee_admission_error(err: NexusFeeAdmissionError) -> Error {
+        match err {
+            NexusFeeAdmissionError::Rejected(reason) => Error::NexusFeeAdmissionRejected { reason },
+            NexusFeeAdmissionError::ConfigInvalid(reason) => {
+                Error::NexusFeeAdmissionConfigInvalid { reason }
+            }
+        }
+    }
+
+    fn recheck_external_nexus_fee_admission(
+        &self,
+        tx: &AcceptedTransaction<'static>,
+        world: &impl WorldReadOnly,
+        nexus: &Nexus,
+    ) -> Result<(), Error> {
+        let Some(transaction) = tx.external() else {
+            return Ok(());
+        };
+        let observation_time_ms = self.nexus_fee_admission_observation_time_ms(tx);
+        check_external_nexus_fee_admission(world, nexus, transaction, observation_time_ms)
+            .map_err(Self::map_nexus_fee_admission_error)
+    }
+
+    fn queue_rejection_reason(
+        err: &Error,
+    ) -> Option<iroha_data_model::transaction::error::TransactionRejectionReason> {
+        match err {
+            Error::NexusFeeAdmissionRejected { reason } => Some(
+                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::NotPermitted(reason.clone()),
+                ),
+            ),
+            Error::NexusFeeAdmissionConfigInvalid { reason } => Some(
+                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::InternalError(reason.clone()),
+                ),
+            ),
+            _ => None,
+        }
     }
 
     /// Returns all pending transactions.
@@ -1529,6 +1601,7 @@ impl Queue {
             checked,
             routing_decision,
             state_view.world(),
+            &state_view.nexus,
             gossip_payload,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
@@ -1602,6 +1675,7 @@ impl Queue {
         }
 
         let world = state.world_view();
+        let nexus = state.nexus_snapshot();
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state.metrics();
 
@@ -1609,6 +1683,7 @@ impl Queue {
             checked,
             routing_decision,
             &world,
+            &nexus,
             gossip_payload,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
@@ -1622,11 +1697,23 @@ impl Queue {
         checked: CheckedTransaction<'static>,
         routing_decision: RoutingDecision,
         world: &impl WorldReadOnly,
+        nexus: &Nexus,
         gossip_payload: Option<Arc<Vec<u8>>>,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<RoutingDecision, Failure> {
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
+
+        if checked.as_accepted().external().is_some() {
+            if let Err(err) =
+                self.recheck_external_nexus_fee_admission(checked.as_accepted(), world, nexus)
+            {
+                return Err(Failure {
+                    tx: Box::new(checked.as_accepted().clone()),
+                    err,
+                });
+            }
+        }
 
         #[cfg(feature = "telemetry")]
         let mut manifest_allowed = false;
@@ -1660,7 +1747,9 @@ impl Queue {
                         Executable::Instructions(instructions) => {
                             instructions_allow_multisig_envelope_authority(&instructions)
                         }
-                        Executable::IvmProved(_) | Executable::Ivm(_) => false,
+                        Executable::ContractCall(_)
+                        | Executable::IvmProved(_)
+                        | Executable::Ivm(_) => false,
                     };
                 if !rules.validators.is_empty() && checked.as_ref().authority_opt().is_none() {
                     #[cfg(feature = "telemetry")]
@@ -2411,6 +2500,54 @@ impl Queue {
                 continue;
             }
 
+            if let Err(e) = self.recheck_external_nexus_fee_admission(
+                tx_arc.as_accepted(),
+                state_view.world(),
+                &state_view.nexus,
+            ) {
+                iroha_logger::warn!(
+                    tx = %hash,
+                    ?e,
+                    "dropping transaction during queue pop (nexus fee recheck)"
+                );
+                drop(tx_arc);
+                if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_expiry_hash(&hash);
+                    if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
+                        self.decrease_per_user_tx_count(authority);
+                    }
+                    let routing = if let Some((_, decision)) = self.routing_decisions.remove(&hash)
+                    {
+                        routing_ledger::discard_if_matches(&hash, decision);
+                        decision
+                    } else {
+                        routing_ledger::take(&hash).unwrap_or_default()
+                    };
+                    #[cfg(feature = "telemetry")]
+                    self.record_teu_dequeue(&hash, Some(state_view.telemetry));
+                    self.tx_enqueued_at_ms.remove(&hash);
+                    self.queued_tx_enqueued_at_ms.remove(&hash);
+                    if let Some(reason) = Self::queue_rejection_reason(&e) {
+                        let _ = self.events_sender.send(
+                            TransactionEvent {
+                                hash,
+                                block_height: None,
+                                lane_id: routing.lane_id,
+                                dataspace_id: routing.dataspace_id,
+                                status: TransactionStatus::Rejected(Box::new(reason)),
+                            }
+                            .into(),
+                        );
+                    }
+                }
+                self.tx_encoded_len.remove(&hash);
+                self.tx_gas_cost.remove(&hash);
+                self.tx_enqueued_at_ms.remove(&hash);
+                self.queued_tx_enqueued_at_ms.remove(&hash);
+                self.tx_gossip_payloads.remove(&hash);
+                continue;
+            }
+
             let routing = self
                 .routing_decisions
                 .get(&hash)
@@ -2460,6 +2597,8 @@ impl Queue {
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
         let committed_transactions = state.transactions.view();
+        let world = state.world_view();
+        let nexus = state.nexus_snapshot();
         loop {
             let hash = if let Some(hash) = self.tx_hashes.pop() {
                 hash
@@ -2514,6 +2653,52 @@ impl Queue {
                         && let Ok(tx) = Arc::try_unwrap(removed_tx)
                     {
                         expired_transactions.push(tx.into_accepted());
+                    }
+                }
+                self.tx_encoded_len.remove(&hash);
+                self.tx_gas_cost.remove(&hash);
+                self.tx_enqueued_at_ms.remove(&hash);
+                self.queued_tx_enqueued_at_ms.remove(&hash);
+                self.tx_gossip_payloads.remove(&hash);
+                continue;
+            }
+
+            if let Err(e) =
+                self.recheck_external_nexus_fee_admission(tx_arc.as_accepted(), &world, &nexus)
+            {
+                iroha_logger::warn!(
+                    tx = %hash,
+                    ?e,
+                    "dropping transaction during queue pop (nexus fee recheck)"
+                );
+                drop(tx_arc);
+                if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_expiry_hash(&hash);
+                    if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
+                        self.decrease_per_user_tx_count(authority);
+                    }
+                    let routing = if let Some((_, decision)) = self.routing_decisions.remove(&hash)
+                    {
+                        routing_ledger::discard_if_matches(&hash, decision);
+                        decision
+                    } else {
+                        routing_ledger::take(&hash).unwrap_or_default()
+                    };
+                    #[cfg(feature = "telemetry")]
+                    self.record_teu_dequeue(&hash, Some(telemetry_handle));
+                    self.tx_enqueued_at_ms.remove(&hash);
+                    self.queued_tx_enqueued_at_ms.remove(&hash);
+                    if let Some(reason) = Self::queue_rejection_reason(&e) {
+                        let _ = self.events_sender.send(
+                            TransactionEvent {
+                                hash,
+                                block_height: None,
+                                lane_id: routing.lane_id,
+                                dataspace_id: routing.dataspace_id,
+                                status: TransactionStatus::Rejected(Box::new(reason)),
+                            }
+                            .into(),
+                        );
                     }
                 }
                 self.tx_encoded_len.remove(&hash);
@@ -3217,6 +3402,12 @@ impl Queue {
                         let instructions: Vec<_> = batch.iter().map(Clone::clone).collect();
                         gas::meter_instructions(&instructions)
                     }
+                    Executable::ContractCall(_) => {
+                        match crate::executor::parse_gas_limit(signed.metadata()) {
+                            Ok(Some(limit)) => limit,
+                            _ => 0,
+                        }
+                    }
                     Executable::IvmProved(proved) => {
                         gas::meter_instructions(proved.overlay.as_ref())
                     }
@@ -3783,6 +3974,7 @@ pub mod tests {
         runtime::RuntimeUpgradeManifest,
     };
     use iroha_executor_data_model::isi::multisig::{MultisigPropose, MultisigSpec};
+    use iroha_executor_data_model::permission::nexus::CanUseFeeSponsor;
     use iroha_logger::Level;
     use iroha_primitives::json::Json;
     use iroha_schema::Ident;
@@ -3807,6 +3999,7 @@ pub mod tests {
             SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
         },
         query::store::LiveQueryStore,
+        smartcontracts::Execute,
         state::{State, World},
     };
 
@@ -5148,6 +5341,9 @@ pub mod tests {
             iroha_data_model::transaction::Executable::Instructions(batch) => {
                 crate::gas::meter_instructions(batch.as_ref())
             }
+            iroha_data_model::transaction::Executable::ContractCall(_) => {
+                panic!("expected ISI transaction for gas test")
+            }
             iroha_data_model::transaction::Executable::Ivm(_) => {
                 panic!("expected ISI transaction for gas test")
             }
@@ -5388,6 +5584,349 @@ pub mod tests {
                 "route rejection reason should include lane lookup failure"
             );
         }
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_missing_nexus_fee_asset_before_enqueue() {
+        let fixture = nexus_fee_fixture(None, None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect_err("missing fee asset must be rejected before enqueue");
+
+        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
+        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
+            assert!(
+                reason.contains("missing"),
+                "expected missing asset reason, got {reason}"
+            );
+        }
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_insufficient_nexus_fee_balance_before_enqueue() {
+        let fixture = nexus_fee_fixture(Some(Numeric::zero()), None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect_err("insufficient fee balance must be rejected before enqueue");
+
+        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
+        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
+            assert!(
+                reason.contains("insufficient"),
+                "expected insufficient balance reason, got {reason}"
+            );
+        }
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_accepts_funded_nexus_fee_payer() {
+        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+
+        queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect("funded payer should be admitted");
+
+        assert_eq!(queue.queued_len(), 1);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_unauthorized_fee_sponsor() {
+        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "fee_sponsor".parse().expect("fee sponsor key"),
+            Json::new(fixture.sponsor_id.to_string()),
+        );
+        let tx = accepted_tx_with(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            vec![sample_unregister_instruction()],
+            metadata,
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect_err("unauthorized sponsor must be rejected");
+
+        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
+        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
+            assert!(
+                reason.contains("not authorized"),
+                "expected sponsor authorization reason, got {reason}"
+            );
+        }
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_accepts_authorized_fee_sponsor_after_committed_grant() {
+        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = fixture.state.block(header);
+        let mut stx = block.transaction();
+        Grant::account_permission(
+            CanUseFeeSponsor {
+                sponsor: fixture.sponsor_id.clone(),
+            },
+            fixture.authority_id.clone(),
+        )
+        .execute(&fixture.sponsor_id, &mut stx)
+        .expect("grant fee sponsor permission");
+        stx.apply();
+        block.commit().expect("commit sponsor permission grant");
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "fee_sponsor".parse().expect("fee sponsor key"),
+            Json::new(fixture.sponsor_id.to_string()),
+        );
+        let tx = accepted_tx_with(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            vec![sample_unregister_instruction()],
+            metadata,
+        );
+
+        queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect("authorized sponsor should be admitted");
+
+        assert_eq!(queue.queued_len(), 1);
+    }
+
+    #[test]
+    fn read_only_fee_sponsor_check_accepts_granted_permission() {
+        let fixture = nexus_fee_fixture(None, Some(Numeric::from(10_u32)));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = fixture.state.block(header);
+        let mut stx = block.transaction();
+        Grant::account_permission(
+            CanUseFeeSponsor {
+                sponsor: fixture.sponsor_id.clone(),
+            },
+            fixture.authority_id.clone(),
+        )
+        .execute(&fixture.sponsor_id, &mut stx)
+        .expect("grant fee sponsor permission");
+
+        assert!(
+            crate::executor::can_use_fee_sponsor_read_only(
+                &stx.world,
+                &fixture.authority_id,
+                &fixture.sponsor_id,
+            ),
+            "read-only sponsor check should honor granted permission"
+        );
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_raw_ivm_when_gas_limit_exceeds_fee_balance() {
+        let mut fixture = nexus_fee_fixture(Some(Numeric::from(50_u32)), None);
+        {
+            let nexus = fixture.state.nexus.get_mut();
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::from(1_u32);
+        }
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_ivm_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            5_000,
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect_err("raw IVM fee bound should use gas_limit");
+
+        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
+        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
+            assert!(
+                reason.contains("insufficient"),
+                "expected insufficient balance reason, got {reason}"
+            );
+        }
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_fee_alias_that_expires_before_tx_deadline() {
+        let mut fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let fee_asset_alias: iroha_data_model::asset::AssetDefinitionAlias =
+            "xor#wonderland.universal".parse().expect("asset alias");
+        {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = fixture.state.block(header);
+            let mut stx = block.transaction();
+            stx.world_mut_for_testing()
+                .bind_asset_definition_alias(
+                    &fixture.fee_asset_definition_id,
+                    fee_asset_alias.clone(),
+                    Some(500),
+                    Some(600),
+                    0,
+                )
+                .expect("bind short-lived fee asset alias");
+            stx.apply();
+            block.commit().expect("commit fee asset alias binding");
+        }
+        {
+            let nexus = fixture.state.nexus.get_mut();
+            nexus.fees.fee_asset_id = fee_asset_alias.to_string();
+        }
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_millis(1_000),
+                ..config_factory()
+            },
+            &time_source,
+        );
+        let tx = accepted_tx_with_ttl(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            Duration::from_millis(1_000),
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect_err("fee alias should be rejected when it expires before the tx deadline");
+
+        assert!(matches!(
+            err.err,
+            Error::NexusFeeAdmissionConfigInvalid { .. }
+        ));
+        if let Error::NexusFeeAdmissionConfigInvalid { reason } = &err.err {
+            assert!(
+                reason.contains("invalid nexus fee asset id"),
+                "expected invalid fee asset config reason, got {reason}"
+            );
+        }
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn push_with_gossip_payload_with_state_and_routing_rejects_fee_insolvent_transaction() {
+        let fixture = nexus_fee_fixture(None, None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+
+        let err = queue
+            .push_with_gossip_payload_with_state_and_routing(
+                tx,
+                &fixture.state,
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL),
+                Some(Arc::new(vec![1_u8])),
+            )
+            .expect_err("fee-insolvent gossip should be rejected before enqueue");
+
+        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn get_transactions_for_block_with_state_drops_transaction_that_loses_fee_balance() {
+        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut queue = Queue::test(config_factory(), &time_source);
+        let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
+        queue.events_sender = event_sender;
+        let queue = Arc::new(queue);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+        let tx_hash = tx.as_ref().hash();
+
+        queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect("funded payer should be admitted before the balance race");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = fixture.state.block(header);
+        let mut stx = block.transaction();
+        let removed = stx.world.remove_asset_and_metadata(&AssetId::of(
+            fixture.fee_asset_definition_id.clone(),
+            fixture.authority_id.clone(),
+        ));
+        assert!(removed.is_some(), "fee asset should exist before removal");
+        stx.apply();
+        block.commit().expect("commit fee asset removal");
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block_with_state(&fixture.state, nonzero!(1_usize), &mut guards);
+
+        assert!(
+            guards.is_empty(),
+            "balance-race tx must not reach proposal assembly"
+        );
+        assert_eq!(queue.queued_len(), 0);
+        let mut saw_rejected = false;
+        while let Ok(event) = event_receiver.try_recv() {
+            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event else {
+                continue;
+            };
+            if event.hash != tx_hash {
+                continue;
+            }
+            let TransactionStatus::Rejected(reason) = &event.status else {
+                continue;
+            };
+            assert!(matches!(
+                reason.as_ref(),
+                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::NotPermitted(message)
+                ) if message.contains("fee asset")
+                    && message.contains(&fixture.fee_asset_definition_id.to_string())
+                    && message.contains(&fixture.authority_id.to_string())
+            ));
+            saw_rejected = true;
+            break;
+        }
+        assert!(
+            saw_rejected,
+            "expected rejected pipeline event for dropped tx"
+        );
     }
 
     #[test]
@@ -5789,6 +6328,39 @@ pub mod tests {
         )
     }
 
+    fn accepted_tx_with_ttl(
+        account_id: AccountId,
+        key_pair: &KeyPair,
+        time_source: &TimeSource,
+        ttl: Duration,
+    ) -> AcceptedTransaction<'static> {
+        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+        let mut builder =
+            TransactionBuilder::new_with_time_source(chain_id.clone(), account_id, time_source)
+                .with_instructions(vec![sample_unregister_instruction()]);
+        builder.set_ttl(ttl);
+        let tx = builder.sign(key_pair.private_key());
+        let default_limits = TransactionParameters::default();
+        let tx_limits = TransactionParameters::with_max_signatures(
+            nonzero!(16_u64),
+            nonzero!(4096_u64),
+            nonzero!(1024_u64),
+            default_limits.max_tx_bytes(),
+            default_limits.max_decompressed_bytes(),
+            default_limits.max_metadata_depth(),
+        );
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        AcceptedTransaction::accept_with_time_source(
+            tx,
+            &chain_id,
+            Duration::from_millis(10),
+            tx_limits,
+            &crypto_cfg,
+            time_source,
+        )
+        .expect("Failed to accept Transaction with TTL.")
+    }
+
     fn accepted_tx_with_attachments(
         account_id: AccountId,
         key_pair: &KeyPair,
@@ -5827,7 +6399,6 @@ pub mod tests {
         .expect("Failed to accept Transaction.")
     }
 
-    #[cfg(feature = "telemetry")]
     fn accepted_ivm_tx_by(
         account_id: AccountId,
         key_pair: &KeyPair,
@@ -5869,7 +6440,6 @@ pub mod tests {
         .expect("Failed to accept IVM transaction.")
     }
 
-    #[cfg(feature = "telemetry")]
     fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<u8> {
         const IVM_MAGIC: [u8; 4] = *b"IVM\0";
         const HEADER_SUFFIX: [u8; 4] = [1, 0, 0, 4];
@@ -5890,6 +6460,77 @@ pub mod tests {
         let domain = Domain::new(domain_id.clone()).build(&account_id);
         let account = Account::new(account_id.clone()).build(&account_id);
         World::with([domain], [account], [])
+    }
+
+    struct NexusFeeFixture {
+        state: State,
+        authority_id: AccountId,
+        authority_keypair: KeyPair,
+        sponsor_id: AccountId,
+        fee_asset_definition_id: AssetDefinitionId,
+    }
+
+    fn nexus_fee_fixture(
+        authority_balance: Option<Numeric>,
+        sponsor_balance: Option<Numeric>,
+    ) -> NexusFeeFixture {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let fee_asset_id = AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("xor"));
+        let asset_definition = {
+            let __asset_definition_id = fee_asset_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&authority_id);
+        let mut assets = Vec::new();
+        if let Some(balance) = authority_balance {
+            assets.push(Asset::new(
+                AssetId::of(fee_asset_id.clone(), authority_id.clone()),
+                balance,
+            ));
+        }
+        if let Some(balance) = sponsor_balance {
+            assets.push(Asset::new(
+                AssetId::of(fee_asset_id.clone(), sponsor_id.clone()),
+                balance,
+            ));
+        }
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sponsor_account, sink_account],
+            [asset_definition],
+            assets,
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.sponsor_max_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = fee_asset_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+        }
+        NexusFeeFixture {
+            state,
+            authority_id,
+            authority_keypair,
+            sponsor_id,
+            fee_asset_definition_id: fee_asset_id,
+        }
     }
 
     #[test]

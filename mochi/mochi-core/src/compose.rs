@@ -507,6 +507,10 @@ impl TransactionPreview {
         let authority = account_literal(signed.authority());
         let instructions = match signed.instructions() {
             Executable::Instructions(list) => list.iter().map(|instr| format!("{instr}")).collect(),
+            Executable::ContractCall(call) => vec![format!(
+                "Contract call {}::{}",
+                call.contract_address, call.entrypoint
+            )],
             Executable::IvmProved(proved) => proved
                 .overlay
                 .iter()

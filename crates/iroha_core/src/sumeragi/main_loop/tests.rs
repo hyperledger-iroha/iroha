@@ -79271,6 +79271,7 @@ async fn proposal_gas_budget_limits_fetch() {
     let tx = sample_transaction();
     let instructions = match tx.instructions() {
         Executable::Instructions(batch) => batch.iter().map(Clone::clone).collect::<Vec<_>>(),
+        Executable::ContractCall(_) => panic!("sample transaction should be ISI-based"),
         Executable::Ivm(_) => panic!("sample transaction should be ISI-based"),
         Executable::IvmProved(_) => panic!("sample transaction should be ISI-based"),
     };
@@ -101484,6 +101485,7 @@ fn proposal_gas_cost_matches_isi_metering() {
     let tx = sample_transaction();
     let instructions = match tx.instructions() {
         Executable::Instructions(batch) => batch.iter().map(Clone::clone).collect::<Vec<_>>(),
+        Executable::ContractCall(_) => panic!("sample transaction should be ISI-based"),
         Executable::Ivm(_) => panic!("sample transaction should be ISI-based"),
         Executable::IvmProved(_) => panic!("sample transaction should be ISI-based"),
     };

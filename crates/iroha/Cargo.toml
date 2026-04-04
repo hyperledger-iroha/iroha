@@ -63,6 +63,7 @@ iroha_logger = { workspace = true }
 iroha_telemetry = { workspace = true }
 iroha_torii_shared = { workspace = true }
 iroha_version = { workspace = true }
+iroha_sccp = { workspace = true }
 sorafs_manifest = { workspace = true }
 sorafs_car = { workspace = true, features = ["manifest"] }
 sorafs_orchestrator = { workspace = true }

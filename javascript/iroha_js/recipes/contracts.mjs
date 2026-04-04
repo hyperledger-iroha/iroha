@@ -2,7 +2,7 @@
 /**
  * Contract deployment helper (roadmap JS-06).
  *
- * Uploads smart-contract manifests/bytecode via Torii's address-first deploy
+ * Uploads smart-contract bytecode via Torii's alias-first deploy
  * flow. Environment variables:
  *
  *   TORII_URL (required)                — Base Torii URL (http://127.0.0.1:8080)
@@ -10,15 +10,14 @@
  *   AUTHORITY (required)                — Account id with the relevant permissions
  *   PRIVATE_KEY / PRIVATE_KEY_HEX       — Signer key (ed25519:<hex> or raw hex)
  *   CONTRACT_CODE_PATH (required)       — Path to .to bytecode
- *   CONTRACT_MANIFEST_PATH              — Optional path to manifest JSON
- *   CONTRACT_MANIFEST_JSON              — Inline manifest JSON string (overrides path)
- *   CONTRACT_DATASPACE                  — Optional dataspace alias (defaults to `universal`)
+ *   CONTRACT_ALIAS (required)           — Stable public alias (for example `router::universal`)
+ *   CONTRACT_LEASE_EXPIRY_MS            — Optional alias lease expiry
  *
  * Examples:
  *   AUTHORITY=sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4 \
  *   PRIVATE_KEY_HEX=fedcba... \
  *   CONTRACT_CODE_PATH=./artifacts/contract.to \
- *   CONTRACT_MANIFEST_PATH=./manifest.json \
+ *   CONTRACT_ALIAS=router::universal \
  *   node javascript/iroha_js/recipes/contracts.mjs
  */
 import { Buffer } from "node:buffer";
@@ -58,42 +57,6 @@ function resolvePrivateKey() {
   fail("PRIVATE_KEY or PRIVATE_KEY_HEX is required");
 }
 
-async function readJsonFile(filePath) {
-  const resolved = path.resolve(filePath);
-  const raw = await readFile(resolved, "utf8");
-  try {
-    const parsed = JSON.parse(raw);
-    if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-      fail(`manifest at ${resolved} must be a JSON object`);
-    }
-    return parsed;
-  } catch (error) {
-    fail(`failed to parse manifest JSON at ${resolved}: ${error?.message ?? error}`);
-  }
-}
-
-async function loadManifest() {
-  const inline = trimToNull(process.env.CONTRACT_MANIFEST_JSON);
-  if (inline) {
-    try {
-      const parsed = JSON.parse(inline);
-      if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
-        fail("CONTRACT_MANIFEST_JSON must encode a JSON object");
-      }
-      return parsed;
-    } catch (error) {
-      fail(
-        `CONTRACT_MANIFEST_JSON is not valid JSON: ${error?.message ?? error}`,
-      );
-    }
-  }
-  const manifestPath = trimToNull(process.env.CONTRACT_MANIFEST_PATH);
-  if (manifestPath) {
-    return readJsonFile(manifestPath);
-  }
-  return null;
-}
-
 async function readCodeBytes() {
   const filePath = trimToNull(process.env.CONTRACT_CODE_PATH);
   if (!filePath) {
@@ -113,11 +76,21 @@ async function main() {
   if (!authority) {
     fail("AUTHORITY is required");
   }
+  const contractAlias = trimToNull(process.env.CONTRACT_ALIAS);
+  if (!contractAlias) {
+    fail("CONTRACT_ALIAS is required");
+  }
 
   const privateKey = resolvePrivateKey();
-  const manifest = await loadManifest();
   const codeBytes = await readCodeBytes();
-  const dataspace = trimToNull(process.env.CONTRACT_DATASPACE);
+  const leaseExpiryMsRaw = trimToNull(process.env.CONTRACT_LEASE_EXPIRY_MS);
+  let leaseExpiryMs;
+  if (leaseExpiryMsRaw !== null) {
+    if (!/^\d+$/.test(leaseExpiryMsRaw)) {
+      fail("CONTRACT_LEASE_EXPIRY_MS must be an unsigned integer");
+    }
+    leaseExpiryMs = Number.parseInt(leaseExpiryMsRaw, 10);
+  }
 
   const clientOptions = {};
   const authToken = trimToNull(process.env.TORII_AUTH_TOKEN);
@@ -134,14 +107,20 @@ async function main() {
   const response = await client.deployContract({
     authority,
     privateKey,
-    dataspace: dataspace ?? undefined,
+    contractAlias,
     codeB64: Buffer.from(codeBytes),
-    manifest: manifest ?? undefined,
+    leaseExpiryMs,
   });
   if (response) {
     console.log(
+      "  contract_alias:",
+      response.contract_alias ?? "<unspecified>",
       "  contract_address:",
       response.contract_address ?? "<unspecified>",
+      "previous_contract_address:",
+      response.previous_contract_address ?? "<none>",
+      "upgraded:",
+      response.upgraded,
       "dataspace:",
       response.dataspace ?? "<unspecified>",
       "tx_hash_hex:",

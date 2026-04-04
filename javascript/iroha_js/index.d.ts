@@ -424,6 +424,8 @@ export const SCCP_DOMAIN_TON: number;
 export const SCCP_DOMAIN_TRON: number;
 export const SCCP_DOMAIN_SORA_KUSAMA: number;
 export const SCCP_DOMAIN_SORA_POLKADOT: number;
+export const SCCP_DOMAIN_SORA2: number;
+export const SCCP_STARK_FRI_PROOF_FAMILY_V1: string;
 export const SCCP_CORE_REMOTE_DOMAINS: number[];
 
 export interface SccpBurnPayload {
@@ -4144,6 +4146,147 @@ export interface ToriiNodeCurveCapabilities {
   allowedCurveBitmap: ReadonlyArray<number>;
 }
 
+export interface ToriiSccpCodecCapability {
+  id: number;
+  key: string;
+  description: string;
+}
+
+export interface ToriiSccpCounterpartyCapability {
+  domain: number;
+  chain: string;
+  messageBackend: string;
+  registryBackend: string;
+  counterpartyAccountCodec: number;
+  counterpartyAccountCodecKey: string;
+}
+
+export interface ToriiSccpCapabilities {
+  localDomain: number;
+  localChain: string;
+  proofFamily: string;
+  burnBundlePath: string;
+  governanceBundlePath: string;
+  messageBundlePath: string;
+  messageProofPath: string;
+  proofManifestPath: string;
+  legacyBurnRegistryBackend: string;
+  legacyGovernanceRegistryBackend: string;
+  proofSubmitPath: string | null;
+  messageSubmitPath: string | null;
+  messagePayloadKinds: ReadonlyArray<string>;
+  codecs: ReadonlyArray<ToriiSccpCodecCapability>;
+  counterparties: ReadonlyArray<ToriiSccpCounterpartyCapability>;
+}
+
+export type ToriiSccpProofFinalityModel =
+  | "EthereumBeaconExecution"
+  | "BscValidatorSet"
+  | "SolanaFinalizedSlot"
+  | "TonMasterchain"
+  | "TronDpos"
+  | "SubstrateGrandpa";
+
+export type ToriiSccpProofVerifierTarget =
+  | "EvmContract"
+  | "SolanaProgram"
+  | "TonContract"
+  | "TronContract"
+  | "SubstrateRuntime";
+
+export interface ToriiSccpProofManifest {
+  version: number;
+  localDomain: number;
+  localChain: string;
+  counterpartyDomain: number;
+  chain: string;
+  proofFamily: string;
+  messageBackend: string;
+  registryBackend: string;
+  counterpartyAccountCodec: number;
+  counterpartyAccountCodecKey: string;
+  finalityModel: ToriiSccpProofFinalityModel;
+  verifierTarget: ToriiSccpProofVerifierTarget;
+  manifestSeed: string;
+  requiredPublicInputs: ReadonlyArray<string>;
+  messagePayloadKinds: ReadonlyArray<string>;
+}
+
+export interface ToriiSccpProofManifestSet {
+  localDomain: number;
+  localChain: string;
+  proofFamily: string;
+  manifests: ReadonlyArray<ToriiSccpProofManifest>;
+}
+
+export type ToriiSccpHubMessageKind =
+  | "Burn"
+  | "TokenAdd"
+  | "TokenPause"
+  | "TokenResume"
+  | "AssetRegister"
+  | "RouteActivate"
+  | "Transfer";
+
+export type ToriiSccpMessagePayloadKind = "AssetRegister" | "RouteActivate" | "Transfer";
+
+export interface ToriiSccpHubCommitment {
+  version: number;
+  kind: ToriiSccpHubMessageKind;
+  targetDomain: number;
+  messageId: string;
+  payloadHash: string;
+  parliamentCertificateHash: string | null;
+}
+
+export interface ToriiSccpMerkleStep {
+  siblingHash: string;
+  siblingIsLeft: boolean;
+}
+
+export interface ToriiSccpMerkleProof {
+  steps: ReadonlyArray<ToriiSccpMerkleStep>;
+}
+
+export interface ToriiSccpPayloadEnvelope {
+  kind: ToriiSccpMessagePayloadKind;
+  value: Readonly<Record<string, unknown>>;
+}
+
+export interface ToriiSccpMessageProofBundle {
+  version: number;
+  commitmentRoot: string;
+  commitment: ToriiSccpHubCommitment;
+  merkleProof: ToriiSccpMerkleProof;
+  payload: ToriiSccpPayloadEnvelope;
+  finalityProof: string;
+}
+
+export interface ToriiSccpMessageTransparentPublicInputs {
+  version: number;
+  messageId: string;
+  payloadHash: string;
+  targetDomain: number;
+  commitmentRoot: string;
+  finalityHeight: number;
+  finalityBlockHash: string;
+}
+
+export interface ToriiSccpMessageTransparentProofArtifact {
+  version: number;
+  localDomain: number;
+  counterpartyDomain: number;
+  proofFamily: string;
+  messageBackend: string;
+  registryBackend: string;
+  manifestSeed: string;
+  finalityModel: ToriiSccpProofFinalityModel;
+  verifierTarget: ToriiSccpProofVerifierTarget;
+  publicInputs: ToriiSccpMessageTransparentPublicInputs;
+  proofBytes: string;
+  bundle: ToriiSccpMessageProofBundle;
+}
+
 export interface ToriiLoggerConfig {
   level: string;
   filter: string | null;
@@ -5580,14 +5723,17 @@ export interface RegisterContractCodeRequest {
 export interface DeployContractRequest {
   authority: string;
   privateKey: string;
-  dataspace?: string | null;
+  contractAlias: string;
   codeB64: string | ArrayBufferView | ArrayBuffer | Buffer;
-  manifest?: ToriiContractManifestInput | null;
+  leaseExpiryMs?: number | null;
 }
 
 export interface DeployContractResponse {
   ok: boolean;
+  contract_alias: string | null;
   contract_address: string | null;
+  previous_contract_address: string | null;
+  upgraded: boolean;
   dataspace: string | null;
   deploy_nonce: number | null;
   tx_hash_hex: string | null;
@@ -7256,6 +7402,14 @@ export declare class ToriiClient {
     options?: { signal?: AbortSignal },
   ): Promise<ToriiNetworkTimeStatus>;
   getNodeCapabilities(options?: { signal?: AbortSignal }): Promise<ToriiNodeCapabilities>;
+  getSccpCapabilities(options?: { signal?: AbortSignal }): Promise<ToriiSccpCapabilities>;
+  getSccpProofManifests(
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiSccpProofManifestSet>;
+  getSccpMessageProofArtifact(
+    messageIdHex: string | Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiSccpMessageTransparentProofArtifact>;
   getRuntimeAbiActive(
     options?: { signal?: AbortSignal },
   ): Promise<ToriiRuntimeAbiActiveResponse>;

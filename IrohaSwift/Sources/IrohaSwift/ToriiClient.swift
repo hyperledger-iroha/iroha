@@ -88,6 +88,77 @@ fileprivate func normalizeToriiAccountAliasLiteral(_ raw: String, field: String)
     return trimmed
 }
 
+fileprivate func normalizeToriiContractAliasLiteral(_ raw: String, field: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+    }
+    guard !trimmed.contains(where: \.isWhitespace) else {
+        throw ToriiClientError.invalidPayload("\(field) must not contain whitespace.")
+    }
+    guard !trimmed.contains("%"),
+          !trimmed.contains("/"),
+          !trimmed.contains("?"),
+          !trimmed.contains("#"),
+          !trimmed.contains("@")
+    else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must use name::dataspace or name::domain.dataspace form."
+        )
+    }
+    let components = trimmed.components(separatedBy: "::")
+    guard components.count == 2,
+          !components[0].isEmpty,
+          !components[1].isEmpty
+    else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must use name::dataspace or name::domain.dataspace form."
+        )
+    }
+    let scopeComponents = components[1].split(separator: ".", omittingEmptySubsequences: false)
+    guard (1...2).contains(scopeComponents.count),
+          !scopeComponents.contains(where: \.isEmpty)
+    else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) must use name::dataspace or name::domain.dataspace form."
+        )
+    }
+    return trimmed
+}
+
+fileprivate func normalizeToriiContractAddressLiteral(_ raw: String, field: String) throws -> String {
+    let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !trimmed.isEmpty else {
+        throw ToriiClientError.invalidPayload("\(field) must be a non-empty string.")
+    }
+    guard !trimmed.contains(where: \.isWhitespace),
+          !trimmed.contains("%"),
+          !trimmed.contains("/"),
+          !trimmed.contains("?"),
+          !trimmed.contains("#")
+    else {
+        throw ToriiClientError.invalidPayload("\(field) must be a canonical contract address.")
+    }
+    return trimmed
+}
+
+fileprivate func normalizeToriiContractTargetSelector(contractAddress: String?,
+                                                      contractAlias: String?,
+                                                      field: String) throws -> (contractAddress: String?, contractAlias: String?) {
+    let normalizedContractAddress = try contractAddress.map {
+        try normalizeToriiContractAddressLiteral($0, field: "\(field).contract_address")
+    }
+    let normalizedContractAlias = try contractAlias.map {
+        try normalizeToriiContractAliasLiteral($0, field: "\(field).contract_alias")
+    }
+    guard (normalizedContractAddress == nil) != (normalizedContractAlias == nil) else {
+        throw ToriiClientError.invalidPayload(
+            "\(field) requires exactly one of contract_address or contract_alias."
+        )
+    }
+    return (normalizedContractAddress, normalizedContractAlias)
+}
+
 fileprivate func normalizeToriiAssetDefinitionIdValue(_ raw: String, field: String) throws -> String {
     let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
     guard !trimmed.isEmpty else {
@@ -7207,50 +7278,60 @@ public struct ToriiContractManifestRecord: Decodable, Sendable {
 public struct ToriiDeployContractRequest: Encodable, Sendable {
     public var authority: String
     public var codeB64: String
-    public var codeHash: String?
-    public var abiHash: String?
-    public var manifest: ToriiContractManifest?
+    public var contractAlias: String
+    public var leaseExpiryMs: UInt64?
 
     public init(authority: String,
                 codeB64: String,
-                codeHash: String? = nil,
-                abiHash: String? = nil,
-                manifest: ToriiContractManifest? = nil) {
+                contractAlias: String,
+                leaseExpiryMs: UInt64? = nil) {
         self.authority = authority
         self.codeB64 = codeB64
-        self.codeHash = codeHash
-        self.abiHash = abiHash
-        self.manifest = manifest
+        self.contractAlias = contractAlias
+        self.leaseExpiryMs = leaseExpiryMs
     }
 
     private enum CodingKeys: String, CodingKey {
         case authority
         case codeB64 = "code_b64"
-        case codeHash = "code_hash"
-        case abiHash = "abi_hash"
-        case manifest
+        case contractAlias = "contract_alias"
+        case leaseExpiryMs = "lease_expiry_ms"
     }
 
     public func encode(to encoder: Encoder) throws {
-        if codeHash != nil || abiHash != nil || manifest != nil {
-            throw ToriiClientError.invalidPayload("code_hash, abi_hash, and manifest are not accepted by /v1/contracts/deploy")
-        }
-        let normalizedAuthority = try ToriiRequestValidation.normalizedNonEmpty(authority,
-                                                                                field: "authority")
+        let normalizedAuthority = try normalizeToriiAccountIdQueryValue(authority, field: "authority")
         let normalizedCodeB64 = try ToriiRequestValidation.normalizedBase64(codeB64, field: "code_b64")
+        let normalizedContractAlias = try normalizeToriiContractAliasLiteral(contractAlias,
+                                                                             field: "contract_alias")
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(normalizedAuthority, forKey: .authority)
         try container.encode(normalizedCodeB64, forKey: .codeB64)
+        try container.encode(normalizedContractAlias, forKey: .contractAlias)
+        try container.encodeIfPresent(leaseExpiryMs, forKey: .leaseExpiryMs)
     }
 }
 
 public struct ToriiDeployContractResponse: Decodable, Sendable {
     public let ok: Bool
-    public let codeHashHex: String?
-    public let abiHashHex: String?
+    public let contractAlias: String
+    public let contractAddress: String
+    public let previousContractAddress: String?
+    public let upgraded: Bool
+    public let dataspace: String
+    public let deployNonce: UInt64
+    public let txHashHex: String
+    public let codeHashHex: String
+    public let abiHashHex: String
 
     private enum CodingKeys: String, CodingKey {
         case ok
+        case contractAlias = "contract_alias"
+        case contractAddress = "contract_address"
+        case previousContractAddress = "previous_contract_address"
+        case upgraded
+        case dataspace
+        case deployNonce = "deploy_nonce"
+        case txHashHex = "tx_hash_hex"
         case codeHashHex = "code_hash_hex"
         case abiHashHex = "abi_hash_hex"
     }
@@ -7258,24 +7339,49 @@ public struct ToriiDeployContractResponse: Decodable, Sendable {
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         ok = try container.decode(Bool.self, forKey: .ok)
-        if let codeHashHex = try container.decodeIfPresent(String.self, forKey: .codeHashHex) {
-            self.codeHashHex = try ToriiValidation.normalized32ByteHex(
-                codeHashHex,
-                field: "code_hash_hex",
-                codingPath: container.codingPath + [CodingKeys.codeHashHex]
+        let contractAlias = try container.decode(String.self, forKey: .contractAlias)
+        self.contractAlias = try normalizeToriiContractAliasLiteral(
+            contractAlias,
+            field: "contract_alias"
+        )
+        let contractAddress = try container.decode(String.self, forKey: .contractAddress)
+        self.contractAddress = try normalizeToriiContractAddressLiteral(
+            contractAddress,
+            field: "contract_address"
+        )
+        if let previousContractAddress = try container.decodeIfPresent(String.self, forKey: .previousContractAddress) {
+            self.previousContractAddress = try normalizeToriiContractAddressLiteral(
+                previousContractAddress,
+                field: "previous_contract_address"
             )
         } else {
-            self.codeHashHex = nil
+            self.previousContractAddress = nil
         }
-        if let abiHashHex = try container.decodeIfPresent(String.self, forKey: .abiHashHex) {
-            self.abiHashHex = try ToriiValidation.normalized32ByteHex(
-                abiHashHex,
-                field: "abi_hash_hex",
-                codingPath: container.codingPath + [CodingKeys.abiHashHex]
-            )
-        } else {
-            self.abiHashHex = nil
-        }
+        upgraded = try container.decode(Bool.self, forKey: .upgraded)
+        dataspace = try ToriiValidation.normalizedNonEmpty(
+            try container.decode(String.self, forKey: .dataspace),
+            field: "dataspace",
+            codingPath: container.codingPath + [CodingKeys.dataspace]
+        )
+        deployNonce = try container.decode(UInt64.self, forKey: .deployNonce)
+        let txHashHex = try container.decode(String.self, forKey: .txHashHex)
+        self.txHashHex = try ToriiValidation.normalized32ByteHex(
+            txHashHex,
+            field: "tx_hash_hex",
+            codingPath: container.codingPath + [CodingKeys.txHashHex]
+        )
+        let codeHashHex = try container.decode(String.self, forKey: .codeHashHex)
+        self.codeHashHex = try ToriiValidation.normalized32ByteHex(
+            codeHashHex,
+            field: "code_hash_hex",
+            codingPath: container.codingPath + [CodingKeys.codeHashHex]
+        )
+        let abiHashHex = try container.decode(String.self, forKey: .abiHashHex)
+        self.abiHashHex = try ToriiValidation.normalized32ByteHex(
+            abiHashHex,
+            field: "abi_hash_hex",
+            codingPath: container.codingPath + [CodingKeys.abiHashHex]
+        )
     }
 }
 
@@ -7299,8 +7405,8 @@ public struct ToriiContractCallRequest: Encodable, Sendable {
     public var authority: String
     public var publicKeyHex: String?
     public var signatureB64: String?
-    public var namespace: String
-    public var contractId: String
+    public var contractAddress: String?
+    public var contractAlias: String?
     public var entrypoint: String?
     public var payload: ToriiJSONValue?
     public var creationTimeMs: UInt64?
@@ -7311,8 +7417,8 @@ public struct ToriiContractCallRequest: Encodable, Sendable {
     public init(authority: String,
                 publicKeyHex: String? = nil,
                 signatureB64: String? = nil,
-                namespace: String,
-                contractId: String,
+                contractAddress: String? = nil,
+                contractAlias: String? = nil,
                 entrypoint: String? = nil,
                 payload: ToriiJSONValue? = nil,
                 creationTimeMs: UInt64? = nil,
@@ -7322,8 +7428,8 @@ public struct ToriiContractCallRequest: Encodable, Sendable {
         self.authority = authority
         self.publicKeyHex = publicKeyHex
         self.signatureB64 = signatureB64
-        self.namespace = namespace
-        self.contractId = contractId
+        self.contractAddress = contractAddress
+        self.contractAlias = contractAlias
         self.entrypoint = entrypoint
         self.payload = payload
         self.creationTimeMs = creationTimeMs
@@ -7336,8 +7442,8 @@ public struct ToriiContractCallRequest: Encodable, Sendable {
         case authority
         case publicKeyHex = "public_key_hex"
         case signatureB64 = "signature_b64"
-        case namespace
-        case contractId = "contract_id"
+        case contractAddress = "contract_address"
+        case contractAlias = "contract_alias"
         case entrypoint
         case payload
         case creationTimeMs = "creation_time_ms"
@@ -7355,13 +7461,10 @@ public struct ToriiContractCallRequest: Encodable, Sendable {
         let normalizedSignatureB64 = try signatureB64.map {
             try ToriiRequestValidation.normalizedBase64($0, field: "signature_b64")
         }
-        let normalizedNamespace = try ToriiRequestValidation.normalizedNonEmpty(
-            namespace,
-            field: "namespace"
-        )
-        let normalizedContractId = try ToriiRequestValidation.normalizedNonEmpty(
-            contractId,
-            field: "contract_id"
+        let normalizedTarget = try normalizeToriiContractTargetSelector(
+            contractAddress: contractAddress,
+            contractAlias: contractAlias,
+            field: "contract call"
         )
         let normalizedEntrypoint = try entrypoint.map {
             try ToriiRequestValidation.normalizedNonEmpty($0, field: "entrypoint")
@@ -7380,8 +7483,8 @@ public struct ToriiContractCallRequest: Encodable, Sendable {
         try container.encode(normalizedAuthority, forKey: .authority)
         try container.encodeIfPresent(normalizedPublicKeyHex, forKey: .publicKeyHex)
         try container.encodeIfPresent(normalizedSignatureB64, forKey: .signatureB64)
-        try container.encode(normalizedNamespace, forKey: .namespace)
-        try container.encode(normalizedContractId, forKey: .contractId)
+        try container.encodeIfPresent(normalizedTarget.contractAddress, forKey: .contractAddress)
+        try container.encodeIfPresent(normalizedTarget.contractAlias, forKey: .contractAlias)
         try container.encodeIfPresent(normalizedEntrypoint, forKey: .entrypoint)
         try container.encodeIfPresent(payload, forKey: .payload)
         try container.encodeIfPresent(creationTimeMs, forKey: .creationTimeMs)
@@ -7394,12 +7497,13 @@ public struct ToriiContractCallRequest: Encodable, Sendable {
 public struct ToriiContractCallResponse: Decodable, Sendable {
     public let ok: Bool
     public let submitted: Bool
-    public let namespace: String
-    public let contractId: String
+    public let dataspace: String
+    public let contractAddress: String?
     public let codeHashHex: String
     public let abiHashHex: String
     public let creationTimeMs: UInt64
     public let txHashHex: String?
+    public let transactionScaffoldB64: String?
     public let signedTransactionB64: String?
     public let signingMessageB64: String?
     public let entrypoint: String?
@@ -7407,12 +7511,13 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
     private enum CodingKeys: String, CodingKey {
         case ok
         case submitted
-        case namespace
-        case contractId = "contract_id"
+        case dataspace
+        case contractAddress = "contract_address"
         case codeHashHex = "code_hash_hex"
         case abiHashHex = "abi_hash_hex"
         case creationTimeMs = "creation_time_ms"
         case txHashHex = "tx_hash_hex"
+        case transactionScaffoldB64 = "transaction_scaffold_b64"
         case signedTransactionB64 = "signed_transaction_b64"
         case signingMessageB64 = "signing_message_b64"
         case entrypoint
@@ -7422,8 +7527,19 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
         let container = try decoder.container(keyedBy: CodingKeys.self)
         ok = try container.decode(Bool.self, forKey: .ok)
         submitted = try container.decode(Bool.self, forKey: .submitted)
-        namespace = try container.decode(String.self, forKey: .namespace)
-        contractId = try container.decode(String.self, forKey: .contractId)
+        dataspace = try ToriiValidation.normalizedNonEmpty(
+            try container.decode(String.self, forKey: .dataspace),
+            field: "dataspace",
+            codingPath: container.codingPath + [CodingKeys.dataspace]
+        )
+        if let contractAddress = try container.decodeIfPresent(String.self, forKey: .contractAddress) {
+            self.contractAddress = try normalizeToriiContractAddressLiteral(
+                contractAddress,
+                field: "contract_address"
+            )
+        } else {
+            self.contractAddress = nil
+        }
         let codeHashHex = try container.decode(String.self, forKey: .codeHashHex)
         self.codeHashHex = try ToriiValidation.normalized32ByteHex(
             codeHashHex,
@@ -7445,6 +7561,15 @@ public struct ToriiContractCallResponse: Decodable, Sendable {
             )
         } else {
             self.txHashHex = nil
+        }
+        if let transactionScaffoldB64 = try container.decodeIfPresent(String.self, forKey: .transactionScaffoldB64) {
+            self.transactionScaffoldB64 = try ToriiValidation.normalizedBase64(
+                transactionScaffoldB64,
+                field: "transaction_scaffold_b64",
+                codingPath: container.codingPath + [CodingKeys.transactionScaffoldB64]
+            )
+        } else {
+            self.transactionScaffoldB64 = nil
         }
         if let signedTransactionB64 = try container.decodeIfPresent(String.self, forKey: .signedTransactionB64) {
             self.signedTransactionB64 = try ToriiValidation.normalizedBase64(
@@ -7634,8 +7759,8 @@ public struct ToriiMultisigContractCallProposeRequest: Encodable, Sendable {
     public var publicKeyHex: String?
     public var signatureB64: String?
     public var creationTimeMs: UInt64?
-    public var namespace: String
-    public var contractId: String
+    public var contractAddress: String?
+    public var contractAlias: String?
     public var entrypoint: String
     public var payload: ToriiJSONValue?
     public var gasAssetId: String?
@@ -7647,8 +7772,8 @@ public struct ToriiMultisigContractCallProposeRequest: Encodable, Sendable {
                 publicKeyHex: String? = nil,
                 signatureB64: String? = nil,
                 creationTimeMs: UInt64? = nil,
-                namespace: String,
-                contractId: String,
+                contractAddress: String? = nil,
+                contractAlias: String? = nil,
                 entrypoint: String,
                 payload: ToriiJSONValue? = nil,
                 gasAssetId: String? = nil,
@@ -7659,8 +7784,8 @@ public struct ToriiMultisigContractCallProposeRequest: Encodable, Sendable {
         self.publicKeyHex = publicKeyHex
         self.signatureB64 = signatureB64
         self.creationTimeMs = creationTimeMs
-        self.namespace = namespace
-        self.contractId = contractId
+        self.contractAddress = contractAddress
+        self.contractAlias = contractAlias
         self.entrypoint = entrypoint
         self.payload = payload
         self.gasAssetId = gasAssetId
@@ -7675,8 +7800,8 @@ public struct ToriiMultisigContractCallProposeRequest: Encodable, Sendable {
         case publicKeyHex = "public_key_hex"
         case signatureB64 = "signature_b64"
         case creationTimeMs = "creation_time_ms"
-        case namespace
-        case contractId = "contract_id"
+        case contractAddress = "contract_address"
+        case contractAlias = "contract_alias"
         case entrypoint
         case payload
         case gasAssetId = "gas_asset_id"
@@ -7690,8 +7815,11 @@ public struct ToriiMultisigContractCallProposeRequest: Encodable, Sendable {
             signerAccountId,
             field: "signer_account_id"
         )
-        let normalizedNamespace = try ToriiRequestValidation.normalizedNonEmpty(namespace, field: "namespace")
-        let normalizedContractId = try ToriiRequestValidation.normalizedNonEmpty(contractId, field: "contract_id")
+        let normalizedTarget = try normalizeToriiContractTargetSelector(
+            contractAddress: contractAddress,
+            contractAlias: contractAlias,
+            field: "multisig contract call"
+        )
         let normalizedEntrypoint = try ToriiRequestValidation.normalizedNonEmpty(entrypoint, field: "entrypoint")
         let normalizedPublicKeyHex = try ToriiRequestValidation.normalizedOptional32ByteHex(publicKeyHex, field: "public_key_hex")
         let normalizedSignatureB64 = try signatureB64.map {
@@ -7714,8 +7842,8 @@ public struct ToriiMultisigContractCallProposeRequest: Encodable, Sendable {
         try container.encodeIfPresent(normalizedPublicKeyHex, forKey: .publicKeyHex)
         try container.encodeIfPresent(normalizedSignatureB64, forKey: .signatureB64)
         try container.encodeIfPresent(creationTimeMs, forKey: .creationTimeMs)
-        try container.encode(normalizedNamespace, forKey: .namespace)
-        try container.encode(normalizedContractId, forKey: .contractId)
+        try container.encodeIfPresent(normalizedTarget.contractAddress, forKey: .contractAddress)
+        try container.encodeIfPresent(normalizedTarget.contractAlias, forKey: .contractAlias)
         try container.encode(normalizedEntrypoint, forKey: .entrypoint)
         try container.encodeIfPresent(payload, forKey: .payload)
         try container.encodeIfPresent(normalizedGasAssetId, forKey: .gasAssetId)
@@ -8297,49 +8425,67 @@ public struct ToriiGovernanceWindow: Codable, Sendable {
 }
 
 public struct ToriiGovernanceDeployContractProposalRequest: Encodable, Sendable {
-    public var namespace: String
-    public var contractId: String
+    public var contractAddress: String?
+    public var contractAlias: String?
     public var codeHashHex: String
     public var abiHashHex: String
     public var abiVersion: String
     public var window: ToriiGovernanceWindow?
+    public var mode: ToriiGovernanceReferendumMode?
+    public var limits: ToriiJSONValue?
+    public var manifestProvenance: ToriiJSONValue?
 
     private enum CodingKeys: String, CodingKey {
-        case namespace
-        case contractId = "contract_id"
+        case contractAddress = "contract_address"
+        case contractAlias = "contract_alias"
         case codeHashHex = "code_hash"
         case abiHashHex = "abi_hash"
         case abiVersion = "abi_version"
         case window
+        case mode
+        case limits
+        case manifestProvenance = "manifest_provenance"
     }
 
-    public init(namespace: String,
-                contractId: String,
+    public init(contractAddress: String? = nil,
+                contractAlias: String? = nil,
                 codeHashHex: String,
                 abiHashHex: String,
-                abiVersion: String,
-                window: ToriiGovernanceWindow? = nil) {
-        self.namespace = namespace
-        self.contractId = contractId
+                abiVersion: String = "1",
+                window: ToriiGovernanceWindow? = nil,
+                mode: ToriiGovernanceReferendumMode? = nil,
+                limits: ToriiJSONValue? = nil,
+                manifestProvenance: ToriiJSONValue? = nil) {
+        self.contractAddress = contractAddress
+        self.contractAlias = contractAlias
         self.codeHashHex = codeHashHex
         self.abiHashHex = abiHashHex
         self.abiVersion = abiVersion
         self.window = window
+        self.mode = mode
+        self.limits = limits
+        self.manifestProvenance = manifestProvenance
     }
 
     public func encode(to encoder: Encoder) throws {
-        let normalizedNamespace = try ToriiRequestValidation.normalizedNonEmpty(namespace, field: "namespace")
-        let normalizedContractId = try ToriiRequestValidation.normalizedNonEmpty(contractId, field: "contract_id")
+        let normalizedTarget = try normalizeToriiContractTargetSelector(
+            contractAddress: contractAddress,
+            contractAlias: contractAlias,
+            field: "governanceProposeDeployContract"
+        )
         let normalizedCodeHash = try ToriiRequestValidation.normalized32ByteHex(codeHashHex, field: "code_hash")
         let normalizedAbiHash = try ToriiRequestValidation.normalized32ByteHex(abiHashHex, field: "abi_hash")
         let normalizedAbiVersion = try ToriiRequestValidation.normalizedNonEmpty(abiVersion, field: "abi_version")
         var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(normalizedNamespace, forKey: .namespace)
-        try container.encode(normalizedContractId, forKey: .contractId)
+        try container.encodeIfPresent(normalizedTarget.contractAddress, forKey: .contractAddress)
+        try container.encodeIfPresent(normalizedTarget.contractAlias, forKey: .contractAlias)
         try container.encode(normalizedCodeHash, forKey: .codeHashHex)
         try container.encode(normalizedAbiHash, forKey: .abiHashHex)
         try container.encode(normalizedAbiVersion, forKey: .abiVersion)
         try container.encodeIfPresent(window, forKey: .window)
+        try container.encodeIfPresent(mode, forKey: .mode)
+        try container.encodeIfPresent(limits, forKey: .limits)
+        try container.encodeIfPresent(manifestProvenance, forKey: .manifestProvenance)
     }
 }
 
@@ -8720,15 +8866,13 @@ public enum ToriiGovernanceProposalKind: Decodable, Sendable, Equatable {
 }
 
 public struct ToriiGovernanceDeployContractKind: Decodable, Sendable, Equatable {
-    public let namespace: String
-    public let contractId: String
+    public let contractAddress: String
     public let codeHashHex: String
     public let abiHashHex: String
     public let abiVersion: String
 
     private enum CodingKeys: String, CodingKey {
-        case namespace
-        case contractId = "contract_id"
+        case contractAddress = "contract_address"
         case codeHashHex = "code_hash_hex"
         case abiHashHex = "abi_hash_hex"
         case abiVersion = "abi_version"
@@ -8736,8 +8880,10 @@ public struct ToriiGovernanceDeployContractKind: Decodable, Sendable, Equatable 
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        namespace = try container.decode(String.self, forKey: .namespace)
-        contractId = try container.decode(String.self, forKey: .contractId)
+        contractAddress = try normalizeToriiContractAddressLiteral(
+            try container.decode(String.self, forKey: .contractAddress),
+            field: "contract_address"
+        )
         let codeHashHex = try container.decode(String.self, forKey: .codeHashHex)
         self.codeHashHex = try ToriiValidation.normalized32ByteHex(
             codeHashHex,
@@ -8837,7 +8983,7 @@ public enum ToriiGovernanceReferendumStatus: String, Decodable, Sendable {
     case closed = "Closed"
 }
 
-public enum ToriiGovernanceReferendumMode: String, Decodable, Sendable {
+public enum ToriiGovernanceReferendumMode: String, Codable, Sendable {
     case zk = "Zk"
     case plain = "Plain"
 }

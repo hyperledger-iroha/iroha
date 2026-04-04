@@ -652,6 +652,7 @@ pub(crate) struct ExplorerTransactionDetailDto {
     pub executable: String,
     pub status: String,
     pub rejection_reason: Option<ExplorerTransactionRejectionDto>,
+    pub executable_payload: Value,
     pub metadata: Value,
     pub nonce: Option<u64>,
     pub signature: String,
@@ -1241,8 +1242,57 @@ fn encode_norito_hex_prefixed<T: Encode>(value: &T) -> String {
 fn executable_label(executable: &Executable) -> &'static str {
     match executable {
         Executable::Instructions(_) => "Instructions",
+        Executable::ContractCall(_) => "ContractCall",
         Executable::Ivm(_) => "Ivm",
         Executable::IvmProved(_) => "IvmProved",
+    }
+}
+
+fn usize_to_value(value: usize) -> Value {
+    Value::Number(u64::try_from(value).unwrap_or(u64::MAX).into())
+}
+
+fn executable_payload(executable: &Executable) -> Value {
+    match executable {
+        Executable::Instructions(instructions) => {
+            let mut map = Map::new();
+            map.insert(
+                "instruction_count".to_string(),
+                usize_to_value(instructions.len()),
+            );
+            Value::Object(map)
+        }
+        Executable::ContractCall(invocation) => {
+            norito::json::to_value(invocation).unwrap_or(Value::Null)
+        }
+        Executable::Ivm(bytecode) => {
+            let mut map = Map::new();
+            map.insert(
+                "bytecode_len".to_string(),
+                usize_to_value(bytecode.size_bytes()),
+            );
+            Value::Object(map)
+        }
+        Executable::IvmProved(proved) => {
+            let mut map = Map::new();
+            map.insert(
+                "bytecode_len".to_string(),
+                usize_to_value(proved.bytecode.size_bytes()),
+            );
+            map.insert(
+                "overlay_count".to_string(),
+                usize_to_value(proved.overlay.len()),
+            );
+            map.insert(
+                "events_commitment".to_string(),
+                Value::String(proved.events_commitment.to_string()),
+            );
+            map.insert(
+                "gas_policy_commitment".to_string(),
+                Value::String(proved.gas_policy_commitment.to_string()),
+            );
+            Value::Object(map)
+        }
     }
 }
 
@@ -1316,6 +1366,7 @@ pub(crate) fn transaction_detail_dto(
                 json: norito::json::to_value(reason).unwrap_or(Value::Null),
                 message: format_rejection_reason_message(reason),
             }),
+        executable_payload: executable_payload(tx.instructions()),
         metadata: metadata_to_json(tx.metadata()),
         nonce: tx.nonce().map(|nonce| nonce.get().into()),
         signature: hex::encode(tx.signature().payload().payload()),
@@ -1593,10 +1644,13 @@ mod tests {
         domain::DomainId,
         isi::{Register, Transfer},
         metadata::Metadata,
+        nexus::DataSpaceId,
         nft::{NftData, NftId},
         rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
+        smart_contract::ContractAddress,
         transaction::{
             error::TransactionRejectionReason,
+            executable::{ContractInvocation, Executable},
             signed::{TransactionBuilder, TransactionResultInner},
         },
         trigger::DataTriggerSequence,
@@ -1893,6 +1947,44 @@ mod tests {
             message.contains("acme"),
             "message should include repeated identifier details"
         );
+    }
+
+    #[test]
+    fn transaction_detail_includes_contract_call_payload() {
+        let chain: ChainId = "test-chain".parse().expect("valid chain id");
+        let contract_address = ContractAddress::derive(0, &ALICE_ID, 1, DataSpaceId::GLOBAL)
+            .expect("contract address");
+        let mut payload = Map::new();
+        payload.insert("amount".to_string(), Value::Number(5_u64.into()));
+        let tx = TransactionBuilder::new(chain, ALICE_ID.clone())
+            .with_executable(Executable::ContractCall(ContractInvocation {
+                contract_address: contract_address.clone(),
+                entrypoint: "contribute".to_string(),
+                payload: Some(iroha_primitives::json::Json::new(Value::Object(payload))),
+            }))
+            .sign(ALICE_KEYPAIR.private_key());
+        let result = TransactionResult(Ok(DataTriggerSequence::default()));
+        let dto = transaction_detail_dto(&tx, 9, &result);
+
+        assert_eq!(dto.executable, "ContractCall");
+        match dto.executable_payload {
+            Value::Object(map) => {
+                assert_eq!(
+                    map.get("contract_address").and_then(Value::as_str),
+                    Some(contract_address.as_ref())
+                );
+                assert_eq!(
+                    map.get("entrypoint").and_then(Value::as_str),
+                    Some("contribute")
+                );
+                let payload = map
+                    .get("payload")
+                    .and_then(Value::as_object)
+                    .expect("contract call payload should be serialized as object");
+                assert_eq!(payload.get("amount").and_then(Value::as_u64), Some(5));
+            }
+            other => panic!("unexpected executable payload: {other:?}"),
+        }
     }
 
     #[test]

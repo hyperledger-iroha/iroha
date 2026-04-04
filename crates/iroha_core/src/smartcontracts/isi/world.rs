@@ -6242,6 +6242,20 @@ pub mod isi {
                         ),
                     ));
                 }
+                if tp.proof.backend.starts_with("sccp/stark-fri-v1/")
+                    && iroha_sccp::recover_nexus_sccp_message_transparent_proof(
+                        tp.proof.backend.as_str(),
+                        &tp.proof.bytes,
+                    )
+                    .is_none()
+                {
+                    return Err(InstructionExecutionError::InvalidParameter(
+                        InvalidParameterError::SmartContract(
+                            "SCCP transparent bridge proofs must decode as valid typed message artifacts"
+                                .into(),
+                        ),
+                    ));
+                }
             }
         }
 
@@ -6539,6 +6553,32 @@ pub mod isi {
             state_transaction
                 .world
                 .emit_events(Some(BridgeEvent::Emitted(self.receipt)));
+            Ok(())
+        }
+    }
+
+    impl Execute for bridge::RecordSccpMessage {
+        fn execute(
+            self,
+            _authority: &AccountId,
+            _state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let Some(payload) =
+                iroha_sccp::decode_canonical_sccp_payload_bytes(&self.payload_bytes)
+            else {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP payload bytes could not be decoded".into(),
+                    ),
+                ));
+            };
+            if !iroha_sccp::verify_sccp_payload_structure(&payload) {
+                return Err(InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(
+                        "SCCP payload bytes failed structural verification".into(),
+                    ),
+                ));
+            }
             Ok(())
         }
     }

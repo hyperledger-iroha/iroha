@@ -7,7 +7,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroU64,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -290,10 +293,22 @@ pub fn deploy_request_json(
     private_key: &ExposedPrivateKey,
     code_b64: &str,
 ) -> String {
+    static DEPLOY_ALIAS_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+    let alias = iroha_data_model::smart_contract::ContractAlias::from_components(
+        &format!(
+            "deploy{}",
+            DEPLOY_ALIAS_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ),
+        None,
+        "universal",
+    )
+    .expect("construct contract alias");
     let value = crate::json_object(vec![
         crate::json_entry("authority", account.clone()),
         crate::json_entry("private_key", private_key.to_string()),
         crate::json_entry("code_b64", code_b64),
+        crate::json_entry("contract_alias", alias),
     ]);
     norito::json::to_json(&value).expect("serialize deploy request")
 }

@@ -234,9 +234,12 @@ pub struct DeployArgs {
     /// Authority account identifier (canonical I105 account literal)
     #[arg(long)]
     pub authority: String,
-    /// Target dataspace alias for public address-first deploys (defaults to `universal`)
+    /// Stable on-chain contract alias (`name::domain.dataspace` or `name::dataspace`)
     #[arg(long)]
-    pub dataspace: Option<String>,
+    pub contract_alias: String,
+    /// Optional lease expiry timestamp (unix ms) for the alias binding
+    #[arg(long)]
+    pub lease_expiry_ms: Option<u64>,
     /// Hex-encoded private key for signing
     #[arg(long, value_name = "HEX")]
     pub private_key: String,
@@ -267,11 +270,16 @@ impl Run for DeployArgs {
         } else {
             return Err(eyre!("either --code-file or --code-b64 must be provided"));
         };
+        let contract_alias: iroha::data_model::smart_contract::ContractAlias = self
+            .contract_alias
+            .parse()
+            .wrap_err("invalid --contract-alias")?;
         let v = client.post_contract_deploy_json(
             &authority,
             &private_key,
             &code_b64,
-            self.dataspace.as_deref(),
+            &contract_alias,
+            self.lease_expiry_ms,
         )?;
         if self.wait.is_enabled() {
             let tx_hash = extract_submitted_transaction_hash(&v)

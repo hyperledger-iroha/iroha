@@ -2084,6 +2084,7 @@ mod tests {
                         }
                     }
                 }
+                Executable::ContractCall(_) => {}
                 Executable::Ivm(_) => {}
                 Executable::IvmProved(_) => {}
             }

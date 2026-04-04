@@ -924,7 +924,7 @@ struct AccountPermissionSummary {
     fee_sponsors: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
 }
 
-fn parse_permission_account_field(
+pub(crate) fn parse_permission_account_field(
     world: &impl WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     payload: &iroha_primitives::json::Json,
@@ -942,6 +942,33 @@ fn parse_permission_account_field(
     };
     crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
         .map(Into::into)
+}
+
+pub(crate) fn fee_sponsor_from_permission(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    permission: &Permission,
+) -> Option<iroha_data_model::account::AccountId> {
+    (permission.name() == "CanUseFeeSponsor")
+        .then(|| {
+            parse_permission_account_field(
+                world,
+                dataspace_catalog,
+                permission.payload(),
+                "sponsor",
+            )
+        })
+        .flatten()
+}
+
+pub(crate) fn permission_allows_fee_sponsor(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    permission: &Permission,
+    sponsor: &iroha_data_model::account::AccountId,
+) -> bool {
+    fee_sponsor_from_permission(world, dataspace_catalog, permission)
+        .is_some_and(|allowed| allowed.subject_id() == sponsor.subject_id())
 }
 
 impl AccountPermissionSummary {
@@ -978,12 +1005,9 @@ impl AccountPermissionSummary {
                 }
             }
             "CanUseFeeSponsor" => {
-                if let Some(sponsor) = parse_permission_account_field(
-                    world,
-                    dataspace_catalog,
-                    permission.payload(),
-                    "sponsor",
-                ) {
+                if let Some(sponsor) =
+                    fee_sponsor_from_permission(world, dataspace_catalog, permission)
+                {
                     self.fee_sponsors.insert(sponsor);
                 }
             }
@@ -26500,6 +26524,129 @@ impl StateTransaction<'_, '_> {
                 self.execute_instructions(instructions.clone(), authority),
                 None,
             ),
+            ExecutableRef::ContractCall(invocation) => {
+                let record = crate::smartcontracts::code::fetch_bound_contract_record(
+                    self,
+                    &invocation.contract_address,
+                )
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{}` not found in WSV",
+                        invocation.contract_address
+                    ))
+                })?;
+                let bytecode = record.code_bytes.clone();
+                let summary = {
+                    let mut cache = self.ivm_cache.lock();
+                    cache
+                        .summarize_program(bytecode.as_ref())
+                        .map_err(|e| ValidationFail::InternalError(e.to_string()))?
+                };
+                let meta = summary.metadata.clone();
+                let pipeline_cap = self.pipeline.ivm_max_cycles_upper_bound;
+                let mut eff_cycles = meta.max_cycles;
+                if eff_cycles == 0 {
+                    eff_cycles = u64::MAX;
+                }
+                if pipeline_cap > 0 {
+                    eff_cycles = eff_cycles.min(pipeline_cap);
+                }
+                if eff_cycles == u64::MAX {
+                    eff_cycles = 0;
+                }
+                let gas_cap_cycles = if eff_cycles == 0 {
+                    meta.max_cycles
+                } else {
+                    eff_cycles
+                };
+                let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(gas_cap_cycles);
+                let remaining_block_budget = if self.gas_limit_per_block == 0 {
+                    u64::MAX
+                } else {
+                    self.gas_limit_per_block
+                        .saturating_sub(self.gas_used_in_block_so_far)
+                };
+                let mut gas_limit = gas_cap.min(remaining_block_budget);
+                if gas_limit == u64::MAX {
+                    gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
+                }
+                let mut cached_runtime = {
+                    let mut cache = self.ivm_cache.lock();
+                    cache
+                        .take_or_create_cached_runtime(bytecode.as_ref(), gas_limit)
+                        .map_err(|e| ValidationFail::InternalError(e.to_string()))?
+                };
+                let mut vm = cached_runtime.vm;
+                let contract_call_context =
+                    crate::executor::parse_contract_invocation_execution_context(
+                        invocation,
+                        bytecode.as_ref(),
+                        record.contract_alias.clone(),
+                    )?;
+                if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc() {
+                    vm.set_register(1, vm.memory.code_len());
+                    vm.set_program_counter(entrypoint_pc).map_err(|err| {
+                        let selector = contract_call_context
+                            .runtime_context()
+                            .map(|runtime| runtime.entrypoint)
+                            .unwrap_or_else(|| "main".to_owned());
+                        ValidationFail::NotPermitted(format!(
+                            "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                        ))
+                    })?;
+                }
+                let contract_runtime_context = contract_call_context.runtime_context();
+                let accounts = self.trigger_accounts_snapshot();
+                let mut host =
+                    crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+                        authority.clone(),
+                        accounts,
+                        contract_call_context.args().clone(),
+                    );
+                let current_block_time_ms =
+                    u64::try_from(self._curr_block.creation_time().as_millis())
+                        .expect("block creation timestamp must fit into u64");
+                host.set_trigger_id(id.clone());
+                host.set_block_time_ms(current_block_time_ms);
+                let default_base = self._curr_block.height().get().saturating_mul(256);
+                host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
+                #[cfg(feature = "telemetry")]
+                host.set_telemetry(self.telemetry.clone());
+                host.set_crypto_config(self.crypto());
+                host.set_halo2_config(&self.zk.halo2);
+                host.set_chain_id(self.chain_id());
+                host.set_durable_state_snapshot_from_world(&self.world);
+                host.set_public_inputs_from_parameters(self.world.parameters.get());
+                host.set_vrf_epoch_seeds_from_world(&self.world);
+                host.set_query_state(self);
+                host.set_zk_snapshots_from_world(&self.world, &self.zk)
+                    .map_err(|e| {
+                        ValidationFail::InternalError(format!("invalid ZK snapshot state: {e}"))
+                    })?;
+                if eff_cycles > 0 {
+                    vm.set_max_cycles(eff_cycles);
+                }
+                vm.set_gas_limit(gas_limit);
+                let run_result = vm.run_with_host(&mut host);
+                cached_runtime.vm = vm;
+                {
+                    let mut cache = self.ivm_cache.lock();
+                    cache.put_cached_runtime(&cached_runtime);
+                }
+                if let Err(e) = run_result {
+                    return Err(
+                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                            &cached_runtime.vm,
+                            &e,
+                        )
+                        .into(),
+                    );
+                }
+                let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
+                let queued = artifacts.apply_to_transaction(self, authority)?;
+                let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
+                (Ok(cvs.into()), None)
+            }
             ExecutableRef::Ivm(blob_hash) => {
                 if let Some(bytecode) = self.world.triggers.get_original_contract(blob_hash) {
                     let trigger_args = self.trigger_args_from_event(&event);
@@ -26680,7 +26827,9 @@ impl StateTransaction<'_, '_> {
     fn execution_step_from_executable(executable: &ExecutableRef) -> ExecutionStep {
         match executable {
             ExecutableRef::Instructions(instructions) => ExecutionStep(instructions.clone()),
-            ExecutableRef::Ivm(_) => ExecutionStep(ConstVec::new_empty()),
+            ExecutableRef::ContractCall(_) | ExecutableRef::Ivm(_) => {
+                ExecutionStep(ConstVec::new_empty())
+            }
         }
     }
 
@@ -26711,6 +26860,9 @@ impl StateTransaction<'_, '_> {
             Executable::Instructions(instructions) => {
                 self.execute_instructions(instructions.clone(), authority)
                     .expect("should be no errors");
+            }
+            Executable::ContractCall(_) => {
+                panic!("apply_executable does not support Executable::ContractCall")
             }
             Executable::Ivm(bytes) => {
                 let mut vm = IVM::new(0);

@@ -88,6 +88,13 @@ export function resolveConnectLaunchUri(
   preview?: Pick<BrowserConnectSessionPreview, "walletUri" | "appUri"> | null,
   session?: Pick<BrowserConnectSessionResponse, "wallet_uri" | "app_uri"> | null,
 ): string;
+export function rewriteConnectUriProtocol(uri: string, protocol?: string): string;
+export function resolveConnectLaunchUriForProtocol(
+  role: "app" | "wallet",
+  preview?: Pick<BrowserConnectSessionPreview, "walletUri" | "appUri"> | null,
+  session?: Pick<BrowserConnectSessionResponse, "wallet_uri" | "app_uri"> | null,
+  protocol?: string,
+): string;
 export function openConnectWebSocket(
   baseUrl: string,
   sid: string,

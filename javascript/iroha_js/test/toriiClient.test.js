@@ -8417,6 +8417,351 @@ test("getNodeCapabilities rejects unsupported option fields", async () => {
   );
 });
 
+test("getSccpCapabilities normalizes discovery response", async () => {
+  const fetchImpl = async (url) => {
+    assert.equal(url, `${BASE_URL}/v1/sccp/capabilities`);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        local_domain: 0,
+        local_chain: "sora",
+        proof_family: "stark-fri-v1",
+        burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}",
+        governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}",
+        message_bundle_path: "/v1/sccp/proofs/message/{message_id}",
+        message_proof_path: "/v1/sccp/artifacts/message/{message_id}",
+        proof_manifest_path: "/v1/sccp/manifests",
+        legacy_burn_registry_backend: "bridge/sccp/burn-v1",
+        legacy_governance_registry_backend: "bridge/sccp/governance-v1",
+        proof_submit_path: "/v1/bridge/proofs/submit",
+        message_submit_path: "/v1/bridge/messages",
+        message_payload_kinds: ["asset_register", "route_activate", "transfer"],
+        codecs: [
+          {
+            id: 4,
+            key: "ton_raw",
+            description: "TON raw addresses in workchain:account_hex form.",
+          },
+        ],
+        counterparties: [
+          {
+            domain: 4,
+            chain: "ton",
+            message_backend: "sccp/stark-fri-v1/ton",
+            registry_backend: "bridge/sccp/stark-fri-v1/ton",
+            counterparty_account_codec: 4,
+            counterparty_account_codec_key: "ton_raw",
+          },
+        ],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getSccpCapabilities();
+  assert.deepEqual(result, {
+    localDomain: 0,
+    localChain: "sora",
+    proofFamily: "stark-fri-v1",
+    burnBundlePath: "/v1/sccp/proofs/burn/{message_id}",
+    governanceBundlePath: "/v1/sccp/proofs/governance/{message_id}",
+    messageBundlePath: "/v1/sccp/proofs/message/{message_id}",
+    messageProofPath: "/v1/sccp/artifacts/message/{message_id}",
+    proofManifestPath: "/v1/sccp/manifests",
+    legacyBurnRegistryBackend: "bridge/sccp/burn-v1",
+    legacyGovernanceRegistryBackend: "bridge/sccp/governance-v1",
+    proofSubmitPath: "/v1/bridge/proofs/submit",
+    messageSubmitPath: "/v1/bridge/messages",
+    messagePayloadKinds: ["asset_register", "route_activate", "transfer"],
+    codecs: [
+      {
+        id: 4,
+        key: "ton_raw",
+        description: "TON raw addresses in workchain:account_hex form.",
+      },
+    ],
+    counterparties: [
+      {
+        domain: 4,
+        chain: "ton",
+        messageBackend: "sccp/stark-fri-v1/ton",
+        registryBackend: "bridge/sccp/stark-fri-v1/ton",
+        counterpartyAccountCodec: 4,
+        counterpartyAccountCodecKey: "ton_raw",
+      },
+    ],
+  });
+});
+
+test("getSccpProofManifests normalizes typed manifest response", async () => {
+  const fetchImpl = async (url) => {
+    assert.equal(url, `${BASE_URL}/v1/sccp/manifests`);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        local_domain: 0,
+        local_chain: "sora",
+        proof_family: "stark-fri-v1",
+        manifests: [
+          {
+            version: 1,
+            local_domain: 0,
+            local_chain: "sora",
+            counterparty_domain: 1,
+            chain: "eth",
+            proof_family: "stark-fri-v1",
+            message_backend: "sccp/stark-fri-v1/eth",
+            registry_backend: "bridge/sccp/stark-fri-v1/eth",
+            counterparty_account_codec: 2,
+            counterparty_account_codec_key: "evm_hex",
+            finality_model: "EthereumBeaconExecution",
+            verifier_target: "EvmContract",
+            manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:eth",
+            required_public_inputs: [
+              "message_id",
+              "payload_hash",
+              "target_domain",
+              "commitment_root",
+              "finality_height",
+              "finality_block_hash",
+            ],
+            message_payload_kinds: ["asset_register", "route_activate", "transfer"],
+          },
+        ],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getSccpProofManifests();
+  assert.deepEqual(result, {
+    localDomain: 0,
+    localChain: "sora",
+    proofFamily: "stark-fri-v1",
+    manifests: [
+      {
+        version: 1,
+        localDomain: 0,
+        localChain: "sora",
+        counterpartyDomain: 1,
+        chain: "eth",
+        proofFamily: "stark-fri-v1",
+        messageBackend: "sccp/stark-fri-v1/eth",
+        registryBackend: "bridge/sccp/stark-fri-v1/eth",
+        counterpartyAccountCodec: 2,
+        counterpartyAccountCodecKey: "evm_hex",
+        finalityModel: "EthereumBeaconExecution",
+        verifierTarget: "EvmContract",
+        manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:eth",
+        requiredPublicInputs: [
+          "message_id",
+          "payload_hash",
+          "target_domain",
+          "commitment_root",
+          "finality_height",
+          "finality_block_hash",
+        ],
+        messagePayloadKinds: ["asset_register", "route_activate", "transfer"],
+      },
+    ],
+  });
+});
+
+test("getSccpProofManifests rejects unsupported verifier target", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        local_domain: 0,
+        local_chain: "sora",
+        proof_family: "stark-fri-v1",
+        manifests: [
+          {
+            version: 1,
+            local_domain: 0,
+            local_chain: "sora",
+            counterparty_domain: 4,
+            chain: "ton",
+            proof_family: "stark-fri-v1",
+            message_backend: "sccp/stark-fri-v1/ton",
+            registry_backend: "bridge/sccp/stark-fri-v1/ton",
+            counterparty_account_codec: 4,
+            counterparty_account_codec_key: "ton_raw",
+            finality_model: "TonMasterchain",
+            verifier_target: "UnknownVerifier",
+            manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+            required_public_inputs: ["message_id"],
+            message_payload_kinds: ["transfer"],
+          },
+        ],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.getSccpProofManifests(),
+    /verifier_target must be a supported SCCP verifier target/,
+  );
+});
+
+test("getSccpMessageProofArtifact normalizes typed artifact response", async () => {
+  const messageId = "11".repeat(32);
+  const payloadHash = "22".repeat(32);
+  const commitmentRoot = "33".repeat(32);
+  const finalityBlockHash = "44".repeat(32);
+  const fetchImpl = async (url) => {
+    assert.equal(url, `${BASE_URL}/v1/sccp/artifacts/message/${messageId}`);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        version: 1,
+        local_domain: 0,
+        counterparty_domain: 4,
+        proof_family: "stark-fri-v1",
+        message_backend: "sccp/stark-fri-v1/ton",
+        registry_backend: "bridge/sccp/stark-fri-v1/ton",
+        manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+        finality_model: "TonMasterchain",
+        verifier_target: "TonContract",
+        public_inputs: {
+          version: 1,
+          message_id: messageId,
+          payload_hash: payloadHash,
+          target_domain: 4,
+          commitment_root: commitmentRoot,
+          finality_height: "19",
+          finality_block_hash: finalityBlockHash,
+        },
+        proof_bytes: "aa55",
+        bundle: {
+          version: 1,
+          commitment_root: commitmentRoot,
+          commitment: {
+            version: 1,
+            kind: "Transfer",
+            target_domain: 4,
+            message_id: messageId,
+            payload_hash: payloadHash,
+            parliament_certificate_hash: null,
+          },
+          merkle_proof: {
+            steps: [{ sibling_hash: "55".repeat(32), sibling_is_left: false }],
+          },
+          payload: {
+            Transfer: {
+              version: 1,
+              source_domain: 0,
+              dest_domain: 4,
+              nonce: "21",
+              amount: "77",
+            },
+          },
+          finality_proof: "bb66",
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getSccpMessageProofArtifact(`0x${messageId}`);
+  assert.deepEqual(result, {
+    version: 1,
+    localDomain: 0,
+    counterpartyDomain: 4,
+    proofFamily: "stark-fri-v1",
+    messageBackend: "sccp/stark-fri-v1/ton",
+    registryBackend: "bridge/sccp/stark-fri-v1/ton",
+    manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+    finalityModel: "TonMasterchain",
+    verifierTarget: "TonContract",
+    publicInputs: {
+      version: 1,
+      messageId,
+      payloadHash,
+      targetDomain: 4,
+      commitmentRoot,
+      finalityHeight: 19,
+      finalityBlockHash,
+    },
+    proofBytes: "aa55",
+    bundle: {
+      version: 1,
+      commitmentRoot,
+      commitment: {
+        version: 1,
+        kind: "Transfer",
+        targetDomain: 4,
+        messageId,
+        payloadHash,
+        parliamentCertificateHash: null,
+      },
+      merkleProof: {
+        steps: [{ siblingHash: "55".repeat(32), siblingIsLeft: false }],
+      },
+      payload: {
+        kind: "Transfer",
+        value: {
+          version: 1,
+          source_domain: 0,
+          dest_domain: 4,
+          nonce: "21",
+          amount: "77",
+        },
+      },
+      finalityProof: "bb66",
+    },
+  });
+});
+
+test("getSccpMessageProofArtifact rejects bundle/public input mismatch", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        version: 1,
+        local_domain: 0,
+        counterparty_domain: 1,
+        proof_family: "stark-fri-v1",
+        message_backend: "sccp/stark-fri-v1/eth",
+        registry_backend: "bridge/sccp/stark-fri-v1/eth",
+        manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:eth",
+        finality_model: "EthereumBeaconExecution",
+        verifier_target: "EvmContract",
+        public_inputs: {
+          version: 1,
+          message_id: "11".repeat(32),
+          payload_hash: "22".repeat(32),
+          target_domain: 1,
+          commitment_root: "33".repeat(32),
+          finality_height: "7",
+          finality_block_hash: "44".repeat(32),
+        },
+        proof_bytes: "aa55",
+        bundle: {
+          version: 1,
+          commitment_root: "33".repeat(32),
+          commitment: {
+            version: 1,
+            kind: "Transfer",
+            target_domain: 1,
+            message_id: "99".repeat(32),
+            payload_hash: "22".repeat(32),
+            parliament_certificate_hash: null,
+          },
+          merkle_proof: { steps: [] },
+          payload: { Transfer: { version: 1 } },
+          finality_proof: "bb66",
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.getSccpMessageProofArtifact("11".repeat(32)),
+    /bundle\.commitment\.message_id must match public_inputs\.message_id/,
+  );
+});
+
 test("getRuntimeAbiActive normalizes ABI version", async () => {
   const fetchImpl = async () =>
     createResponse({
@@ -14964,7 +15309,10 @@ test("deployContract submits base64 payload and returns response", async () => {
   let captured;
   const responsePayload = {
     ok: true,
+    contract_alias: "router::universal",
     contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    previous_contract_address: null,
+    upgraded: false,
     dataspace: "universal",
     deploy_nonce: 7,
     tx_hash_hex: "a".repeat(64),
@@ -14983,21 +15331,18 @@ test("deployContract submits base64 payload and returns response", async () => {
   const result = await client.deployContract({
     authority: FIXTURE_ALICE_ID,
     privateKey: "ed25519:deadbeef",
+    contractAlias: "router::universal",
     codeB64: Buffer.from("payload"),
-    manifest: { features_bitmap: 1 },
+    leaseExpiryMs: 1234,
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/deploy`);
   const body = JSON.parse(captured.init.body);
-  assert.equal(body.code_b64, Buffer.from("payload").toString("base64"));
-  assert.deepEqual(body.manifest, {
-    code_hash: null,
-    abi_hash: null,
-    compiler_fingerprint: null,
-    features_bitmap: 1,
-    access_set_hints: null,
-    entrypoints: null,
-    kotoba: null,
-    provenance: null,
+  assert.deepEqual(body, {
+    authority: FIXTURE_ALICE_ID,
+    private_key: "ed25519:deadbeef",
+    contract_alias: "router::universal",
+    code_b64: Buffer.from("payload").toString("base64"),
+    lease_expiry_ms: 1234,
   });
   assert.deepEqual(result, responsePayload);
 });
@@ -15013,6 +15358,7 @@ test("deployContract rejects invalid base64 payloads", async () => {
       client.deployContract({
         authority: FIXTURE_ALICE_ID,
         privateKey: "ed25519:deadbeef",
+        contractAlias: "router::universal",
         codeB64: "YmFzZTY0*",
       }),
     (error) =>
@@ -15033,9 +15379,40 @@ test("deployContract rejects empty code bytes", async () => {
       client.deployContract({
         authority: FIXTURE_ALICE_ID,
         privateKey: "ed25519:deadbeef",
+        contractAlias: "router::universal",
         codeB64: Buffer.alloc(0),
       }),
     /deployContract\.codeB64/,
+  );
+});
+
+test("deployContract rejects manifest and dataspace shortcuts", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("should not fetch");
+    },
+  });
+  await assert.rejects(
+    () =>
+      client.deployContract({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        contractAlias: "router::universal",
+        codeB64: Buffer.from("payload"),
+        dataspace: "universal",
+      }),
+    /deployContract\.dataspace is not accepted by \/v1\/contracts\/deploy/,
+  );
+  await assert.rejects(
+    () =>
+      client.deployContract({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        contractAlias: "router::universal",
+        codeB64: Buffer.from("payload"),
+        manifest: { features_bitmap: 1 },
+      }),
+    /deployContract\.manifest is not accepted by \/v1\/contracts\/deploy/,
   );
 });
 
