@@ -1,0 +1,863 @@
+- generic [ref=e1]:
+  - generic [ref=e10]:
+    - img "Suno background aura" [ref=e12]
+    - generic [ref=e14]:
+      - generic [ref=e16]:
+        - link "Suno Logo" [ref=e18] [cursor=pointer]:
+          - /url: /home
+          - img "Suno Logo" [ref=e19]
+        - generic [ref=e25]:
+          - button "Sign In" [ref=e26] [cursor=pointer]:
+            - generic [ref=e27]: Sign In
+          - button "Sign Up" [ref=e28] [cursor=pointer]:
+            - generic [ref=e29]: Sign Up
+      - generic [ref=e30]:
+        - generic [ref=e34] [cursor=pointer]:
+          - img "HIP QUAKE" [ref=e35]
+          - img [ref=e38]
+          - generic [ref=e41]:
+            - generic [ref=e42]: HIP QUAKE
+            - generic [ref=e43]:
+              - img "THINK@SONG (Spotify)" [ref=e45]
+              - generic [ref=e46]: THINK@SONG (Spotify)
+        - generic [ref=e50] [cursor=pointer]:
+          - img "Parental Burnout" [ref=e51]
+          - img [ref=e54]
+          - generic [ref=e57]:
+            - generic [ref=e58]: Parental Burnout
+            - generic [ref=e59]:
+              - img "THE BEAT BASTARDS" [ref=e61]
+              - generic [ref=e62]: THE BEAT BASTARDS
+        - generic [ref=e63]:
+          - heading "Make any song you can imagine" [level=1] [ref=e66]: Make any song you can imagine
+          - heading "Start with a simple prompt or dive into our pro editing tools, your next track is just a step away." [level=2] [ref=e69]
+        - generic [ref=e72]:
+          - textbox "Chat to make music" [ref=e74]
+          - generic [ref=e75]:
+            - button [ref=e78]:
+              - img [ref=e79]
+            - button "Advanced" [ref=e82]:
+              - img [ref=e83]
+              - generic [ref=e86]: Advanced
+            - button "Generate random prompt" [ref=e87]:
+              - img [ref=e88]
+            - button "Create" [ref=e92]:
+              - generic [ref=e93]:
+                - img [ref=e95]
+                - generic [ref=e99]: Create
+        - generic [ref=e102]:
+          - img "Billboard" [ref=e105]
+          - img "Complex" [ref=e108]
+          - img "Forbes" [ref=e111]
+          - img "Rolling Stone" [ref=e114]
+          - img "Variety" [ref=e117]
+          - img "Wired" [ref=e120]
+          - img "Billboard" [ref=e123]
+          - img "Complex" [ref=e126]
+          - img "Forbes" [ref=e129]
+          - img "Rolling Stone" [ref=e132]
+          - img "Variety" [ref=e135]
+          - img "Wired" [ref=e138]
+      - generic [ref=e139]:
+        - generic [ref=e142]:
+          - heading "Mind blowing song quality" [level=1] [ref=e143]
+          - heading "Whether you have a melody in your head, lyrics you've written, or just a feeling you want to hear—Suno makes high-quality music creation accessible to all" [level=2] [ref=e144]
+        - generic [ref=e148]:
+          - generic [ref=e151]:
+            - generic [ref=e152]:
+              - img "HIP QUAKE" [ref=e153]
+              - img [ref=e155]
+              - generic [ref=e158]:
+                - generic "Play button with play count" [ref=e159]:
+                  - img [ref=e161]
+                  - generic [ref=e164]: 252K
+                - button "Like button with like count" [ref=e165]:
+                  - img [ref=e167]
+                  - generic [ref=e170]: 4.7K
+            - generic [ref=e171]: HIP QUAKE
+            - generic [ref=e172]:
+              - img "THINK@SONG (Spotify)" [ref=e174]
+              - generic [ref=e175]: THINK@SONG (Spotify)
+          - generic [ref=e178]:
+            - generic [ref=e179]:
+              - img "Parental Burnout" [ref=e180]
+              - img [ref=e182]
+              - generic [ref=e185]:
+                - generic "Play button with play count" [ref=e186]:
+                  - img [ref=e188]
+                  - generic [ref=e191]: 111K
+                - button "Like button with like count" [ref=e192]:
+                  - img [ref=e194]
+                  - generic [ref=e197]: "992"
+            - generic [ref=e198]: Parental Burnout
+            - generic [ref=e199]:
+              - img "THE BEAT BASTARDS" [ref=e201]
+              - generic [ref=e202]: THE BEAT BASTARDS
+          - generic [ref=e205]:
+            - generic [ref=e206]:
+              - img "Mirror, mirror on the wall" [ref=e207]
+              - img [ref=e209]
+              - generic [ref=e212]:
+                - generic "Play button with play count" [ref=e213]:
+                  - img [ref=e215]
+                  - generic [ref=e218]: 261K
+                - button "Like button with like count" [ref=e219]:
+                  - img [ref=e221]
+                  - generic [ref=e224]: 5.8K
+            - generic [ref=e225]: Mirror, mirror on the wall
+            - generic [ref=e226]:
+              - img "Vertical Smile" [ref=e228]
+              - generic [ref=e229]: Vertical Smile
+          - generic [ref=e232]:
+            - generic [ref=e233]:
+              - img "Signal Fade" [ref=e234]
+              - img [ref=e236]
+              - generic [ref=e239]:
+                - generic "Play button with play count" [ref=e240]:
+                  - img [ref=e242]
+                  - generic [ref=e245]: 148K
+                - button "Like button with like count" [ref=e246]:
+                  - img [ref=e248]
+                  - generic [ref=e251]: 1.1K
+            - generic [ref=e252]: Signal Fade
+            - generic [ref=e253]:
+              - img "MakMuzical" [ref=e255]
+              - generic [ref=e256]: MakMuzical
+          - generic [ref=e259]:
+            - generic [ref=e260]:
+              - img "Moth Among the Stars (Live)" [ref=e261]
+              - img [ref=e263]
+              - generic [ref=e266]:
+                - generic "Play button with play count" [ref=e267]:
+                  - img [ref=e269]
+                  - generic [ref=e272]: 271K
+                - button "Like button with like count" [ref=e273]:
+                  - img [ref=e275]
+                  - generic [ref=e278]: 4.5K
+            - generic [ref=e279]: Moth Among the Stars (Live)
+            - generic [ref=e280]:
+              - img "Sam" [ref=e282]
+              - generic [ref=e283]: Sam
+          - generic [ref=e286]:
+            - generic [ref=e287]:
+              - img "April's Gone" [ref=e288]
+              - img [ref=e290]
+              - generic [ref=e293]:
+                - generic "Play button with play count" [ref=e294]:
+                  - img [ref=e296]
+                  - generic [ref=e299]: 196K
+                - button "Like button with like count" [ref=e300]:
+                  - img [ref=e302]
+                  - generic [ref=e305]: 3.1K
+            - generic [ref=e306]: April's Gone
+            - generic [ref=e307]:
+              - img "Thomas Otten" [ref=e309]
+              - generic [ref=e310]: Thomas Otten
+          - generic [ref=e313]:
+            - generic [ref=e314]:
+              - img "changes" [ref=e315]
+              - img [ref=e317]
+              - generic [ref=e320]:
+                - generic "Play button with play count" [ref=e321]:
+                  - img [ref=e323]
+                  - generic [ref=e326]: 338K
+                - button "Like button with like count" [ref=e327]:
+                  - img [ref=e329]
+                  - generic [ref=e332]: 4.3K
+            - generic [ref=e333]: changes
+            - generic [ref=e334]:
+              - img "GTZY" [ref=e336]
+              - generic [ref=e337]: GTZY
+          - generic [ref=e340]:
+            - generic [ref=e341]:
+              - img "goth girl knife fight." [ref=e342]
+              - img [ref=e344]
+              - generic [ref=e347]:
+                - generic "Play button with play count" [ref=e348]:
+                  - img [ref=e350]
+                  - generic [ref=e353]: 330K
+                - button "Like button with like count" [ref=e354]:
+                  - img [ref=e356]
+                  - generic [ref=e359]: 5.2K
+            - generic [ref=e360]: goth girl knife fight.
+            - generic [ref=e361]:
+              - img "a.astronaut" [ref=e363]
+              - generic [ref=e364]: a.astronaut
+          - generic [ref=e367]:
+            - generic [ref=e368]:
+              - img "The Speaker Eater [Slap House / Tech Bass House]" [ref=e369]
+              - img [ref=e371]
+              - generic [ref=e374]:
+                - generic "Play button with play count" [ref=e375]:
+                  - img [ref=e377]
+                  - generic [ref=e380]: 85K
+                - button "Like button with like count" [ref=e381]:
+                  - img [ref=e383]
+                  - generic [ref=e386]: "73"
+            - generic [ref=e387]: The Speaker Eater [Slap House / Tech Bass House]
+            - generic [ref=e388]:
+              - img "Tia Maze" [ref=e390]
+              - generic [ref=e391]: Tia Maze
+          - generic [ref=e394]:
+            - generic [ref=e395]:
+              - img "Memory" [ref=e396]
+              - img [ref=e398]
+              - generic [ref=e401]:
+                - generic "Play button with play count" [ref=e402]:
+                  - img [ref=e404]
+                  - generic [ref=e407]: 391K
+                - button "Like button with like count" [ref=e408]:
+                  - img [ref=e410]
+                  - generic [ref=e413]: 10K
+            - generic [ref=e414]: Memory
+            - generic [ref=e415]:
+              - img "JoonOc" [ref=e417]
+              - generic [ref=e418]: JoonOc
+          - generic [ref=e421]:
+            - generic [ref=e422]:
+              - img "𝕃𝕚𝕓𝕖𝕣𝕥𝕪 𝕠𝕣 ℂ𝕣𝕦𝕖𝕝𝕥𝕪...?" [ref=e423]
+              - img [ref=e425]
+              - generic [ref=e428]:
+                - generic "Play button with play count" [ref=e429]:
+                  - img [ref=e431]
+                  - generic [ref=e434]: 295K
+                - button "Like button with like count" [ref=e435]:
+                  - img [ref=e437]
+                  - generic [ref=e440]: 4.6K
+            - generic [ref=e441]: 𝕃𝕚𝕓𝕖𝕣𝕥𝕪 𝕠𝕣 ℂ𝕣𝕦𝕖𝕝𝕥𝕪...?
+            - generic [ref=e442]:
+              - img "𝙳𝚒𝚖 𝙲𝚊𝚗𝚍𝚕𝚎𝚜" [ref=e444]
+              - generic [ref=e445]: 𝙳𝚒𝚖 𝙲𝚊𝚗𝚍𝚕𝚎𝚜
+          - generic [ref=e448]:
+            - generic [ref=e449]:
+              - img "I am in - I am out EDM" [ref=e450]
+              - img [ref=e452]
+              - generic [ref=e455]:
+                - generic "Play button with play count" [ref=e456]:
+                  - img [ref=e458]
+                  - generic [ref=e461]: 140K
+                - button "Like button with like count" [ref=e462]:
+                  - img [ref=e464]
+                  - generic [ref=e467]: 1.2K
+            - generic [ref=e468]: I am in - I am out EDM
+            - generic [ref=e469]:
+              - img "EUMAK4U" [ref=e471]
+              - generic [ref=e472]: EUMAK4U
+          - generic [ref=e475]:
+            - generic [ref=e476]:
+              - img "Stuck In My Head" [ref=e477]
+              - img [ref=e479]
+              - generic [ref=e482]:
+                - generic "Play button with play count" [ref=e483]:
+                  - img [ref=e485]
+                  - generic [ref=e488]: 120K
+                - button "Like button with like count" [ref=e489]:
+                  - img [ref=e491]
+                  - generic [ref=e494]: "887"
+            - generic [ref=e495]: Stuck In My Head
+            - generic [ref=e496]:
+              - img "Kostaboda" [ref=e498]
+              - generic [ref=e499]: Kostaboda
+          - generic [ref=e502]:
+            - generic [ref=e503]:
+              - img "passing by" [ref=e504]
+              - img [ref=e506]
+              - generic [ref=e509]:
+                - generic "Play button with play count" [ref=e510]:
+                  - img [ref=e512]
+                  - generic [ref=e515]: 114K
+                - button "Like button with like count" [ref=e516]:
+                  - img [ref=e518]
+                  - generic [ref=e521]: "800"
+            - generic [ref=e522]: passing by
+            - generic [ref=e523]:
+              - img "bleeder" [ref=e525]
+              - generic [ref=e526]: bleeder
+          - generic [ref=e529]:
+            - generic [ref=e530]:
+              - img "Kundalini" [ref=e531]
+              - img [ref=e533]
+              - generic [ref=e536]:
+                - generic "Play button with play count" [ref=e537]:
+                  - img [ref=e539]
+                  - generic [ref=e542]: 252K
+                - button "Like button with like count" [ref=e543]:
+                  - img [ref=e545]
+                  - generic [ref=e548]: 5.8K
+            - generic [ref=e549]: Kundalini
+            - generic [ref=e550]:
+              - img "TheloniousPunkd" [ref=e552]
+              - generic [ref=e553]: TheloniousPunkd
+          - generic [ref=e556]:
+            - generic [ref=e557]:
+              - img "Play the Cards" [ref=e558]
+              - img [ref=e560]
+              - generic [ref=e563]:
+                - generic "Play button with play count" [ref=e564]:
+                  - img [ref=e566]
+                  - generic [ref=e569]: 277K
+                - button "Like button with like count" [ref=e570]:
+                  - img [ref=e572]
+                  - generic [ref=e575]: 5.2K
+            - generic [ref=e576]: Play the Cards
+            - generic [ref=e577]:
+              - img "BettyByte" [ref=e579]
+              - generic [ref=e580]: BettyByte
+          - generic [ref=e583]:
+            - generic [ref=e584]:
+              - img "Dilapidated (Cover)" [ref=e585]
+              - img [ref=e587]
+              - generic [ref=e590]:
+                - generic "Play button with play count" [ref=e591]:
+                  - img [ref=e593]
+                  - generic [ref=e596]: 375K
+                - button "Like button with like count" [ref=e597]:
+                  - img [ref=e599]
+                  - generic [ref=e602]: 4.3K
+            - generic [ref=e603]: Dilapidated (Cover)
+            - generic [ref=e604]:
+              - img "DeeBeetttZZ" [ref=e606]
+              - generic [ref=e607]: DeeBeetttZZ
+          - generic [ref=e610]:
+            - generic [ref=e611]:
+              - img "Muse" [ref=e612]
+              - img [ref=e614]
+              - generic [ref=e617]:
+                - generic "Play button with play count" [ref=e618]:
+                  - img [ref=e620]
+                  - generic [ref=e623]: 128K
+                - button "Like button with like count" [ref=e624]:
+                  - img [ref=e626]
+                  - generic [ref=e629]: "308"
+            - generic [ref=e630]: Muse
+            - generic [ref=e631]:
+              - img "sonoa" [ref=e633]
+              - generic [ref=e634]: sonoa
+          - generic [ref=e637]:
+            - generic [ref=e638]:
+              - img "Everything’s Fine" [ref=e639]
+              - img [ref=e641]
+              - generic [ref=e644]:
+                - generic "Play button with play count" [ref=e645]:
+                  - img [ref=e647]
+                  - generic [ref=e650]: 444K
+                - button "Like button with like count" [ref=e651]:
+                  - img [ref=e653]
+                  - generic [ref=e656]: 10K
+            - generic [ref=e657]: Everything’s Fine
+            - generic [ref=e658]:
+              - img "Staabsworth" [ref=e660]
+              - generic [ref=e661]: Staabsworth
+          - generic [ref=e664]:
+            - generic [ref=e665]:
+              - img "Breath Syncs With the Clip" [ref=e666]
+              - img [ref=e668]
+              - generic [ref=e671]:
+                - generic "Play button with play count" [ref=e672]:
+                  - img [ref=e674]
+                  - generic [ref=e677]: 173K
+                - button "Like button with like count" [ref=e678]:
+                  - img [ref=e680]
+                  - generic [ref=e683]: 2.8K
+            - generic [ref=e684]: Breath Syncs With the Clip
+            - generic [ref=e685]:
+              - img "UrbanUrchin" [ref=e687]
+              - generic [ref=e688]: UrbanUrchin
+          - generic [ref=e691]:
+            - generic [ref=e692]:
+              - img "Lo-Fi Rocks" [ref=e693]
+              - img [ref=e695]
+              - generic [ref=e698]:
+                - generic "Play button with play count" [ref=e699]:
+                  - img [ref=e701]
+                  - generic [ref=e704]: 115K
+                - button "Like button with like count" [ref=e705]:
+                  - img [ref=e707]
+                  - generic [ref=e710]: "591"
+            - generic [ref=e711]: Lo-Fi Rocks
+            - generic [ref=e712]:
+              - img "Stray Cat/Game Dev" [ref=e714]
+              - generic [ref=e715]: Stray Cat/Game Dev
+          - generic [ref=e718]:
+            - generic [ref=e719]:
+              - img "Through This Life And Beyond It" [ref=e720]
+              - img [ref=e722]
+              - generic [ref=e725]:
+                - generic "Play button with play count" [ref=e726]:
+                  - img [ref=e728]
+                  - generic [ref=e731]: 282K
+                - button "Like button with like count" [ref=e732]:
+                  - img [ref=e734]
+                  - generic [ref=e737]: 5.4K
+            - generic [ref=e738]: Through This Life And Beyond It
+            - generic [ref=e739]:
+              - img "KristaMusic" [ref=e741]
+              - generic [ref=e742]: KristaMusic
+          - generic [ref=e745]:
+            - generic [ref=e746]:
+              - img "Something is going down" [ref=e747]
+              - img [ref=e749]
+              - generic [ref=e752]:
+                - generic "Play button with play count" [ref=e753]:
+                  - img [ref=e755]
+                  - generic [ref=e758]: 304K
+                - button "Like button with like count" [ref=e759]:
+                  - img [ref=e761]
+                  - generic [ref=e764]: 3.8K
+            - generic [ref=e765]: Something is going down
+            - generic [ref=e766]:
+              - img "XAVI" [ref=e768]
+              - generic [ref=e769]: XAVI
+          - generic [ref=e772]:
+            - generic [ref=e773]:
+              - img "Bittersweet Gravity" [ref=e774]
+              - img [ref=e776]
+              - generic [ref=e779]:
+                - generic "Play button with play count" [ref=e780]:
+                  - img [ref=e782]
+                  - generic [ref=e785]: 284K
+                - button "Like button with like count" [ref=e786]:
+                  - img [ref=e788]
+                  - generic [ref=e791]: 6.0K
+            - generic [ref=e792]: Bittersweet Gravity
+            - generic [ref=e793]:
+              - img "Wistaria Addict" [ref=e795]
+              - generic [ref=e796]: Wistaria Addict
+          - generic [ref=e799]:
+            - generic [ref=e800]:
+              - img "Short-Circuit" [ref=e801]
+              - img [ref=e803]
+              - generic [ref=e806]:
+                - generic "Play button with play count" [ref=e807]:
+                  - img [ref=e809]
+                  - generic [ref=e812]: 204K
+                - button "Like button with like count" [ref=e813]:
+                  - img [ref=e815]
+                  - generic [ref=e818]: 3.7K
+            - generic [ref=e819]: Short-Circuit
+            - generic [ref=e820]:
+              - img "JAMATHORN" [ref=e822]
+              - generic [ref=e823]: JAMATHORN
+          - generic [ref=e826]:
+            - generic [ref=e827]:
+              - img "Ride to Conser Drive" [ref=e828]
+              - img [ref=e830]
+              - generic [ref=e833]:
+                - generic "Play button with play count" [ref=e834]:
+                  - img [ref=e836]
+                  - generic [ref=e839]: 92K
+                - button "Like button with like count" [ref=e840]:
+                  - img [ref=e842]
+                  - generic [ref=e845]: "327"
+            - generic [ref=e846]: Ride to Conser Drive
+            - generic [ref=e847]:
+              - img "zake" [ref=e849]
+              - generic [ref=e850]: zake
+          - generic [ref=e853]:
+            - generic [ref=e854]:
+              - img "take me with her" [ref=e855]
+              - img [ref=e857]
+              - generic [ref=e860]:
+                - generic "Play button with play count" [ref=e861]:
+                  - img [ref=e863]
+                  - generic [ref=e866]: 177K
+                - button "Like button with like count" [ref=e867]:
+                  - img [ref=e869]
+                  - generic [ref=e872]: 1.8K
+            - generic [ref=e873]: take me with her
+            - generic [ref=e874]:
+              - img "Sol" [ref=e876]
+              - generic [ref=e877]: Sol
+          - generic [ref=e880]:
+            - generic [ref=e881]:
+              - img "Mojave" [ref=e882]
+              - img [ref=e884]
+              - generic [ref=e887]:
+                - generic "Play button with play count" [ref=e888]:
+                  - img [ref=e890]
+                  - generic [ref=e893]: 126K
+                - button "Like button with like count" [ref=e894]:
+                  - img [ref=e896]
+                  - generic [ref=e899]: "843"
+            - generic [ref=e900]: Mojave
+            - generic [ref=e901]:
+              - img "HighSpeedOutro9488" [ref=e903]
+              - generic [ref=e904]: HighSpeedOutro9488
+          - generic [ref=e907]:
+            - generic [ref=e908]:
+              - img "What A Shame (Original Version) - by GVG.Creations" [ref=e909]
+              - img [ref=e911]
+              - generic [ref=e914]:
+                - generic "Play button with play count" [ref=e915]:
+                  - img [ref=e917]
+                  - generic [ref=e920]: 164K
+                - button "Like button with like count" [ref=e921]:
+                  - img [ref=e923]
+                  - generic [ref=e926]: 1.4K
+            - generic [ref=e927]: What A Shame (Original Version) - by GVG.Creations
+            - generic [ref=e928]:
+              - img "GVG.Creations" [ref=e930]
+              - generic [ref=e931]: GVG.Creations
+      - generic [ref=e933]:
+        - heading "Everything you need to make music your way" [level=1] [ref=e935]
+        - generic [ref=e938]:
+          - generic [ref=e941]:
+            - heading "10 free songs, daily" [level=3] [ref=e942]
+            - generic [ref=e943]: Turn any moment into customized music instantly — from your commute to inside jokes. Express what words can’t. Free forever, no subscription needed.
+          - generic [ref=e947]:
+            - heading "Free AI music generator" [level=3] [ref=e948]
+            - generic [ref=e949]: Discover what’s possible when anyone can make music. Access the market-leading AI song generator to explore millions of songs—remixes, jokes, and raw emotion.
+          - generic [ref=e953]:
+            - heading "Share it with the world" [level=3] [ref=e954]
+            - generic [ref=e955]: Make music that matters to you, then share it with people who’ll feel it too. From your inner circle to millions of music fans, your next track can go far.
+        - generic [ref=e959]:
+          - generic [ref=e962]:
+            - heading "Granular creation controls" [level=3] [ref=e963]
+            - generic [ref=e964]: Steer your style with Voices, Inspo, exclusions, and vocal gender. Or get even more granular and experiment with weirdness and style sliders.
+          - generic [ref=e968]:
+            - heading "Commercial rights to your songs" [level=3] [ref=e969]
+            - generic [ref=e970]: Songs you create as a paid Suno subscriber are yours to keep and do whatever you want with them, from using them as background music in videos to publishing an album.
+          - generic [ref=e974]:
+            - heading "Your complete creative workspace" [level=3] [ref=e975]
+            - generic [ref=e976]: Suno Studio is a first-of-its-kind web-based generative audio workstation that combines traditional DAW functionality with AI-powered music creation.
+        - generic [ref=e980]:
+          - generic [ref=e983]:
+            - heading "Experience the modern song maker" [level=3] [ref=e984]
+            - generic [ref=e985]: Start, edit, remix—your way. Upload or record your own audio, rewrite lyrics, reorder sections, and reimagine your sound with powerful creative tools.
+          - generic [ref=e989]:
+            - heading "Create everyday. Keep it all." [level=3] [ref=e990]
+            - generic [ref=e991]: Make up to 500 custom songs a month, with full commercial rights on the Pro plan. Get inspired, break genre boundaries, and own what you generate—no strings attached.
+          - generic [ref=e995]:
+            - heading "Extract stems. Drop into your DAW." [level=3] [ref=e996]
+            - generic [ref=e997]: Export up to 12 time-aligned WAV stems and use them seamlessly in Ableton, Logic, or any DAW. Clean, structured, and ready for pro workflows.
+      - generic [ref=e1000]:
+        - generic [ref=e1001]:
+          - heading "Start making music for free" [level=1] [ref=e1002]
+          - heading "Select the plan that best fits your needs" [level=2] [ref=e1003]
+        - generic [ref=e1004]:
+          - radiogroup [ref=e1005]:
+            - radio "Monthly" [ref=e1006] [cursor=pointer]:
+              - generic [ref=e1008]: Monthly
+            - radio "Yearly save 20%" [checked] [ref=e1009] [cursor=pointer]:
+              - img [ref=e1011]
+              - generic [ref=e1014]:
+                - text: Yearly
+                - generic [ref=e1016]: save 20%
+          - generic [ref=e1017]:
+            - generic [ref=e1020]:
+              - generic [ref=e1021]:
+                - generic [ref=e1022]:
+                  - generic [ref=e1023]:
+                    - heading "無料プラン" [level=2] [ref=e1026]
+                    - generic [ref=e1027]: はじめての人にぴったり
+                  - generic [ref=e1029]:
+                    - generic [ref=e1030]: $0
+                    - generic [ref=e1031]: /月
+                - button "利用する" [ref=e1034] [cursor=pointer]:
+                  - generic [ref=e1035]: 利用する
+              - list [ref=e1037]:
+                - listitem [ref=e1038]:
+                  - img [ref=e1040]
+                  - generic [ref=e1043]: v4.5-all利用可能
+                - listitem [ref=e1044]:
+                  - img [ref=e1046]
+                  - generic [ref=e1049]: 毎日50クレジット更新（10曲分）
+                - listitem [ref=e1050]:
+                  - img [ref=e1052]
+                  - generic [ref=e1055]: 商用利用不可
+                - listitem [ref=e1056]:
+                  - img [ref=e1058]
+                  - generic [ref=e1061]: 標準機能のみ利用可能
+                - listitem [ref=e1062]:
+                  - img [ref=e1064]
+                  - generic [ref=e1067]: 最大1分の音声アップロード
+                - listitem [ref=e1068]:
+                  - img [ref=e1070]
+                  - generic [ref=e1073]: 共有キューを用いての生成
+                - listitem [ref=e1074]:
+                  - img [ref=e1076]
+                  - generic [ref=e1079]: 追加クレジット購入不可
+            - generic [ref=e1082]:
+              - generic [ref=e1083]:
+                - generic [ref=e1084]:
+                  - generic [ref=e1085]:
+                    - generic [ref=e1086]:
+                      - heading "プロプラン" [level=2] [ref=e1088]
+                      - generic [ref=e1091]:
+                        - img [ref=e1093]
+                        - generic [ref=e1096]: 最も人気
+                    - generic [ref=e1097]: 最高性能のモデルと編集機能が付帯
+                  - generic [ref=e1098]:
+                    - generic [ref=e1099]:
+                      - generic [ref=e1100]: $8
+                      - generic [ref=e1101]: /月
+                    - generic [ref=e1103]:
+                      - generic [ref=e1104]: 年払いなら$24お得！
+                      - generic [ref=e1105]: 税金は決済時に適用されます
+                - button "購読する" [ref=e1107] [cursor=pointer]:
+                  - generic [ref=e1108]: 購読する
+              - list [ref=e1110]:
+                - listitem [ref=e1111]:
+                  - img [ref=e1113]
+                  - generic [ref=e1116]: 最高かつ最もパーソナルなv5.5モデルへのアクセス
+                - listitem [ref=e1117]:
+                  - img [ref=e1119]
+                  - generic [ref=e1122]: 毎月2,500クレジット付与（最大500曲まで制作可能）
+                - listitem [ref=e1123]:
+                  - img [ref=e1125]
+                  - generic [ref=e1128]: 契約期間中に制作した楽曲は商用利用OK
+                - listitem [ref=e1129]:
+                  - img [ref=e1131]
+                  - generic [ref=e1134]: 標準+プロ機能（ペルソナ設定や高度な編集）を利用可能
+                - listitem [ref=e1135]:
+                  - img [ref=e1137]
+                  - generic [ref=e1140]: 最大12のステム（ボーカル・インスト）に分離可能
+                - listitem [ref=e1141]:
+                  - img [ref=e1143]
+                  - generic [ref=e1146]: 最大8分の音声アップロード
+                - listitem [ref=e1147]:
+                  - img [ref=e1149]
+                  - generic [ref=e1152]: 既存の曲に新たにボーカルやインストを追加可能
+                - listitem [ref=e1153]:
+                  - img [ref=e1155]
+                  - generic [ref=e1158]: 新機能の先行アクセス
+                - listitem [ref=e1159]:
+                  - img [ref=e1161]
+                  - generic [ref=e1164]: 追加クレジット購入可
+                - listitem [ref=e1165]:
+                  - img [ref=e1167]
+                  - generic [ref=e1170]: 優先キューで最大10曲を同時生成
+                - listitem [ref=e1171]:
+                  - img [ref=e1173]
+                  - generic [ref=e1176]: 自分の声で録音、アップロード、そして創作しよう
+                - listitem [ref=e1177]:
+                  - img [ref=e1179]
+                  - generic [ref=e1182]: 独自のオーディオを使用してv5.5のカスタムバージョンをチューニングします
+            - generic [ref=e1185]:
+              - generic [ref=e1186]:
+                - generic [ref=e1187]:
+                  - generic [ref=e1188]:
+                    - generic [ref=e1189]:
+                      - heading "プレミアプラン" [level=2] [ref=e1191]
+                      - generic [ref=e1195]: 最高のお得
+                    - generic [ref=e1196]: クレジット数MAXですべての機能が楽しめる
+                  - generic [ref=e1197]:
+                    - generic [ref=e1198]:
+                      - generic [ref=e1199]: $24
+                      - generic [ref=e1200]: /月
+                    - generic [ref=e1202]:
+                      - generic [ref=e1203]: 年払いなら$72お得！
+                      - generic [ref=e1204]: 税金は決済時に適用されます
+                - button "購読する" [ref=e1206] [cursor=pointer]:
+                  - generic [ref=e1207]: 購読する
+              - list [ref=e1209]:
+                - listitem [ref=e1210]:
+                  - img [ref=e1212]
+                  - generic [ref=e1215]: Suno Studio利用可能
+                - listitem [ref=e1216]:
+                  - img [ref=e1218]
+                  - generic [ref=e1221]: 最高かつ最もパーソナルなv5.5モデルへのアクセス
+                - listitem [ref=e1222]:
+                  - img [ref=e1224]
+                  - generic [ref=e1227]: 毎月10,000クレジット付与（最大2,000曲まで制作可能）
+                - listitem [ref=e1228]:
+                  - img [ref=e1230]
+                  - generic [ref=e1233]: 契約期間中に制作した楽曲は商用利用OK
+                - listitem [ref=e1234]:
+                  - img [ref=e1236]
+                  - generic [ref=e1239]: 標準+プロ機能（ペルソナ設定や高度な編集）を利用可能
+                - listitem [ref=e1240]:
+                  - img [ref=e1242]
+                  - generic [ref=e1245]: 最大12のステム（ボーカル・インスト）に分離可能
+                - listitem [ref=e1246]:
+                  - img [ref=e1248]
+                  - generic [ref=e1251]: 最大8分の音声アップロード
+                - listitem [ref=e1252]:
+                  - img [ref=e1254]
+                  - generic [ref=e1257]: 既存の曲に新たにボーカルやインストを追加可能
+                - listitem [ref=e1258]:
+                  - img [ref=e1260]
+                  - generic [ref=e1263]: 新機能の先行アクセス
+                - listitem [ref=e1264]:
+                  - img [ref=e1266]
+                  - generic [ref=e1269]: 追加クレジット購入可
+                - listitem [ref=e1270]:
+                  - img [ref=e1272]
+                  - generic [ref=e1275]: 優先キューで最大10曲を同時生成
+                - listitem [ref=e1276]:
+                  - img [ref=e1278]
+                  - generic [ref=e1281]: 自分の声で録音、アップロード、そして創作しよう
+                - listitem [ref=e1282]:
+                  - img [ref=e1284]
+                  - generic [ref=e1287]: 独自のオーディオを使用してv5.5のカスタムバージョンをチューニングします
+      - generic [ref=e1288]:
+        - img "Suno background aura" [ref=e1290]
+        - generic [ref=e1293]:
+          - 'heading "The #1 AI music app" [level=2] [ref=e1294]'
+          - paragraph [ref=e1295]: Where you can discover, create and share from anywhere because music has no boundaries.
+          - generic [ref=e1296]:
+            - generic [ref=e1297]:
+              - generic [ref=e1298]:
+                - img [ref=e1299]
+                - generic [ref=e1302]: Top 10 music app
+              - generic [ref=e1303]:
+                - generic [ref=e1304]:
+                  - generic [ref=e1305]: "4.9"
+                  - img [ref=e1306]
+                - generic [ref=e1309]: 363k+ reviews
+              - button "Download on iPhone" [ref=e1310] [cursor=pointer]:
+                - generic [ref=e1311]:
+                  - img [ref=e1312]
+                  - text: Download on iPhone
+            - generic [ref=e1315]:
+              - generic [ref=e1316]:
+                - img [ref=e1317]
+                - generic [ref=e1321]: Top 10 music app
+              - generic [ref=e1322]:
+                - generic [ref=e1323]:
+                  - generic [ref=e1324]: "4.8"
+                  - img [ref=e1325]
+                - generic [ref=e1328]: 653k+ reviews
+              - button "Download on Android" [ref=e1329] [cursor=pointer]:
+                - generic [ref=e1330]:
+                  - img [ref=e1331]
+                  - text: Download on Android
+      - generic [ref=e1335]:
+        - generic [ref=e1337]:
+          - heading "Explore and get inspired" [level=1] [ref=e1338]
+          - 'heading "Join the #1 AI music generator. Create songs, remix tracks, make beats, and share your music with millions — free forever." [level=2] [ref=e1339]'
+        - generic [ref=e1343]:
+          - generic [ref=e1346]:
+            - img [ref=e1350]
+            - link "@timbaland" [ref=e1354] [cursor=pointer]:
+              - /url: https://instagram.com/timbaland
+          - generic [ref=e1357]:
+            - img [ref=e1361]
+            - link "@spellspellspell" [ref=e1365] [cursor=pointer]:
+              - /url: https://instagram.com/spellspellspell
+          - generic [ref=e1368]:
+            - img [ref=e1372]
+            - link "@nickfloats" [ref=e1376] [cursor=pointer]:
+              - /url: https://instagram.com/nickfloats
+          - generic [ref=e1379]:
+            - img [ref=e1383]
+            - link "@milesmusickid" [ref=e1387] [cursor=pointer]:
+              - /url: https://instagram.com/milesmusickid
+          - generic [ref=e1390]:
+            - img [ref=e1394]
+            - link "@devanibiza" [ref=e1398] [cursor=pointer]:
+              - /url: https://instagram.com/devanibiza
+          - generic [ref=e1401]:
+            - img [ref=e1405]
+            - link "@techguyver" [ref=e1409] [cursor=pointer]:
+              - /url: https://instagram.com/techguyver
+      - generic [ref=e1410]:
+        - generic [ref=e1411]:
+          - heading "Frequently asked questions" [level=2] [ref=e1412]
+          - paragraph [ref=e1413]: Everything you need to know about making music with Suno.
+        - generic [ref=e1414]:
+          - generic [ref=e1415]:
+            - heading "Why is Suno the best AI music generator?" [level=3] [ref=e1416]:
+              - button "Why is Suno the best AI music generator?" [ref=e1417] [cursor=pointer]:
+                - generic [ref=e1418]: Why is Suno the best AI music generator?
+                - generic [ref=e1419]: +
+            - paragraph [ref=e1420]: Most AI music generators produce short instrumental loops. Suno helps you create complete, original songs – vocals, lyrics, full production – from a single text prompt in under a minute, across every genre. Featured in Rolling Stone, Billboard, Wired, and Variety, Suno is used by everyone from first-time creators to top producers and songwriters. We're a top 10 music app on iOS and Android.
+          - generic [ref=e1421]:
+            - heading "How do I make a song with Suno?" [level=3] [ref=e1422]:
+              - button "How do I make a song with Suno?" [ref=e1423] [cursor=pointer]:
+                - generic [ref=e1424]: How do I make a song with Suno?
+                - generic [ref=e1425]: +
+            - paragraph [ref=e1426]: Go to suno.com, describe the song you want – genre, mood, theme, or your own lyrics – and hit Create. Suno helps you build a complete track with vocals, instrumentation, and production in under a minute. Regenerate, extend, or refine from there. Whether you're after a full song or just an instrumental, Suno works as a beat maker, AI song generator and song creator in one.
+          - generic [ref=e1427]:
+            - heading "Do I need any music experience to use Suno?" [level=3] [ref=e1428]:
+              - button "Do I need any music experience to use Suno?" [ref=e1429] [cursor=pointer]:
+                - generic [ref=e1430]: Do I need any music experience to use Suno?
+                - generic [ref=e1431]: +
+            - paragraph [ref=e1432]: "No experience needed. Suno is built for everyone – people making music for the first time and chart-topping pros alike. Describe what you want in plain language: a genre, a mood, a topic, even a few lyrics. From there, you shape the melody, harmony, vocals, and production into exactly what you're hearing in your head."
+          - generic [ref=e1433]:
+            - heading "Can I use AI to make music?" [level=3] [ref=e1434]:
+              - button "Can I use AI to make music?" [ref=e1435] [cursor=pointer]:
+                - generic [ref=e1436]: Can I use AI to make music?
+                - generic [ref=e1437]: +
+            - paragraph [ref=e1438]: "Yes. With Suno's AI song generator, you can create complete, original songs just by describing what you want. Type a genre, a mood, an idea – \"chill lo-fi beat about rainy mornings\" – and Suno helps you build a full track with vocals, lyrics, and production in seconds. Millions of people are already using AI to make music: for fun, for content, for professional projects."
+          - generic [ref=e1439]:
+            - heading "Is Suno free to use?" [level=3] [ref=e1440]:
+              - button "Is Suno free to use?" [ref=e1441] [cursor=pointer]:
+                - generic [ref=e1442]: Is Suno free to use?
+                - generic [ref=e1443]: +
+            - paragraph [ref=e1444]: Yes. Suno is a free AI music generator that lets you create up to 10 songs a day, no credit card required. When you're ready to go further, paid plans unlock more. The Pro plan ($10/month) gives you 500 songs a month, royalty free music, access to v5.5 - Suno's best and most personalized AI music model – commercial use rights, priority generation, the Song Editor, stem separation into vocal and instrument stems, and audio uploads of up to 8 minutes. It's the go-to plan for content creators, songwriters, and anyone looking for royalty free music for YouTube, podcasts, ads, or any commercial project. The Premier plan ($30/month) is built for serious creators and producers. On top of everything in Pro, you get 2,000 songs a month, access to Suno Studio – the first-ever generative audio workstation – a multitrack editor, MIDI export, persona voices, and early access to new features. It's a full AI music production suite in your browser. Both paid plans are available at a 20% discount with annual billing.
+        - link "See the full FAQ →" [ref=e1445] [cursor=pointer]:
+          - /url: https://help.suno.com
+          - text: See the full FAQ
+          - generic [ref=e1446]: →
+        - button "Sign up for free" [ref=e1448] [cursor=pointer]:
+          - generic [ref=e1449]: Sign up for free
+      - generic [ref=e1450]:
+        - generic [ref=e1451]:
+          - generic [ref=e1452]:
+            - generic [ref=e1454]:
+              - generic [ref=e1455]: Brand
+              - link "About" [ref=e1457] [cursor=pointer]:
+                - /url: https://suno.com/about
+              - link "Work at Suno" [ref=e1459] [cursor=pointer]:
+                - /url: https://suno.com/careers
+              - link "Blog" [ref=e1461] [cursor=pointer]:
+                - /url: https://suno.com/blog?tag=all
+              - link "Pricing" [ref=e1463] [cursor=pointer]:
+                - /url: https://suno.com/pricing
+              - link "Hub" [ref=e1465] [cursor=pointer]:
+                - /url: https://suno.com/hub
+            - generic [ref=e1467]:
+              - generic [ref=e1468]: Support
+              - link "Help" [ref=e1470] [cursor=pointer]:
+                - /url: https://help.suno.com/
+              - link "Contact Us" [ref=e1472] [cursor=pointer]:
+                - /url: https://help.suno.com/en/articles/2551617
+              - link "Community Guidelines" [ref=e1474] [cursor=pointer]:
+                - /url: https://suno.com/community-guidelines
+              - link "FAQs" [ref=e1476] [cursor=pointer]:
+                - /url: https://help.suno.com
+              - link "Terms of Service" [ref=e1478] [cursor=pointer]:
+                - /url: https://suno.com/terms-of-service
+              - link "Privacy Policy" [ref=e1480] [cursor=pointer]:
+                - /url: https://suno.com/privacy-policy
+          - generic [ref=e1482]:
+            - link [ref=e1483] [cursor=pointer]:
+              - /url: https://x.com/suno
+              - img [ref=e1484]
+            - link [ref=e1487] [cursor=pointer]:
+              - /url: https://www.instagram.com/sunomusic
+              - img [ref=e1488]
+            - link [ref=e1491] [cursor=pointer]:
+              - /url: https://www.tiktok.com/@sunomusic
+              - img [ref=e1492]
+            - link [ref=e1495] [cursor=pointer]:
+              - /url: https://www.youtube.com/@suno
+              - img [ref=e1496]
+            - link [ref=e1499] [cursor=pointer]:
+              - /url: https://discord.com/invite/suno
+              - img [ref=e1500]
+        - generic [ref=e1504]: © 2026 Suno, Inc.
+  - alert [ref=e1505]
+  - generic:
+    - region "Notifications-top"
+    - region "Notifications-top-left"
+    - region "Notifications-top-right"
+    - region "Notifications-bottom-left"
+    - region "Notifications-bottom"
+    - region "Notifications-bottom-right"
+  - generic:
+    - region "Notifications-top"
+    - region "Notifications-top-left"
+    - region "Notifications-top-right"
+    - region "Notifications-bottom-left"
+    - region "Notifications-bottom"
+    - region "Notifications-bottom-right"
+  - dialog "Privacy" [ref=e1507]:
+    - generic [ref=e1509]:
+      - generic [ref=e1512]: By clicking “Accept All Cookies”, you agree to the storing of cookies on your device to enhance site navigation, analyze site usage, and assist in our marketing efforts.
+      - generic [ref=e1514]:
+        - button "Your Privacy Choices, Opens the preference center dialog" [ref=e1515] [cursor=pointer]: Your Privacy Choices
+        - button "Reject All" [ref=e1516] [cursor=pointer]
+        - button "Accept All Cookies" [ref=e1517] [cursor=pointer]
+    - button "Close" [ref=e1519] [cursor=pointer]

@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-04
 
+Latest sync (2026-04-04 unstable-network timeout fallback + clap compile fix):
+the latest dataspace/domain cleanup fallout is narrowed to verification work.
+The patched tree is compile-clean again, and the two runtime failures from the
+older broad workspace run are both green on focused post-patch reruns.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/soracloud.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/extra_functional/unstable_network.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/triggers/time_trigger.rs`
+- verified with:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup_fix cargo test --workspace --no-run`
+  - `CARGO_TARGET_DIR=target_tmp_unstable_fix cargo test -p integration_tests --test mod extra_functional::unstable_network::unstable_network_12_peers_4_faults -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_unstable_fix cargo test -p integration_tests --test mod triggers::time_trigger:: -- --nocapture`
+
+Open work for this slice now remains:
+- run a fresh full runtime workspace sweep on the fully patched tree:
+  `CARGO_TARGET_DIR=target_tmp_domain_cleanup_fix cargo test --workspace`;
+- if that runtime sweep is green, follow with the strict lint pass:
+  `cargo clippy --workspace --all-targets -- -D warnings`; and
+- if any runtime failures remain, treat them as new breakage beyond the now-fixed
+  unstable-network confirmation-timeout regression.
+
 Latest sync (2026-04-04 aggressive stepped sweep to `1000 TPS`):
 the current patched tree no longer dies on the old NPoS opaque-asset-id panic,
 but the aggressive single-host load knee is still low and mode-dependent.

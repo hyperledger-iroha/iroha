@@ -1178,28 +1178,29 @@ impl UnstableNetwork {
                 loop {
                     let client = query_client.clone();
                     let asset_definition_id = asset_definition_id.clone();
-                    match spawn_blocking(move || client.query(FindAssetsDefinitions::new()).execute_all())
-                        .await
+                    match spawn_blocking(move || {
+                        client.query(FindAssetsDefinitions::new()).execute_all()
+                    })
+                    .await
                     {
-                        Ok(Ok(definitions))
+                        Ok(Ok(definitions)) => {
                             if definitions
                                 .into_iter()
-                                .any(|definition| definition.id() == &asset_definition_id) =>
-                        {
-                            iroha_logger::warn!(
-                                ?asset_definition_id,
-                                "asset definition registration confirmed via query after tx confirmation timeout"
-                            );
-                            return Ok(());
+                                .any(|definition| definition.id() == &asset_definition_id)
+                            {
+                                iroha_logger::warn!(
+                                    ?asset_definition_id,
+                                    "asset definition registration confirmed via query after tx confirmation timeout"
+                                );
+                                return Ok(());
+                            }
                         }
-                        Ok(Ok(_)) | Ok(Err(_)) | Err(_) => {}
+                        Ok(Err(_)) | Err(_) => {}
                     }
                     if Instant::now() >= deadline {
-                        return Err(err.wrap_err_with(|| {
-                            format!(
-                                "asset definition {asset_definition_id} stayed absent after tx confirmation timeout"
-                            )
-                        }));
+                        return Err(err.wrap_err(format!(
+                            "asset definition {asset_definition_id} stayed absent after tx confirmation timeout"
+                        )));
                     }
                     sleep(Duration::from_millis(200)).await;
                 }

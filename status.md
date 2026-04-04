@@ -2,6 +2,40 @@
 
 Last updated: 2026-04-04
 
+## 2026-04-04 Follow-up: workspace compile sweep is green and the broad-run regression pair is patched
+- Finished the remaining compile/runtime fallout around the dataspace-domain
+  cleanup in the current tree:
+  - `crates/iroha_cli/src/soracloud.rs` now marks `Command::App(...)` as a
+    real clap subcommand again, which restores workspace-wide `--no-run`
+    compilation; and
+  - `integration_tests/tests/extra_functional/unstable_network.rs` no longer
+    treats a post-submit transaction-confirmation timeout during
+    `register_numeric_asset(...)` as an immediate failure when the asset
+    definition was actually accepted and becomes visible shortly after.
+  - `integration_tests/tests/triggers/time_trigger.rs` now floors the
+    time-trigger submission TTL to `4 * sync_timeout` and treats a one-off
+    `Transaction expired` during scenario bootstrap as retryable.
+- The unstable-network helper now:
+  - detects the existing transaction-confirmation timeout signatures from the
+    client path;
+  - polls `FindAssetsDefinitions` until the requested asset definition becomes
+    visible or the original timeout window expires; and
+  - only preserves the original error if the asset definition still does not
+    appear by the deadline.
+- Focused validation completed on the patched tree:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_domain_cleanup_fix cargo test --workspace --no-run`
+  - `CARGO_TARGET_DIR=target_tmp_unstable_fix cargo test -p integration_tests --test mod extra_functional::unstable_network::unstable_network_12_peers_4_faults -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_unstable_fix cargo test -p integration_tests --test mod triggers::time_trigger:: -- --nocapture`
+- Current verification boundary:
+  - the long-running pre-patch `cargo test --workspace` session finished with
+    exactly two failures:
+    `unstable_network_12_peers_4_faults` and
+    `triggers::time_trigger::time_trigger_scenarios`;
+  - both failures are green on focused post-patch reruns; and
+  - a fresh full runtime `cargo test --workspace` has not yet been rerun on the
+    fully patched tree.
+
 ## 2026-04-04 Follow-up: aggressive stepped sweep to 1000 TPS still shows early single-host knees
 - Ran a fresh sequential aggressive stepped sweep on the patched release
   binaries in `/tmp/iroha_target_tieredfix/release` using:
