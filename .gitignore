@@ -203,6 +203,7 @@ _apalache-out*
 /fastpq_*.json
 /libtest.rlib
 /clippy_errors.txt
+/.playwright-cli*
 /*.log
 /*.aux
 /*.bbl

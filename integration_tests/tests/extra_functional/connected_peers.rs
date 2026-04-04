@@ -182,20 +182,25 @@ async fn connected_peers_with_f(context: &'static str, faults: usize) -> Result<
     let submit_timeout = sync_timeout.saturating_add(da_commit_timeout);
 
     // Unregister a peer and wait for the roster to reflect the change.
-    let mut client = leader_peer(randomized_peers.iter().copied()).client();
-    client.transaction_status_timeout = submit_timeout;
-    client.transaction_ttl = Some(submit_timeout.saturating_add(Duration::from_secs(120)));
     let unregister_peer = Unregister::peer(removed_peer.id());
-    submit_instruction_or_warn(client.clone(), unregister_peer, context).await?;
-    wait_for_block_height(randomized_peers.iter().copied(), 2, sync_timeout).await?;
     if sandbox::handle_result(
-        wait_for_peer_roster(&roster_client, n_peers - 1, sync_timeout).await,
+        submit_instruction_until_peer_roster(
+            randomized_peers.iter().copied(),
+            &roster_client,
+            unregister_peer.into(),
+            n_peers - 1,
+            context,
+            submit_timeout,
+            sync_timeout,
+        )
+        .await,
         context,
     )?
     .is_none()
     {
         return Ok(());
     }
+    wait_for_block_height(randomized_peers.iter().copied(), 2, sync_timeout).await?;
     let expected_connected = expected_connected_peers(n_peers - 1);
     if sandbox::handle_result(
         assert_peers_status(
