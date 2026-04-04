@@ -2452,7 +2452,7 @@ fn copy_rans_tables(out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-const CLIENT_ACCOUNT_DOMAIN: &str = "wonderland";
+const CLIENT_ACCOUNT_DOMAIN: &str = "wonderland.universal";
 const CLIENT_ACCOUNT_PUBLIC: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const CLIENT_ACCOUNT_PRIVATE: &str =

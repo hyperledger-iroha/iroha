@@ -2,6 +2,53 @@
 
 Last updated: 2026-04-04
 
+## 2026-04-04 Follow-up: Taira reset + explorer redeploy are green again after the repo update
+- Reset the local/public Taira bundle from scratch:
+  - stopped and removed the old `dist/taira-localnet`;
+  - regenerated it with the current `kagami` and the Taira chain id
+    `809574f5-fee7-5e69-bfcf-52451e42d50f`; and
+  - re-ran `configs/soranexus/taira/bootstrap_kaigi_localnet.sh`.
+- Rebuilt the static explorer in the sibling checkout
+  `/Users/administrator/dev/iroha2-block-explorer-web` against the refreshed
+  runtime config, and the public explorer is serving the updated build again.
+- Fixed the config/domain fallout that blocked post-reset rollout:
+  - `crates/iroha_kagami/src/localnet.rs` now emits
+    `wonderland.universal` in generated localnet `client.toml`;
+  - `crates/iroha_kagami/src/client_configs.rs` now defaults generated client
+    configs to fully qualified domains (`acme.universal`);
+  - `defaults/client.toml`, `defaults/nexus/client.toml`, and
+    `configs/soranexus/taira/taira-canary-client.example.toml` now use
+    `wonderland.universal`; and
+  - `configs/soranexus/taira/check_mcp_rollout.sh` no longer scrapes the CLI
+    error text for faucet bootstrap. It derives the canary account id from the
+    write config plus chain discriminant and uses
+    `iroha tools address convert`.
+- The Kaigi bootstrap wrapper was also aligned with the updated fully
+  qualified domain model:
+  - `configs/soranexus/taira/bootstrap_kaigi_localnet.sh` now defaults call
+    and relay domains to `wonderland.universal` / `nexus.universal`; and
+  - it passes an explicit bootstrap-authority domain instead of reusing the
+    relay-domain variable.
+- Validation completed:
+  - `cargo fmt --all`
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh`
+  - `bash -n configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+  - `cargo test -p iroha_kagami client_config_is_written_and_parsable -- --nocapture`
+  - `cargo test -p iroha_kagami render_client_config_contains_expected_fields -- --nocapture`
+  - `cargo test -p iroha_kagami run_writes_client_configs -- --nocapture`
+  - `LOCAL_MCP_URL=http://127.0.0.1:29080/v1/mcp PUBLIC_MCP_URL=https://taira.sora.org/v1/mcp bash configs/soranexus/taira/check_mcp_rollout.sh --skip-write-canary`
+  - `LOCAL_MCP_URL=http://127.0.0.1:29080/v1/mcp bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --write-config dist/taira-localnet/client.toml --write-target local --iroha-bin ./target/release/iroha`
+  - `curl -sf https://taira.sora.org/status`
+  - `curl -sf https://taira.sora.org/v1/mcp`
+  - `curl -sf https://taira-explorer.sora.org/`
+  - `curl -sf https://taira-explorer.sora.org/config.json`
+- Live state after the reset:
+  - local and public `/status` are back on the same chain head and report
+    `commit_qc_validator_set_len=4`;
+  - the local signed write canary succeeds again after the reset; and
+  - the public explorer serves the rebuilt static bundle with
+    `toriiBaseUrl = "https://taira.sora.org"`.
+
 ## 2026-04-04 Follow-up: aggressive stepped sweep to 1000 TPS still shows early single-host knees
 - Ran a fresh sequential aggressive stepped sweep on the patched release
   binaries in `/tmp/iroha_target_tieredfix/release` using:

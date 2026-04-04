@@ -357,7 +357,8 @@ chain = source.get("chain")
 account = source.get("account") or {}
 public_key = account.get("public_key")
 private_key = account.get("private_key")
-domain = account.get("domain", "wonderland")
+chain_discriminant = account.get("chain_discriminant")
+domain = account.get("domain", "wonderland.universal")
 basic_auth = source.get("basic_auth")
 
 if not isinstance(chain, str) or not chain:
@@ -366,8 +367,10 @@ if not isinstance(public_key, str) or not public_key:
     raise SystemExit("write canary config is missing `account.public_key`")
 if not isinstance(private_key, str) or not private_key:
     raise SystemExit("write canary config is missing `account.private_key`")
+if chain_discriminant is not None and not isinstance(chain_discriminant, int):
+    raise SystemExit("write canary config `account.chain_discriminant` must be an integer")
 if not isinstance(domain, str) or not domain:
-    domain = "wonderland"
+    domain = "wonderland.universal"
 
 lines = [
     f'chain = "{chain}"',
@@ -394,9 +397,13 @@ lines.extend(
         f'domain = "{domain}"',
         f'public_key = "{public_key}"',
         f'private_key = "{private_key}"',
-        "",
     ]
 )
+
+if isinstance(chain_discriminant, int):
+    lines.append(f'chain_discriminant = {chain_discriminant}')
+
+lines.append("")
 
 with open(output_path, "w", encoding="utf-8") as handle:
     handle.write("\n".join(lines))
@@ -435,22 +442,84 @@ ensure_iroha_bin() {
   fi
 }
 
-extract_authority_from_cli_output() {
-  local output_path="$1"
-  python3 - "$output_path" <<'PY'
-import re
+resolve_canary_account_id() {
+  local config_path="$1"
+  local values=()
+  local line
+  while IFS= read -r line; do
+    values+=("$line")
+  done < <(
+    python3 - "$config_path" <<'PY'
+import sys
+
+try:
+    import tomllib
+except ModuleNotFoundError:
+    import tomli as tomllib
+
+KNOWN_PREFIXES = {
+    "iroha3-taira": 369,
+    "809574f5-fee7-5e69-bfcf-52451e42d50f": 369,
+    "iroha3-nexus": 753,
+    "00000000-0000-0000-0000-000000000753": 753,
+}
+
+with open(sys.argv[1], "rb") as handle:
+    source = tomllib.load(handle)
+
+account = source.get("account") or {}
+public_key = account.get("public_key")
+chain = source.get("chain")
+chain_discriminant = account.get("chain_discriminant")
+
+if not isinstance(public_key, str) or not public_key:
+    raise SystemExit("write canary config is missing `account.public_key`")
+if chain_discriminant is None:
+    chain_discriminant = KNOWN_PREFIXES.get(chain)
+if not isinstance(chain_discriminant, int):
+    raise SystemExit(
+        "write canary config must set `account.chain_discriminant` when `chain` is not a known Taira/Nexus chain id"
+    )
+
+print(public_key)
+print(chain_discriminant)
+PY
+  )
+
+  if [[ "${#values[@]}" -lt 2 ]]; then
+    echo "could not derive the canary signer public key and chain discriminant from $config_path" >&2
+    exit 1
+  fi
+
+  local public_key="${values[0]}"
+  local chain_discriminant="${values[1]}"
+  local output_file
+  output_file="$(mktemp)"
+  "${IROHA_RUNNER[@]}" tools address convert --network-prefix "$chain_discriminant" --format json "$public_key" \
+    >"$output_file" 2>&1 || {
+    sed -n '1,80p' "$output_file" >&2 || true
+    rm -f "$output_file"
+    exit 1
+  }
+
+  python3 - "$output_file" <<'PY'
+import json
 import sys
 
 with open(sys.argv[1], "r", encoding="utf-8", errors="replace") as handle:
     payload = handle.read()
 
-match = re.search(r"authority:\s*([^,]+),\s*creation_time_ms:", payload)
-if not match:
-    raise SystemExit(
-        "could not extract the canary authority account id from the failed CLI output"
-    )
-print(match.group(1).strip())
+start = payload.find("{")
+if start == -1:
+    raise SystemExit("could not find JSON address-convert output while deriving the canary account id")
+
+summary = json.loads(payload[start:])
+account_id = summary.get("i105", {}).get("value")
+if not isinstance(account_id, str) or not account_id:
+    raise SystemExit("address-convert output did not include an i105 account id")
+print(account_id)
 PY
+  rm -f "$output_file"
 }
 
 claim_faucet_for_canary() {
@@ -512,7 +581,7 @@ run_write_canary() {
     fi
     if grep -q 'Failed to find asset' "$output_file"; then
       local canary_account_id
-      canary_account_id="$(extract_authority_from_cli_output "$output_file" | tr -d '\r\n')"
+      canary_account_id="$(resolve_canary_account_id "$temp_config" | tr -d '\r\n')"
       if ! claim_faucet_for_canary "$target_url" "$canary_account_id" >&2; then
         echo "write canary failed: canary signer is unfunded and the automatic faucet bootstrap did not succeed" >&2
         sed -n '1,80p' "$output_file" >&2 || true

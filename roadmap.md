@@ -2,6 +2,29 @@
 
 Last updated: 2026-04-04
 
+Latest sync (2026-04-04 Taira reset + explorer redeploy after repo update):
+the Taira/testnet reset slice is green again after refreshing the local/public
+bundle, rebuilding the explorer, and fixing the updated fully qualified
+domain/config expectations in the rollout helpers and generated client configs.
+
+- verified in this slice:
+  - `cargo fmt --all`
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh`
+  - `bash -n configs/soranexus/taira/bootstrap_kaigi_localnet.sh`
+  - `cargo test -p iroha_kagami client_config_is_written_and_parsable -- --nocapture`
+  - `cargo test -p iroha_kagami render_client_config_contains_expected_fields -- --nocapture`
+  - `cargo test -p iroha_kagami run_writes_client_configs -- --nocapture`
+  - `LOCAL_MCP_URL=http://127.0.0.1:29080/v1/mcp PUBLIC_MCP_URL=https://taira.sora.org/v1/mcp bash configs/soranexus/taira/check_mcp_rollout.sh --skip-write-canary`
+  - `LOCAL_MCP_URL=http://127.0.0.1:29080/v1/mcp bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --write-config dist/taira-localnet/client.toml --write-target local --iroha-bin ./target/release/iroha`
+- open work for this slice now remains:
+  - reconcile the checked-in explorer/nginx template with the actual host-local
+    Homebrew nginx deployment so future redeploys do not depend on manual
+    drift between `configs/soranexus/taira/taira-explorer.nginx.conf` and the
+    live server config; and
+  - rerun broader workspace validation (`cargo test --workspace`,
+    `cargo clippy --workspace --all-targets -- -D warnings`) once the current
+    Taira/runtime slice is otherwise quiet.
+
 Latest sync (2026-04-04 aggressive stepped sweep to `1000 TPS`):
 the current patched tree no longer dies on the old NPoS opaque-asset-id panic,
 but the aggressive single-host load knee is still low and mode-dependent.
