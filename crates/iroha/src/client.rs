@@ -155,6 +155,8 @@ pub struct SccpCounterpartyCapability {
     pub domain: u32,
     /// Stable logical key for the remote chain.
     pub chain: String,
+    /// Target verifier backend family for the remote chain.
+    pub verifier_backend: iroha_sccp::SccpVerifierBackendV1,
     /// Backend label used for transparent SCCP message proofs for this chain.
     pub message_backend: String,
     /// Backend label used for SCCP registry proofs for this chain.
@@ -6105,10 +6107,10 @@ impl Client {
             .expect("data model compatibility lock");
         match cached.clone() {
             DataModelCompatibility::Unchecked => {}
-            DataModelCompatibility::Compatible => return Ok(()),
-            DataModelCompatibility::SubmitCompatible => return Ok(()),
+            DataModelCompatibility::Compatible
+            | DataModelCompatibility::SubmitCompatible
+            | DataModelCompatibility::SchemaIncompatible(_) => return Ok(()),
             DataModelCompatibility::Incompatible(err) => return Err(err.into()),
-            DataModelCompatibility::SchemaIncompatible(_) => return Ok(()),
         }
 
         let Some(capabilities) = self.get_node_capabilities_json_for_compatibility()? else {
@@ -6162,8 +6164,7 @@ impl Client {
         *cached = outcome.clone();
 
         match outcome {
-            DataModelCompatibility::Compatible => Ok(()),
-            DataModelCompatibility::SubmitCompatible => Ok(()),
+            DataModelCompatibility::Compatible | DataModelCompatibility::SubmitCompatible => Ok(()),
             DataModelCompatibility::Incompatible(err) => Err(err.into()),
             DataModelCompatibility::SchemaIncompatible(_) => {
                 unreachable!("data model compatibility evaluation cannot produce schema errors")
@@ -6212,18 +6213,18 @@ impl Client {
                 };
                 match parsed {
                     Ok(actual) => {
-                        if actual != DATA_MODEL_VERSION {
+                        if actual == DATA_MODEL_VERSION {
+                            match parse_signed_transaction_schema_hash_hex(&capabilities) {
+                                Ok(_) => DataModelCompatibility::SubmitCompatible,
+                                Err(err) => DataModelCompatibility::SchemaIncompatible(err),
+                            }
+                        } else {
                             DataModelCompatibility::Incompatible(
                                 DataModelCompatibilityError::Mismatch {
                                     expected: DATA_MODEL_VERSION,
                                     actual,
                                 },
                             )
-                        } else {
-                            match parse_signed_transaction_schema_hash_hex(&capabilities) {
-                                Ok(_) => DataModelCompatibility::SubmitCompatible,
-                                Err(err) => DataModelCompatibility::SchemaIncompatible(err),
-                            }
                         }
                     }
                     Err(err) => DataModelCompatibility::Incompatible(err),
@@ -17963,6 +17964,10 @@ mod tests {
                 SccpCounterpartyCapability {
                     domain: iroha_sccp::SCCP_DOMAIN_TON,
                     chain: "ton".to_owned(),
+                    verifier_backend: iroha_sccp::sccp_verifier_backend_for_domain(
+                        iroha_sccp::SCCP_DOMAIN_TON,
+                    )
+                    .expect("ton verifier backend"),
                     message_backend: "bridge/sccp/stark-fri-v1/ton".to_owned(),
                     registry_backend: "bridge/sccp/registry-v1/ton".to_owned(),
                     counterparty_account_codec: iroha_sccp::SCCP_CODEC_TON_RAW,
@@ -17971,6 +17976,10 @@ mod tests {
                 SccpCounterpartyCapability {
                     domain: iroha_sccp::SCCP_DOMAIN_ETH,
                     chain: "eth".to_owned(),
+                    verifier_backend: iroha_sccp::sccp_verifier_backend_for_domain(
+                        iroha_sccp::SCCP_DOMAIN_ETH,
+                    )
+                    .expect("eth verifier backend"),
                     message_backend: "bridge/sccp/stark-fri-v1/eth".to_owned(),
                     registry_backend: "bridge/sccp/registry-v1/eth".to_owned(),
                     counterparty_account_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,

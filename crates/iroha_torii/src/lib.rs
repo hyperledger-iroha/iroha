@@ -8492,7 +8492,7 @@ fn normalize_stark_fri_circuit_id(backend: &str, raw: &str) -> Option<String> {
 }
 
 fn is_stark_fri_v1_backend(backend: &str) -> bool {
-    backend == iroha_core::zk::ZK_BACKEND_STARK_FRI_V1 || backend.starts_with("stark/fri-v1/")
+    backend == iroha_core::zk::ZK_BACKEND_STARK_FRI_V1 || backend.starts_with("stark/fri/")
 }
 
 fn circuit_id_matches(backend: &str, record_id: &str, env_id: &str) -> bool {
@@ -8573,7 +8573,7 @@ async fn handler_zk_ivm_derive(
     if !iroha_core::zk::is_ivm_execution_backend(backend) {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "ivm derive requires vk_ref.backend == `halo2/ipa` or `stark/fri-v1`".to_owned(),
+                "ivm derive requires vk_ref.backend == `halo2/ipa` or `stark/fri`".to_owned(),
             ),
         )));
     }
@@ -8729,7 +8729,7 @@ async fn handler_zk_ivm_prove(
     if !iroha_core::zk::is_ivm_execution_backend(backend) {
         return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
             iroha_data_model::query::error::QueryExecutionFail::Conversion(
-                "ivm prove requires vk_ref.backend == `halo2/ipa` or `stark/fri-v1`".to_owned(),
+                "ivm prove requires vk_ref.backend == `halo2/ipa` or `stark/fri`".to_owned(),
             ),
         )));
     }
@@ -8989,7 +8989,7 @@ async fn handler_zk_ivm_prove(
                     #[cfg(not(feature = "zk-stark"))]
                     {
                         return Err(
-                            "stark/fri-v1 prove requested but binary lacks `zk-stark`".to_owned()
+                            "stark/fri prove requested but binary lacks `zk-stark`".to_owned()
                         );
                     }
                 } else {
@@ -17342,11 +17342,14 @@ async fn handler_sccp_message_artifact(
         );
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(
-        routing::handle_v1_sccp_message_proof_artifact(app.state.as_ref(), message_id, accept)
-            .await?
-            .into_response(),
+    Ok(routing::handle_v1_sccp_message_proof_artifact(
+        app.state.as_ref(),
+        &app.da_receipt_signer,
+        message_id,
+        accept,
     )
+    .await?
+    .into_response())
 }
 
 async fn handler_sccp_message_job(
@@ -17382,11 +17385,14 @@ async fn handler_sccp_message_job(
         crate::telemetry::report_torii_api_hit(&app.telemetry, &api_token, "v1/sccp/jobs/message");
     }
     let accept = headers.get(axum::http::header::ACCEPT).cloned();
-    Ok(
-        routing::handle_v1_sccp_message_proof_job(app.state.as_ref(), message_id, accept)
-            .await?
-            .into_response(),
+    Ok(routing::handle_v1_sccp_message_proof_job(
+        app.state.as_ref(),
+        &app.da_receipt_signer,
+        message_id,
+        accept,
     )
+    .await?
+    .into_response())
 }
 
 async fn handler_sccp_capabilities(
@@ -17873,6 +17879,7 @@ async fn handler_post_bridge_proof_submit(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
+        &app.da_receipt_signer,
         app.telemetry.clone(),
         request,
     )
@@ -17928,6 +17935,7 @@ async fn handler_post_bridge_message_submit(
         app.chain_id.clone(),
         app.queue.clone(),
         app.state.clone(),
+        &app.da_receipt_signer,
         app.telemetry.clone(),
         request,
     )
@@ -27247,7 +27255,9 @@ mod gateway_denylist_loader_tests {
         let i105 = address
             .to_i105_for_discriminant(chain_discriminant())
             .expect("i105 encoding");
-        let non_canonical_i105 = address.to_i105().expect("i105 encoding");
+        let non_canonical_i105 = address
+            .to_i105_for_discriminant(chain_discriminant().wrapping_add(1))
+            .expect("alternate i105 encoding");
         (canonical, i105, non_canonical_i105)
     }
 
@@ -28482,13 +28492,16 @@ pub(crate) mod tests_runtime_handlers {
         account_id: &AccountId,
         alias: &str,
     ) {
-        let label = iroha_data_model::account::rekey::AccountAlias::from_literal(
-            alias,
-            &app.state.nexus_snapshot().dataspace_catalog,
-        )
-        .expect("valid account alias");
+        let dataspace_catalog = app.state.nexus_snapshot().dataspace_catalog.clone();
+        let label =
+            iroha_data_model::account::rekey::AccountAlias::from_literal(alias, &dataspace_catalog)
+                .expect("valid account alias");
+        let next_height = app
+            .state
+            .latest_block_header_fast()
+            .map_or(1, |header| header.height().get().saturating_add(1));
         let header = BlockHeader::new(
-            NonZeroU64::new(1).expect("non-zero height"),
+            NonZeroU64::new(next_height).expect("non-zero height"),
             None,
             None,
             None,
@@ -28498,6 +28511,23 @@ pub(crate) mod tests_runtime_handlers {
         let mut block = app.state.block(header);
         let mut tx = block.transaction();
         let world = tx.world_mut_for_testing();
+        let selector = iroha_core::sns::selector_for_account_alias(&label, &dataspace_catalog)
+            .expect("account alias selector");
+        let account_address =
+            AccountAddress::from_account_id(account_id).expect("address from account id");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            account_id.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(
+                &account_address,
+            )],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            iroha_data_model::metadata::Metadata::default(),
+        );
         world
             .account_aliases_mut_for_testing()
             .insert(label.clone(), account_id.clone());
@@ -28513,6 +28543,10 @@ pub(crate) mod tests_runtime_handlers {
         world.account_rekey_records_mut_for_testing().insert(
             label.clone(),
             iroha_data_model::account::rekey::AccountRekeyRecord::new(label, account_id.clone()),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            iroha_core::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
         );
         tx.apply();
         block.commit().expect("commit account alias for test");
@@ -28550,11 +28584,18 @@ pub(crate) mod tests_runtime_handlers {
         uri: &axum::http::Uri,
         body: &[u8],
     ) -> HeaderMap {
+        static TEST_NONCE_SEQ: LazyLock<std::sync::atomic::AtomicU64> =
+            LazyLock::new(|| std::sync::atomic::AtomicU64::new(0));
         let timestamp_ms = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .expect("system clock")
             .as_millis() as u64;
-        let nonce = format!("lib-test-{timestamp_ms}-{}", uri.path());
+        let nonce_seq = TEST_NONCE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let nonce = format!(
+            "lib-test-{timestamp_ms}-{nonce_seq}-{}-{}",
+            method.as_str(),
+            uri.path()
+        );
         let message =
             crate::canonical_request_signature_message(method, uri, body, timestamp_ms, &nonce);
         let signature = Signature::new(key_pair.private_key(), &message);
@@ -28691,7 +28732,7 @@ pub(crate) mod tests_runtime_handlers {
         ));
         let da_replay_store = Arc::new(da::ReplayCursorStore::in_memory());
         let da_ingest = iroha_config::parameters::actual::DaIngest::default();
-        let da_receipt_signer = KeyPair::random();
+        let da_receipt_signer = KeyPair::random_with_algorithm(Algorithm::Secp256k1);
         let da_receipt_log = Arc::new(da::DaReceiptLog::in_memory(
             Arc::clone(&da_replay_store),
             da_receipt_signer.public_key().clone(),
@@ -31154,13 +31195,11 @@ pub(crate) mod tests_runtime_handlers {
             .expect("body");
         let payload: norito::json::Value = norito::json::from_slice(&bytes).expect("json");
         let rejection_payload = payload
-            .get("content")
-            .and_then(|content| content.get("status"))
-            .and_then(|status| status.get("content"))
-            .and_then(norito::json::Value::as_str)
+            .get("status")
+            .and_then(|status| status.get("rejection_reason"))
+            .cloned()
             .expect("rejection content");
-        let expected =
-            base64::engine::general_purpose::STANDARD.encode(norito::to_bytes(&reason).unwrap());
+        let expected = norito::json::to_value(&reason).expect("rejection json");
         assert_eq!(rejection_payload, expected);
     }
 
@@ -31786,6 +31825,14 @@ pub(crate) mod tests_runtime_handlers {
         (app, message_id)
     }
 
+    fn install_evm_da_receipt_signer_for_test(app: &mut SharedAppState) {
+        let app_mut = Arc::get_mut(app).expect("unique app state");
+        app_mut.da_receipt_signer = KeyPair::from_seed(
+            b"iroha:torii:test:evm-attestor".to_vec(),
+            Algorithm::Secp256k1,
+        );
+    }
+
     fn bridge_finalize_inbound_ivm_program(abi_version: u8) -> Vec<u8> {
         let meta = ivm::ProgramMetadata {
             version_major: 1,
@@ -32165,6 +32212,7 @@ pub(crate) mod tests_runtime_handlers {
 
         let json_response = routing::handle_v1_sccp_message_proof_artifact(
             app.state.as_ref(),
+            &app.da_receipt_signer,
             hex::encode(message_id),
             None,
         )
@@ -32192,6 +32240,7 @@ pub(crate) mod tests_runtime_handlers {
 
         let norito_response = routing::handle_v1_sccp_message_proof_artifact(
             app.state.as_ref(),
+            &app.da_receipt_signer,
             hex::encode(message_id),
             Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
         )
@@ -32238,6 +32287,7 @@ pub(crate) mod tests_runtime_handlers {
 
         let json_response = routing::handle_v1_sccp_message_proof_job(
             app.state.as_ref(),
+            &app.da_receipt_signer,
             hex::encode(message_id),
             None,
         )
@@ -32270,6 +32320,7 @@ pub(crate) mod tests_runtime_handlers {
 
         let norito_response = routing::handle_v1_sccp_message_proof_job(
             app.state.as_ref(),
+            &app.da_receipt_signer,
             hex::encode(message_id),
             Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
         )
@@ -32288,6 +32339,62 @@ pub(crate) mod tests_runtime_handlers {
         let decoded_norito: iroha_sccp::SccpCounterpartyProofJobV1 =
             norito::decode_from_bytes(&norito_bytes).expect("decode norito proof job");
         assert_eq!(decoded_norito, decoded_json);
+
+        routing::clear_sccp_bundles_for_tests();
+    }
+
+    #[tokio::test]
+    async fn sccp_message_artifact_endpoint_builds_evm_attestation_payloads() {
+        routing::clear_sccp_bundles_for_tests();
+        let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_ETH,
+            nonce: 31,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 44,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
+            recipient: b"0x1111111111111111111111111111111111111111".to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:eth:xor".to_vec(),
+        });
+        let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        install_evm_da_receipt_signer_for_test(&mut app);
+
+        let response = routing::handle_v1_sccp_message_proof_artifact(
+            app.state.as_ref(),
+            &app.da_receipt_signer,
+            hex::encode(message_id),
+            None,
+        )
+        .await
+        .expect("json response");
+        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("json body");
+        let decoded: iroha_sccp::NexusSccpMessageTransparentProofV1 =
+            serde_json::from_slice(&bytes).expect("decode json artifact");
+
+        assert_eq!(
+            decoded.verifier_backend.key,
+            iroha_sccp::SCCP_EVM_SECP256K1_PROOF_BACKEND_V1
+        );
+        assert!(iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(&decoded));
+        match &decoded.submission_package.platform_payload {
+            iroha_sccp::SccpPlatformSubmissionPayloadV1::EvmContractCall(payload) => {
+                assert_eq!(
+                    payload.attestation.source_domain,
+                    iroha_sccp::SCCP_DOMAIN_SORA
+                );
+                assert_eq!(payload.attestation.signatures.len(), 1);
+                assert_ne!(payload.proof_bytes, decoded.proof_bytes);
+            }
+            other => panic!("unexpected EVM platform payload: {other:?}"),
+        }
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -32450,7 +32557,8 @@ pub(crate) mod tests_runtime_handlers {
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: b"nexus:eth:xor".to_vec(),
         });
-        let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        install_evm_da_receipt_signer_for_test(&mut app);
         let bundle_response = routing::handle_v1_sccp_message_bundle(
             app.state.as_ref(),
             hex::encode(message_id),
@@ -32471,6 +32579,7 @@ pub(crate) mod tests_runtime_handlers {
             app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
+            &app.da_receipt_signer,
             app.telemetry.clone(),
             crate::utils::extractors::JsonOnly(crate::routing::BridgeProofSubmitDto {
                 authority,
@@ -32540,7 +32649,8 @@ pub(crate) mod tests_runtime_handlers {
             route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
             route_id: b"eth:sora:weth".to_vec(),
         });
-        let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
+        install_evm_da_receipt_signer_for_test(&mut app);
         let bundle_response = routing::handle_v1_sccp_message_bundle(
             app.state.as_ref(),
             hex::encode(message_id),
@@ -32561,6 +32671,7 @@ pub(crate) mod tests_runtime_handlers {
             app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
+            &app.da_receipt_signer,
             app.telemetry.clone(),
             crate::utils::extractors::JsonOnly(crate::routing::BridgeMessageSubmitDto {
                 authority,
@@ -32675,6 +32786,7 @@ pub(crate) mod tests_runtime_handlers {
             app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
+            &app.da_receipt_signer,
             app.telemetry.clone(),
             crate::utils::extractors::JsonOnly(crate::routing::BridgeMessageSubmitDto {
                 authority,
@@ -32713,6 +32825,7 @@ pub(crate) mod tests_runtime_handlers {
         let authority_keypair = KeyPair::random();
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let mut settlement_app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        install_evm_da_receipt_signer_for_test(&mut settlement_app);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             0,
             &authority,
@@ -32765,6 +32878,7 @@ pub(crate) mod tests_runtime_handlers {
             settlement_app.chain_id.clone(),
             settlement_app.queue.clone(),
             settlement_app.state.clone(),
+            &settlement_app.da_receipt_signer,
             settlement_app.telemetry.clone(),
             crate::utils::extractors::JsonOnly(crate::routing::BridgeMessageSubmitDto {
                 authority: authority.clone(),
@@ -32840,6 +32954,7 @@ pub(crate) mod tests_runtime_handlers {
         let authority_keypair = KeyPair::random();
         let authority = AccountId::new(authority_keypair.public_key().clone());
         let mut settlement_app = mk_app_state_for_tests_with_world(world_with_account(&authority));
+        install_evm_da_receipt_signer_for_test(&mut settlement_app);
         let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
             0,
             &authority,
@@ -32892,6 +33007,7 @@ pub(crate) mod tests_runtime_handlers {
             settlement_app.chain_id.clone(),
             settlement_app.queue.clone(),
             settlement_app.state.clone(),
+            &settlement_app.da_receipt_signer,
             settlement_app.telemetry.clone(),
             crate::utils::extractors::JsonOnly(crate::routing::BridgeMessageSubmitDto {
                 authority: authority.clone(),
@@ -33568,6 +33684,7 @@ pub(crate) mod tests_runtime_handlers {
                 axum::http::Request::builder()
                     .uri("/app/assets")
                     .header(axum::http::header::HOST, "portal.sora")
+                    .extension(crate::loopback_connect_info())
                     .body(Body::empty())
                     .expect("request"),
             )
@@ -33628,6 +33745,7 @@ pub(crate) mod tests_runtime_handlers {
                 axum::http::Request::builder()
                     .uri("/app/query")
                     .header(axum::http::header::HOST, "portal.sora")
+                    .extension(crate::loopback_connect_info())
                     .body(Body::empty())
                     .expect("request"),
             )
@@ -34885,11 +35003,14 @@ pub(crate) mod tests_runtime_handlers {
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
     #[tokio::test]
     async fn forward_incoming_torii_proxy_request_reaches_authoritative_peer() {
-        let local_keypair = KeyPair::random();
-        let authoritative_keypair = KeyPair::random();
+        let local_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let authoritative_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let sender_keypair = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
         let local_peer_id = PeerId::from(local_keypair.public_key().clone());
         let authoritative_peer_id = PeerId::from(authoritative_keypair.public_key().clone());
-        let sender_peer_id = PeerId::from(KeyPair::random().public_key().clone());
+        let sender_peer_id = PeerId::from(sender_keypair.public_key().clone());
+        let authoritative_validator = AccountId::new(KeyPair::random().public_key().clone());
+        let sender_validator = AccountId::new(KeyPair::random().public_key().clone());
         let mut app = mk_app_state_for_tests();
         {
             let app_mut = Arc::get_mut(&mut app).expect("unique app state");
@@ -34919,6 +35040,32 @@ pub(crate) mod tests_runtime_handlers {
             topology.clear();
             topology.push(authoritative_peer_id.clone());
             topology.commit();
+        }
+        {
+            let app_mut = Arc::get_mut(&mut app).expect("unique app state");
+            let state = Arc::get_mut(&mut app_mut.state).expect("unique state");
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &authoritative_validator,
+                &authoritative_keypair,
+                "authoritative",
+            );
+            ensure_runtime_peer_binding_for_test(
+                state,
+                &sender_validator,
+                &sender_keypair,
+                "sender",
+            );
+            install_lane_manifest_registry_for_test(
+                state,
+                &[(
+                    LaneId::SINGLE,
+                    vec![
+                        (authoritative_validator, authoritative_peer_id.clone()),
+                        (sender_validator, sender_peer_id.clone()),
+                    ],
+                )],
+            );
         }
 
         let route = RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL);
@@ -36125,7 +36272,7 @@ pub(crate) mod tests_runtime_handlers {
             authority: creds.account.clone(),
             private_key: clone_private_key(&creds.private_key),
             code_b64: code_b64.clone(),
-            contract_alias: "rate-limit::dataspace".parse().expect("contract alias"),
+            contract_alias: "rate-limit::universal".parse().expect("contract alias"),
             lease_expiry_ms: None,
         };
         // Exhaust the exact handler key up front so this regression does not depend
@@ -36920,7 +37067,7 @@ pub(crate) mod tests_runtime_handlers {
             authority: creds.account,
             private_key: clone_private_key(&creds.private_key),
             code_b64,
-            contract_alias: "deploy-test::dataspace".parse().expect("contract alias"),
+            contract_alias: "deploy-test::universal".parse().expect("contract alias"),
             lease_expiry_ms: None,
         };
         let resp = super::handler_post_contract_deploy(
@@ -38368,7 +38515,6 @@ mod tests {
             request.get("lineage_id").and_then(Value::as_str),
             Some("lineage-1")
         );
-        assert_eq!(request.get("lineage_id"), None);
         assert_eq!(
             request.get("device_id").and_then(Value::as_str),
             Some("device-1")
@@ -38856,37 +39002,15 @@ mod tests {
         let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
             .build(&authority);
         let account = Account::new(authority.clone())
-            .with_label(Some(primary_label))
+            .with_label(Some(primary_label.clone()))
             .build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with(
             [domain],
             [authority_account, account],
             [],
         ));
-        {
-            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
-            let mut block = app.state.block(header);
-            let mut tx = block.transaction();
-            let world = tx.world_mut_for_testing();
-            let secondary = AccountAlias::domainless(
-                "public".parse().expect("label"),
-                iroha_data_model::nexus::DataSpaceId::GLOBAL,
-            );
-            world
-                .account_aliases_mut_for_testing()
-                .insert(secondary.clone(), authority.clone());
-            let mut labels = world
-                .account_aliases_by_account_mut_for_testing()
-                .get(&authority)
-                .cloned()
-                .unwrap_or_default();
-            labels.insert(secondary.clone());
-            world
-                .account_aliases_by_account_mut_for_testing()
-                .insert(authority.clone(), labels);
-            tx.apply();
-            block.commit().expect("commit secondary alias");
-        }
+        bind_account_alias_for_test(&app, &authority, "banking@centralbank.universal");
+        bind_account_alias_for_test(&app, &authority, "public@universal");
         let request = routing::AliasLookupByAccountRequestDto {
             account_id: authority.to_string(),
             dataspace: None,
@@ -38939,13 +39063,14 @@ mod tests {
         let domain = Domain::new(DomainId::try_new("centralbank", "universal").expect("domain id"))
             .build(&authority);
         let account = Account::new(authority.clone())
-            .with_label(Some(primary_label))
+            .with_label(Some(primary_label.clone()))
             .build(&authority);
         let app = mk_app_state_for_tests_with_world(World::with(
             [domain],
             [authority_account, account],
             [],
         ));
+        bind_account_alias_for_test(&app, &authority, "banking@centralbank.universal");
         let request = routing::AliasLookupByAccountRequestDto {
             account_id: authority.to_string(),
             dataspace: Some("universal".to_string()),
@@ -41022,8 +41147,8 @@ mod tests {
             core.zk.verify_timeout = Duration::ZERO;
         }
 
-        let backend = "stark/fri-v1/sha256-goldilocks-v1";
-        let circuit_id = "stark/fri-v1/sha256-goldilocks-v1:ivm-execution-v1";
+        let backend = "stark/fri/sha256-goldilocks-v1";
+        let circuit_id = "stark/fri/sha256-goldilocks-v1:ivm-execution-v1";
         let vk_id = VerifyingKeyId::new(backend, "ivm-exec-v1-stark");
         let vk_box = sample_stark_vk_box(
             backend,

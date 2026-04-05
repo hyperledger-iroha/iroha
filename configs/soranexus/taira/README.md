@@ -418,10 +418,17 @@ From `../iroha2-block-explorer-web`:
    - ensure both `taira.sora.org` and `taira-explorer.sora.org` resolve to the
      shared edge host from `dns_records.json` before relying on this nginx
      configuration.
-4. Issue/refresh TLS certificates for both hostnames:
-   - `sudo certbot certonly --nginx -d taira.sora.org -d taira-explorer.sora.org`
-   - certbot stores this SAN cert under `.../live/taira.sora.org/` and nginx can
-     reuse it for both server blocks.
+   - add wildcard edge routing for `*.sorafs.taira.sora.org` and preserve the
+     incoming host header when proxying to Torii; the checked-in nginx example
+     now includes that wildcard `server_name`.
+4. Issue/refresh TLS certificates for the public hosts and CID-origin wildcard:
+   - `taira.sora.org`
+   - `taira-explorer.sora.org`
+   - `*.sorafs.taira.sora.org`
+   - the wildcard requires DNS-01 validation; `certbot --nginx` alone is not
+     enough for the `*.sorafs.taira.sora.org` SAN.
+   - if your ACME client stores all SANs under one lineage, nginx can keep
+     pointing at a single certificate bundle for all three names.
 5. Validate and reload nginx:
    - `sudo nginx -t && sudo systemctl reload nginx`
    - on the shared macOS/Homebrew host, use `nginx -t && nginx -s reload`
@@ -430,11 +437,12 @@ From `../iroha2-block-explorer-web`:
    - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}"`
    - the public check now requires `--write-config /run/secrets/taira-canary-client.toml`
      unless you explicitly opt into read-only mode with `--skip-write-canary`
-7. Verify that SNI now serves the correct cert for each host and that both MCP
-   and Connect still work through the public edge:
+7. Verify that SNI now serves the correct cert for each host and that MCP,
+   Connect, and CID-host routing still work through the public edge:
    - `curl -vI https://taira.sora.org`
    - `curl -vI https://taira-explorer.sora.org`
    - `echo | openssl s_client -connect taira-explorer.sora.org:443 -servername taira-explorer.sora.org 2>/dev/null | openssl x509 -noout -subject -issuer -ext subjectAltName`
+   - `echo | openssl s_client -connect taira.sora.org:443 -servername example.sorafs.taira.sora.org 2>/dev/null | openssl x509 -noout -subject -issuer -ext subjectAltName`
    - verify MCP over the direct node host:
      `curl -sS "${PUBLIC_TORII_ROOT}/v1/mcp" | jq .`
    - verify curated `iroha.*` exposure:
@@ -447,6 +455,12 @@ From `../iroha2-block-explorer-web`:
      returned `sid` and app token:
      `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' "${PUBLIC_TORII_ROOT}/v1/connect/ws?sid=<sid>&role=app"`
      `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' 'https://taira-explorer.sora.org/v1/connect/ws?sid=<sid>&role=app'`
+   - verify CID-host origin isolation with a known site CID:
+     `curl -vkI "https://<cid>.sorafs.taira.sora.org/"`
+     `curl -vkI "https://taira.sora.org/sorafs/cid/<cid>/swap/ton/usdt" -H 'accept: text/html'`
+   - browser-style navigations should `308` to
+     `https://<cid>.sorafs.taira.sora.org/...`, while asset/tooling requests can
+     still stay on `/sorafs/cid/<cid>/...`.
    - if those websocket probes now return a Torii-generated app error
      (`400/401/...`) instead of a proxy-layer `404` / missing-upgrade failure,
      the reverse-proxy websocket hop is working and any remaining error is in

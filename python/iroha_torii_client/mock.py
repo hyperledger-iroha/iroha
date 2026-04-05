@@ -101,6 +101,8 @@ class _MockState:
         self.gov_contracts: Dict[str, Dict[str, Any]] = {}
         self.contract_manifests: Dict[str, Dict[str, Any]] = {}
         self.contract_code_bytes: Dict[str, Dict[str, Any]] = {}
+        self.contract_deploy_response: Dict[str, Any] = {}
+        self.contract_call_response: Dict[str, Any] = {}
         self.gov_proposals: Dict[str, Dict[str, Any]] = {}
         self.gov_propose_deploy_response: Dict[str, Any] = {}
         self.gov_finalize_response: Dict[str, Any] = {}
@@ -155,6 +157,10 @@ class _MockState:
             return self._account_get(account_id)
         if method == "POST" and path == "/v1/gov/proposals/deploy-contract":
             return self._gov_propose_deploy(body)
+        if method == "POST" and path == "/v1/contracts/deploy":
+            return self._contracts_deploy(body)
+        if method == "POST" and path == "/v1/contracts/call":
+            return self._contracts_call(body)
         if method == "POST" and path == "/v1/gov/finalize":
             return self._gov_finalize(body)
         if method == "POST" and path == "/v1/gov/enact":
@@ -258,6 +264,32 @@ class _MockState:
             self.gov_contracts.clear()
             self.contract_manifests.clear()
             self.contract_code_bytes.clear()
+            self.contract_deploy_response = {
+                "ok": True,
+                "contract_alias": "router::universal",
+                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                "previous_contract_address": None,
+                "upgraded": False,
+                "dataspace": "universal",
+                "deploy_nonce": 0,
+                "tx_hash_hex": "11" * 32,
+                "code_hash_hex": "22" * 32,
+                "abi_hash_hex": "33" * 32,
+            }
+            self.contract_call_response = {
+                "ok": True,
+                "submitted": True,
+                "dataspace": "universal",
+                "code_hash_hex": "22" * 32,
+                "abi_hash_hex": "33" * 32,
+                "creation_time_ms": 0,
+                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                "tx_hash_hex": "44" * 32,
+                "entrypoint": "ping",
+                "transaction_scaffold_b64": "AQID",
+                "signed_transaction_b64": "BAUG",
+                "signing_message_b64": "BwgJ",
+            }
             self.gov_proposals.clear()
             self.gov_propose_deploy_response = {"ok": True, "proposal_id": "mock-proposal"}
             self.gov_finalize_response = {"ok": True, "tx_instructions": []}
@@ -274,6 +306,7 @@ class _MockState:
             self.node_capabilities = {
                 "abi_version": 1,
                 "data_model_version": 1,
+                "signed_transaction_schema_hash_hex": "7ad1ae306dffd89a7ad1ae306dffd89a",
             }
             self.sccp_capabilities = {
                 "local_domain": 0,
@@ -468,6 +501,18 @@ class _MockState:
             self.contract_code_bytes = normalized_code_bytes
         else:
             self.contract_code_bytes = {}
+
+        contract_deploy_payload = payload.get("contract_deploy_response")
+        if contract_deploy_payload is not None:
+            if not isinstance(contract_deploy_payload, dict):
+                raise ValueError("contract_deploy_response must be an object")
+            self.contract_deploy_response = dict(contract_deploy_payload)
+
+        contract_call_payload = payload.get("contract_call_response")
+        if contract_call_payload is not None:
+            if not isinstance(contract_call_payload, dict):
+                raise ValueError("contract_call_response must be an object")
+            self.contract_call_response = dict(contract_call_payload)
 
         proposals_payload = payload.get("proposals")
         if proposals_payload is not None:
@@ -810,6 +855,43 @@ class _MockState:
         if payload is None:
             return _json_response(HTTPStatus.NOT_FOUND, {"error": "code bytes not found"})
         return _json_response(HTTPStatus.OK, payload)
+
+    def _contracts_deploy(self, body: bytes) -> _Response:
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except json.JSONDecodeError as err:
+            raise ValueError(f"invalid contract deploy payload: {err}") from err
+        if not isinstance(payload, dict):
+            raise ValueError("contract deploy payload must be an object")
+        for key in ("authority", "private_key", "code_b64", "contract_alias"):
+            value = payload.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"contract deploy payload missing '{key}'")
+        if "dataspace" in payload:
+            raise ValueError("contract deploy payload must not include dataspace")
+        if "manifest" in payload:
+            raise ValueError("contract deploy payload must not include manifest")
+        if "lease_expiry_ms" in payload and not isinstance(payload.get("lease_expiry_ms"), (int, float, str)):
+            raise ValueError("contract deploy payload lease_expiry_ms must be numeric")
+        return _json_response(HTTPStatus.ACCEPTED, dict(self.contract_deploy_response))
+
+    def _contracts_call(self, body: bytes) -> _Response:
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except json.JSONDecodeError as err:
+            raise ValueError(f"invalid contract call payload: {err}") from err
+        if not isinstance(payload, dict):
+            raise ValueError("contract call payload must be an object")
+        for key in ("authority", "private_key"):
+            value = payload.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"contract call payload missing '{key}'")
+        if ("contract_address" in payload) == ("contract_alias" in payload):
+            raise ValueError("contract call payload must include exactly one of contract_address or contract_alias")
+        gas_limit = payload.get("gas_limit")
+        if not isinstance(gas_limit, (int, float, str)):
+            raise ValueError("contract call payload missing 'gas_limit'")
+        return _json_response(HTTPStatus.ACCEPTED, dict(self.contract_call_response))
 
     def _gov_proposals_get(self, proposal_id: str) -> _Response:
         key = proposal_id.lower()

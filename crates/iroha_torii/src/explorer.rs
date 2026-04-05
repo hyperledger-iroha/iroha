@@ -10,7 +10,7 @@ use hex;
 use iroha_core::state::WorldReadOnly;
 use iroha_data_model::{
     HasMetadata, Identifiable, ValidationFail,
-    account::{AccountAddress, AccountEntry, AccountId},
+    account::{AccountEntry, AccountId},
     asset::{AssetDefinition, AssetDefinitionId, AssetEntry, AssetId, Mintable},
     block::SignedBlock,
     domain::{Domain, DomainId},
@@ -195,7 +195,6 @@ pub(crate) struct ExplorerPaginationMeta {
 #[derive(Clone, Debug, JsonSerialize)]
 pub(crate) struct ExplorerAccountDto {
     pub id: String,
-    pub i105_address: String,
     pub network_prefix: u16,
     pub metadata: Value,
     pub owned_domains: u32,
@@ -205,15 +204,9 @@ pub(crate) struct ExplorerAccountDto {
 
 impl ExplorerAccountDto {
     pub(crate) fn from_entry(entry: AccountEntry<'_>, counts: AccountCounters) -> Self {
-        let network_prefix = iroha_data_model::account::address::chain_discriminant();
-        let address =
-            AccountAddress::from_account_id(entry.id()).expect("account ids are always valid");
         Self {
             id: entry.id().to_string(),
-            i105_address: address
-                .to_i105_for_discriminant(network_prefix)
-                .unwrap_or_else(|_| entry.id().to_string()),
-            network_prefix,
+            network_prefix: iroha_data_model::account::address::chain_discriminant(),
             metadata: metadata_to_json(entry.value().metadata()),
             owned_domains: counts.domains,
             owned_assets: counts.assets,
@@ -1721,6 +1714,49 @@ mod tests {
     }
 
     #[test]
+    fn account_dto_omits_redundant_i105_address_field() {
+        let details = Owned::new(AccountDetails::new(
+            Metadata::default(),
+            None,
+            None,
+            Vec::new(),
+        ));
+        let account_id = ALICE_ID.clone();
+        let entry = Ref::new(&account_id, &details);
+        let dto = ExplorerAccountDto::from_entry(
+            entry,
+            AccountCounters {
+                domains: 1,
+                assets: 2,
+                nfts: 3,
+            },
+        );
+        let expected_id = account_id.to_string();
+
+        assert_eq!(dto.id, expected_id);
+        assert_eq!(
+            dto.network_prefix,
+            iroha_data_model::account::address::chain_discriminant()
+        );
+        assert_eq!(dto.owned_domains, 1);
+        assert_eq!(dto.owned_assets, 2);
+        assert_eq!(dto.owned_nfts, 3);
+
+        let payload = norito::json::to_value(&dto).expect("dto json");
+        let object = payload
+            .as_object()
+            .expect("dto should serialize as an object");
+        assert_eq!(
+            object.get("id").and_then(Value::as_str),
+            Some(expected_id.as_str())
+        );
+        assert!(
+            !object.contains_key("i105_address"),
+            "explorer account detail should not emit redundant i105_address"
+        );
+    }
+
+    #[test]
     fn asset_definition_dto_contains_metadata() {
         let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             DomainId::try_new("wonderland", "universal").unwrap(),
@@ -1768,7 +1804,7 @@ mod tests {
 
     #[test]
     fn nft_dto_includes_metadata() {
-        let nft_id: NftId = "rose$wonderland".parse().expect("nft id");
+        let nft_id: NftId = "rose$wonderland.universal".parse().expect("nft id");
         let mut data = NftData {
             content: Metadata::default(),
             owned_by: ALICE_ID.clone(),
@@ -2128,8 +2164,10 @@ mod tests {
 
     #[test]
     fn nfts_page_filters_by_owner_and_domain() {
-        let nft_alpha: NftId = "alpha$wonderland".parse().expect("nft id");
-        let nft_beta: NftId = "beta$garden_of_live_flowers".parse().expect("nft id");
+        let nft_alpha: NftId = "alpha$wonderland.universal".parse().expect("nft id");
+        let nft_beta: NftId = "beta$garden_of_live_flowers.universal"
+            .parse()
+            .expect("nft id");
         let mut alpha_data = NftData {
             content: Metadata::default(),
             owned_by: ALICE_ID.clone(),
@@ -2175,19 +2213,19 @@ mod tests {
     #[test]
     fn rwas_page_filters_by_owner_and_domain() {
         let rwa_alpha: RwaId = format!(
-            "{}$wonderland",
+            "{}$wonderland.universal",
             iroha_crypto::Hash::prehashed([7; iroha_crypto::Hash::LENGTH])
         )
         .parse()
         .expect("rwa id");
         let rwa_alpha_parent: RwaId = format!(
-            "{}$wonderland",
+            "{}$wonderland.universal",
             iroha_crypto::Hash::prehashed([9; iroha_crypto::Hash::LENGTH])
         )
         .parse()
         .expect("rwa parent id");
         let rwa_beta: RwaId = format!(
-            "{}$garden_of_live_flowers",
+            "{}$garden_of_live_flowers.universal",
             iroha_crypto::Hash::prehashed([8; iroha_crypto::Hash::LENGTH])
         )
         .parse()

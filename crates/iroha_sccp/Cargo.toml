@@ -14,6 +14,7 @@ std = [
     "serde/std",
     "dep:norito",
     "dep:fastpq_prover",
+    "dep:iroha_crypto",
 ]
 serde = ["dep:serde"]
 
@@ -25,3 +26,4 @@ bs58 = { version = "0.5.1", default-features = false, features = ["alloc"] }
 serde = { version = "1.0.228", default-features = false, features = ["derive"], optional = true }
 norito = { path = "../norito", optional = true }
 fastpq_prover = { path = "../fastpq_prover", optional = true }
+iroha_crypto = { path = "../iroha_crypto", optional = true }

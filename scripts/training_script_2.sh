@@ -16,6 +16,10 @@ Options:
   --base-p2p-port <P>   Base P2P port (default: 33337)
   --auto-ports          Auto-advance base ports if the range is already in use
   --profile <NAME>      Cargo profile: release or debug (default: release)
+  --target-dir <DIR>    Set CARGO_TARGET_DIR for builds and binary lookup
+  --fast                Run cargo via scripts/cargo_fast.sh when available
+  --fast-zero-debug     With --fast, set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
+  --fast-no-incremental With --fast, set CARGO_INCREMENTAL=0
   --no-build            Skip cargo build (assumes binaries already exist)
   --force               Remove existing run directories under --out-dir
   --ready-timeout <S>   Seconds to wait for /status (default: 30)
@@ -23,6 +27,15 @@ Options:
   --stall-threshold <S> Seconds to flag slow block cadence (default: 40)
   -h, --help            Show this help
 EOF
+}
+
+require_option_value() {
+  local flag="$1"
+  local value="${2-}"
+  if [[ -z "$value" ]] || [[ "$value" == --* ]]; then
+    echo "Missing value for ${flag}" >&2
+    exit 2
+  fi
 }
 
 RUNS=1
@@ -41,6 +54,10 @@ STALL_THRESHOLD=40
 PUBLIC_HOST="127.0.0.1"
 BIND_HOST="127.0.0.1"
 TRAINING_ASSET_DEFINITION_ID="7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+TARGET_DIR=""
+USE_CARGO_FAST=false
+FAST_ZERO_DEBUG=false
+FAST_NO_INCREMENTAL=false
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -75,6 +92,23 @@ while [[ $# -gt 0 ]]; do
     --profile)
       PROFILE="$2"
       shift 2
+      ;;
+    --target-dir)
+      require_option_value "--target-dir" "${2-}"
+      TARGET_DIR="$2"
+      shift 2
+      ;;
+    --fast)
+      USE_CARGO_FAST=true
+      shift
+      ;;
+    --fast-zero-debug)
+      FAST_ZERO_DEBUG=true
+      shift
+      ;;
+    --fast-no-incremental)
+      FAST_NO_INCREMENTAL=true
+      shift
       ;;
     --no-build)
       DO_BUILD=false
@@ -111,6 +145,21 @@ done
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
+resolve_dir() {
+  local path="$1"
+  local candidate
+  if [[ "${path}" = /* ]]; then
+    candidate="${path}"
+  else
+    candidate="${REPO_ROOT}/${path}"
+  fi
+  mkdir -p "${candidate}"
+  (
+    cd "${candidate}"
+    pwd
+  )
+}
+
 if [[ "$PROFILE" != "release" && "$PROFILE" != "debug" ]]; then
   echo "Invalid --profile: $PROFILE (expected release or debug)" >&2
   exit 2
@@ -123,18 +172,39 @@ for cmd in cargo curl python3 rg; do
   fi
 done
 
+cargo_runner=(cargo)
+if [[ "$USE_CARGO_FAST" == true ]]; then
+  cargo_fast_script="${REPO_ROOT}/scripts/cargo_fast.sh"
+  if [[ ! -x "${cargo_fast_script}" ]]; then
+    echo "scripts/cargo_fast.sh is not available or not executable" >&2
+    exit 2
+  fi
+  cargo_runner=("${cargo_fast_script}")
+  if [[ "$FAST_ZERO_DEBUG" == true ]]; then
+    cargo_runner+=("--zero-debug")
+  fi
+  if [[ "$FAST_NO_INCREMENTAL" == true ]]; then
+    cargo_runner+=("--no-incremental")
+  fi
+  echo "[training-script-2] using scripts/cargo_fast.sh for cargo commands"
+elif [[ "$FAST_ZERO_DEBUG" == true || "$FAST_NO_INCREMENTAL" == true ]]; then
+  echo "--fast-zero-debug and --fast-no-incremental require --fast" >&2
+  exit 2
+fi
+
+if [[ -n "${TARGET_DIR}" ]]; then
+  export CARGO_TARGET_DIR="$(resolve_dir "${TARGET_DIR}")"
+fi
+TARGET_DIR="$(resolve_dir "${CARGO_TARGET_DIR:-target}")"
+export CARGO_TARGET_DIR="${TARGET_DIR}"
+
 if [[ "$DO_BUILD" == true ]]; then
   echo "Building kagami/irohad/iroha ($PROFILE)..."
   if [[ "$PROFILE" == "release" ]]; then
-    cargo build --release --bin kagami --bin irohad --bin iroha
+    (cd "$REPO_ROOT" && "${cargo_runner[@]}" -- build --release --bin kagami --bin irohad --bin iroha)
   else
-    cargo build --bin kagami --bin irohad --bin iroha
+    (cd "$REPO_ROOT" && "${cargo_runner[@]}" -- build --bin kagami --bin irohad --bin iroha)
   fi
-fi
-
-TARGET_DIR="${CARGO_TARGET_DIR:-"$REPO_ROOT/target"}"
-if [[ "$TARGET_DIR" != /* ]]; then
-  TARGET_DIR="$REPO_ROOT/$TARGET_DIR"
 fi
 
 KAGAMI_BIN="${KAGAMI_BIN:-"$TARGET_DIR/$PROFILE/kagami"}"
@@ -359,7 +429,15 @@ read_public_key() {
 
 public_key_to_i105() {
   local public_key="$1"
-  "$IROHA_BIN" tools address convert "$public_key" --format i105
+  ADDRESS_PAYLOAD="$("$IROHA_BIN" --output-format json tools address convert "$public_key" --format json | extract_json_output)" \
+    python3 - <<'PY'
+import json
+import os
+
+payload = os.environ["ADDRESS_PAYLOAD"]
+data = json.loads(payload)
+print(data["i105"]["value"])
+PY
 }
 
 read_domain() {
@@ -372,7 +450,7 @@ generate_client_configs() {
   local domain="$3"
   local seed_prefix="$4"
   local names_csv="$5"
-  "$KAGAMI_BIN" client-configs \
+  "$KAGAMI_BIN" advanced client-configs \
     --base-config "$base_config" \
     --out-dir "$out_dir" \
     --domain "$domain" \
@@ -609,14 +687,17 @@ for run in $(seq 1 "$RUNS"); do
   echo "[run $run] asset flow..."
   asset_ok=true
   if ! retry_cmd "asset definition register" 3 2 \
-      "$IROHA_BIN" --config "$client_cfg" asset definition register \
+      "$IROHA_BIN" --config "$client_cfg" ledger asset definition register \
       --id "$asset_def" \
       --name "$asset_name" \
       --scale 0; then
     asset_ok=false
   fi
   if ! retry_cmd "asset mint" 3 2 \
-      "$IROHA_BIN" --config "$client_cfg" asset mint --id "${asset_def}#${sender_account}" --quantity 10; then
+      "$IROHA_BIN" --config "$client_cfg" ledger asset mint \
+      --definition "$asset_def" \
+      --account "$sender_account" \
+      --quantity 10; then
     asset_ok=false
   fi
 
@@ -627,14 +708,15 @@ for run in $(seq 1 "$RUNS"); do
   fi
   recipient_account="$(public_key_to_i105 "$recipient_pub")"
   if ! retry_cmd "recipient account register" 3 2 \
-      "$IROHA_BIN" --config "$client_cfg" account register --id "$recipient_account"; then
+      "$IROHA_BIN" --config "$client_cfg" ledger account register --id "$recipient_account"; then
     asset_ok=false
   elif ! wait_for_account "$client_cfg" "$recipient_account"; then
     asset_ok=false
   fi
   if ! retry_cmd "asset transfer" 3 2 \
-      "$IROHA_BIN" --config "$client_cfg" asset transfer \
-      --id "${asset_def}#${sender_account}" \
+      "$IROHA_BIN" --config "$client_cfg" ledger asset transfer \
+      --definition "$asset_def" \
+      --account "$sender_account" \
       --to "$recipient_account" \
       --quantity 1; then
     asset_ok=false
@@ -668,7 +750,7 @@ for run in $(seq 1 "$RUNS"); do
 
   for acct in "$sig1_account" "$sig2_account" "$sig3_account"; do
     if ! retry_cmd "signatory account register" 3 2 \
-        "$IROHA_BIN" --config "$client_cfg" account register --id "$acct"; then
+        "$IROHA_BIN" --config "$client_cfg" ledger account register --id "$acct"; then
       multisig_ok=false
     elif ! wait_for_account "$client_cfg" "$acct"; then
       multisig_ok=false
@@ -678,7 +760,7 @@ for run in $(seq 1 "$RUNS"); do
   multisig_account="$(public_key_to_i105 "$multisig_pub")"
 
   if ! retry_cmd "multisig register" 3 2 \
-      "$IROHA_BIN" --config "$client_cfg" multisig register \
+      "$IROHA_BIN" --config "$client_cfg" ledger multisig register \
       --account "$multisig_account" \
       --signatories "$sig1_account" "$sig2_account" "$sig3_account" \
       --weights 1 1 1 \
@@ -692,7 +774,7 @@ for run in $(seq 1 "$RUNS"); do
   propose_output=""
   instructions_hash=""
   if propose_output="$(retry_cmd_output "multisig propose" 3 2 bash -c \
-    "echo '\"congratulations\"' | \"$IROHA_BIN\" --config \"$sig1_cfg\" -o account meta set --id \"$multisig_account\" --key success_marker | \"$IROHA_BIN\" --config \"$sig1_cfg\" multisig propose --account \"$multisig_account\"")"; then
+    "echo '\"congratulations\"' | \"$IROHA_BIN\" --config \"$sig1_cfg\" -o ledger account meta set --id \"$multisig_account\" --key success_marker | \"$IROHA_BIN\" --config \"$sig1_cfg\" ledger multisig propose --account \"$multisig_account\"")"; then
     instructions_hash="$(printf '%s\n' "$propose_output" | rg -m1 -o '^[0-9a-f]{64}$' || true)"
     if [[ -z "$instructions_hash" ]]; then
       echo "[run $run] failed to parse multisig instructions hash" >&2
@@ -714,13 +796,13 @@ for run in $(seq 1 "$RUNS"); do
 
   if [[ "$proposal_ready" == true ]]; then
     if ! retry_cmd "multisig approve (sig2)" 3 2 \
-        "$IROHA_BIN" --config "$sig2_cfg" multisig approve \
+        "$IROHA_BIN" --config "$sig2_cfg" ledger multisig approve \
         --account "$multisig_account" \
         --instructions-hash "$instructions_hash"; then
       multisig_ok=false
     fi
     if ! retry_cmd "multisig approve (sig3)" 3 2 \
-        "$IROHA_BIN" --config "$sig3_cfg" multisig approve \
+        "$IROHA_BIN" --config "$sig3_cfg" ledger multisig approve \
         --account "$multisig_account" \
         --instructions-hash "$instructions_hash"; then
       multisig_ok=false

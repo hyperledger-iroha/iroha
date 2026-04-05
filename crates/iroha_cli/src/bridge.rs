@@ -179,10 +179,11 @@ fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
         .iter()
         .map(|counterparty| {
             format!(
-                "{}({}:{})",
+                "{}({}:{}:{})",
                 counterparty.chain,
                 counterparty.domain,
-                counterparty.counterparty_account_codec_key
+                counterparty.counterparty_account_codec_key,
+                counterparty.verifier_backend.key.as_str()
             )
         })
         .collect::<Vec<_>>()
@@ -211,10 +212,11 @@ fn render_sccp_manifests_summary(manifests: &SccpProofManifestSet) -> String {
     )];
     lines.extend(manifests.manifests.iter().map(|manifest| {
         format!(
-            "chain={} domain={} backend={} registry={} finality={:?} verifier={:?} codec={} submit={}",
+            "chain={} domain={} backend={} verifier_backend={} registry={} finality={:?} verifier={:?} codec={} submit={}",
             manifest.chain,
             manifest.counterparty_domain,
             manifest.message_backend,
+            manifest.verifier_backend.key.as_str(),
             manifest.registry_backend,
             manifest.finality_model,
             manifest.verifier_target,
@@ -241,41 +243,48 @@ fn render_sccp_artifact_summary(
         artifact,
     ) {
         Some(inner) => format!(
-            " inner_family={:?} inner_payload={} statement_hash={} proof_parameter=fastpq-lane-balanced",
+            " inner_family={:?} inner_payload={} statement_hash={} verifier_backend={} proof_parameter=fastpq-lane-balanced",
             inner.chain_family,
             inner.payload_kind,
-            hex::encode(inner.statement_hash)
+            hex::encode(inner.statement_hash),
+            inner.verifier_backend.key.as_str()
         ),
         None => format!(" proof_bytes_len={}", artifact.proof_bytes.len()),
     };
     format!(
-        "sccp artifact: message_id={} payload={} chain={}({}) backend={} proof_family={} finality_height={} commitment_root={}{}{}",
+        "sccp artifact: message_id={} payload={} chain={}({}) backend={} verifier_backend={} proof_family={} finality_height={} commitment_root={}{}{} package={}/{}",
         hex::encode(artifact.public_inputs.message_id),
         iroha_sccp::sccp_message_payload_kind_key(&artifact.bundle.payload),
         iroha_sccp::sccp_chain_key_for_domain(artifact.counterparty_domain).unwrap_or("unknown"),
         artifact.counterparty_domain,
         artifact.message_backend,
+        artifact.verifier_backend.key.as_str(),
         artifact.proof_family,
         artifact.public_inputs.finality_height,
         hex::encode(artifact.public_inputs.commitment_root),
         projection_summary,
-        inner_summary
+        inner_summary,
+        artifact.submission_package.submission_kind,
+        artifact.submission_package.envelope_encoding
     )
 }
 
 fn render_sccp_job_summary(job: &iroha_sccp::SccpCounterpartyProofJobV1) -> String {
     format!(
-        "sccp job: message_id={} payload={} chain={}({}) backend={} registry={} finality={:?} verifier={:?} projection={} submit={}",
+        "sccp job: message_id={} payload={} chain={}({}) backend={} verifier_backend={} registry={} finality={:?} verifier={:?} projection={} submit={} package={}/{}",
         hex::encode(job.public_inputs.message_id),
         job.payload_kind,
         job.chain,
         job.counterparty_domain,
         job.message_backend,
+        job.verifier_backend.key.as_str(),
         job.registry_backend,
         job.finality_model,
         job.verifier_target,
         render_sccp_payload_projection_summary(&job.payload_projection),
-        render_sccp_submission_template_summary(&job.submission_template)
+        render_sccp_submission_template_summary(&job.submission_template),
+        job.submission_package.submission_kind,
+        job.submission_package.envelope_encoding
     )
 }
 
@@ -607,6 +616,10 @@ mod tests {
                 SccpCounterpartyCapability {
                     domain: iroha_sccp::SCCP_DOMAIN_TON,
                     chain: "ton".to_owned(),
+                    verifier_backend: iroha_sccp::sccp_verifier_backend_for_domain(
+                        iroha_sccp::SCCP_DOMAIN_TON,
+                    )
+                    .expect("ton verifier backend"),
                     message_backend: "bridge/sccp/stark-fri-v1/ton".to_owned(),
                     registry_backend: "bridge/sccp/registry-v1/ton".to_owned(),
                     counterparty_account_codec: iroha_sccp::SCCP_CODEC_TON_RAW,
@@ -615,6 +628,10 @@ mod tests {
                 SccpCounterpartyCapability {
                     domain: iroha_sccp::SCCP_DOMAIN_ETH,
                     chain: "eth".to_owned(),
+                    verifier_backend: iroha_sccp::sccp_verifier_backend_for_domain(
+                        iroha_sccp::SCCP_DOMAIN_ETH,
+                    )
+                    .expect("eth verifier backend"),
                     message_backend: "bridge/sccp/stark-fri-v1/eth".to_owned(),
                     registry_backend: "bridge/sccp/registry-v1/eth".to_owned(),
                     counterparty_account_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
@@ -796,8 +813,8 @@ mod tests {
         let rendered = ctx.printed_lines.join("\n");
         assert!(rendered.contains("sccp capabilities:"));
         assert!(rendered.contains("proof_family=stark-fri-v1"));
-        assert!(rendered.contains("ton(4:ton_raw)"));
-        assert!(rendered.contains("eth(1:evm_hex)"));
+        assert!(rendered.contains("ton(4:ton_raw:ton-contract-v1)"));
+        assert!(rendered.contains("eth(1:evm_hex:evm-secp256k1-keccak-v1)"));
     }
 
     #[test]
@@ -854,6 +871,7 @@ mod tests {
         assert!(rendered.contains(&message_id_hex));
         assert!(rendered.contains("payload=transfer"));
         assert!(rendered.contains("chain=ton(4)"));
+        assert!(rendered.contains("verifier_backend=ton-contract-v1"));
         assert!(rendered.contains("finality_height=19"));
         assert!(rendered.contains("projection=transfer"));
         assert!(rendered.contains(
@@ -864,6 +882,7 @@ mod tests {
         ));
         assert!(rendered.contains("inner_family=Ton"));
         assert!(rendered.contains("inner_payload=transfer"));
+        assert!(rendered.contains("package=internal_message/ton_message_body_v1"));
     }
 
     #[test]
@@ -890,6 +909,7 @@ mod tests {
         assert!(rendered.contains(&message_id_hex));
         assert!(rendered.contains("payload=transfer"));
         assert!(rendered.contains("chain=ton(4)"));
+        assert!(rendered.contains("verifier_backend=ton-contract-v1"));
         assert!(rendered.contains("projection=transfer"));
         assert!(rendered.contains(
             "recipient=ton:0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
@@ -897,5 +917,6 @@ mod tests {
         assert!(rendered.contains(
             "submit=internal_message/ton_cell_v1/op::submit_sccp_message_proof args=[proof_cell,public_inputs_cell,bundle_cell]"
         ));
+        assert!(rendered.contains("package=internal_message/ton_message_body_v1"));
     }
 }

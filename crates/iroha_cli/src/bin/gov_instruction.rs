@@ -15,7 +15,7 @@ struct Args {
 
 #[derive(Subcommand, Debug)]
 enum Command {
-    /// Encode a RegisterCitizen instruction.
+    /// Encode a `RegisterCitizen` instruction.
     RegisterCitizen {
         #[arg(long)]
         owner: String,

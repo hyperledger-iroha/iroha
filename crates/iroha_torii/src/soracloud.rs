@@ -13834,8 +13834,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resolve_public_local_read_route_uses_authoritative_service_route_state() {
+    #[tokio::test]
+    async fn resolve_public_local_read_route_uses_authoritative_service_route_state() {
         use iroha_core::state::World;
 
         let mut world = World::new();
@@ -15276,8 +15276,19 @@ mod tests {
         let bundle = fixture_bundle("1.0.0");
         let encoded = encode_bundle_signature_payload(&bundle, &BTreeMap::new(), &BTreeMap::new())
             .expect("encode signature payload");
-        let expected = norito::to_bytes(&bundle).expect("encode canonical layout");
+        let expected =
+            iroha_data_model::soracloud::encode_bundle_with_materials_provenance_payload(
+                &bundle,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            )
+            .expect("encode canonical layout");
         assert_eq!(encoded, expected);
+        assert_ne!(
+            encoded,
+            norito::to_bytes(&bundle).expect("encode legacy layout"),
+            "bundle signatures must commit to the bundle-plus-materials payload, not the legacy raw bundle layout",
+        );
     }
 
     #[test]

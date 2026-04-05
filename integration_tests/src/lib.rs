@@ -3,6 +3,8 @@
 
 /// Data availability simulators shared with tooling and docs.
 pub mod da;
+/// Shared binary resolution helpers for `kagami`-driven localnet tests.
+pub mod kagami;
 /// Prometheus metrics parsing utilities shared by integration tests.
 pub mod metrics;
 /// Sandbox-aware network helpers used across integration test binaries.

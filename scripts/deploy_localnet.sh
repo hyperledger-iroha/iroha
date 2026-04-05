@@ -7,8 +7,9 @@ set -euo pipefail
 #   IROHA_DIR        Path to the workspace root (default: repository root).
 #   CARGO_TARGET_DIR Cargo target directory override (default: <IROHA_DIR>/target).
 #   KAGAMI_BIN       Path to the `kagami` binary (default: <target-dir>/<profile>/kagami).
-#   IROHAD_BIN       Path to the `irohad` binary (default: <IROHA_DIR>/target/<profile>/irohad).
-#   IROHA_CLI_BIN    Path to the `iroha` CLI binary (default: <IROHA_DIR>/target/<profile>/iroha).
+#   IROHAD_BIN       Path to the `irohad` binary (default: <target-dir>/<profile>/irohad).
+#   IROHA_CLI_BIN    Path to the `iroha` CLI binary (default: <target-dir>/<profile>/iroha).
+#   SKIP_TOOL_BUILD  Skip cargo build and reuse existing binaries (default: false).
 #   IROHA_LOCALNET_NOFILE_MIN Minimum RLIMIT_NOFILE for localnet peers (default: 4096).
 #   IROHA_LOCALNET_GUEST_STACK_BYTES Override [concurrency].guest_stack_bytes in generated peer configs.
 #   IROHA_LOCALNET_GAS_TO_STACK_MULTIPLIER Override [concurrency].gas_to_stack_multiplier in generated peer configs.
@@ -41,7 +42,12 @@ Options:
   --base-p2p-port <PORT>     Base P2P port (default: 33337)
   --bind-host <HOST>         Bind host (default: 127.0.0.1)
   --public-host <HOST>       Public host (default: 127.0.0.1)
+  --target-dir <DIR>         Set CARGO_TARGET_DIR for builds and binary reuse
+  --fast                     Run cargo via scripts/cargo_fast.sh when available
+  --fast-zero-debug          With --fast, set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
+  --fast-no-incremental      With --fast, set CARGO_INCREMENTAL=0
   --release                  Build and run release binaries
+  --no-build                 Skip cargo build and require prebuilt binaries
   --no-sample-asset          Do not include kagami's sample asset
   --asset-id <ID>            Canonical Base58 asset definition id to register (default: 7EAD8EFYUx1aVKZPUU1fyKvr8dF1)
   --asset-name <NAME>        Asset definition name to register (default: USD)
@@ -55,6 +61,30 @@ EOF
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 IROHA_DIR="${IROHA_DIR:-"$(cd "${SCRIPT_DIR}/.." && pwd)"}"
+
+require_option_value() {
+  local flag="$1"
+  local value="${2-}"
+  if [[ -z "$value" ]] || [[ "$value" == --* ]]; then
+    echo "Missing value for ${flag}" >&2
+    exit 2
+  fi
+}
+
+resolve_dir() {
+  local path="$1"
+  local candidate
+  if [[ "${path}" = /* ]]; then
+    candidate="${path}"
+  else
+    candidate="${IROHA_DIR}/${path}"
+  fi
+  mkdir -p "${candidate}"
+  (
+    cd "${candidate}"
+    pwd
+  )
+}
 
 OUT_DIR="/tmp/iroha-localnet"
 PEERS=4
@@ -84,6 +114,10 @@ LOGGER_FILTER=""
 CURL_TIMEOUT_SECS=2
 PORT_SCAN_MAX_TRIES=200
 SKIP_TOOL_BUILD="${SKIP_TOOL_BUILD:-false}"
+TARGET_DIR_OVERRIDE=""
+USE_CARGO_FAST=false
+FAST_ZERO_DEBUG=false
+FAST_NO_INCREMENTAL=false
 PYTHON_BIN="${PYTHON_BIN:-python3}"
 LOCALNET_GUEST_STACK_BYTES="${IROHA_LOCALNET_GUEST_STACK_BYTES:-}"
 LOCALNET_GAS_TO_STACK_MULTIPLIER="${IROHA_LOCALNET_GAS_TO_STACK_MULTIPLIER:-}"
@@ -164,8 +198,29 @@ while [[ $# -gt 0 ]]; do
       PUBLIC_HOST="$2"
       shift 2
       ;;
+    --target-dir)
+      require_option_value "--target-dir" "${2-}"
+      TARGET_DIR_OVERRIDE="$2"
+      shift 2
+      ;;
+    --fast)
+      USE_CARGO_FAST=true
+      shift
+      ;;
+    --fast-zero-debug)
+      FAST_ZERO_DEBUG=true
+      shift
+      ;;
+    --fast-no-incremental)
+      FAST_NO_INCREMENTAL=true
+      shift
+      ;;
     --release)
       PROFILE="release"
+      shift
+      ;;
+    --no-build|--skip-build)
+      SKIP_TOOL_BUILD=true
       shift
       ;;
     --no-sample-asset)
@@ -251,6 +306,32 @@ if [[ ! -d "$IROHA_DIR" ]]; then
   echo "IROHA_DIR does not exist: $IROHA_DIR" >&2
   exit 1
 fi
+
+cargo_runner=(cargo)
+if [[ "${USE_CARGO_FAST}" == true ]]; then
+  cargo_fast_script="${IROHA_DIR}/scripts/cargo_fast.sh"
+  if [[ ! -x "${cargo_fast_script}" ]]; then
+    echo "scripts/cargo_fast.sh is not available or not executable" >&2
+    exit 2
+  fi
+  cargo_runner=("${cargo_fast_script}")
+  if [[ "${FAST_ZERO_DEBUG}" == true ]]; then
+    cargo_runner+=("--zero-debug")
+  fi
+  if [[ "${FAST_NO_INCREMENTAL}" == true ]]; then
+    cargo_runner+=("--no-incremental")
+  fi
+  echo "Using scripts/cargo_fast.sh for cargo commands."
+elif [[ "${FAST_ZERO_DEBUG}" == true || "${FAST_NO_INCREMENTAL}" == true ]]; then
+  echo "--fast-zero-debug and --fast-no-incremental require --fast" >&2
+  exit 2
+fi
+
+if [[ -n "${TARGET_DIR_OVERRIDE}" ]]; then
+  export CARGO_TARGET_DIR="$(resolve_dir "${TARGET_DIR_OVERRIDE}")"
+fi
+TARGET_DIR="$(resolve_dir "${CARGO_TARGET_DIR:-target}")"
+export CARGO_TARGET_DIR="${TARGET_DIR}"
 
 if [[ -d "$OUT_DIR" ]]; then
   if [[ -f "$OUT_DIR/stop.sh" ]]; then
@@ -338,14 +419,9 @@ cd "$IROHA_DIR"
 if [[ "$SKIP_TOOL_BUILD" == "true" ]]; then
   echo "Skipping Iroha tool build; using existing binaries."
 elif [[ "$PROFILE" == "release" ]]; then
-  cargo build --release --bin kagami --bin irohad --bin iroha
+  "${cargo_runner[@]}" -- build --release --bin kagami --bin irohad --bin iroha
 else
-  cargo build --bin kagami --bin irohad --bin iroha
-fi
-
-TARGET_DIR="${CARGO_TARGET_DIR:-"$IROHA_DIR/target"}"
-if [[ "$TARGET_DIR" != /* ]]; then
-  TARGET_DIR="$IROHA_DIR/$TARGET_DIR"
+  "${cargo_runner[@]}" -- build --bin kagami --bin irohad --bin iroha
 fi
 
 KAGAMI_BIN="${KAGAMI_BIN:-"$TARGET_DIR/$PROFILE/kagami"}"

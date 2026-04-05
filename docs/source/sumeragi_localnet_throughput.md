@@ -90,13 +90,19 @@ Recommended wrapper:
 scripts/run_localnet_throughput.sh --release --artifact-dir ./artifacts/localnet-throughput
 ```
 
+For repeated local runs, add `--target-dir <dir>` to pin `CARGO_TARGET_DIR`.
+When an `iroha3d` binary already exists under that target root, the wrapper now
+reuses it and auto-sets `IROHA_TEST_SKIP_BUILD=1`; pass `--no-skip-build` to
+force the legacy nested-build path.
+
 Manual command:
 
 ```bash
 IROHA_THROUGHPUT_ARTIFACT_DIR=./artifacts/localnet-throughput \
   cargo test -p integration_tests --release \
-  --test sumeragi_localnet_smoke permissioned_localnet_throughput_10k_tps \
-  -- --ignored --nocapture
+  --test consensus_and_da \
+  sumeragi_localnet_smoke::permissioned_localnet_throughput_10k_tps \
+  -- --ignored --exact --nocapture
 ```
 
 NPoS run:
@@ -104,8 +110,9 @@ NPoS run:
 ```bash
 IROHA_THROUGHPUT_ARTIFACT_DIR=./artifacts/localnet-throughput \
   cargo test -p integration_tests --release \
-  --test sumeragi_localnet_smoke npos_localnet_throughput_10k_tps \
-  -- --ignored --nocapture
+  --test consensus_and_da \
+  sumeragi_localnet_smoke::npos_localnet_throughput_10k_tps \
+  -- --ignored --exact --nocapture
 ```
 
 ## Artifacts

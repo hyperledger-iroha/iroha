@@ -943,16 +943,24 @@ public final class IrohaSDK: @unchecked Sendable {
         fromSeed seed: Data,
         metadata: SigningMetadata = SigningMetadata()
     ) throws -> SigningKey {
-        guard let derived = NoritoNativeBridge.shared.keypairFromSeed(
-            algorithm: defaultSigningAlgorithm,
-            seed: seed
-        ) else {
-            throw SigningKeyError.unsupportedAlgorithm(String(describing: defaultSigningAlgorithm))
-        }
         switch defaultSigningAlgorithm {
         case .ed25519:
+            guard let derived = NoritoNativeBridge.shared.keypairFromSeed(
+                algorithm: .ed25519,
+                seed: seed
+            ) else {
+                // Keep legacy seed-derived Ed25519 flows working even when the
+                // native bridge omits that helper on the current host.
+                return try SigningKey.ed25519(privateKey: seed, metadata: metadata)
+            }
             return try SigningKey.ed25519(privateKey: derived.privateKey, metadata: metadata)
         case .mlDsa:
+            guard let derived = NoritoNativeBridge.shared.keypairFromSeed(
+                algorithm: .mlDsa,
+                seed: seed
+            ) else {
+                throw SigningKeyError.unsupportedAlgorithm(String(describing: defaultSigningAlgorithm))
+            }
             return try SigningKey.mlDsa(privateKey: derived.privateKey, metadata: metadata)
         default:
             throw SigningKeyError.unsupportedAlgorithm(String(describing: defaultSigningAlgorithm))

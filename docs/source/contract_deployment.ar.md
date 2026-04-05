@@ -3,7 +3,6 @@ lang: ar
 direction: rtl
 source: docs/source/contract_deployment.md
 status: needs-update
-generator: scripts/sync_docs_i18n.py
 source_hash: d3aefb7ebdeb3b9b2d41a3a04ca6c7007e2eb6ac9580a85b7fbdeb9392375660
 source_last_modified: "2026-04-04T12:14:12.575161+00:00"
 translation_last_reviewed: 2026-04-05

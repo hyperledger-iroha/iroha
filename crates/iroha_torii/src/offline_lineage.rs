@@ -5033,7 +5033,13 @@ mod tests {
     fn canonical_account_helper_rejects_alias_literals() {
         let err = ensure_canonical_account_id_literal("alice@wallets", "account_id")
             .expect_err("aliases must be rejected");
-        assert!(err.to_string().contains("canonical I105 account id"));
+        let crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+        )) = err
+        else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(message.contains("canonical I105 account id"));
     }
 
     #[test]
@@ -5041,10 +5047,13 @@ mod tests {
         let err =
             ensure_canonical_asset_definition_id_literal("usd#wallets", "asset_definition_id")
                 .expect_err("aliases must be rejected");
-        assert!(
-            err.to_string()
-                .contains("canonical Base58 asset definition id")
-        );
+        let crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+        )) = err
+        else {
+            panic!("unexpected error: {err:?}");
+        };
+        assert!(message.contains("canonical Base58 asset definition id"));
     }
 }
 

@@ -2,12 +2,15 @@
 
 from .client import (
     BallotSubmitResult,
+    ContractCallResponse,
+    ContractDeployResponse,
     CouncilAuditMetadata,
     CouncilCurrentStatus,
     CouncilMember,
     CouncilPersistResult,
     ExplorerAccountQr,
     GovernanceInstructionDraft,
+    GovernanceContractResponse,
     GovernanceLocksOverview,
     GovernanceProposalDraft,
     GovernanceProposalStatus,
@@ -88,9 +91,12 @@ from .client import (
 __all__ = [
     "ToriiClient",
     "ExplorerAccountQr",
+    "ContractDeployResponse",
+    "ContractCallResponse",
     "CouncilMember",
     "CouncilCurrentStatus",
     "CouncilAuditMetadata",
+    "GovernanceContractResponse",
     "GovernanceProposalStatus",
     "GovernanceInstructionDraft",
     "GovernanceLocksOverview",

@@ -4989,9 +4989,9 @@ fn sccp_message_artifact_operation() -> Map {
         "description".into(),
         Value::String(
             "Returns the typed transparent SCCP proof artifact for a canonical message id, \
-             including the chain profile, public inputs, placeholder proof bytes, and embedded \
-             Nexus message bundle. Supports JSON or Norito content negotiation via the `Accept` \
-             header."
+             including the chain profile, public inputs, verifier-backend metadata, generated \
+             counterparty submission package, real proof bytes, and embedded Nexus message bundle. \
+             Supports JSON or Norito content negotiation via the `Accept` header."
                 .to_owned(),
         ),
     );
@@ -10598,7 +10598,7 @@ mod tests {
         let account_assets = params_for(&doc, "/v1/accounts/{account_id}/assets");
         assert!(account_assets.contains(&"limit".to_owned()));
         assert!(account_assets.contains(&"offset".to_owned()));
-        assert!(account_assets.contains(&"asset_id".to_owned()));
+        assert!(account_assets.contains(&"asset".to_owned()));
 
         let account_transactions = params_for(&doc, "/v1/accounts/{account_id}/transactions");
         assert!(account_transactions.contains(&"limit".to_owned()));

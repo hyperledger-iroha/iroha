@@ -23,6 +23,41 @@ impl EcdsaSecp256k1Sha256 {
         EcdsaSecp256k1Impl::sign(message, sk)
     }
 
+    /// Sign a 32-byte prehash using a recoverable secp256k1 signature.
+    ///
+    /// Returns a 65-byte `r || s || v` payload where `v` is `27` or `28`, matching
+    /// the compact signature format expected by EVM `ecrecover`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::Signing`] if the key material cannot produce a recoverable
+    /// signature.
+    pub fn sign_prehash_recoverable(
+        prehash: &[u8; 32],
+        sk: &PrivateKey,
+    ) -> Result<[u8; 65], Error> {
+        EcdsaSecp256k1Impl::sign_prehash_recoverable(prehash, sk)
+    }
+
+    /// Recover a secp256k1 public key from a 32-byte prehash and recoverable signature.
+    ///
+    /// The signature must be encoded as `r || s || v` where `v` is `27` or `28`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`Error::BadSignature`] if recovery fails or the payload is malformed.
+    pub fn recover_public_key_from_prehash(
+        prehash: &[u8; 32],
+        signature: &[u8; 65],
+    ) -> Result<PublicKey, Error> {
+        EcdsaSecp256k1Impl::recover_public_key_from_prehash(prehash, signature)
+    }
+
+    /// Derive the 20-byte EVM address for a secp256k1 public key.
+    pub fn evm_address(pk: &PublicKey) -> [u8; 20] {
+        EcdsaSecp256k1Impl::evm_address(pk)
+    }
+
     /// Verify a signature using the provided public key.
     ///
     /// # Errors
@@ -140,8 +175,15 @@ mod tests {
 mod ecdsa_secp256k1 {
     use std::{format, string::ToString as _, vec::Vec};
 
-    use k256::ecdsa::signature::hazmat::{PrehashSigner as _, PrehashVerifier as _};
+    use k256::{
+        ecdsa::{
+            RecoveryId, Signature, SigningKey, VerifyingKey,
+            signature::hazmat::{PrehashSigner as _, PrehashVerifier as _},
+        },
+        elliptic_curve::sec1::ToEncodedPoint as _,
+    };
     use sha2::Digest as _;
+    use sha3::Keccak256;
 
     use super::{PrivateKey, PublicKey};
     #[cfg(feature = "rand")]
@@ -170,23 +212,61 @@ mod ecdsa_secp256k1 {
         }
 
         pub fn sign(message: &[u8], sk: &PrivateKey) -> Vec<u8> {
-            let signing_key = k256::ecdsa::SigningKey::from(sk);
+            let signing_key = SigningKey::from(sk);
             let digest = sha2::Sha256::digest(message);
-            let signature: k256::ecdsa::Signature = signing_key
+            let signature: Signature = signing_key
                 .sign_prehash(&digest)
                 .expect("sha256 digest length is 32 bytes");
             let signature = signature.normalize_s().unwrap_or(signature);
             signature.to_bytes().to_vec()
         }
 
+        pub fn sign_prehash_recoverable(
+            prehash: &[u8; 32],
+            sk: &PrivateKey,
+        ) -> Result<[u8; 65], Error> {
+            let signing_key = SigningKey::from(sk);
+            let (signature, recovery_id) = signing_key
+                .sign_prehash_recoverable(prehash)
+                .map_err(|err| Error::Signing(format!("{err:?}")))?;
+            let mut out = [0u8; 65];
+            out[..64].copy_from_slice(signature.to_bytes().as_slice());
+            out[64] = recovery_id.to_byte().saturating_add(27);
+            Ok(out)
+        }
+
+        pub fn recover_public_key_from_prehash(
+            prehash: &[u8; 32],
+            signature: &[u8; 65],
+        ) -> Result<PublicKey, Error> {
+            let recovery_id =
+                RecoveryId::from_byte(signature[64].checked_sub(27).ok_or(Error::BadSignature)?)
+                    .ok_or(Error::BadSignature)?;
+            let signature =
+                Signature::from_slice(&signature[..64]).map_err(|_| Error::BadSignature)?;
+            VerifyingKey::recover_from_prehash(prehash, &signature, recovery_id)
+                .map(Into::into)
+                .map_err(|_| Error::BadSignature)
+        }
+
+        pub fn evm_address(pk: &PublicKey) -> [u8; 20] {
+            let encoded = pk.to_encoded_point(false);
+            let mut keccak = Keccak256::new();
+            keccak.update(&encoded.as_bytes()[1..]);
+            let hash = keccak.finalize();
+            let mut out = [0u8; 20];
+            out.copy_from_slice(&hash[12..]);
+            out
+        }
+
         pub fn verify(message: &[u8], signature: &[u8], pk: &PublicKey) -> Result<(), Error> {
-            let signature = k256::ecdsa::Signature::from_slice(signature)
-                .map_err(|e| Error::Signing(format!("{e:?}")))?;
+            let signature =
+                Signature::from_slice(signature).map_err(|e| Error::Signing(format!("{e:?}")))?;
             if signature.normalize_s().is_some() {
                 return Err(Error::BadSignature);
             }
 
-            let verifying_key = k256::ecdsa::VerifyingKey::from(pk);
+            let verifying_key = VerifyingKey::from(pk);
 
             let digest = sha2::Sha256::digest(message);
             verifying_key
@@ -430,5 +510,26 @@ mod test {
 
         let err = EcdsaSecp256k1Sha256::verify(message, high_sig.to_bytes().as_ref(), &pk);
         assert!(matches!(err, Err(Error::BadSignature)));
+    }
+
+    #[test]
+    fn recoverable_prehash_roundtrip_preserves_key_and_evm_address() {
+        let secret = private_key();
+        let public = public_key();
+        let prehash = sha2::Sha256::digest(b"iroha:sccp:evm-attestation");
+        let mut digest = [0u8; 32];
+        digest.copy_from_slice(&prehash);
+
+        let signature = EcdsaSecp256k1Sha256::sign_prehash_recoverable(&digest, &secret)
+            .expect("recoverable signature");
+        let recovered = EcdsaSecp256k1Sha256::recover_public_key_from_prehash(&digest, &signature)
+            .expect("recoverable public key");
+
+        assert_eq!(recovered, public);
+        assert_eq!(
+            EcdsaSecp256k1Sha256::evm_address(&recovered),
+            EcdsaSecp256k1Sha256::evm_address(&public)
+        );
+        assert!(matches!(signature[64], 27 | 28));
     }
 }

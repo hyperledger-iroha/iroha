@@ -32,6 +32,7 @@ use iroha_crypto::{Algorithm, PublicKey};
 use iroha_data_model::{account::AccountId, name::Name};
 use soranet_pq::MlKemSuite;
 use thiserror::Error;
+use toml::Value as TomlValue;
 use url::Url;
 
 fn fixtures_dir() -> PathBuf {
@@ -927,6 +928,15 @@ fn minimal_config_snapshot() {
                     anonymity_policy: Some(
                         GuardPq,
                     ),
+                    untrusted_hosting: SorafsGatewayUntrustedHosting {
+                        enabled: false,
+                        cid_host_suffixes: SorafsGatewayCidHostSuffixes {
+                            live: "sorafs.sora.org",
+                            taira: "sorafs.taira.sora.org",
+                        },
+                        path_gateway_redirect: true,
+                        redirect_html_only: true,
+                    },
                     acme: SorafsGatewayAcme {
                         enabled: false,
                         account_email: None,
@@ -3399,6 +3409,58 @@ fn full_config_parses_fine() {
             "sorafs.sf1.primary:global".to_string(),
             "sorafs.sf1.backup:eu".to_string()
         ]
+    );
+}
+
+#[test]
+fn taira_config_enables_untrusted_cid_hosting() {
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .and_then(Path::parent)
+        .expect("workspace root")
+        .join("configs/soranexus/taira/config.toml");
+
+    let raw = fs::read_to_string(&config_path).expect("Taira config should exist");
+    let doc: TomlValue = toml::from_str(&raw).expect("Taira config should be valid TOML");
+
+    let untrusted = doc
+        .get("sorafs")
+        .and_then(TomlValue::as_table)
+        .and_then(|sorafs| sorafs.get("gateway"))
+        .and_then(TomlValue::as_table)
+        .and_then(|gateway| gateway.get("untrusted_hosting"))
+        .and_then(TomlValue::as_table)
+        .expect("sorafs.gateway.untrusted_hosting should be configured");
+
+    assert_eq!(
+        untrusted.get("enabled").and_then(TomlValue::as_bool),
+        Some(true),
+        "Taira profile should enable CID-host routing"
+    );
+    assert_eq!(
+        untrusted
+            .get("path_gateway_redirect")
+            .and_then(TomlValue::as_bool),
+        Some(true)
+    );
+    assert_eq!(
+        untrusted
+            .get("redirect_html_only")
+            .and_then(TomlValue::as_bool),
+        Some(true)
+    );
+
+    let suffixes = untrusted
+        .get("cid_host_suffixes")
+        .and_then(TomlValue::as_table)
+        .expect("CID host suffixes should be configured");
+    assert_eq!(
+        suffixes.get("live").and_then(TomlValue::as_str),
+        Some("sorafs.sora.org")
+    );
+    assert_eq!(
+        suffixes.get("taira").and_then(TomlValue::as_str),
+        Some("sorafs.taira.sora.org")
     );
 }
 

@@ -345,7 +345,7 @@ fn reject_zk_public_input_aliases(map: &json::Map) -> Result<(), String> {
 
 fn ensure_owner_canonical(owner: &str) -> Result<(), String> {
     let canonical = iroha_data_model::account::AccountId::canonicalize(owner)
-        .map_err(|_| "owner must be a canonical I105 account id".to_string())?;
+        .map_err(|_| "owner must use canonical I105 account id form".to_string())?;
     if canonical != owner {
         return Err("owner must use canonical I105 account id form".to_string());
     }
@@ -2960,6 +2960,38 @@ mod tests {
             .expect("contract address")
     }
 
+    fn decode_tx_instruction(instr: &TxInstr) -> iroha_data_model::isi::InstructionBox {
+        let bytes = hex::decode(&instr.payload_hex).expect("instruction payload hex");
+        iroha_data_model::isi::decode_instruction_from_pair(&instr.wire_id, &bytes)
+            .expect("instruction payload decode")
+    }
+
+    fn queue_instruction_skeleton(harness: &GovHarness, tx_instructions: &[TxInstr]) {
+        let instructions = tx_instructions
+            .iter()
+            .map(decode_tx_instruction)
+            .collect::<Vec<_>>();
+        let tx = iroha_data_model::transaction::signed::TransactionBuilder::new(
+            (*harness.chain_id).clone(),
+            harness.authority.clone(),
+        )
+        .with_instructions(instructions)
+        .sign(harness.authority_keypair.private_key());
+        let params = harness.state.view().world().parameters().clone();
+        let accepted = iroha_core::tx::AcceptedTransaction::accept(
+            tx,
+            harness.chain_id.as_ref(),
+            params.sumeragi().max_clock_drift(),
+            params.transaction(),
+            harness.state.crypto().as_ref(),
+        )
+        .expect("accepted governance instruction skeleton");
+        harness
+            .queue
+            .push(accepted, harness.state.view())
+            .expect("push governance instruction skeleton");
+    }
+
     fn apply_queued_block_allow_errors(
         state: &Arc<State>,
         queue: &Arc<Queue>,
@@ -3583,8 +3615,6 @@ mod tests {
     async fn gov_flow_submits_and_applies() {
         let harness = mk_governance_harness(true);
         let authority_str = harness.authority.to_string();
-        let private_key =
-            ExposedPrivateKey(harness.authority_keypair.private_key().clone()).to_string();
         let chain_id_str = harness.chain_id.as_str().to_string();
 
         let code_hash_bytes = [0x11u8; 32];
@@ -3603,8 +3633,8 @@ mod tests {
             mode: Some("Plain".to_string()),
             limits: None,
             manifest_provenance: Some(manifest_provenance),
-            authority: Some(authority_str.clone()),
-            private_key: Some(private_key.clone()),
+            authority: None,
+            private_key: None,
         };
         let res = handle_gov_propose_deploy(
             harness.chain_id.clone(),
@@ -3615,7 +3645,8 @@ mod tests {
         )
         .await
         .expect("propose ok");
-        let proposal_id = res.0.proposal_id;
+        let proposal_id = res.0.proposal_id.clone();
+        queue_instruction_skeleton(&harness, &res.0.tx_instructions);
         let mut height = 1_u64;
         let applied = crate::test_utils::apply_queued_in_one_block(
             &harness.state,
@@ -3658,9 +3689,9 @@ mod tests {
             amount: "100".to_string(),
             duration_blocks: 1,
             direction: "Aye".to_string(),
-            private_key: Some(private_key.clone()),
+            private_key: None,
         };
-        handle_gov_ballot_plain_with_policy(
+        let ballot = handle_gov_ballot_plain_with_policy(
             harness.chain_id.clone(),
             harness.queue.clone(),
             harness.state.clone(),
@@ -3669,6 +3700,7 @@ mod tests {
         )
         .await
         .expect("ballot ok");
+        queue_instruction_skeleton(&harness, &ballot.0.tx_instructions);
         let applied = crate::test_utils::apply_queued_in_one_block(
             &harness.state,
             &harness.queue,
@@ -3693,10 +3725,10 @@ mod tests {
         let finalize = FinalizeDto {
             referendum_id: proposal_id.clone(),
             proposal_id: format!("0x{}", proposal_id),
-            authority: Some(authority_str.clone()),
-            private_key: Some(private_key.clone()),
+            authority: None,
+            private_key: None,
         };
-        handle_gov_finalize(
+        let finalize = handle_gov_finalize(
             harness.chain_id.clone(),
             harness.queue.clone(),
             harness.state.clone(),
@@ -3705,6 +3737,7 @@ mod tests {
         )
         .await
         .expect("finalize ok");
+        queue_instruction_skeleton(&harness, &finalize.0.tx_instructions);
         let applied = crate::test_utils::apply_queued_in_one_block(
             &harness.state,
             &harness.queue,
@@ -3731,10 +3764,10 @@ mod tests {
             proposal_id: format!("0x{}", proposal_id),
             preimage_hash: None,
             window: None,
-            authority: Some(authority_str),
-            private_key: Some(private_key),
+            authority: None,
+            private_key: None,
         };
-        handle_gov_enact(
+        let enact = handle_gov_enact(
             harness.chain_id.clone(),
             harness.queue.clone(),
             harness.state.clone(),
@@ -3743,6 +3776,7 @@ mod tests {
         )
         .await
         .expect("enact ok");
+        queue_instruction_skeleton(&harness, &enact.0.tx_instructions);
         let applied = crate::test_utils::apply_queued_in_one_block(
             &harness.state,
             &harness.queue,
@@ -3773,9 +3807,6 @@ mod tests {
     #[tokio::test]
     async fn propose_deploy_rejected_without_permission() {
         let harness = mk_governance_harness(false);
-        let authority_str = harness.authority.to_string();
-        let private_key =
-            ExposedPrivateKey(harness.authority_keypair.private_key().clone()).to_string();
         let code_hash_bytes = [0x22u8; 32];
         let abi_hash_bytes = ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1);
         let manifest_provenance =
@@ -3790,8 +3821,8 @@ mod tests {
             mode: Some("Plain".to_string()),
             limits: None,
             manifest_provenance: Some(manifest_provenance),
-            authority: Some(authority_str),
-            private_key: Some(private_key),
+            authority: None,
+            private_key: None,
         };
         let res = handle_gov_propose_deploy(
             harness.chain_id.clone(),
@@ -3802,7 +3833,8 @@ mod tests {
         )
         .await
         .expect("handler ok");
-        let proposal_id = res.0.proposal_id;
+        let proposal_id = res.0.proposal_id.clone();
+        queue_instruction_skeleton(&harness, &res.0.tx_instructions);
         let errors = apply_queued_block_allow_errors(&harness.state, &harness.queue, 1);
         assert_eq!(errors, vec![true]);
         let pid_bytes = hex::decode(&proposal_id).expect("proposal id hex");

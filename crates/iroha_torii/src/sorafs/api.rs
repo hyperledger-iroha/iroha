@@ -17,7 +17,7 @@ use axum::{
     Json,
     body::{Body, Bytes},
     extract::{ConnectInfo, Path, Query, State},
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, HeaderValue, StatusCode, Uri, header},
     response::{IntoResponse, Response},
 };
 use base64::{
@@ -95,7 +95,7 @@ use crate::{
         },
         site::{
             content_type_for_path, decode_content_cid, encode_content_cid, find_site_binding,
-            load_site_bindings_from_env, path_components_for_request, should_use_spa_fallback,
+            load_site_bindings_from_env, normalize_host_header, path_components_for_request,
         },
     },
     utils::extractors::{ExtractAccept, JsonOnly, NoritoJson},
@@ -2819,12 +2819,83 @@ fn build_plan_for_storage_pin_request(
     Ok(plan)
 }
 
-fn resolve_bound_site_manifest(
+#[derive(Debug, Clone)]
+struct ResolvedSiteHost {
+    hostname: String,
+    index_document: String,
+    spa_fallback: bool,
+    stored: StoredManifest,
+}
+
+fn normalized_site_request_host(headers: &HeaderMap) -> Result<String, Response> {
+    let Some(host) = headers
+        .get(header::HOST)
+        .and_then(|value| value.to_str().ok())
+    else {
+        return Err(json_error(StatusCode::BAD_REQUEST, "missing Host header"));
+    };
+
+    normalize_host_header(host)
+        .ok_or_else(|| json_error(StatusCode::BAD_REQUEST, "invalid Host header"))
+}
+
+fn extract_cid_from_untrusted_host(
+    host: &str,
+    config: &iroha_config::parameters::actual::SorafsGatewayUntrustedHosting,
+) -> Result<Option<String>, Response> {
+    if !config.enabled {
+        return Ok(None);
+    }
+
+    for suffix in [
+        config.cid_host_suffixes.live.as_str(),
+        config.cid_host_suffixes.taira.as_str(),
+    ] {
+        if suffix.is_empty() {
+            continue;
+        }
+
+        let marker = format!(".{suffix}");
+        let Some(cid_label) = host.strip_suffix(&marker) else {
+            continue;
+        };
+        if cid_label.is_empty() || cid_label.contains('.') {
+            continue;
+        }
+
+        if decode_content_cid(cid_label).is_none() {
+            return Err(json_error(
+                StatusCode::BAD_REQUEST,
+                "invalid content CID host",
+            ));
+        }
+
+        return Ok(Some(cid_label.to_owned()));
+    }
+
+    Ok(None)
+}
+
+async fn resolve_site_host(
     state: &SharedAppState,
     headers: &HeaderMap,
-) -> Result<(crate::sorafs::site::SiteBinding, StoredManifest), Response> {
+) -> Result<ResolvedSiteHost, Response> {
     if !state.sorafs_node.is_enabled() {
         return Err(storage_disabled_response());
+    }
+
+    let host = normalized_site_request_host(headers)?;
+
+    if let Some(cid) =
+        extract_cid_from_untrusted_host(&host, &state.sorafs_gateway_config.untrusted_hosting)?
+    {
+        let stored = resolve_site_manifest_by_cid(state, &cid).await?;
+        return Ok(ResolvedSiteHost {
+            hostname: host,
+            index_document: "index.html".to_owned(),
+            spa_fallback: true,
+            stored,
+        });
     }
 
     let bindings = match load_site_bindings_from_env() {
@@ -2833,14 +2904,7 @@ fn resolve_bound_site_manifest(
         Err(err) => return Err(json_error(StatusCode::INTERNAL_SERVER_ERROR, err)),
     };
 
-    let Some(host) = headers
-        .get(header::HOST)
-        .and_then(|value| value.to_str().ok())
-    else {
-        return Err(json_error(StatusCode::BAD_REQUEST, "missing Host header"));
-    };
-
-    let Some(binding) = find_site_binding(&bindings, host).cloned() else {
+    let Some(binding) = find_site_binding(&bindings, &host).cloned() else {
         return Err(StatusCode::NOT_FOUND.into_response());
     };
 
@@ -2860,7 +2924,15 @@ fn resolve_bound_site_manifest(
 
     enforce_site_denylist(state, &stored)?;
 
-    Ok((binding, stored))
+    let hostname = binding.hostname.clone();
+    let index_document = binding.index_document().to_owned();
+    let spa_fallback = binding.spa_fallback_enabled();
+    Ok(ResolvedSiteHost {
+        hostname,
+        index_document,
+        spa_fallback,
+        stored,
+    })
 }
 
 #[derive(Debug, Clone)]
@@ -2890,7 +2962,14 @@ fn find_local_site_manifest_by_cid(
         .map_err(node_storage_error_response)?;
     Ok(manifests
         .into_iter()
-        .find(|manifest| manifest.manifest_cid() == cid_bytes))
+        .filter(|manifest| manifest.manifest_cid() == cid_bytes)
+        .max_by_key(|manifest| {
+            let files = manifest.files();
+            let has_index_document = files
+                .iter()
+                .any(|file| file.path.len() == 1 && file.path[0] == "index.html");
+            (has_index_document, files.len())
+        }))
 }
 
 fn normalize_provider_torii_base_url(host_pattern: &str) -> Result<reqwest::Url, String> {
@@ -3313,6 +3392,123 @@ fn attach_cid_gateway_headers(response: &mut Response, stored: &StoredManifest) 
     );
 }
 
+fn should_use_spa_fallback_enabled(raw_path: &str, enabled: bool) -> bool {
+    if !enabled {
+        return false;
+    }
+    let trimmed = raw_path.trim_end_matches('/');
+    let last = trimmed.rsplit('/').next().unwrap_or_default();
+    !last.contains('.')
+}
+
+fn index_document_path(index_document: &str) -> Vec<String> {
+    path_components_for_request(index_document, index_document)
+        .unwrap_or_else(|| vec![index_document.to_owned()])
+}
+
+fn is_browser_document_request(headers: &HeaderMap) -> bool {
+    if headers
+        .get("sec-fetch-dest")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("document"))
+    {
+        return true;
+    }
+
+    if headers
+        .get("sec-fetch-mode")
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| value.eq_ignore_ascii_case("navigate"))
+    {
+        return true;
+    }
+
+    headers
+        .get(header::ACCEPT)
+        .and_then(|value| value.to_str().ok())
+        .is_some_and(|value| {
+            value.split(',').any(|entry| {
+                let mime = entry.trim().split(';').next().unwrap_or_default().trim();
+                mime.eq_ignore_ascii_case("text/html")
+                    || mime.eq_ignore_ascii_case("application/xhtml+xml")
+            })
+        })
+}
+
+fn path_gateway_host_for_cid_suffix(suffix: &str) -> Option<String> {
+    suffix
+        .strip_prefix("sorafs.")
+        .map(|value| value.trim().trim_end_matches('.').to_ascii_lowercase())
+        .filter(|value| !value.is_empty())
+}
+
+fn canonical_cid_host_suffix_for_request(
+    headers: &HeaderMap,
+    config: &iroha_config::parameters::actual::SorafsGatewayUntrustedHosting,
+) -> Option<String> {
+    let host = headers.get(header::HOST)?.to_str().ok()?;
+    let normalized_host = normalize_host_header(host)?;
+
+    for suffix in [
+        config.cid_host_suffixes.taira.as_str(),
+        config.cid_host_suffixes.live.as_str(),
+    ] {
+        let Some(path_gateway_host) = path_gateway_host_for_cid_suffix(suffix) else {
+            continue;
+        };
+        if normalized_host == path_gateway_host {
+            return Some(suffix.to_owned());
+        }
+    }
+
+    None
+}
+
+fn cid_gateway_request_path(uri: &Uri, cid: &str) -> Option<String> {
+    let prefix = format!("/sorafs/cid/{cid}");
+    let path = uri.path();
+    if path == prefix || path == format!("{prefix}/") {
+        return Some("/".to_owned());
+    }
+
+    path.strip_prefix(&format!("{prefix}/"))
+        .map(|suffix| format!("/{suffix}"))
+}
+
+fn permanent_redirect(location: String) -> Response {
+    let mut response = Response::new(Body::empty());
+    *response.status_mut() = StatusCode::PERMANENT_REDIRECT;
+    response.headers_mut().insert(
+        header::LOCATION,
+        HeaderValue::from_str(&location).unwrap_or_else(|_| HeaderValue::from_static("/")),
+    );
+    response
+}
+
+fn maybe_redirect_cid_gateway_request(
+    state: &SharedAppState,
+    headers: &HeaderMap,
+    uri: &Uri,
+    cid: &str,
+) -> Option<Response> {
+    let config = &state.sorafs_gateway_config.untrusted_hosting;
+    if !config.enabled || !config.path_gateway_redirect {
+        return None;
+    }
+    if config.redirect_html_only && !is_browser_document_request(headers) {
+        return None;
+    }
+
+    let suffix = canonical_cid_host_suffix_for_request(headers, config)?;
+    let path = cid_gateway_request_path(uri, cid)?;
+    let mut location = format!("https://{cid}.{suffix}{path}");
+    if let Some(query) = uri.query() {
+        location.push('?');
+        location.push_str(query);
+    }
+    Some(permanent_redirect(location))
+}
+
 fn build_site_file_response(
     state: &SharedAppState,
     stored: &StoredManifest,
@@ -3357,12 +3553,12 @@ pub(crate) async fn handle_get_sorafs_site_manifest(
     State(state): State<SharedAppState>,
     headers: HeaderMap,
 ) -> Response {
-    let (binding, stored) = match resolve_bound_site_manifest(&state, &headers) {
+    let resolved = match resolve_site_host(&state, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
 
-    let manifest_bytes = match fs::read(stored.manifest_path()) {
+    let manifest_bytes = match fs::read(resolved.stored.manifest_path()) {
         Ok(bytes) => bytes,
         Err(err) => {
             error!(
@@ -3377,18 +3573,18 @@ pub(crate) async fn handle_get_sorafs_site_manifest(
     };
 
     let value = json_object(vec![
-        json_entry("hostname", Value::from(binding.hostname.clone())),
+        json_entry("hostname", Value::from(resolved.hostname.clone())),
         json_entry(
             "content_cid",
-            Value::from(encode_content_cid(stored.manifest_cid())),
+            Value::from(encode_content_cid(resolved.stored.manifest_cid())),
         ),
         json_entry(
             "manifest_digest_hex",
-            Value::from(hex::encode(stored.manifest_digest())),
+            Value::from(hex::encode(resolved.stored.manifest_digest())),
         ),
         json_entry(
             "manifest_id_hex",
-            Value::from(stored.manifest_id().to_owned()),
+            Value::from(resolved.stored.manifest_id().to_owned()),
         ),
         json_entry(
             "manifest_b64",
@@ -3396,10 +3592,10 @@ pub(crate) async fn handle_get_sorafs_site_manifest(
         ),
         json_entry(
             "index_document",
-            Value::from(binding.index_document().to_owned()),
+            Value::from(resolved.index_document.clone()),
         ),
-        json_entry("spa_fallback", Value::from(binding.spa_fallback_enabled())),
-        json_entry("files", file_listing_json(&stored)),
+        json_entry("spa_fallback", Value::from(resolved.spa_fallback)),
+        json_entry("files", file_listing_json(&resolved.stored)),
     ]);
     JsonBody(value).into_response()
 }
@@ -3418,21 +3614,22 @@ pub(crate) async fn handle_get_sorafs_site_path(
     headers: HeaderMap,
     Path(raw_path): Path<String>,
 ) -> Response {
-    let (binding, stored) = match resolve_bound_site_manifest(&state, &headers) {
+    let resolved = match resolve_site_host(&state, &headers).await {
         Ok(value) => value,
         Err(response) => return response,
     };
 
-    let Some(mut path) = path_components_for_request(&raw_path, binding.index_document()) else {
+    let Some(mut path) = path_components_for_request(&raw_path, &resolved.index_document) else {
         return StatusCode::NOT_FOUND.into_response();
     };
 
-    if stored.file_by_path(&path).is_none() && should_use_spa_fallback(&raw_path, &binding) {
-        path = path_components_for_request(binding.index_document(), binding.index_document())
-            .unwrap_or_else(|| vec![binding.index_document().to_owned()]);
+    if resolved.stored.file_by_path(&path).is_none()
+        && should_use_spa_fallback_enabled(&raw_path, resolved.spa_fallback)
+    {
+        path = index_document_path(&resolved.index_document);
     }
 
-    build_site_file_response(&state, &stored, &path)
+    build_site_file_response(&state, &resolved.stored, &path)
 }
 
 #[cfg(feature = "app_api")]
@@ -3471,34 +3668,53 @@ pub(crate) async fn handle_get_sorafs_cid_lookup(
 }
 
 #[cfg(feature = "app_api")]
-pub(crate) async fn handle_get_sorafs_cid_root_redirect(Path(cid): Path<String>) -> Response {
+pub(crate) async fn handle_get_sorafs_cid_root_redirect(
+    State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    uri: Uri,
+    Path(cid): Path<String>,
+) -> Response {
     if decode_content_cid(&cid).is_none() {
         return json_error(StatusCode::BAD_REQUEST, "invalid content CID");
     }
 
-    let mut response = Response::new(Body::empty());
-    *response.status_mut() = StatusCode::PERMANENT_REDIRECT;
-    response.headers_mut().insert(
-        header::LOCATION,
-        HeaderValue::from_str(&format!("/sorafs/cid/{cid}/"))
-            .unwrap_or_else(|_| HeaderValue::from_static("/")),
-    );
-    response
+    if let Some(response) = maybe_redirect_cid_gateway_request(&state, &headers, &uri, &cid) {
+        return response;
+    }
+
+    let mut location = format!("/sorafs/cid/{cid}/");
+    if let Some(query) = uri.query() {
+        location.push('?');
+        location.push_str(query);
+    }
+    permanent_redirect(location)
 }
 
 #[cfg(feature = "app_api")]
 pub(crate) async fn handle_get_sorafs_cid_root(
     State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    uri: Uri,
     Path(cid): Path<String>,
 ) -> Response {
-    handle_get_sorafs_cid_path(State(state), Path((cid, String::new()))).await
+    handle_get_sorafs_cid_path(State(state), headers, uri, Path((cid, String::new()))).await
 }
 
 #[cfg(feature = "app_api")]
 pub(crate) async fn handle_get_sorafs_cid_path(
     State(state): State<SharedAppState>,
+    headers: HeaderMap,
+    uri: Uri,
     Path((cid, raw_path)): Path<(String, String)>,
 ) -> Response {
+    if decode_content_cid(&cid).is_none() {
+        return json_error(StatusCode::BAD_REQUEST, "invalid content CID");
+    }
+
+    if let Some(response) = maybe_redirect_cid_gateway_request(&state, &headers, &uri, &cid) {
+        return response;
+    }
+
     let stored = match resolve_site_manifest_by_cid(&state, &cid).await {
         Ok(value) => value,
         Err(response) => return response,
@@ -7047,7 +7263,7 @@ mod app_api_tests {
         time::Duration,
     };
 
-    use axum::body;
+    use axum::{body, http::Uri};
     use blake3::hash;
     use ed25519_dalek::{Signer as _, SigningKey};
     use iroha_config::parameters::actual::SorafsTokenConfig;
@@ -10805,8 +11021,15 @@ mod advert_tests {
             Some(content_cid.as_str())
         );
 
-        let cid_root =
-            handle_get_sorafs_cid_root(State(state.clone()), Path(content_cid.clone())).await;
+        let cid_root = handle_get_sorafs_cid_root(
+            State(state.clone()),
+            HeaderMap::new(),
+            format!("/sorafs/cid/{content_cid}/")
+                .parse::<Uri>()
+                .expect("cid root uri"),
+            Path(content_cid.clone()),
+        )
+        .await;
         assert_eq!(cid_root.status(), StatusCode::OK);
         let cid_root_body = body::to_bytes(cid_root.into_body(), usize::MAX)
             .await
@@ -10815,6 +11038,10 @@ mod advert_tests {
 
         let cid_asset = handle_get_sorafs_cid_path(
             State(state.clone()),
+            HeaderMap::new(),
+            format!("/sorafs/cid/{content_cid}/assets/app.js")
+                .parse::<Uri>()
+                .expect("cid asset uri"),
             Path((content_cid.clone(), "assets/app.js".to_owned())),
         )
         .await;
@@ -10831,6 +11058,377 @@ mod advert_tests {
             Some(&HeaderValue::from_static(
                 "public, max-age=31536000, immutable"
             ))
+        );
+    }
+
+    #[tokio::test]
+    async fn cid_host_serves_manifest_and_spa_fallback() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+
+        let index_bytes = b"<!doctype html><title>CID host</title>";
+        let asset_bytes = b"console.log('cid-host');";
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![
+                FileEntry {
+                    path: vec!["assets".to_owned(), "app.js".to_owned()],
+                    data: asset_bytes.to_vec(),
+                },
+                FileEntry {
+                    path: vec!["index.html".to_owned()],
+                    data: index_bytes.to_vec(),
+                },
+            ],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("directory plan");
+        let manifest = manifest_for_payload(0xD5, &payload);
+        let content_cid = encode_content_cid(&manifest.root_cid);
+        let cid_host = format!("{content_cid}.sorafs.taira.sora.org");
+        let mut reader = payload.as_slice();
+        node.ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest site payload");
+
+        inner.sorafs_node = node;
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .live = "sorafs.sora.org".to_owned();
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
+        let state = Arc::new(inner);
+
+        let mut root_headers = HeaderMap::new();
+        root_headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&cid_host).expect("cid host header"),
+        );
+        let root_response = handle_get_sorafs_site_root(State(state.clone()), root_headers).await;
+        assert_eq!(root_response.status(), StatusCode::OK);
+        let root_body = body::to_bytes(root_response.into_body(), usize::MAX)
+            .await
+            .expect("read cid host root body");
+        assert_eq!(root_body, &index_bytes[..]);
+
+        let mut manifest_headers = HeaderMap::new();
+        manifest_headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&cid_host).expect("cid host header"),
+        );
+        let manifest_response =
+            handle_get_sorafs_site_manifest(State(state.clone()), manifest_headers).await;
+        assert_eq!(manifest_response.status(), StatusCode::OK);
+        let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
+            .await
+            .expect("read cid host manifest body");
+        let manifest_value: Value =
+            norito::json::from_slice(&manifest_body).expect("decode cid host manifest");
+        assert_eq!(
+            manifest_value.get("hostname").and_then(Value::as_str),
+            Some(cid_host.as_str())
+        );
+        assert_eq!(
+            manifest_value.get("index_document").and_then(Value::as_str),
+            Some("index.html")
+        );
+        assert_eq!(
+            manifest_value.get("spa_fallback").and_then(Value::as_bool),
+            Some(true)
+        );
+
+        let mut spa_headers = HeaderMap::new();
+        spa_headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&cid_host).expect("cid host header"),
+        );
+        let spa_response = handle_get_sorafs_site_path(
+            State(state.clone()),
+            spa_headers,
+            Path("swap/ton/usdt".to_owned()),
+        )
+        .await;
+        assert_eq!(spa_response.status(), StatusCode::OK);
+        let spa_body = body::to_bytes(spa_response.into_body(), usize::MAX)
+            .await
+            .expect("read cid host spa body");
+        assert_eq!(spa_body, &index_bytes[..]);
+
+        let mut asset_headers = HeaderMap::new();
+        asset_headers.insert(
+            header::HOST,
+            HeaderValue::from_str(&cid_host).expect("cid host header"),
+        );
+        let asset_response = handle_get_sorafs_site_path(
+            State(state),
+            asset_headers,
+            Path("assets/app.js".to_owned()),
+        )
+        .await;
+        assert_eq!(asset_response.status(), StatusCode::OK);
+        let asset_body = body::to_bytes(asset_response.into_body(), usize::MAX)
+            .await
+            .expect("read cid host asset body");
+        assert_eq!(asset_body, &asset_bytes[..]);
+    }
+
+    #[tokio::test]
+    async fn cid_host_rejects_invalid_cid_label() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
+        let state = Arc::new(inner);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::HOST,
+            HeaderValue::from_static("notacid.sorafs.taira.sora.org"),
+        );
+        let response = handle_get_sorafs_site_root(State(state), headers).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[tokio::test]
+    async fn cid_path_gateway_redirects_browser_navigation_to_canonical_host() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+
+        let index_bytes = b"<!doctype html><title>Redirected</title>";
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![FileEntry {
+                path: vec!["index.html".to_owned()],
+                data: index_bytes.to_vec(),
+            }],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("directory plan");
+        let manifest = manifest_for_payload(0xD7, &payload);
+        let content_cid = encode_content_cid(&manifest.root_cid);
+        let mut reader = payload.as_slice();
+        node.ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest site payload");
+
+        inner.sorafs_node = node;
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .path_gateway_redirect = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .redirect_html_only = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
+        let state = Arc::new(inner);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        headers.insert(header::ACCEPT, HeaderValue::from_static("text/html"));
+        let response = handle_get_sorafs_cid_path(
+            State(state),
+            headers,
+            format!("/sorafs/cid/{content_cid}/swap/ton/usdt?x=1")
+                .parse::<Uri>()
+                .expect("browser redirect uri"),
+            Path((content_cid.clone(), "swap/ton/usdt".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::PERMANENT_REDIRECT);
+        assert_eq!(
+            response.headers().get(header::LOCATION),
+            Some(
+                &HeaderValue::from_str(&format!(
+                    "https://{content_cid}.sorafs.taira.sora.org/swap/ton/usdt?x=1"
+                ))
+                .expect("redirect header")
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn cid_path_gateway_non_browser_request_stays_on_path_gateway() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+
+        let asset_bytes = b"console.log('path-gateway');";
+        let (plan, payload) = CarBuildPlan::from_files_with_profile(
+            vec![
+                FileEntry {
+                    path: vec!["assets".to_owned(), "app.js".to_owned()],
+                    data: asset_bytes.to_vec(),
+                },
+                FileEntry {
+                    path: vec!["index.html".to_owned()],
+                    data: b"<!doctype html><title>Path gateway</title>".to_vec(),
+                },
+            ],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("directory plan");
+        let manifest = manifest_for_payload(0xD8, &payload);
+        let content_cid = encode_content_cid(&manifest.root_cid);
+        let mut reader = payload.as_slice();
+        node.ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest site payload");
+
+        inner.sorafs_node = node;
+        inner.sorafs_gateway_config.untrusted_hosting.enabled = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .path_gateway_redirect = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .redirect_html_only = true;
+        inner
+            .sorafs_gateway_config
+            .untrusted_hosting
+            .cid_host_suffixes
+            .taira = "sorafs.taira.sora.org".to_owned();
+        let state = Arc::new(inner);
+
+        let mut headers = HeaderMap::new();
+        headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        headers.insert(header::ACCEPT, HeaderValue::from_static("application/json"));
+        let response = handle_get_sorafs_cid_path(
+            State(state),
+            headers,
+            format!("/sorafs/cid/{content_cid}/assets/app.js")
+                .parse::<Uri>()
+                .expect("non-browser uri"),
+            Path((content_cid.clone(), "assets/app.js".to_owned())),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(response.headers().get(header::LOCATION).is_none());
+        let body = body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read path gateway asset body");
+        assert_eq!(body, &asset_bytes[..]);
+    }
+
+    #[tokio::test]
+    async fn cid_gateway_prefers_site_manifest_when_same_cid_has_blob_and_site_variants() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+
+        let index_bytes = b"<!doctype html><title>Preferred site</title>";
+        let asset_bytes = b"console.log('preferred-site');";
+        let files = vec![
+            FileEntry {
+                path: vec!["assets".to_owned(), "app.js".to_owned()],
+                data: asset_bytes.to_vec(),
+            },
+            FileEntry {
+                path: vec!["index.html".to_owned()],
+                data: index_bytes.to_vec(),
+            },
+        ];
+        let (_site_plan, payload) = CarBuildPlan::from_files_with_profile(
+            files.clone(),
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("directory plan");
+
+        let blob_manifest = manifest_for_payload(0xD6, &payload);
+        let mut site_manifest = manifest_for_payload(0xD6, &payload);
+        site_manifest
+            .chunking
+            .aliases
+            .push("alias/preferred-site".to_owned());
+        let content_cid = encode_content_cid(&site_manifest.root_cid);
+
+        let blob_plan = CarBuildPlan::single_file(&payload).expect("single-file plan");
+        let mut blob_reader = payload.as_slice();
+        node.ingest_manifest(&blob_manifest, &blob_plan, &mut blob_reader)
+            .expect("ingest blob manifest");
+
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let manifest_b64 = base64::engine::general_purpose::STANDARD
+            .encode(norito::to_bytes(&site_manifest).expect("encode manifest"));
+        let payload_b64 = base64::engine::general_purpose::STANDARD.encode(&payload);
+        let request = StoragePinRequestDto {
+            manifest_b64,
+            payload_b64,
+            files: Some(
+                files
+                    .iter()
+                    .map(|file| StorageFileEntryDto {
+                        path: file.path.clone(),
+                        size: file.data.len() as u64,
+                    })
+                    .collect(),
+            ),
+            stripe_layout: None,
+            chunk_roles: None,
+        };
+
+        let response = handle_post_sorafs_storage_pin(
+            State(state.clone()),
+            HeaderMap::new(),
+            ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 8080))),
+            JsonOnly(request),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+
+        let cid_root = handle_get_sorafs_cid_root(
+            State(state.clone()),
+            HeaderMap::new(),
+            format!("/sorafs/cid/{content_cid}/")
+                .parse::<Uri>()
+                .expect("preferred cid root uri"),
+            Path(content_cid.clone()),
+        )
+        .await;
+        assert_eq!(cid_root.status(), StatusCode::OK);
+        let cid_root_body = body::to_bytes(cid_root.into_body(), usize::MAX)
+            .await
+            .expect("read cid root body");
+        assert_eq!(cid_root_body, &index_bytes[..]);
+
+        let cid_lookup =
+            handle_get_sorafs_cid_lookup(State(state.clone()), Path(content_cid.clone())).await;
+        assert_eq!(cid_lookup.status(), StatusCode::OK);
+        let cid_lookup_body = body::to_bytes(cid_lookup.into_body(), usize::MAX)
+            .await
+            .expect("read cid lookup body");
+        let cid_lookup_value: Value =
+            norito::json::from_slice(&cid_lookup_body).expect("decode cid lookup response");
+        assert_eq!(
+            cid_lookup_value
+                .get("index_document")
+                .and_then(Value::as_str),
+            Some("index.html")
+        );
+        assert_eq!(
+            cid_lookup_value
+                .get("files")
+                .and_then(Value::as_array)
+                .map(Vec::len),
+            Some(2)
         );
     }
 
@@ -10963,8 +11561,15 @@ mod advert_tests {
         );
         let state = Arc::new(inner);
 
-        let cid_root =
-            handle_get_sorafs_cid_root(State(state.clone()), Path(content_cid.clone())).await;
+        let cid_root = handle_get_sorafs_cid_root(
+            State(state.clone()),
+            HeaderMap::new(),
+            format!("/sorafs/cid/{content_cid}/")
+                .parse::<Uri>()
+                .expect("remote cid root uri"),
+            Path(content_cid.clone()),
+        )
+        .await;
         assert_eq!(cid_root.status(), StatusCode::OK);
         let cid_root_body = body::to_bytes(cid_root.into_body(), usize::MAX)
             .await
@@ -10975,6 +11580,10 @@ mod advert_tests {
 
         let cid_asset = handle_get_sorafs_cid_path(
             State(state.clone()),
+            HeaderMap::new(),
+            format!("/sorafs/cid/{content_cid}/assets/app.js")
+                .parse::<Uri>()
+                .expect("remote cid asset uri"),
             Path((content_cid.clone(), "assets/app.js".to_owned())),
         )
         .await;

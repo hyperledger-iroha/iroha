@@ -3,7 +3,6 @@ lang: kk
 direction: ltr
 source: docs/source/torii_contracts_api.md
 status: needs-update
-generator: scripts/sync_docs_i18n.py
 source_hash: d87270b8bd4f18c4d06ad0adc36f3db1f5279762cac2bf1e11354ead6d3b538e
 source_last_modified: "2026-04-04T12:14:28.164058+00:00"
 translation_last_reviewed: 2026-04-05

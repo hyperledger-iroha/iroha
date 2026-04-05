@@ -232,6 +232,61 @@ fileprivate func canonicalPublicAssetDefinitionLiteral(_ raw: String?) -> String
     return trimmed
 }
 
+fileprivate struct ToriiAnyCodingKey: CodingKey {
+    let stringValue: String
+    let intValue: Int?
+
+    init(_ stringValue: String) {
+        self.stringValue = stringValue
+        intValue = nil
+    }
+
+    init?(stringValue: String) {
+        self.init(stringValue)
+    }
+
+    init?(intValue: Int) {
+        stringValue = String(intValue)
+        self.intValue = intValue
+    }
+}
+
+fileprivate func decodeOptionalStringValue(
+    from container: KeyedDecodingContainer<ToriiAnyCodingKey>,
+    keys: [String]
+) throws -> String? {
+    for key in keys {
+        let codingKey = ToriiAnyCodingKey(key)
+        guard container.contains(codingKey) else {
+            continue
+        }
+        let value = try container.decodeIfPresent(String.self, forKey: codingKey)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        if let value, !value.isEmpty {
+            return value
+        }
+    }
+    return nil
+}
+
+fileprivate func decodeRequiredStringValue(
+    from container: KeyedDecodingContainer<ToriiAnyCodingKey>,
+    keys: [String],
+    decoder: Decoder,
+    debugDescription: String
+) throws -> String {
+    if let value = try decodeOptionalStringValue(from: container, keys: keys) {
+        return value
+    }
+    throw DecodingError.keyNotFound(
+        ToriiAnyCodingKey(keys[0]),
+        DecodingError.Context(
+            codingPath: decoder.codingPath,
+            debugDescription: debugDescription
+        )
+    )
+}
+
 public struct ToriiAssetBalance: Decodable, Sendable {
     public let asset: String
     public let accountId: String?
@@ -322,6 +377,20 @@ public struct ToriiAccountAliasResolution: Decodable, Sendable {
         case accountId = "account_id"
         case index
         case source
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let anyContainer = try decoder.container(keyedBy: ToriiAnyCodingKey.self)
+        alias = try container.decode(String.self, forKey: .alias)
+        accountId = try decodeRequiredStringValue(
+            from: anyContainer,
+            keys: ["account_id", "accountId"],
+            decoder: decoder,
+            debugDescription: "account alias resolution must include account_id."
+        )
+        index = try container.decodeIfPresent(UInt64.self, forKey: .index)
+        source = try container.decodeIfPresent(String.self, forKey: .source)
     }
 }
 
@@ -783,6 +852,7 @@ public struct ToriiIdentifierResolutionPayload: Codable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
+        let anyContainer = try decoder.container(keyedBy: ToriiAnyCodingKey.self)
         policyId = try ToriiIdentifierReceiptWireValue.normalizedPolicyId(
             from: container,
             forKey: .policyId
@@ -808,7 +878,12 @@ public struct ToriiIdentifierResolutionPayload: Codable, Sendable {
             from: container,
             forKey: .uaid
         )
-        accountId = try container.decode(String.self, forKey: .accountId)
+        accountId = try decodeRequiredStringValue(
+            from: anyContainer,
+            keys: ["account_id", "accountId"],
+            decoder: decoder,
+            debugDescription: "signature_payload.account_id is required."
+        )
         if let executionPayload = try container.decodeIfPresent(
             ToriiIdentifierResolutionExecutionPayload.self,
             forKey: .execution
@@ -857,6 +932,44 @@ public struct ToriiIdentifierClaimRecord: Codable, Sendable {
         case verifiedAtMs = "verified_at_ms"
         case expiresAtMs = "expires_at_ms"
     }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let anyContainer = try decoder.container(keyedBy: ToriiAnyCodingKey.self)
+        policyId = try ToriiIdentifierReceiptWireValue.normalizedPolicyId(
+            from: container,
+            forKey: .policyId
+        )
+        opaqueId = try ToriiIdentifierReceiptWireValue.normalizedOpaqueId(
+            from: container,
+            forKey: .opaqueId
+        )
+        guard let normalizedReceiptHash = try ToriiIdentifierReceiptWireValue.normalizedHashValue(
+            from: container,
+            forKey: .receiptHash
+        ) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.receiptHash,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "receipt_hash is required."
+                )
+            )
+        }
+        receiptHash = normalizedReceiptHash
+        uaid = try ToriiIdentifierReceiptWireValue.normalizedUaid(
+            from: container,
+            forKey: .uaid
+        )
+        accountId = try decodeRequiredStringValue(
+            from: anyContainer,
+            keys: ["account_id", "accountId"],
+            decoder: decoder,
+            debugDescription: "account_id is required."
+        )
+        verifiedAtMs = try container.decode(UInt64.self, forKey: .verifiedAtMs)
+        expiresAtMs = try container.decodeIfPresent(UInt64.self, forKey: .expiresAtMs)
+    }
 }
 
 public struct ToriiIdentifierResolutionReceipt: Codable, Sendable {
@@ -884,6 +997,48 @@ public struct ToriiIdentifierResolutionReceipt: Codable, Sendable {
         case signature
         case signaturePayloadHex = "signature_payload_hex"
         case signaturePayload = "signature_payload"
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let anyContainer = try decoder.container(keyedBy: ToriiAnyCodingKey.self)
+        policyId = try ToriiIdentifierReceiptWireValue.normalizedPolicyId(
+            from: container,
+            forKey: .policyId
+        )
+        opaqueId = try ToriiIdentifierReceiptWireValue.normalizedOpaqueId(
+            from: container,
+            forKey: .opaqueId
+        )
+        guard let normalizedReceiptHash = try ToriiIdentifierReceiptWireValue.normalizedHashValue(
+            from: container,
+            forKey: .receiptHash
+        ) else {
+            throw DecodingError.keyNotFound(
+                CodingKeys.receiptHash,
+                DecodingError.Context(
+                    codingPath: decoder.codingPath,
+                    debugDescription: "receipt_hash is required."
+                )
+            )
+        }
+        receiptHash = normalizedReceiptHash
+        uaid = try ToriiIdentifierReceiptWireValue.normalizedUaid(
+            from: container,
+            forKey: .uaid
+        )
+        accountId = try decodeRequiredStringValue(
+            from: anyContainer,
+            keys: ["account_id", "accountId"],
+            decoder: decoder,
+            debugDescription: "account_id is required."
+        )
+        resolvedAtMs = try container.decode(UInt64.self, forKey: .resolvedAtMs)
+        expiresAtMs = try container.decodeIfPresent(UInt64.self, forKey: .expiresAtMs)
+        backend = try container.decode(String.self, forKey: .backend)
+        signature = try container.decode(String.self, forKey: .signature)
+        signaturePayloadHex = try container.decode(String.self, forKey: .signaturePayloadHex)
+        signaturePayload = try container.decode(ToriiIdentifierResolutionPayload.self, forKey: .signaturePayload)
     }
 }
 
@@ -2279,8 +2434,12 @@ public extension ToriiExplorerTransferRecord {
             guard let assetDefinition = asset.assetDefinitionId else {
                 return []
             }
-            let receiver = asset.destinationAccountId
             let normalizedKind = instruction.kind.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let fallbackReceiver = instruction.authority.trimmingCharacters(in: .whitespacesAndNewlines)
+            let trimmedReceiver = asset.destinationAccountId.trimmingCharacters(in: .whitespacesAndNewlines)
+            let receiver = trimmedReceiver.isEmpty && normalizedKind == "mint"
+                ? fallbackReceiver
+                : asset.destinationAccountId
             let direction: ToriiExplorerTransferDirection
             switch normalizedKind {
             case "mint":
@@ -2641,11 +2800,13 @@ extension ToriiExplorerTransferDetails {
               let amount = stringValue(map["object"]) else {
             return nil
         }
-        let (definition, sender) = parseAssetId(source)
-        let details = ToriiExplorerTransferAsset(destinationAccountId: destination,
+        let sourceFields = decodeToriiAssetIdFields(source)
+        let destinationFields = decodeToriiAssetIdFields(destination)
+        let sender = sourceFields.accountId?.trimmingCharacters(in: .whitespacesAndNewlines)
+        let details = ToriiExplorerTransferAsset(destinationAccountId: destinationFields.accountId ?? destination,
                                                  amount: amount,
-                                                 senderAccountId: sender,
-                                                 assetDefinitionId: definition)
+                                                 senderAccountId: sender?.isEmpty == false ? sender : nil,
+                                                 assetDefinitionId: sourceFields.assetDefinitionId ?? destinationFields.assetDefinitionId)
         return .asset(details)
     }
 
@@ -2699,8 +2860,14 @@ extension ToriiExplorerTransferDetails {
         guard !trimmed.isEmpty else {
             return (nil, "")
         }
+        if let parsed = OfflineNorito.parsePublicAssetIdLiteral(trimmed) {
+            return (parsed.assetDefinitionId, parsed.accountId)
+        }
         if let canonical = canonicalPublicAssetDefinitionLiteral(trimmed) {
             return (canonical, "")
+        }
+        if let canonicalAccount = try? normalizeToriiAccountIdQueryValue(trimmed, field: "asset_id.account_id") {
+            return (nil, canonicalAccount)
         }
         return (nil, "")
     }
@@ -2712,10 +2879,19 @@ extension ToriiExplorerTransferDetails {
 
     fileprivate static func decodeToriiAssetIdFields(_ literal: String) -> DecodedToriiAssetIdFields {
         let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let canonical = canonicalPublicAssetDefinitionLiteral(trimmed) else {
-            return DecodedToriiAssetIdFields(assetDefinitionId: nil, accountId: nil)
+        if let parsed = OfflineNorito.parsePublicAssetIdLiteral(trimmed) {
+            return DecodedToriiAssetIdFields(
+                assetDefinitionId: parsed.assetDefinitionId,
+                accountId: parsed.accountId
+            )
         }
-        return DecodedToriiAssetIdFields(assetDefinitionId: canonical, accountId: nil)
+        if let canonical = canonicalPublicAssetDefinitionLiteral(trimmed) {
+            return DecodedToriiAssetIdFields(assetDefinitionId: canonical, accountId: nil)
+        }
+        if let canonicalAccount = try? normalizeToriiAccountIdQueryValue(trimmed, field: "asset_id.account_id") {
+            return DecodedToriiAssetIdFields(assetDefinitionId: nil, accountId: canonicalAccount)
+        }
+        return DecodedToriiAssetIdFields(assetDefinitionId: nil, accountId: nil)
     }
 }
 
@@ -5083,7 +5259,13 @@ public struct ToriiConfidentialAssetPolicy: Decodable, Sendable {
 
     public init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let rawAssetId = try container.decode(String.self, forKey: .assetId)
+        let anyContainer = try decoder.container(keyedBy: ToriiAnyCodingKey.self)
+        let rawAssetId = try decodeRequiredStringValue(
+            from: anyContainer,
+            keys: ["asset_id", "asset"],
+            decoder: decoder,
+            debugDescription: "confidential asset policy must include asset_id."
+        )
         assetId = canonicalPublicAssetDefinitionLiteral(rawAssetId) ?? rawAssetId
         blockHeight = try container.decode(UInt64.self, forKey: .blockHeight)
         currentMode = try container.decode(String.self, forKey: .currentMode)

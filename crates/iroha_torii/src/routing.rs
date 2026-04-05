@@ -146,10 +146,12 @@ use iroha_sccp::{
     NexusSccpGovernanceProofV1, NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
     SccpCounterpartyProofJobV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
     SccpPayloadV1, SccpProofManifestV1, build_nexus_sccp_message_transparent_proof,
-    build_sccp_counterparty_proof_job_from_bundle, burn_message_id, canonical_burn_payload_bytes,
-    canonical_governance_payload_bytes, canonical_sccp_payload_bytes, commitment_leaf_hash,
-    decode_nexus_bridge_finality_proof, parliament_certificate_hash, payload_hash,
-    recover_nexus_sccp_message_transparent_proof, sccp_message_id, sccp_message_kind,
+    build_nexus_sccp_message_transparent_proof_with_signer,
+    build_sccp_counterparty_proof_job_from_bundle,
+    build_sccp_counterparty_proof_job_from_bundle_with_signer, burn_message_id,
+    canonical_burn_payload_bytes, canonical_governance_payload_bytes, canonical_sccp_payload_bytes,
+    commitment_leaf_hash, decode_nexus_bridge_finality_proof, parliament_certificate_hash,
+    payload_hash, recover_nexus_sccp_message_transparent_proof, sccp_message_id, sccp_message_kind,
     sccp_message_target_domain, verify_burn_bundle_structure, verify_governance_bundle_structure,
     verify_message_bundle_structure,
 };
@@ -3038,6 +3040,10 @@ fn bridge_record_to_json(
                     norito::json::Value::from(proof.proof_family.clone()),
                 );
                 payload.insert(
+                    "verifier_backend".into(),
+                    norito::json::Value::from(proof.verifier_backend.key.clone()),
+                );
+                payload.insert(
                     "target_domain".into(),
                     norito::json::Value::from(proof.public_inputs.target_domain),
                 );
@@ -3071,6 +3077,10 @@ fn bridge_record_to_json(
                     payload.insert(
                         "inner_chain_family".into(),
                         norito::json::Value::from(sccp_chain_family_key(inner.chain_family)),
+                    );
+                    payload.insert(
+                        "inner_verifier_backend".into(),
+                        norito::json::Value::from(inner.verifier_backend.key.clone()),
                     );
                     payload.insert(
                         "inner_payload_kind".into(),
@@ -4612,6 +4622,8 @@ pub struct SccpCounterpartyCapabilityDto {
     pub domain: u32,
     /// Stable logical chain key.
     pub chain: String,
+    /// Target verifier backend family for the counterparty submission path.
+    pub verifier_backend: iroha_sccp::SccpVerifierBackendV1,
     /// Generic SCCP message proof backend emitted before bridge-registry prefixing.
     pub message_backend: String,
     /// Bridge proof registry backend label returned by Torii proof-submit APIs.
@@ -4745,6 +4757,7 @@ fn sccp_counterparty_capabilities() -> Result<Vec<SccpCounterpartyCapabilityDto>
             Ok(SccpCounterpartyCapabilityDto {
                 domain,
                 chain: manifest.chain,
+                verifier_backend: manifest.verifier_backend,
                 message_backend: manifest.message_backend,
                 registry_backend: manifest.registry_backend,
                 counterparty_account_codec: manifest.counterparty_account_codec,
@@ -4971,9 +4984,26 @@ fn sccp_counterparty_from_backend(backend: &str) -> Option<(u32, &'static str)> 
     Some((domain, iroha_sccp::sccp_chain_key_for_domain(domain)?))
 }
 
+fn sccp_message_proof_build_error_message(
+    bundle: &NexusSccpMessageProofV1,
+    signer: &KeyPair,
+    target: &str,
+) -> String {
+    let mut message = format!("failed to build SCCP {target}");
+    let needs_evm_attestation = matches!(
+        iroha_sccp::sccp_counterparty_domain_for_message_payload(&bundle.payload),
+        Some(iroha_sccp::SCCP_DOMAIN_ETH | iroha_sccp::SCCP_DOMAIN_BSC)
+    );
+    if needs_evm_attestation && signer.algorithm() != Algorithm::Secp256k1 {
+        message.push_str(": EVM/BSC SCCP proofs require da_receipt_signer to use secp256k1");
+    }
+    message
+}
+
 #[cfg(feature = "app_api")]
 fn bridge_proof_from_sccp_message_bundle(
     bundle: &NexusSccpMessageProofV1,
+    signer: &KeyPair,
 ) -> Result<iroha_data_model::bridge::BridgeProof> {
     if !verify_message_bundle_structure(bundle) {
         return Err(conversion_error(
@@ -4984,9 +5014,15 @@ fn bridge_proof_from_sccp_message_bundle(
         conversion_error("SCCP message bundle finality proof could not be decoded".to_owned())
     })?;
     let (backend, manifest_hash, _) = sccp_message_backend_descriptor(&bundle.payload)?;
-    let artifact = build_nexus_sccp_message_transparent_proof(bundle).ok_or_else(|| {
-        conversion_error("failed to build SCCP transparent proof artifact".to_owned())
-    })?;
+    let artifact = build_nexus_sccp_message_transparent_proof_with_signer(bundle, signer)
+        .or_else(|| build_nexus_sccp_message_transparent_proof(bundle))
+        .ok_or_else(|| {
+            conversion_error(sccp_message_proof_build_error_message(
+                bundle,
+                signer,
+                "transparent proof artifact",
+            ))
+        })?;
     let proof_bytes = to_bytes(&artifact).map_err(|err| {
         conversion_error(format!(
             "failed to encode SCCP transparent proof artifact: {err}"
@@ -5239,6 +5275,18 @@ mod sccp_message_backend_tests {
         );
         assert_eq!(
             payload
+                .get("verifier_backend")
+                .and_then(norito::json::Value::as_str),
+            Some("ton-contract-v1")
+        );
+        assert_eq!(
+            payload
+                .get("inner_verifier_backend")
+                .and_then(norito::json::Value::as_str),
+            Some("ton-contract-v1")
+        );
+        assert_eq!(
+            payload
                 .get("inner_statement_hash")
                 .and_then(norito::json::Value::as_str),
             Some(hex::encode(inner.statement_hash).as_str())
@@ -5290,6 +5338,7 @@ mod sccp_message_backend_tests {
             .iter()
             .find(|entry| entry.chain == "ton")
             .expect("ton counterparty");
+        assert_eq!(ton.verifier_backend.key.as_str(), "ton-contract-v1");
         assert_eq!(ton.message_backend, "sccp/stark-fri-v1/ton");
         assert_eq!(ton.registry_backend, "bridge/sccp/stark-fri-v1/ton");
         assert_eq!(
@@ -5318,6 +5367,10 @@ mod sccp_message_backend_tests {
             .iter()
             .find(|manifest| manifest.counterparty_domain == iroha_sccp::SCCP_DOMAIN_ETH)
             .expect("eth manifest");
+        assert_eq!(
+            eth.verifier_backend.key.as_str(),
+            iroha_sccp::SCCP_EVM_SECP256K1_PROOF_BACKEND_V1
+        );
         assert_eq!(eth.message_backend, "sccp/stark-fri-v1/eth");
         assert_eq!(eth.registry_backend, "bridge/sccp/stark-fri-v1/eth");
         assert_eq!(
@@ -5331,6 +5384,7 @@ mod sccp_message_backend_tests {
             .find(|manifest| manifest.counterparty_domain == iroha_sccp::SCCP_DOMAIN_TON)
             .expect("ton manifest");
         assert_eq!(ton.chain, "ton");
+        assert_eq!(ton.verifier_backend.key.as_str(), "ton-contract-v1");
         assert_eq!(ton.counterparty_account_codec_key, "ton_raw");
     }
 
@@ -5506,8 +5560,12 @@ mod sccp_message_backend_tests {
             .expect("encode finality"),
         };
 
+        let signer = KeyPair::from_seed(
+            b"iroha:torii:routing:test:evm-attestor".to_vec(),
+            Algorithm::Secp256k1,
+        );
         let bridge_proof =
-            bridge_proof_from_sccp_message_bundle(&bundle).expect("build bridge proof");
+            bridge_proof_from_sccp_message_bundle(&bundle, &signer).expect("build bridge proof");
         let iroha_data_model::bridge::BridgeProofPayload::TransparentZk(tp) = bridge_proof.payload
         else {
             panic!("expected transparent proof payload");
@@ -6062,6 +6120,7 @@ pub async fn handle_v1_sccp_message_bundle(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_message_proof_artifact(
     state: &CoreState,
+    signer: &KeyPair,
     message_id_hex: String,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
@@ -6075,8 +6134,15 @@ pub async fn handle_v1_sccp_message_proof_artifact(
                 .cloned()
         })
         .ok_or_else(sccp_not_found)?;
-    let artifact = build_nexus_sccp_message_transparent_proof(&bundle)
-        .ok_or_else(|| sccp_internal_error("failed to build SCCP proof artifact".to_owned()))?;
+    let artifact = build_nexus_sccp_message_transparent_proof_with_signer(&bundle, signer)
+        .or_else(|| build_nexus_sccp_message_transparent_proof(&bundle))
+        .ok_or_else(|| {
+            sccp_internal_error(sccp_message_proof_build_error_message(
+                &bundle,
+                signer,
+                "proof artifact",
+            ))
+        })?;
     sccp_bundle_response(&artifact, accept.as_ref())
 }
 
@@ -6084,6 +6150,7 @@ pub async fn handle_v1_sccp_message_proof_artifact(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_message_proof_job(
     state: &CoreState,
+    signer: &KeyPair,
     message_id_hex: String,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
@@ -6097,9 +6164,15 @@ pub async fn handle_v1_sccp_message_proof_job(
                 .cloned()
         })
         .ok_or_else(sccp_not_found)?;
-    let job = build_sccp_counterparty_proof_job_from_bundle(&bundle).ok_or_else(|| {
-        sccp_internal_error("failed to build SCCP normalized proof job".to_owned())
-    })?;
+    let job = build_sccp_counterparty_proof_job_from_bundle_with_signer(&bundle, signer)
+        .or_else(|| build_sccp_counterparty_proof_job_from_bundle(&bundle))
+        .ok_or_else(|| {
+            sccp_internal_error(sccp_message_proof_build_error_message(
+                &bundle,
+                signer,
+                "normalized proof job",
+            ))
+        })?;
     sccp_bundle_response(&job, accept.as_ref())
 }
 
@@ -6812,6 +6885,12 @@ fn test_asset_definition_id_from_hex(hex_literal: &str) -> AssetDefinitionId {
 #[cfg(test)]
 fn test_asset_definition_literal_from_hex(hex_literal: &str) -> String {
     test_asset_definition_id_from_hex(hex_literal).to_string()
+}
+
+fn asset_definition_display_name(id: &AssetDefinitionId) -> String {
+    id.try_name()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| id.to_string())
 }
 
 #[cfg(test)]
@@ -9792,6 +9871,7 @@ pub async fn handle_post_bridge_proof_submit(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
+    signer: &KeyPair,
     telemetry: MaybeTelemetry,
     JsonOnly(req): JsonOnly<BridgeProofSubmitDto>,
 ) -> Result<impl IntoResponse> {
@@ -9874,7 +9954,7 @@ pub async fn handle_post_bridge_proof_submit(
                 sccp_counterparty_for_message_payload(&bundle.payload)?;
             (
                 "message",
-                bridge_proof_from_sccp_message_bundle(bundle)?,
+                bridge_proof_from_sccp_message_bundle(bundle, signer)?,
                 counterparty_domain,
                 counterparty_chain.to_owned(),
             )
@@ -10038,6 +10118,7 @@ pub async fn handle_post_bridge_message_submit(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
+    signer: &KeyPair,
     telemetry: MaybeTelemetry,
     JsonOnly(req): JsonOnly<BridgeMessageSubmitDto>,
 ) -> Result<impl IntoResponse> {
@@ -10075,7 +10156,7 @@ pub async fn handle_post_bridge_message_submit(
     let (counterparty_domain, counterparty_chain) =
         sccp_counterparty_for_message_payload(&message_bundle.payload)?;
     let message_id_hex = hex::encode(message_bundle.commitment.message_id);
-    let bridge_proof = bridge_proof_from_sccp_message_bundle(&message_bundle)?;
+    let bridge_proof = bridge_proof_from_sccp_message_bundle(&message_bundle, signer)?;
     let range_start_height = bridge_proof.range.start_height;
     let range_end_height = bridge_proof.range.end_height;
     let manifest_hash_hex = hex::encode(bridge_proof.manifest_hash);
@@ -11237,15 +11318,36 @@ fn execute_contract_call_simulation(
 #[cfg(feature = "app_api")]
 fn build_contract_call_metadata(
     _manifest: &manifest::ContractManifest,
-    _contract_address: &iroha_data_model::smart_contract::ContractAddress,
-    _contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
-    _entrypoint: Option<&str>,
-    _payload: Option<&IrohaJson>,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
+    entrypoint: Option<&str>,
+    payload: Option<&IrohaJson>,
     gas_asset_id: Option<&str>,
     fee_sponsor: Option<&iroha_data_model::account::AccountId>,
     gas_limit: u64,
 ) -> Metadata {
     let mut metadata = Metadata::default();
+    let contract_address_key =
+        Name::from_str("contract_address").expect("static metadata key `contract_address`");
+    metadata.insert(
+        contract_address_key,
+        IrohaJson::new(contract_address.to_string()),
+    );
+    if let Some(alias) = contract_alias {
+        let alias_key =
+            Name::from_str("contract_alias").expect("static metadata key `contract_alias`");
+        metadata.insert(alias_key, IrohaJson::new(alias.to_string()));
+    }
+    if let Some(entrypoint) = entrypoint {
+        let entrypoint_key = Name::from_str("contract_entrypoint")
+            .expect("static metadata key `contract_entrypoint`");
+        metadata.insert(entrypoint_key, IrohaJson::new(entrypoint.to_owned()));
+    }
+    if let Some(payload) = payload {
+        let payload_key =
+            Name::from_str("contract_payload").expect("static metadata key `contract_payload`");
+        metadata.insert(payload_key, payload.clone());
+    }
     if let Some(asset_id) = gas_asset_id {
         let gas_asset_key =
             Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
@@ -12807,12 +12909,12 @@ mod multisig_contract_call_tests {
         );
         assert_eq!(
             metadata.iter().count(),
-            3,
-            "only gas asset, fee sponsor, and gas limit should remain"
+            5,
+            "contract address and entrypoint should stay alongside the fee metadata"
         );
         assert!(metadata.get("gov_contract_address").is_none());
-        assert!(metadata.get("contract_address").is_none());
-        assert!(metadata.get("contract_entrypoint").is_none());
+        assert!(metadata.get("contract_address").is_some());
+        assert!(metadata.get("contract_entrypoint").is_some());
         assert!(metadata.get("contract_payload").is_none());
     }
 }
@@ -13129,7 +13231,7 @@ mod multisig_selector_tests {
     ) {
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let label_name: Name = "cbdc".parse().expect("label");
-        let alias_literal = format!("{}@{}.universal", label_name, domain_id);
+        let alias_literal = format!("{label_name}@{domain_id}");
 
         let signer_one = KeyPair::random();
         let signer_two = KeyPair::random();
@@ -13300,7 +13402,7 @@ mod multisig_selector_tests {
     ) {
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let label_name: Name = "cbdc".parse().expect("label");
-        let alias_literal = format!("{}@{}.universal", label_name, domain_id);
+        let alias_literal = format!("{label_name}@{domain_id}");
 
         let signer_one = KeyPair::random();
         let signer_two = KeyPair::random();
@@ -13764,7 +13866,7 @@ mod multisig_selector_tests {
         let JsonBody(response) = handle_post_multisig_spec(
             state,
             NoritoJson(MultisigSpecRequestDto {
-                selector: alias_selector(&format!("{label_name}@{domain_id}.universal")),
+                selector: alias_selector(&format!("{label_name}@{domain_id}")),
             }),
         )
         .await
@@ -21748,7 +21850,13 @@ mod repair_worker_tests {
                 Ok(_) => panic!("alias worker id must be rejected"),
                 Err(err) => err,
             };
-            assert!(err.to_string().contains("canonical I105 account id"));
+            let crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) = err
+            else {
+                panic!("unexpected error: {err:?}");
+            };
+            assert!(message.contains("canonical I105 account id"));
         });
     }
 }
@@ -24376,6 +24484,37 @@ fn filter_contains_asset_id(expr: &FilterExpr) -> bool {
 }
 
 #[cfg(feature = "app_api")]
+enum TxAssetSelector {
+    AssetId(iroha_data_model::asset::AssetId),
+    DefinitionId(iroha_data_model::asset::AssetDefinitionId),
+}
+
+#[cfg(feature = "app_api")]
+fn parse_tx_asset_selector(literal: &str) -> Option<TxAssetSelector> {
+    iroha_data_model::asset::AssetId::parse_literal(literal)
+        .ok()
+        .map(TxAssetSelector::AssetId)
+        .or_else(|| {
+            iroha_data_model::asset::AssetDefinitionId::parse_address_literal(literal)
+                .ok()
+                .map(TxAssetSelector::DefinitionId)
+        })
+}
+
+#[cfg(feature = "app_api")]
+fn tx_asset_matches_selector(
+    assets: &[iroha_data_model::asset::AssetId],
+    selector: &TxAssetSelector,
+) -> bool {
+    match selector {
+        TxAssetSelector::AssetId(expected) => assets.iter().any(|candidate| candidate == expected),
+        TxAssetSelector::DefinitionId(expected) => assets
+            .iter()
+            .any(|candidate| candidate.definition() == expected),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> Result<()> {
     // Strict adapter validation with depth and set-size limits + value parsing
     const MAX_DEPTH: usize = 10;
@@ -24434,9 +24573,9 @@ fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> 
                     let s = v
                         .as_str()
                         .ok_or_else(|| Error::Query(dm::ValidationFail::TooComplex))?;
-                    iroha_data_model::asset::AssetId::parse_literal(s)
+                    parse_tx_asset_selector(s)
                         .map(|_| ())
-                        .map_err(|_| Error::Query(dm::ValidationFail::TooComplex))
+                        .ok_or_else(|| Error::Query(dm::ValidationFail::TooComplex))
                 }
                 "result_ok" => {
                     if !matches!(v, Value::Bool(_)) {
@@ -24522,7 +24661,7 @@ fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> 
                             let Some(s) = value.as_str() else {
                                 return Err(Error::Query(dm::ValidationFail::TooComplex));
                             };
-                            if s.parse::<iroha_data_model::asset::AssetId>().is_err() {
+                            if parse_tx_asset_selector(s).is_none() {
                                 return Err(Error::Query(dm::ValidationFail::TooComplex));
                             }
                         }
@@ -24671,8 +24810,8 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 }
                 "asset_id" => v
                     .as_str()
-                    .and_then(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
-                    .map(|id| asset_ids_for_tx().iter().any(|candidate| candidate == &id))
+                    .and_then(parse_tx_asset_selector)
+                    .map(|selector| tx_asset_matches_selector(asset_ids_for_tx(), &selector))
                     .unwrap_or(false),
                 "entrypoint_hash" => v
                     .as_str()
@@ -24724,8 +24863,8 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 }
                 "asset_id" => v
                     .as_str()
-                    .and_then(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
-                    .map(|id| !asset_ids_for_tx().iter().any(|candidate| candidate == &id))
+                    .and_then(parse_tx_asset_selector)
+                    .map(|selector| !tx_asset_matches_selector(asset_ids_for_tx(), &selector))
                     .unwrap_or(false),
                 // For app-facing queries, treat NE(entrypoint_hash) as a no-op filter
                 // to avoid surprising interactions with on-chain hashing nuances. In
@@ -24816,8 +24955,8 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 "asset_id" => list
                     .iter()
                     .filter_map(|v| v.as_str())
-                    .filter_map(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
-                    .any(|id| asset_ids_for_tx().iter().any(|candidate| candidate == &id)),
+                    .filter_map(parse_tx_asset_selector)
+                    .any(|selector| tx_asset_matches_selector(asset_ids_for_tx(), &selector)),
                 _ => match tx_field_value(tx, &f.0) {
                     Some(val) => list.iter().any(|v| v.as_str() == Some(&val)),
                     None => false,
@@ -24876,8 +25015,8 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 "asset_id" => list
                     .iter()
                     .filter_map(|v| v.as_str())
-                    .filter_map(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
-                    .all(|id| !asset_ids_for_tx().iter().any(|candidate| candidate == &id)),
+                    .filter_map(parse_tx_asset_selector)
+                    .all(|selector| !tx_asset_matches_selector(asset_ids_for_tx(), &selector)),
                 _ => match tx_field_value(tx, &f.0) {
                     Some(val) => list.iter().all(|v| v.as_str() != Some(&val)),
                     None => true,
@@ -25118,14 +25257,28 @@ fn tx_predicate_from_filter(
                 }
                 F::Not(inner) => convert(inner).map(|p| TP::Not(Box::new(p))),
                 F::Eq(field, value) => match field_name(field) {
-                    "authority" => None,
+                    "authority" => value
+                        .as_str()
+                        .and_then(|s| {
+                            iroha_data_model::account::AccountId::parse_encoded(s)
+                                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                                .ok()
+                        })
+                        .map(TP::AuthorityEq),
                     "timestamp_ms" => parse_u64(value).map(TP::TsEq),
                     "result_ok" => None,
                     "entrypoint_hash" => parse_entry_hash(value).map(TP::EntryEq),
                     _ => None,
                 },
                 F::Ne(field, value) => match field_name(field) {
-                    "authority" => None,
+                    "authority" => value
+                        .as_str()
+                        .and_then(|s| {
+                            iroha_data_model::account::AccountId::parse_encoded(s)
+                                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                                .ok()
+                        })
+                        .map(TP::AuthorityNe),
                     "timestamp_ms" => parse_u64(value).map(|n| TP::Not(Box::new(TP::TsEq(n)))),
                     "result_ok" => None,
                     "entrypoint_hash" => parse_entry_hash(value).map(TP::EntryNe),
@@ -25147,53 +25300,79 @@ fn tx_predicate_from_filter(
                     "timestamp_ms" => parse_u64(value).map(TP::TsGte),
                     _ => None,
                 },
-                F::In(field, values) => match field_name(field) {
-                    "authority" => None,
-                    "timestamp_ms" => {
-                        let mut out = Vec::new();
-                        for v in values {
-                            out.push(parse_u64(v)?);
+                F::In(field, values) => {
+                    match field_name(field) {
+                        "authority" => {
+                            let mut out = Vec::new();
+                            for v in values {
+                                let id = v.as_str().and_then(|s| {
+                                iroha_data_model::account::AccountId::parse_encoded(s)
+                                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                                    .ok()
+                            })?;
+                                out.push(id);
+                            }
+                            Some(TP::AuthorityIn(out))
                         }
-                        Some(TP::TsIn(out))
-                    }
-                    "result_ok" => None,
-                    "entrypoint_hash" => {
-                        let mut out = Vec::new();
-                        for v in values {
-                            out.push(parse_entry_hash(v)?);
+                        "timestamp_ms" => {
+                            let mut out = Vec::new();
+                            for v in values {
+                                out.push(parse_u64(v)?);
+                            }
+                            Some(TP::TsIn(out))
                         }
-                        Some(TP::EntryIn(out))
-                    }
-                    _ => None,
-                },
-                F::Nin(field, values) => match field_name(field) {
-                    "authority" => None,
-                    "timestamp_ms" => {
-                        let mut out = Vec::new();
-                        for v in values {
-                            out.push(parse_u64(v)?);
+                        "result_ok" => None,
+                        "entrypoint_hash" => {
+                            let mut out = Vec::new();
+                            for v in values {
+                                out.push(parse_entry_hash(v)?);
+                            }
+                            Some(TP::EntryIn(out))
                         }
-                        Some(TP::TsNin(out))
+                        _ => None,
                     }
-                    "result_ok" => None,
-                    "entrypoint_hash" => {
-                        let mut out = Vec::new();
-                        for v in values {
-                            out.push(parse_entry_hash(v)?);
+                }
+                F::Nin(field, values) => {
+                    match field_name(field) {
+                        "authority" => {
+                            let mut out = Vec::new();
+                            for v in values {
+                                let id = v.as_str().and_then(|s| {
+                                iroha_data_model::account::AccountId::parse_encoded(s)
+                                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                                    .ok()
+                            })?;
+                                out.push(id);
+                            }
+                            Some(TP::AuthorityNin(out))
                         }
-                        Some(TP::EntryNin(out))
+                        "timestamp_ms" => {
+                            let mut out = Vec::new();
+                            for v in values {
+                                out.push(parse_u64(v)?);
+                            }
+                            Some(TP::TsNin(out))
+                        }
+                        "result_ok" => None,
+                        "entrypoint_hash" => {
+                            let mut out = Vec::new();
+                            for v in values {
+                                out.push(parse_entry_hash(v)?);
+                            }
+                            Some(TP::EntryNin(out))
+                        }
+                        _ => None,
                     }
-                    _ => None,
-                },
+                }
                 F::Exists(field) => match field_name(field) {
-                    "authority" => None,
+                    "authority" => Some(TP::AuthorityExists(true)),
                     "timestamp_ms" => Some(TP::TsExists(true)),
                     "result_ok" => None,
                     "entrypoint_hash" => Some(TP::EntryExists(true)),
                     _ => None,
                 },
                 F::IsNull(field) => match field_name(field) {
-                    "authority" => None,
+                    "authority" => Some(TP::AuthorityExists(false)),
                     "timestamp_ms" => Some(TP::TsExists(false)),
                     "result_ok" => None,
                     "entrypoint_hash" => Some(TP::EntryExists(false)),
@@ -29138,7 +29317,7 @@ mod tx_query_integration_smoke {
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
             dm::AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+                .with_name(asset_definition_display_name(&__asset_definition_id))
         })
         .execute(exec_id.account(), &mut stx0)
         .ok();
@@ -29450,12 +29629,8 @@ mod tx_query_integration_smoke {
             .unpack(|_| {});
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
-        let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
-        dm::Register::domain(dm::Domain::new(domain_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .unwrap();
         dm::Register::account(dm::Account::new(exec_id.account().clone()))
             .execute(exec_id.account(), &mut stx0)
             .unwrap();
@@ -29545,7 +29720,6 @@ mod tx_query_integration_smoke {
         ));
 
         // Ensure domain and accounts exist before committing txs
-        let dom_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
@@ -29560,9 +29734,6 @@ mod tx_query_integration_smoke {
         let mut stx0 = st_block0.transaction();
         let kp_seed = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let exec_id = dm::AccountId::new(kp_seed.public_key().clone());
-        dm::Register::domain(dm::Domain::new(dom_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .unwrap();
         dm::Register::account(dm::Account::new(exec_id.account().clone()))
             .execute(exec_id.account(), &mut stx0)
             .unwrap();
@@ -32588,21 +32759,18 @@ mod app_api_integration_tests {
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         ))
+        .with_name("rose".to_owned())
         .confidential_policy(policy)
         .build(&alice_id);
-        let expected_asset_id = asset_def.id().to_string();
+        let asset_def_id = asset_def.id().clone();
+        let expected_asset_id = asset_def_id.to_string();
         let world = World::with([domain], [account], [asset_def]);
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        bind_permanent_asset_alias_for_test(
-            &state,
-            &alice_id,
-            &test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd"),
-            "rose#centralbank",
-        );
+        bind_permanent_asset_alias_for_test(&state, &alice_id, &asset_def_id, "rose#centralbank");
 
         let app = Router::new().route(
             "/v1/confidential/assets/{definition_id}/transitions",
@@ -42327,11 +42495,6 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    Register::domain(Domain::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-    ))
-    .execute(&authority_id, &mut stx)
-    .unwrap();
     Register::account(Account::new(initiator_id.clone()))
         .execute(&authority_id, &mut stx)
         .unwrap();
@@ -42341,14 +42504,14 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     Register::asset_definition({
         let __asset_definition_id = cash_def_id.clone();
         AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
+            .with_name(asset_definition_display_name(&__asset_definition_id))
     })
     .execute(&authority_id, &mut stx)
     .unwrap();
     Register::asset_definition({
         let __asset_definition_id = collateral_def_id.clone();
         AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
+            .with_name(asset_definition_display_name(&__asset_definition_id))
     })
     .execute(&authority_id, &mut stx)
     .unwrap();
@@ -46317,7 +46480,7 @@ mod asset_definitions_query_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        bind_permanent_asset_alias_for_test(&state, &authority, &cbdc_id, "cbdc#centralbank");
+        bind_permanent_asset_alias_for_test(&state, &authority, &cbdc_id, "CBDC#centralbank");
         state
     }
 
@@ -46354,7 +46517,7 @@ mod asset_definitions_query_tests {
         assert_eq!(items.len(), 2);
 
         assert_eq!(items[0]["name"].as_str(), Some("CBDC"));
-        assert_eq!(items[0]["alias"].as_str(), Some("cbdc#centralbank"));
+        assert_eq!(items[0]["alias"].as_str(), Some("CBDC#centralbank"));
         assert_eq!(items[1]["name"].as_str(), Some("USD"));
         assert!(items[1]["alias"].is_null());
     }
@@ -46395,7 +46558,7 @@ mod asset_definitions_query_tests {
             query: None,
             filter: Some(crate::filter::FilterExpr::Eq(
                 crate::filter::FieldPath("alias".into()),
-                norito::json::Value::from("cbdc#centralbank"),
+                norito::json::Value::from("CBDC#centralbank"),
             )),
             select: None,
             sort: Vec::new(),
@@ -46417,7 +46580,7 @@ mod asset_definitions_query_tests {
         let items = doc["items"].as_array().expect("items");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["name"].as_str(), Some("CBDC"));
-        assert_eq!(items[0]["alias"].as_str(), Some("cbdc#centralbank"));
+        assert_eq!(items[0]["alias"].as_str(), Some("CBDC#centralbank"));
 
         let null_alias = crate::filter::QueryEnvelope {
             query: None,
@@ -48625,7 +48788,7 @@ mod explorer_asset_definition_econometrics_tests {
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
             dm::AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+                .with_name(asset_definition_display_name(&__asset_definition_id))
         })
         .execute(exec_id.account(), &mut stx0)
         .ok();
@@ -48929,7 +49092,7 @@ mod explorer_asset_definition_snapshot_tests {
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
             dm::AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+                .with_name(asset_definition_display_name(&__asset_definition_id))
         })
         .execute(exec_id.account(), &mut stx0)
         .ok();
@@ -49099,7 +49262,7 @@ mod explorer_asset_definition_snapshot_tests {
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
             dm::AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+                .with_name(asset_definition_display_name(&__asset_definition_id))
         })
         .execute(exec_id.account(), &mut stx0)
         .ok();
@@ -57070,7 +57233,8 @@ pub async fn handle_post_v1_subscription_plan(
     let plan_key = (*SUBSCRIPTION_PLAN_KEY).clone();
     let instructions = vec![
         InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(plan_id.clone()).with_name(plan_id.name().to_string()),
+            AssetDefinition::numeric(plan_id.clone())
+                .with_name(asset_definition_display_name(&plan_id)),
         )),
         InstructionBox::from(SetKeyValue::asset_definition(
             plan_id.clone(),
@@ -58010,7 +58174,7 @@ mod subscription_api_tests {
 
     #[test]
     fn derive_trigger_id_is_deterministic() {
-        let subscription_id: NftId = "sub1$wonderland".parse().unwrap();
+        let subscription_id: NftId = "sub1$wonderland.universal".parse().unwrap();
         let bill = derive_trigger_id("sub_bill_", &subscription_id).unwrap();
         let bill2 = derive_trigger_id("sub_bill_", &subscription_id).unwrap();
         let usage = derive_trigger_id("sub_usage_", &subscription_id).unwrap();
@@ -58124,7 +58288,7 @@ mod subscription_api_tests {
             billing_trigger_id,
         };
         let invoice = SubscriptionInvoice {
-            subscription_nft_id: "sub1$wonderland".parse().unwrap(),
+            subscription_nft_id: "sub1$wonderland.universal".parse().unwrap(),
             period_start_ms: 1_000,
             period_end_ms: 2_000,
             attempted_at_ms: 2_000,
@@ -58168,7 +58332,7 @@ mod subscription_api_tests {
 
     #[test]
     fn resolve_trigger_id_prefers_explicit() {
-        let subscription_id: NftId = "sub2$wonderland".parse().unwrap();
+        let subscription_id: NftId = "sub2$wonderland.universal".parse().unwrap();
         let explicit: TriggerId = "explicit_trigger".parse().unwrap();
         let resolved =
             resolve_trigger_id("sub_bill_", &subscription_id, Some(explicit.clone())).unwrap();
@@ -58191,7 +58355,7 @@ mod subscription_api_tests {
     fn build_billing_trigger_attaches_metadata_and_schedule() {
         use iroha_data_model::events::{EventFilterBox, time::ExecutionTime};
         let trigger_id: TriggerId = "bill_trigger".parse().unwrap();
-        let subscription_id: NftId = "sub3$wonderland".parse().unwrap();
+        let subscription_id: NftId = "sub3$wonderland.universal".parse().unwrap();
         let authority = ALICE_ID.clone();
         let trigger = build_billing_trigger(
             trigger_id.clone(),
@@ -58487,8 +58651,8 @@ mod subscription_api_tests {
                 ),
             }),
         };
-        let active_id: NftId = "sub-active$wonderland".parse().unwrap();
-        let paused_id: NftId = "sub-paused$wonderland".parse().unwrap();
+        let active_id: NftId = "sub-active$wonderland.universal".parse().unwrap();
+        let paused_id: NftId = "sub-paused$wonderland.universal".parse().unwrap();
         let active_state = SubscriptionState {
             plan_id: plan_id.clone(),
             provider: provider.clone(),
@@ -58566,8 +58730,8 @@ mod subscription_api_tests {
                 ),
             }),
         };
-        let active_id: NftId = "sub-alias-active$wonderland".parse().unwrap();
-        let paused_id: NftId = "sub-alias-paused$wonderland".parse().unwrap();
+        let active_id: NftId = "sub-alias-active$wonderland.universal".parse().unwrap();
+        let paused_id: NftId = "sub-alias-paused$wonderland.universal".parse().unwrap();
         let active_state = SubscriptionState {
             plan_id: plan_id.clone(),
             provider: provider.clone(),
@@ -58648,7 +58812,7 @@ mod subscription_api_tests {
                 ),
             }),
         };
-        let subscription_id: NftId = "sub-invoice$wonderland".parse().unwrap();
+        let subscription_id: NftId = "sub-invoice$wonderland.universal".parse().unwrap();
         let subscription_state = SubscriptionState {
             plan_id: plan_id.clone(),
             provider: provider.clone(),
@@ -58750,7 +58914,7 @@ mod subscription_api_tests {
             Vec::new(),
         );
         let (queue, chain_id, telemetry) = test_queue_components();
-        let subscription_id: NftId = "sub-create$wonderland".parse().unwrap();
+        let subscription_id: NftId = "sub-create$wonderland.universal".parse().unwrap();
         let req = SubscriptionCreateDto {
             authority: subscriber,
             private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
@@ -58789,8 +58953,8 @@ mod subscription_api_tests {
         let plan_id: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400fa");
         let plan = sample_plan(provider.clone());
-        let active_id: NftId = "sub-active-actions$wonderland".parse().unwrap();
-        let paused_id: NftId = "sub-paused-actions$wonderland".parse().unwrap();
+        let active_id: NftId = "sub-active-actions$wonderland.universal".parse().unwrap();
+        let paused_id: NftId = "sub-paused-actions$wonderland.universal".parse().unwrap();
         let active_state = sample_subscription_state(
             plan_id.clone(),
             provider.clone(),
@@ -58805,7 +58969,7 @@ mod subscription_api_tests {
             SubscriptionStatus::Paused,
             "bill_paused_actions".parse().unwrap(),
         );
-        let keep_id: NftId = "sub-keep-actions$wonderland".parse().unwrap();
+        let keep_id: NftId = "sub-keep-actions$wonderland.universal".parse().unwrap();
         let mut keep_state = sample_subscription_state(
             plan_id.clone(),
             provider.clone(),
@@ -59082,9 +59246,9 @@ mod adapter_filter_tests {
             definition,
             id: "66owaQmAQMuHxPzxUN3bqZ6FJfDa".to_owned(),
             name: "CBDC".to_owned(),
-            alias: Some("cbdc#centralbank".to_owned()),
+            alias: Some("CBDC#centralbank".to_owned()),
             alias_binding: Some(AssetAliasBindingDto {
-                alias: "cbdc#centralbank".to_owned(),
+                alias: "CBDC#centralbank".to_owned(),
                 status: "leased_grace".to_owned(),
                 lease_expiry_ms: Some(100),
                 grace_until_ms: Some(200),
@@ -59097,7 +59261,7 @@ mod adapter_filter_tests {
             &item,
         ));
         assert!(asset_definition_filter_projection(
-            &FilterExpr::Eq(FieldPath("alias".into()), Value::from("cbdc#centralbank"),),
+            &FilterExpr::Eq(FieldPath("alias".into()), Value::from("CBDC#centralbank"),),
             &item,
         ));
         assert!(asset_definition_filter_projection(
@@ -59290,20 +59454,7 @@ mod adapter_filter_tests {
 
     #[cfg(all(test, feature = "app_api"))]
     fn sample_allowance_world(record: &OfflineAllowanceRecord) -> World {
-        let domain_id = record
-            .certificate
-            .allowance
-            .asset
-            .definition()
-            .domain()
-            .clone();
         let controller = record.certificate.controller.clone();
-        let domain = Domain {
-            id: domain_id.clone(),
-            logo: None,
-            metadata: Metadata::default(),
-            owned_by: controller.clone(),
-        };
         let account = Account {
             id: controller.clone(),
             metadata: Metadata::default(),
@@ -59325,7 +59476,7 @@ mod adapter_filter_tests {
             total_quantity: Numeric::zero(),
             confidential_policy: Default::default(),
         };
-        World::with([domain], [account], [asset_definition])
+        World::with(Vec::<Domain>::new(), [account], [asset_definition])
     }
 
     #[cfg(feature = "app_api")]
@@ -59483,21 +59634,9 @@ mod adapter_filter_tests {
     #[test]
     fn offline_allowance_projection_missing_asset_definition_returns_internal_error() {
         let record = sample_allowance_record();
-        let domain_id = record
-            .certificate
-            .allowance
-            .asset
-            .definition()
-            .domain()
-            .clone();
         let controller = record.certificate.controller.clone();
         let world = World::with(
-            [Domain {
-                id: domain_id.clone(),
-                logo: None,
-                metadata: Metadata::default(),
-                owned_by: controller.clone(),
-            }],
+            Vec::<Domain>::new(),
             [Account {
                 id: controller,
                 metadata: Metadata::default(),
@@ -59972,10 +60111,10 @@ fn sample_transfer_record() -> OfflineTransferRecord {
             amount: Numeric::new(1_000, 0),
             commitment: vec![0xAB; 32],
         },
-        spend_public_key: PublicKey::from_str(
-            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
-        )
-        .expect("public key"),
+        spend_public_key: controller
+            .try_signatory()
+            .expect("single-signature controller")
+            .clone(),
         attestation_report: Vec::new(),
         issued_at_ms: 1_700_000_000_000,
         expires_at_ms: 1_900_000_000_000,

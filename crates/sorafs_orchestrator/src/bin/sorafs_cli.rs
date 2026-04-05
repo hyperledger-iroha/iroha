@@ -5120,10 +5120,12 @@ fn chunk_profile_from_manifest(manifest: &ManifestV1) -> Result<ChunkProfile, St
     })
 }
 
+type StoragePinPayload = (Vec<u8>, Option<Vec<StorageFileEntryOwned>>, &'static str);
+
 fn load_storage_pin_payload(
     input: &Path,
     manifest: &ManifestV1,
-) -> Result<(Vec<u8>, Option<Vec<StorageFileEntryOwned>>, &'static str), String> {
+) -> Result<StoragePinPayload, String> {
     let metadata = fs::metadata(input)
         .map_err(|err| format!("failed to access payload `{}`: {err}", input.display()))?;
 

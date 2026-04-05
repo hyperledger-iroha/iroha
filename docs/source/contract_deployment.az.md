@@ -3,12 +3,11 @@ lang: az
 direction: ltr
 source: docs/source/contract_deployment.md
 status: needs-update
-generator: scripts/sync_docs_i18n.py
+title: Contract Deployment (.to) — API & Workflow
+translator: machine-google-reviewed
 source_hash: d3aefb7ebdeb3b9b2d41a3a04ca6c7007e2eb6ac9580a85b7fbdeb9392375660
 source_last_modified: "2026-04-04T12:14:12.575161+00:00"
 translation_last_reviewed: 2026-04-05
-title: Contract Deployment (.to) — API & Workflow
-translator: machine-google-reviewed
 ---
 
 > Translation sync note (2026-04-05): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.

@@ -61,6 +61,8 @@ public final class SubscriptionToriiClientTests {
   }
 
   private static void listPlansParsesResponse() {
+    final String providerId =
+        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
     final RecordingExecutor executor = new RecordingExecutor();
     executor.enqueue(
         200,
@@ -89,7 +91,7 @@ public final class SubscriptionToriiClientTests {
         client
             .listSubscriptionPlans(
                 SubscriptionPlanListParams.builder()
-                    .provider("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D")
+                    .provider(providerId)
                     .limit(10L)
                     .offset(5L)
                     .build())
@@ -105,7 +107,7 @@ public final class SubscriptionToriiClientTests {
     assert billForMap.containsKey("value") : "bill_for value missing";
     assert billForMap.get("value") == null : "bill_for value should be null";
     final String query = executor.lastRequest.uri().getRawQuery();
-    assert query.contains("provider=aws%40commerce") : "provider query missing";
+    assert query.contains("provider=" + urlEncode(providerId)) : "provider query missing";
     assert query.contains("limit=10") : "limit query missing";
     assert query.contains("offset=5") : "offset query missing";
     assert "application/json".equals(firstHeader(executor.lastRequest, "Accept"))
@@ -173,6 +175,10 @@ public final class SubscriptionToriiClientTests {
   }
 
   private static void listSubscriptionsParsesResponse() {
+    final String ownedBy =
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    final String providerId =
+        "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
     final RecordingExecutor executor = new RecordingExecutor();
     executor.enqueue(
         200,
@@ -198,8 +204,8 @@ public final class SubscriptionToriiClientTests {
         client
             .listSubscriptions(
                 SubscriptionListParams.builder()
-                    .ownedBy("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")
-                    .provider("sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D")
+                    .ownedBy(ownedBy)
+                    .provider(providerId)
                     .status(SubscriptionStatus.ACTIVE)
                     .limit(10L)
                     .offset(0L)
@@ -220,8 +226,8 @@ public final class SubscriptionToriiClientTests {
     assert billForMap.containsKey("value") : "invoice bill_for value missing";
     assert billForMap.get("value") == null : "invoice bill_for value should be null";
     final String query = executor.lastRequest.uri().getRawQuery();
-    assert query.contains("owned_by=alice%40wonderland") : "owned_by query missing";
-    assert query.contains("provider=aws%40commerce") : "provider query missing";
+    assert query.contains("owned_by=" + urlEncode(ownedBy)) : "owned_by query missing";
+    assert query.contains("provider=" + urlEncode(providerId)) : "provider query missing";
     assert query.contains("status=active") : "status query missing";
     assert query.contains("limit=10") : "limit query missing";
     assert query.contains("offset=0") : "offset query missing";

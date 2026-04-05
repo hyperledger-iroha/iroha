@@ -2065,7 +2065,7 @@ mod tests {
 
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/ipa:ivm-execution",
+            "halo2/ipa:ivm-execution-v1",
             BackendTag::Halo2IpaPasta,
             "pasta",
             vk_fixture.schema_hash,
@@ -2198,7 +2198,7 @@ mod tests {
         };
 
         let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = "stark/fri/sha256-goldilocks:ivm-execution";
+        let circuit_id = "stark/fri/sha256-goldilocks:ivm-execution-v1";
         let vk_id = VerifyingKeyId::new(backend, "ivm_execution_stark");
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
@@ -2298,7 +2298,7 @@ mod tests {
             events_commitment,
             gas_policy_commitment,
         )
-        .expect("build STARK ivm-execution proof");
+        .expect("build STARK ivm-execution-v1 proof");
 
         let attachment = ProofAttachment::new_ref(backend.into(), proof_box, vk_id);
         let attachments = ProofAttachmentList(vec![attachment]);
@@ -2353,7 +2353,7 @@ mod tests {
         };
 
         let backend = "stark/fri/sha256-goldilocks";
-        let circuit_id = "stark/fri/sha256-goldilocks:ivm-execution";
+        let circuit_id = "stark/fri/sha256-goldilocks:ivm-execution-v1";
         let vk_id = VerifyingKeyId::new(backend, "ivm_execution_stark");
         let vk_payload = crate::zk_stark::StarkFriVerifyingKeyV1 {
             version: 1,
@@ -2453,7 +2453,7 @@ mod tests {
             events_commitment,
             gas_policy_commitment,
         )
-        .expect("build STARK ivm-execution proof");
+        .expect("build STARK ivm-execution-v1 proof");
         let mut envelope: OpenVerifyEnvelope =
             norito::decode_from_bytes(&proof_box.bytes).expect("decode OpenVerifyEnvelope");
         envelope.circuit_id = format!("{backend}:wrong-circuit");
@@ -2531,7 +2531,7 @@ mod tests {
 
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/ipa:ivm-execution",
+            "halo2/ipa:ivm-execution-v1",
             BackendTag::Halo2IpaPasta,
             "pasta",
             vk_fixture.schema_hash,
@@ -2828,7 +2828,7 @@ mod tests {
 
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/ipa:ivm-execution",
+            "halo2/ipa:ivm-execution-v1",
             BackendTag::Halo2IpaPasta,
             "pasta",
             fixture.schema_hash,
@@ -2935,7 +2935,7 @@ mod tests {
 
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/ipa:ivm-execution",
+            "halo2/ipa:ivm-execution-v1",
             BackendTag::Halo2IpaPasta,
             "pasta",
             *Hash::new(b"wrong-schema").as_ref(),
@@ -3046,7 +3046,7 @@ mod tests {
 
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/ipa:ivm-execution",
+            "halo2/ipa:ivm-execution-v1",
             BackendTag::Halo2IpaPasta,
             "pasta",
             vk_fixture.schema_hash,
@@ -3193,7 +3193,7 @@ mod tests {
 
         let mut vk_record = VerifyingKeyRecord::new(
             1,
-            "halo2/ipa:ivm-execution",
+            "halo2/ipa:ivm-execution-v1",
             BackendTag::Halo2IpaPasta,
             "pasta",
             crate::zk::ivm_execution_public_inputs_schema_hash(),
@@ -4679,7 +4679,7 @@ fn is_legacy_ivm_overlay_bind_circuit(backend: &str, circuit_id: &str) -> bool {
             .is_some_and(|normalized| normalized == IVM_OVERLAY_BIND_CIRCUIT_CANONICAL)
 }
 
-const IVM_EXECUTION_V1_CIRCUIT_CANONICAL: &str = "halo2/pasta/ipa/ivm-execution";
+const IVM_EXECUTION_V1_CIRCUIT_CANONICAL: &str = "halo2/pasta/ipa/ivm-execution-v1";
 
 fn is_full_semantics_ivm_execution_circuit(backend: &str, circuit_id: &str) -> bool {
     if backend == crate::zk::ZK_BACKEND_HALO2_IPA {
@@ -4978,14 +4978,14 @@ where
         || is_legacy_ivm_overlay_bind_circuit(attachment.backend.as_str(), &env.circuit_id)
     {
         return Err(OverlayBuildError::ZkProof(
-            "Executable::IvmProved rejects `halo2/ipa:ivm-overlay-bind`: the binding-only stand-in circuit is no longer accepted; `ivm-execution` proof attachments are required"
+            "Executable::IvmProved rejects `halo2/ipa:ivm-overlay-bind`: the binding-only stand-in circuit is no longer accepted; `ivm-execution-v1` proof attachments are required"
                 .to_owned(),
         ));
     }
     let expected_schema_hash = crate::zk::ivm_execution_public_inputs_schema_hash();
     if vk_record.public_inputs_schema_hash != expected_schema_hash {
         return Err(OverlayBuildError::ZkProof(
-            "verifying key schema hash mismatch for ivm-execution".to_owned(),
+            "verifying key schema hash mismatch for ivm-execution-v1".to_owned(),
         ));
     }
     let observed_schema_hash: [u8; 32] = *Hash::new(&env.public_inputs).as_ref();

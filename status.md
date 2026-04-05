@@ -1,6 +1,675 @@
 # Status
 
-Last updated: 2026-04-05
+Last updated: 2026-04-06
+
+## 2026-04-06 Follow-up: explorer account detail now returns the canonical id only
+- `crates/iroha_torii/src/explorer.rs` drops the redundant `i105_address`
+  field from `ExplorerAccountDto`; `id` remains the canonical i105 literal and
+  `network_prefix` is unchanged for UI labeling/QR use.
+- In-repo SDK/client sweep (Rust, Swift, JS, Python, Kotlin, Java) confirmed
+  they only expose the explorer QR snapshot for `/v1/explorer/accounts/...`
+  and do not parse an explorer account-detail `i105_address` field, so no SDK
+  code changes were required in this repo.
+- Added regression coverage in `crates/iroha_torii/src/explorer.rs` to lock the
+  serialized DTO shape to `id`-only account identifiers.
+- Focused validation:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_torii --features telemetry account_dto_omits_redundant_i105_address_field -- --nocapture`
+
+## 2026-04-06 Follow-up: full `nexus_and_streaming` harness is green again
+- The grouped `nexus_and_streaming` integration harness is now green on the
+  current tree:
+  - `CARGO_TARGET_DIR=target_tmp_nexus_fix cargo test -p integration_tests --test nexus_and_streaming -q`
+  - result: `211 passed; 0 failed; 2 ignored`
+- The remaining red cases in that harness collapsed into two shared issues:
+  - stale Norito fixture payloads for the mint/burn instruction samples; and
+  - SORA governance fixture setup paths that tried to register
+    `govsmoke.universal` without first seeding the required SNS
+    domain-registration lease, then used `submit_blocking` for the large
+    proposer-funding mint transactions.
+- `/Users/takemiyamakoto/dev/iroha/fixtures/norito_instructions/burn_asset_numeric.json`,
+  `/Users/takemiyamakoto/dev/iroha/fixtures/norito_instructions/burn_asset_fractional.json`,
+  and
+  `/Users/takemiyamakoto/dev/iroha/fixtures/norito_instructions/mint_asset_numeric.json`
+  now match the current canonical Norito JSON and wire hex emitted by Rust.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/common/sora_runtime_governance.rs`
+  and
+  `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sora_parliament_lifecycle_smoke.rs`
+  now:
+  - seed the SNS lease for `govsmoke.universal` on the whole test network
+    before `Register::domain(...)`; and
+  - submit the large proposer-funding mints with explicit transaction-hash
+    polling (`submit` + `wait_for_tx_applied`) instead of relying on
+    `submit_blocking` confirmation timeouts.
+- Focused validation completed in this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_nexus_fix cargo test -p integration_tests --test nexus_and_streaming norito_burn_fixture:: -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_nexus_fix cargo test -p integration_tests --test nexus_and_streaming sora_runtime_upgrade_resilience::sora_runtime_upgrade_resilience_rejects_overlapping_runtime_window_proposal -- --nocapture --exact --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_nexus_fix cargo test -p integration_tests --test nexus_and_streaming sora_parliament_lifecycle_smoke::sora_parliament_lifecycle_smoke -- --nocapture --exact --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_nexus_fix cargo test -p integration_tests --test nexus_and_streaming -q`
+- Current verification boundary:
+  - `events_and_triggers` is green;
+  - `network_functional` is green;
+  - `nexus_and_streaming` is green; but
+  - I have not yet rerun the full `cargo test -p integration_tests` sweep,
+    `cargo test --workspace`, or
+    `cargo clippy --workspace --all-targets -- -D warnings`.
+
+## 2026-04-06 Follow-up: full `network_functional` harness is green again
+- The grouped `network_functional` integration harness is now green on the
+  current tree:
+  - `CARGO_TARGET_DIR=target_tmp_nexus_fix cargo test -p integration_tests --test network_functional -q`
+  - result: `50 passed; 0 failed`
+- The blocking regression was
+  `extra_functional::unstable_network::unstable_network_5_peers_1_fault`, which
+  could fail before round 1 because the asset-definition bootstrap path assumed
+  all running peers had to reach height 2 even when one lagging peer was
+  already within the configured fault budget.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/extra_functional/unstable_network.rs`
+  now:
+  - absorbs pre-round lagging peers into the configured fault budget when a
+    commit quorum of healthy peers has reached the bootstrap height;
+  - prioritizes those lagging peers in per-round faulty-peer selection; and
+  - includes unit coverage for the preferred-fault selection path.
+- Focused validation completed in this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_nexus_fix cargo test -p integration_tests --test network_functional extra_functional::unstable_network::unstable_network_5_peers_1_fault -- --nocapture --exact --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_nexus_fix cargo test -p integration_tests --test network_functional -q`
+- Current verification boundary:
+  - `events_and_triggers` is green;
+  - `network_functional` is green;
+  - the earlier red exact `nexus_and_streaming` cases are green; but
+  - I have not yet rerun the full `nexus_and_streaming` harness, the full
+    `cargo test -p integration_tests` sweep, `cargo test --workspace`, or
+    `cargo clippy --workspace --all-targets -- -D warnings`.
+
+## 2026-04-05 Follow-up: previously red trigger and nexus regressions are green again
+- The previously red exact integration cases in this slice are now green on the
+  current tree:
+  - `sumeragi_da::sumeragi_rbc_unverified_roster_stash_requests_missing_block`
+  - `triggers::by_call_trigger::trigger_in_genesis`
+  - `triggers::by_call_trigger::call_execute_trigger_with_args`
+  - `triggers::data_trigger::two_non_intersecting_execution_paths`
+  - `nexus::cbdc_whitelist::cbdc_capability_manifests_enforce_policy_semantics`
+  - `nexus::tx_query_cross_dataspace_routing_localnet::wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models`
+  - `nexus::cross_dataspace_localnet::cross_dataspace_localnet_genesis_preexecution_smoke`
+  - `nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing`
+  - `extra_functional::unstable_network::unstable_network_12_peers_4_faults`
+- The missing-block DA regression in
+  `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_da.rs`
+  now validates the recovery signal it is actually named for: the restarted
+  peer only needs to advertise the unverified-roster stash / missing-block
+  fetch path, not fully catch up within the same polling window.
+- The subscription regression found during wider trigger coverage is fixed in
+  `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/subscriptions.rs`;
+  the NFT fixture ids now use fully qualified domain literals such as
+  `subscription_usage$wonderland.universal`.
+- Wider validation in this slice:
+  - `CARGO_TARGET_DIR=target_tmp_triggers_fix cargo test -p integration_tests --test events_and_triggers -q`
+    is green (`36 passed; 0 failed`)
+- Focused validation completed in this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_npos_isolated4 cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_unverified_roster_stash_requests_missing_block -- --nocapture --exact --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_triggers_fix cargo test -p integration_tests --test events_and_triggers triggers::by_call_trigger::trigger_in_genesis -- --nocapture --exact --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_triggers_fix cargo test -p integration_tests --test events_and_triggers triggers::by_call_trigger::call_execute_trigger_with_args -- --nocapture --exact --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_triggers_fix cargo test -p integration_tests --test events_and_triggers triggers::data_trigger::two_non_intersecting_execution_paths -- --nocapture --exact --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_triggers_fix cargo test -p integration_tests --test events_and_triggers subscriptions::subscription_scenarios -- --nocapture --exact --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_nexus_fix cargo test -p integration_tests --test nexus_and_streaming nexus::cbdc_whitelist::cbdc_capability_manifests_enforce_policy_semantics -- --nocapture --exact --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_nexus_fix cargo test -p integration_tests --test nexus_and_streaming nexus::tx_query_cross_dataspace_routing_localnet::wrong_dataspace_ingress_routes_transactions_and_queries_across_permission_models -- --nocapture --exact --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_nexus_fix cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet::cross_dataspace_localnet_genesis_preexecution_smoke -- --nocapture --exact --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_nexus_fix cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing -- --nocapture --exact --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_nexus_fix cargo test -p integration_tests --test network_functional extra_functional::unstable_network::unstable_network_12_peers_4_faults -- --nocapture --exact --test-threads=1`
+- Current verification boundary:
+  - `events_and_triggers` is fully green; and
+  - the previously red exact `nexus_and_streaming` / `network_functional`
+    cases above are green; but
+  - I did not rerun the full `nexus_and_streaming` or `network_functional`
+    harnesses; and
+  - the repo-wide `cargo test -p integration_tests`,
+    `cargo test --workspace`, and
+    `cargo clippy --workspace --all-targets -- -D warnings` runs remain
+    outstanding.
+
+## 2026-04-05 Follow-up: targeted consensus-and-DA regressions are green again
+- The remaining targeted `consensus_and_da` regressions in this slice are now
+  green on the current tree:
+  - `sumeragi_adversarial::sumeragi_adversarial_chunk_equivocation_marks_invalid`
+  - `sumeragi_adversarial::sumeragi_adversarial_conflicting_ready_marks_invalid`
+  - `sumeragi_commit_certificates::npos_commit_quorum_requires_stake`
+- The adversarial harness in
+  `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_adversarial.rs`
+  no longer blocks on 600s transaction confirmations for scenarios whose whole
+  point is to stall delivery. It now submits the heavy log non-blockingly,
+  treats missing RBC sessions as valid evidence for the adversarial stall
+  paths, and only requires honest delivery where the runtime actually makes
+  that guarantee.
+- The NPoS commit-certificate regression in
+  `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_commit_certificates.rs`
+  is now checked in two explicit phases:
+  - first, a network with the high-stake validator offline proves that no
+    non-empty block commits without stake quorum;
+  - second, a fresh network with the same bootstrap proves that NPoS commits
+    again and that the resulting commit certificate includes the high-stake
+    validator signature.
+- This keeps the test aligned with the runtime behavior observed in the live
+  logs: the old same-network “recover the exact stalled pending block after the
+  validator rejoins” assumption was not reliable enough for a deterministic
+  integration test.
+- Focused validation completed in this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_adversarial_fix2 cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_conflicting_ready_marks_invalid -- --nocapture --exact --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_adversarial_fix2 cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_equivocation_marks_invalid -- --nocapture --exact --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_npos_isolated4 cargo test -p integration_tests --test consensus_and_da sumeragi_commit_certificates::npos_commit_quorum_requires_stake -- --nocapture --exact --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_npos_isolated4 cargo test -p integration_tests --test consensus_and_da sumeragi_commit_certificates:: -- --list`
+- Current verification boundary:
+  - the previously failing targeted consensus tests above are green; but
+  - I did not rerun the full runtime `cargo test -p integration_tests` sweep,
+    and the repo-wide `cargo test --workspace` /
+    `cargo clippy --workspace --all-targets -- -D warnings` runs remain
+    outstanding.
+
+## 2026-04-05 Follow-up: shared localnet wrappers now expose the fast target-dir path
+- The remaining long-running localnet helper scripts now expose the same
+  local-build controls that were already added to the integration-test
+  wrappers:
+  - `scripts/deploy_localnet.sh` now accepts `--target-dir`, `--fast`,
+    `--fast-zero-debug`, `--fast-no-incremental`, and `--no-build`, and routes
+    cargo through `scripts/cargo_fast.sh` when requested.
+  - `scripts/run_10k_localnet.sh` now forwards those flags into
+    `deploy_localnet.sh` and auto-sets `SKIP_TOOL_BUILD=true` when the chosen
+    target root already contains the requested profile’s `kagami`, `irohad`,
+    and `iroha` binaries.
+  - `scripts/run_100tps_profile_localnet.sh` now uses the same fast/target-dir
+    path for both its profiling-endpoint `irohad` build and its downstream
+    `deploy_localnet.sh` call, and it auto-skips the shared tool build when
+    the non-profiled `kagami` / `iroha` binaries already exist.
+  - `scripts/training_script_2.sh` now accepts `--target-dir`, `--fast`,
+    `--fast-zero-debug`, and `--fast-no-incremental` for its direct
+    `kagami` / `irohad` / `iroha` build path.
+- Runtime follow-up in this same slice closed two wrapper regressions that only
+  showed up on real execution:
+  - `scripts/run_10k_localnet.sh` and
+    `scripts/run_100tps_profile_localnet.sh` no longer trip Bash 3.2's
+    empty-array + `set -u` behavior on debug runs.
+  - `scripts/run_10k_localnet.sh` now passes the resolved `iroha` CLI binary
+    and the actual localnet base API port into `tx_load.py`, and
+    `scripts/run_100tps_profile_localnet.sh` now passes the resolved `iroha`
+    CLI binary as well.
+- `scripts/training_script_2.sh` also had stale runtime command surfaces beyond
+  the build flags:
+  - it now uses `kagami advanced client-configs` instead of the removed
+    top-level `kagami client-configs`;
+  - it now uses `iroha ledger asset ...` / `iroha ledger multisig ...` for the
+    current CLI layout; and
+  - its public-key to I105 conversion now parses the JSON output path so later
+    account-registration steps receive clean canonical identifiers.
+- Focused validation completed on this follow-up:
+  - `bash -n scripts/deploy_localnet.sh scripts/run_10k_localnet.sh scripts/run_100tps_profile_localnet.sh scripts/training_script_2.sh`
+  - `scripts/deploy_localnet.sh --help`
+  - `scripts/run_10k_localnet.sh --help`
+  - `scripts/run_100tps_profile_localnet.sh --help`
+  - `scripts/training_script_2.sh --help`
+  - `scripts/deploy_localnet.sh --fast-zero-debug` (exits `2` with the expected `require --fast` guard)
+  - `scripts/run_10k_localnet.sh --fast-zero-debug` (exits `2` with the expected `require --fast` guard)
+  - `scripts/run_100tps_profile_localnet.sh --fast-zero-debug` (exits `2` with the expected `require --fast` guard)
+  - `scripts/training_script_2.sh --fast-zero-debug` (exits `2` with the expected `require --fast` guard)
+  - `rg -n -e '--target-dir' -e '--fast-zero-debug' -e '--fast-no-incremental' -e 'SKIP_TOOL_BUILD=true' -e 'CARGO_TARGET_DIR=.*pprof' -e 'cargo_fast\\.sh' scripts/deploy_localnet.sh scripts/run_10k_localnet.sh scripts/run_100tps_profile_localnet.sh scripts/training_script_2.sh`
+  - `scripts/run_10k_localnet.sh --mode permissioned --peers 4 --count 1 --parallel 1 --batch-size 1 --batch-interval 1 --drain-timeout 30 --debug --target-dir target` (ok; reused existing debug binaries and completed a 1-tx load run)
+  - `scripts/training_script_2.sh --runs 1 --profile debug --target-dir target --no-build --force --ready-timeout 60 --height-timeout 60` (still fails; `asset_ok=true`, `multisig_ok=false`, `height2=timeout`, `height10=timeout`)
+  - `rg -n -e 'advanced client-configs' -e 'ledger asset definition register' -e 'ledger asset mint' -e 'ledger asset transfer' -e 'ledger multisig register' -e 'ledger multisig propose' -e 'ledger multisig approve' scripts/training_script_2.sh scripts/run_10k_localnet.sh scripts/run_100tps_profile_localnet.sh`
+  - `git diff --check -- scripts/deploy_localnet.sh scripts/run_10k_localnet.sh scripts/run_100tps_profile_localnet.sh scripts/training_script_2.sh status.md roadmap.md`
+- Current verification boundary:
+  - the shared localnet wrappers now expose a consistent fast/target-dir build
+    path on the current tree, and `run_10k_localnet.sh` now passes a real
+    end-to-end smoke on reused debug binaries; but
+  - `scripts/training_script_2.sh` still has a remaining runtime failure in the
+    multisig phase (`ledger multisig register` rejects the generated controller
+    with `Failed to find domain: default.universal`), and
+  - I did not run an end-to-end smoke for `scripts/run_100tps_profile_localnet.sh`, and the
+    repo-wide `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings`
+    runs remain outstanding.
+
+## 2026-04-05 Follow-up: current integration-test docs now match the grouped harness layout
+- The current doc set under `docs/source/` no longer advertises removed
+  `integration_tests` binaries:
+  - `sumeragi*.md` and `sumeragi_localnet_throughput*.md` now use the grouped
+    `consensus_and_da` harness with module-qualified filters.
+  - `nexus_cross_dataspace_localnet*.md` now uses the grouped
+    `nexus_and_streaming` harness instead of the retired `mod` target.
+  - `project_tracker/npos_sumeragi_phase_a*.md` now references the grouped
+    `consensus_and_da sumeragi_npos_performance::` path instead of the removed
+    `sumeragi_npos_performance` test binary.
+- Focused validation completed on this follow-up:
+  - `rg -n -- '--test sumeragi_localnet_smoke' docs/source` (no matches)
+  - `rg -n -- '--test mod' docs/source` (no matches)
+  - `rg -n -- '--test sumeragi_npos_performance' docs/source/project_tracker` (no matches)
+  - `cargo test -p integration_tests --test nexus_and_streaming nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing -- --exact --list` (ok; finished in 42.84s)
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_performance:: -- --list` (ok; finished in 42.96s)
+  - `git diff --check -- docs/source/nexus_cross_dataspace_localnet*.md docs/source/project_tracker/npos_sumeragi_phase_a*.md docs/source/sumeragi*.md docs/source/sumeragi_localnet_throughput*.md status.md roadmap.md`
+- Current verification boundary:
+  - the current scripts and docs now consistently reflect the grouped
+    integration-test harness layout; but
+  - the full runtime `cargo test -p integration_tests` sweep and the repo-wide
+    `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings`
+    runs remain outstanding.
+
+## 2026-04-05 Follow-up: localnet throughput wrapper now targets the grouped harness and reuses binaries
+- `scripts/run_localnet_throughput.sh` no longer points at the deleted
+  `sumeragi_localnet_smoke` Cargo test target. It now runs the grouped
+  `consensus_and_da` harness with the module-qualified exact filter
+  `sumeragi_localnet_smoke::permissioned_localnet_throughput_10k_tps`.
+- The throughput wrapper now also matches the newer localnet helpers:
+  - supports `--target-dir`, `--fast`, `--fast-zero-debug`, and
+    `--fast-no-incremental`;
+  - provisions an isolated `IROHA_TEST_NETWORK_PERMIT_DIR` unless one is
+    already set; and
+  - auto-sets `IROHA_TEST_SKIP_BUILD=1` only when an existing `iroha3d` binary
+    is already present under the chosen target root (override with
+    `--no-skip-build`).
+- Focused validation completed on this follow-up:
+  - `bash -n scripts/run_localnet_throughput.sh`
+  - `scripts/run_localnet_throughput.sh --help`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_localnet_smoke::permissioned_localnet_throughput_10k_tps -- --ignored --exact --list` (ok; finished in 3m 14s)
+  - `git diff --check -- scripts/run_localnet_throughput.sh docs/source/sumeragi_localnet_throughput.md docs/source/sumeragi.md`
+- Current verification boundary:
+  - the wrapper is aligned with the grouped harness layout; but
+  - the full runtime `cargo test -p integration_tests` sweep and the repo-wide
+    `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings`
+    runs remain outstanding.
+
+## 2026-04-05 Follow-up: `iroha_torii --lib` is green after dataspace/alias and SCCP test-harness cleanup
+- The remaining `iroha_torii` unit-test fallout from the canonical-account /
+  dataspace-domain / SCCP work is closed on the current tree.
+- The fixes in this slice covered:
+  - SNS-backed account-alias test seeding, including real `NameRecordV1`
+    leases and explicit primary-label setup for alias lookup tests.
+  - governance skeleton replay tests decoding wire-framed `TxInstr` payloads
+    through the instruction registry instead of raw Norito decode.
+  - runtime-handler and proxy harness drift around `ConnectInfo`, canonical
+    rejection JSON, and BLS peer-key binding for authoritative forwarding.
+  - contract-call metadata expectations after keeping canonical
+    `contract_address` / `contract_entrypoint` fields for multisig selector
+    classification.
+  - test-only `data_dir` serialization so async and sync tests no longer stomp
+    the global Torii override/base-dir state in parallel.
+- Files touched in this follow-up include:
+  - `crates/iroha_torii/src/lib.rs`
+  - `crates/iroha_torii/src/gov.rs`
+  - `crates/iroha_torii/src/routing.rs`
+  - `crates/iroha_torii/src/contract_sources.rs`
+  - `crates/iroha_torii/src/offline_lineage.rs`
+  - `crates/iroha_torii/src/openapi.rs`
+  - `crates/iroha_torii/src/soracloud.rs`
+  - `crates/iroha_torii/src/data_dir.rs`
+- Focused validation completed on this follow-up:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_evm_prod cargo test -p iroha_torii contract_sources::tests::code_hash_contract_view_prefers_verified_source_record --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_evm_prod cargo test -p iroha_torii gov::tests::gov_flow_submits_and_applies --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_evm_prod cargo test -p iroha_torii gov::tests::propose_deploy_rejected_without_permission --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_evm_prod cargo test -p iroha_torii alias_lookup_by_account_ --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_evm_prod cargo test -p iroha_torii routing::multisig_contract_call_tests::contract_call_metadata_keeps_only_fee_fields --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_evm_prod cargo test -p iroha_torii tests_runtime_handlers::forward_incoming_torii_proxy_request_reaches_authoritative_peer --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_evm_prod cargo test -p iroha_torii --lib -q`
+- Current verification boundary:
+  - the full `iroha_torii --lib` unit-test ring now passes on the current tree;
+    but
+  - the repo-wide `cargo test --workspace` /
+    `cargo clippy --workspace --all-targets -- -D warnings` runs remain
+    outstanding.
+
+## 2026-04-05 Follow-up: Nexus integration runners now match the fast/full-test workflow
+- The Nexus-focused integration helpers now expose the same local-throughput
+  knobs as `scripts/run_full_tests.sh`:
+  - `scripts/nexus/run_autoscale_soak_matrix.sh`,
+    `scripts/nexus/run_cross_runtime_matrix.sh`, and
+    `scripts/run_nexus_cross_dataspace_atomic_swap.sh` now accept `--fast`,
+    `--fast-zero-debug`, and `--fast-no-incremental` so they can route cargo
+    through `scripts/cargo_fast.sh`.
+  - Those scripts now also provision an isolated
+    `IROHA_TEST_NETWORK_PERMIT_DIR` unless the caller already set one, which
+    avoids accidental waits behind unrelated local test-network sessions.
+- Additional cleanup in this follow-up:
+  - `scripts/nexus/run_cross_runtime_matrix.sh` no longer documents or searches
+    for the retired `mod-*` test binary pattern; it now consistently refers to
+    `nexus_and_streaming-*`.
+  - `scripts/run_nexus_cross_dataspace_atomic_swap.sh` now accepts
+    `--target-dir` and validates option values before constructing the cargo
+    command line.
+- Focused validation completed on this follow-up:
+  - `cargo test -p integration_tests --no-run` (ok; finished in 9m 04s on the dirty workspace rebuild)
+  - `bash -n scripts/nexus/run_autoscale_soak_matrix.sh scripts/nexus/run_cross_runtime_matrix.sh scripts/run_nexus_cross_dataspace_atomic_swap.sh scripts/run_full_tests.sh`
+  - `scripts/nexus/run_autoscale_soak_matrix.sh --help`
+  - `scripts/nexus/run_cross_runtime_matrix.sh --help`
+  - `scripts/run_nexus_cross_dataspace_atomic_swap.sh --help`
+  - `rg -n -e '--test mod' -e 'debug/deps/mod-\\*' -e 'list_mod_test_binaries_by_mtime_desc' scripts integration_tests -g '*.sh' -g '*.md' -g '*.rs'`
+  - `git diff --check -- scripts/nexus/run_autoscale_soak_matrix.sh scripts/nexus/run_cross_runtime_matrix.sh scripts/run_nexus_cross_dataspace_atomic_swap.sh scripts/run_full_tests.sh`
+- Current verification boundary:
+  - the harness split, binary-reuse path, and the Nexus script speed helpers are
+    all in place on the current tree; but
+  - the full runtime `cargo test -p integration_tests` sweep and the repo-wide
+    `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings`
+    runs remain outstanding.
+
+## 2026-04-05 Follow-up: full Android harness and full JS package sweep are green
+- The broader SDK validation ring is now closed on the current tree:
+  - the full Java Android `GradleHarnessTests` suite passes, not just the
+    earlier selected transport/governance subset; and
+  - the full JavaScript package suite under `IROHA_JS_DISABLE_NATIVE=1` now
+    passes end-to-end (`1003` pass / `0` fail / `265` skipped).
+- The only code change needed for this follow-up was in the JS pure-fallback
+  regression test:
+  - `javascript/iroha_js/test/norito_fallback.test.js` no longer snapshots a
+    nullable native binding during module load, so the pure-JS run now checks
+    canonical fixture bytes directly and pins a stable multisig transfer hex
+    vector instead of dereferencing `null`.
+- Focused validation completed on this follow-up:
+  - `cd java/iroha_android && JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/norito_fallback.test.js`
+  - `cd javascript/iroha_js && npm run test:js`
+  - `git diff --check -- javascript/iroha_js/test/norito_fallback.test.js`
+- Current verification boundary:
+  - Swift, Python, Kotlin/JVM, Java Android, and the full JavaScript package
+    sweep are green on the current tree; but
+  - the repo-wide `cargo test --workspace` /
+    `cargo clippy --workspace --all-targets -- -D warnings` runs are still
+    outstanding.
+
+## 2026-04-05 Follow-up: broader client SDK sweeps are green after canonical-id and HTTPS test drift cleanup
+- The broader client-side suites around the active Torii transport layer now
+  pass on the patched tree:
+  - `python/iroha_torii_client/tests/test_client.py` is green end-to-end
+    (`110 passed`) after aligning stale explorer QR and Kaigi relay path
+    expectations with the current canonical-id URL encoding rules.
+  - `kotlin/core-jvm` is green under a full `:core-jvm:test` pass.
+  - the selected Java Android client/governance harness set is green after
+    updating the mock-network tests to stop sending credential-bearing headers
+    over the HTTP-only `ToriiMockServer`, refreshing stale canonical account-id
+    query expectations in `SubscriptionToriiClientTests`, and making the mock
+    server’s recorded header lookup case-insensitive.
+  - the JavaScript Torii client suite in
+    `javascript/iroha_js/test/toriiClient.test.js` is green again on the same
+    tree.
+- Additional follow-up touched:
+  - `python/iroha_torii_client/tests/test_client.py`
+  - `java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/ClientConfigNoritoRpcTests.java`
+  - `java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportHarnessTests.java`
+  - `java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/SubscriptionToriiClientTests.java`
+  - `java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/mock/ToriiMockServer.java`
+- Focused validation completed on this follow-up:
+  - `pytest python/iroha_torii_client/tests/test_client.py`
+  - `cd kotlin && ./gradlew :core-jvm:test --console=plain`
+  - `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.ClientConfigNoritoRpcTests,org.hyperledger.iroha.android.client.HttpClientTransportHarnessTests,org.hyperledger.iroha.android.client.HttpClientTransportStatusTests,org.hyperledger.iroha.android.client.HttpClientTransportTests,org.hyperledger.iroha.android.client.SubscriptionToriiClientTests,org.hyperledger.iroha.android.governance.GovernanceInstructionBuilderTests JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+  - `cd javascript/iroha_js && npm run test:js -- test/toriiClient.test.js`
+- Current verification boundary:
+  - the active SDK surfaces for Swift, JavaScript, Python, Kotlin/JVM, and the
+    Java Android client/governance harnesses around Torii transport and the
+    alias-first contract lifecycle are now green under broader targeted
+    validation; but
+  - the repo-wide
+    `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings`
+    runs are still outstanding.
+
+## 2026-04-05 Follow-up: Python, Kotlin/JVM, and Java Android now mirror the alias-first contract Torii surface
+- The remaining SDK gaps after the contract-call/deploy redesign are closed for
+  the checked-in client libraries:
+  - `python/iroha_torii_client/client.py` now exposes first-class
+    `deploy_contract(...)`, `call_contract(...)`, and
+    `get_governance_contract(...)` helpers plus typed
+    `ContractDeployResponse`, `ContractCallResponse`, and
+    `GovernanceContractResponse` models, and
+    `python/iroha_torii_client/mock.py` now serves matching deploy/call
+    fixtures for focused SDK tests.
+  - `kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/HttpClientTransport.kt`
+    now exposes the same alias-first deploy helper, compact contract-call
+    helper, and governance binding lookup, backed by the new
+    `Contract{Deploy,Call,Governance}Response` models and
+    `ContractJsonParser.kt`.
+  - `java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/HttpClientTransport.java`
+    mirrors that same contract transport surface for the Android/Java SDK,
+    backed by the matching Java response models and `ContractJsonParser.java`.
+- The stale mobile governance deploy-contract instruction model is also aligned
+  with the Rust/Swift/Kotlin API:
+  - Kotlin
+    `ProposeDeployContractInstruction.kt` now serializes and parses exactly one
+    of `contract_address` or `contract_alias`; and
+  - Java Android
+    `ProposeDeployContractInstruction.java` now matches that one-of selector
+    contract and no longer emits the retired `namespace` / `contract_id`
+    payload.
+- Follow-up SDK coverage now includes:
+  - Python contract helper tests in
+    `python/iroha_torii_client/tests/test_client.py`;
+  - Kotlin/JVM transport tests in
+    `kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt`;
+  - Kotlin governance instruction tests in
+    `kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ProposeDeployContractInstructionTest.kt`;
+  - Java Android governance builder coverage in
+    `java/iroha_android/src/test/java/org/hyperledger/iroha/android/governance/GovernanceInstructionBuilderTests.java`; and
+  - Java Android transport coverage in
+    `java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java`,
+    which also now uses HTTPS fixture URIs and canonical encoded account-id
+    expectations so it matches the current transport safety checks.
+- Focused validation completed on this slice:
+  - `pytest python/iroha_torii_client/tests/test_client.py -k 'deploy_contract or call_contract or governance_contract or contract_helpers_against_mock_server'`
+  - `cd kotlin && ./gradlew :core-jvm:test --tests org.hyperledger.iroha.sdk.client.HttpClientTransportTest --tests org.hyperledger.iroha.sdk.core.model.instructions.ProposeDeployContractInstructionTest --console=plain`
+  - `cd java/iroha_android && ANDROID_HARNESS_MAINS=org.hyperledger.iroha.android.client.HttpClientTransportTests,org.hyperledger.iroha.android.governance.GovernanceInstructionBuilderTests JAVA_HOME=$(/usr/libexec/java_home -v 21) ANDROID_HOME=$HOME/Library/Android/sdk ANDROID_SDK_ROOT=$HOME/Library/Android/sdk ./gradlew :core:test --tests org.hyperledger.iroha.android.GradleHarnessTests --console=plain`
+  - `git diff --check -- python/iroha_torii_client/__init__.py python/iroha_torii_client/client.py python/iroha_torii_client/mock.py python/iroha_torii_client/tests/test_client.py kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/HttpClientTransport.kt kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ContractDeployResponse.kt kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ContractCallResponse.kt kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/GovernanceContractResponse.kt kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/client/ContractJsonParser.kt kotlin/core-jvm/src/main/java/org/hyperledger/iroha/sdk/core/model/instructions/ProposeDeployContractInstruction.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/client/HttpClientTransportTest.kt kotlin/core-jvm/src/test/kotlin/org/hyperledger/iroha/sdk/core/model/instructions/ProposeDeployContractInstructionTest.kt java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/HttpClientTransport.java java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ContractDeployResponse.java java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ContractCallResponse.java java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/GovernanceContractResponse.java java/iroha_android/src/main/java/org/hyperledger/iroha/android/client/ContractJsonParser.java java/iroha_android/src/main/java/org/hyperledger/iroha/android/model/instructions/ProposeDeployContractInstruction.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/client/HttpClientTransportTests.java java/iroha_android/src/test/java/org/hyperledger/iroha/android/governance/GovernanceInstructionBuilderTests.java`
+- Current verification boundary:
+  - the Python, Kotlin/JVM, Swift, JavaScript, and Java Android SDK surfaces
+    that correspond to the alias-first/by-reference contract API are now green
+    under focused validation; but
+  - a fresh full `cargo test --workspace` / `cargo clippy --workspace --all-targets -- -D warnings`
+    sweep has still not been rerun after the broader protocol and SDK changes;
+    and
+  - the full Android harness suite and any broader Python/Kotlin/JS package
+    sweeps beyond the contract-focused tests were not rerun in this slice.
+
+## 2026-04-05 SCCP follow-up: artifact/job submission packages now expose typed per-platform payloads
+- `SccpCounterpartySubmissionPackageV1` in
+  `crates/iroha_sccp/src/lib.rs` now carries a typed `platform_payload` enum in
+  addition to the generic argument list and encoded envelope bytes.
+- The platform payload variants are explicit for each lane:
+  - `evm_contract_call`
+  - `tron_contract_call`
+  - `solana_program_instruction`
+  - `ton_internal_message`
+  - `substrate_runtime_call`
+- JS and Python SCCP artifact/job clients now normalize that submission package
+  instead of silently dropping it:
+  - `javascript/iroha_js/src/toriiClient.js`
+  - `python/iroha_torii_client/client.py`
+- Focused validation completed:
+  - `cargo test -p iroha_sccp submission_ -- --nocapture`
+  - `cargo test -p iroha_sccp message_transparent_proof_builder_roundtrip_verifies -- --nocapture`
+  - `node --test javascript/iroha_js/test/toriiClient.test.js --test-name-pattern "getSccpMessageProofArtifact|getSccpMessageProofJob"`
+  - `python3 -m pytest python/iroha_torii_client/tests/test_client.py -k "sccp_message_proof_artifact or sccp_message_proof_job"`
+
+## 2026-04-05 SCCP follow-up: EVM-like SCCP lanes now use platform-targeted fixed-word proof inputs
+- The EVM SCCP wrapper/deployer contracts now live in this repo under
+  `contracts/evm/sccp` instead of an external sibling path.
+- `crates/iroha_sccp/src/lib.rs` now includes focused tests that lock the
+  emitted ETH submission-template metadata to the in-repo Solidity wrapper:
+  - the manifest entrypoint/argument contract must match the wrapper/interface
+    source names;
+  - generated ETH/TRON submission packages now use fixed `bytes32[6]`
+    public-input words plus a `bytes32 statement_hash` instead of passing the
+    whole bundle through ABI calldata; and
+  - BSC is explicitly pinned to the same wrapper/template contract shape as ETH.
+- Focused validation completed:
+  - `cargo test -p iroha_sccp evm_submission_template_matches_in_repo_wrapper_contract_source -- --nocapture`
+  - `cargo test -p iroha_sccp evm_submission_package_uses_wrapper_selector_and_argument_order -- --nocapture`
+  - `cargo test -p iroha_sccp bsc_shares_the_same_evm_wrapper_submission_contract_as_eth -- --nocapture`
+  - `cargo test -p iroha_sccp tron_submission_package_uses_fixed_word_public_inputs_and_statement_hash -- --nocapture`
+  - `scripts/sccp_evm_contract_smoke.sh`
+
+## 2026-04-05 Follow-up: `integration_tests` now uses six explicit harnesses and shared localnet binary reuse
+- `integration_tests/Cargo.toml` now disables Cargo auto-discovery for the
+  test tree and registers six explicit harnesses instead:
+  `core_api`, `events_and_triggers`, `queries_and_proofs`,
+  `network_functional`, `consensus_and_da`, and
+  `nexus_and_streaming`.
+- The scenario files remain in `integration_tests/tests/`; each harness now
+  pulls them in with `#[path = ...]` so coverage stays intact while Cargo no
+  longer has to treat the entire tree as separate test binaries. The binary
+  surface drops from the old auto-discovered fan-out of roughly 87 scenario
+  files/directories to 6 explicit harnesses.
+- Added `integration_tests::kagami::resolve_kagami_bin()` and switched the two
+  Kagami localnet tests to it, so `kagami` resolution now honors `KAGAMI_BIN`,
+  `CARGO_BIN_EXE_kagami`, `CARGO_TARGET_DIR`, `IROHA_TEST_TARGET_DIR`, and the
+  repo-root `target/` tree before considering an on-demand build.
+- `scripts/run_full_tests.sh` now pins an absolute `CARGO_TARGET_DIR`, exports
+  `IROHA_TEST_SKIP_BUILD=1` and `IROHA_TEST_TARGET_DIR` when the caller did not
+  set them, reuses built `iroha3d` / `iroha` / `kagami` binaries when present,
+  provisions an isolated `IROHA_TEST_NETWORK_PERMIT_DIR` unless one is already
+  supplied, and now supports an opt-in `--fast` path through
+  `scripts/cargo_fast.sh` with optional `--fast-zero-debug` /
+  `--fast-no-incremental` local-throughput flags.
+- Removed the obsolete `integration_tests/tests/mod.rs` harness file and
+  retargeted the Nexus helper scripts that still called `--test mod`
+  (`scripts/nexus/run_autoscale_soak_matrix.sh`,
+  `scripts/nexus/run_cross_runtime_matrix.sh`,
+  `scripts/run_nexus_cross_dataspace_atomic_swap.sh`) to the new
+  `nexus_and_streaming` harness.
+- Integration-test docs now describe the grouped harness names and the new
+  `cargo test -p integration_tests --test <harness> <filter>` workflow, with
+  module-qualified exact filters where needed.
+- Focused validation completed on this slice:
+  - `cargo test -p integration_tests --no-run` (ok; `integration_tests` now
+    emits only the 6 explicit harness executables plus the crate/unit-test
+    binaries)
+  - `cargo test -p integration_tests -- --list` (ok; list output walks the 6
+    grouped harness binaries instead of the old per-file fan-out)
+  - `cargo test -p integration_tests --test core_api asset::client_add_asset_quantities_should_increase_asset_amounts -- --exact --nocapture` (ok; finished in 235.48s)
+  - `cargo test -p integration_tests --test network_functional extra_functional::unstable_network::unstable_network_12_peers_4_faults -- --exact --nocapture` (ok; finished in 261.03s)
+  - `IROHA_TEST_NETWORK_PERMIT_DIR=$(mktemp -d) cargo test -p integration_tests --test consensus_and_da sumeragi_kagami_localnet::kagami_localnet_bootstrap_produces_blocks -- --exact --nocapture` (ok; finished in 7.51s)
+  - `scripts/run_full_tests.sh --only-network -- --list` (ok; workspace build
+    completed in 7m26s on the current dirty tree, then the script printed
+    `integration tests configured to reuse built binaries` and listed the 6
+    grouped harness binaries successfully)
+  - `scripts/run_full_tests.sh --help` (ok; includes the new `--fast`,
+    `--fast-zero-debug`, and `--fast-no-incremental` options)
+  - `bash -n scripts/nexus/run_autoscale_soak_matrix.sh scripts/nexus/run_cross_runtime_matrix.sh scripts/run_nexus_cross_dataspace_atomic_swap.sh scripts/run_full_tests.sh` (ok)
+  - `cargo test -p integration_tests --no-run` (ok after deleting `tests/mod.rs`; now finishes with only the 6 explicit harness executables)
+
+## 2026-04-05 Follow-up: the Swift package failure sweep is clean again
+- `cd IrohaSwift && swift test` now passes end-to-end again:
+  - executed `700` tests,
+  - skipped `96` tests, and
+  - reported `0` failures / `0` unexpected failures.
+- Closed the previously failing Swift clusters without changing the public
+  contract-call redesign semantics:
+  - `IrohaSwift/Sources/IrohaSwift/TxBuilder.swift` now falls back to the local
+    Ed25519 `SigningKey` path when the native bridge does not provide an
+    Ed25519 keypair from seed, so legacy signing tests no longer fail with
+    `unsupportedAlgorithm("ed25519")`.
+  - `IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift` and
+    `IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift` now keep
+    public-asset parsing errors typed as invalid asset ids and can recover
+    canonical asset-definition ids from full public asset literals.
+  - `IrohaSwift/Sources/IrohaSwift/ToriiClient.swift` now accepts both
+    snake_case and camelCase account/asset identifier fields where the live
+    Torii/mock payloads vary, and the explorer asset-transfer decoding path now
+    preserves sender/receiver/account/asset identities for mint/burn/transfer
+    summaries instead of collapsing to empty strings or `nil`.
+  - `python/iroha_torii_client/mock.py` now advertises the pipeline
+    `signed_transaction_schema_hash_hex`, which fixes the Swift mock submit-and-
+    wait schema compatibility checks.
+  - `IrohaSwift/Tests/IrohaSwiftTests/AccountAddressFixtureTests.swift` and
+    `IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift` were updated to
+    match the current stable error-code strings, request encoding, query-key
+    names, and checked-in BFV request fixture loading.
+  - `IrohaSwift/Fixtures/js_email_identifier_request.json` is now checked in so
+    the JS-vs-Swift BFV envelope vector no longer depends on `/tmp` state.
+- Focused validation completed during the sweep:
+  - `cd IrohaSwift && swift test --filter IrohaSDKSigningAlgorithmTests/testLegacyKeypairRemainsEd25519Compatible`
+  - `cd IrohaSwift && swift test --filter AccountAddressFixtureTests/testNegativeVectorsReject`
+  - `cd IrohaSwift && swift test --filter OfflineNoritoEncodingTests/testEncodeAssetIdRejectsTextualForms`
+  - `cd IrohaSwift && swift test --filter 'ToriiClientIntegrationTests/(testPipelineSubmitAndWaitSuccessAgainstMock|testPipelineSubmitAndWaitFailureAgainstMock|testPipelineSubmitAndWaitTimeoutAgainstMock)'`
+  - `cd IrohaSwift && swift test --filter 'ToriiClientTests/(testGetAssetsAsync|testGetTransactionsEncodesAssetIdFilter|testGetConfidentialAssetPolicyAsync|testResolveIdentifierAsync|testIssueIdentifierClaimReceiptAsync|testResolveAccountAliasAsync|testExplorerMintInstructionParsedAsSummary|testCanonicalMintDestinationStaysCanonical|testGetExplorerTransactionTransfersAggregatesPages|testIdentifierBfvEnvelopeBuilderMatchesLiveJsVector)'`
+  - `cd IrohaSwift && swift test`
+  - `git diff --check -- IrohaSwift/Sources/IrohaSwift/TxBuilder.swift IrohaSwift/Sources/IrohaSwift/OfflineNoritoEncoding.swift IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift IrohaSwift/Sources/IrohaSwift/ToriiClient.swift IrohaSwift/Tests/IrohaSwiftTests/AccountAddressFixtureTests.swift IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift IrohaSwift/Fixtures/js_email_identifier_request.json python/iroha_torii_client/mock.py`
+- Remaining follow-up after this pass is broader repo-wide validation (`cargo
+  test --workspace`, `cargo clippy --workspace --all-targets -- -D warnings`,
+  and the non-Swift SDK sweeps), not additional known Swift package failures.
+
+## 2026-04-05 SCCP follow-up: verifier-backend metadata, submission packages, and bridge hooks are now wired
+- `crates/iroha_sccp/src/lib.rs` now carries explicit per-counterparty
+  `verifier_backend` metadata in SCCP manifests, typed artifacts, inner-proof
+  context, and normalized counterparty proof jobs.
+- SCCP typed artifacts/jobs now also include a generated
+  `submission_package` with:
+  - the target verifier entrypoint and submission kind,
+  - the relayer envelope encoding for that lane,
+  - raw proof/public-input/bundle arguments, and
+  - prebuilt envelope bytes for ABI/Borsh/Scale-style lanes.
+- The SCCP statement hash now binds the verifier-backend family/key, so the
+  typed proof context changes if the target verifier lane changes.
+- Torii bridge summaries and CLI text output now surface verifier-backend keys
+  and the generated submission package metadata, and the bridge-proof docs/API
+  text were updated to describe the new fields.
+- The counterparty integration hooks now split by intended ownership:
+  - `../sora2-network/pallets/sccp-bridge` exposes a signed
+    `submit_message_proof` extrinsic, stores typed proof receipts, and fails
+    closed with `ProofVerifierUnavailable` until a native verifier is plugged
+    in.
+  - `contracts/evm/sccp` in this repo now has `ISccpMessageVerifier`,
+    `SccpMessageBridge`, and `SccpMessageBridgeDeployer`, so EVM lanes can bind
+    a concrete verifier contract and get replay protection plus acceptance
+    events without changing the submission package shape again.
+  - `contracts/evm/sccp` now includes the production
+    `SccpSecp256k1MessageVerifier`, and the ETH/BSC SCCP package builder emits
+    a secp256k1 attestation envelope that the contract verifies with
+    `keccak256` + `ecrecover` against the configured signer set.
+  - Torii now threads that same signer through the live SCCP artifact/job and
+    app-facing bridge submit paths, and those ETH/BSC routes fail loudly unless
+    `da_receipt_signer` uses `secp256k1`.
+  - `irohad` now defaults an unset `torii.receipt_signer` to an ephemeral
+    secp256k1 key instead of Ed25519, so ETH/BSC SCCP proof routes work without
+    extra startup configuration.
+- Focused validation is green on the final formatted tree:
+  - `CARGO_TARGET_DIR=target_tmp_sccp_finish cargo check -p iroha_sccp -p iroha_torii -p iroha_cli -p iroha --tests`
+  - `CARGO_TARGET_DIR=target_tmp_sccp_test_core cargo test -p iroha_sccp message_transparent_proof -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_sccp_test_core cargo test -p iroha_sccp tampered_ -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_sccp_test_cli cargo test -p iroha_cli --features bridge --bin iroha bridge::tests::sccp_ -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_sccp_test_torii cargo test -p iroha_torii sccp_ --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_evm_prod cargo test -p irohad torii_receipt_signer_selection -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_evm_prod cargo test -p iroha_sccp --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_evm_prod cargo test -p iroha_torii sccp_ --lib -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_evm_prod cargo test -p iroha get_sccp_message_proof_ --lib -- --nocapture`
+  - in `../sora2-network`:
+    - `cargo test -p sccp-bridge`
+    - `cargo check -p framenode-runtime`
+  - in this repo:
+    - `npx --yes solc@0.7.4 --bin --base-path . contracts/evm/sccp/SccpMessageBridge.sol contracts/evm/sccp/SccpMessageBridgeDeployer.sol contracts/evm/sccp/ISccpMessageVerifier.sol contracts/evm/sccp/Ownable.sol`
+    - `npm install --no-save --no-package-lock solc@0.7.4 ganache ethers && node contracts/evm/sccp/test/sccp_message_bridge_smoke.js && rm -rf node_modules`
+
+## 2026-04-05 Follow-up: contract/governance source and portal translation mirrors were resynced to the alias-first lifecycle
+- Re-synced the remaining translated source-doc families that still advertised
+  the retired public `/v1/contracts/instance*` lifecycle:
+  - `docs/source/governance_api.*.md`
+  - `docs/source/torii_contracts_api.*.md`
+  - `docs/source/contract_deployment.*.md`
+  - `docs/source/telemetry.*.md`
+  - `docs/source/torii/app_api_parity_audit.*.md`
+  - `docs/source/sdk/js/quickstart.*.md`
+  - the already refreshed `docs/source/torii/norito_rpc.*.md` and
+    `docs/source/torii/contract_lifecycle_app_api.*.md` families remain aligned.
+- Re-synced the portal mirrors that were still lagging behind the canonical
+  docs:
+  - `docs/portal/docs/governance/api*.md`
+  - `docs/portal/docs/reference/torii-app-api-parity*.md`
+  - `docs/portal/i18n/*/docusaurus-plugin-content-docs/current/governance/api*.md`
+  - `docs/portal/i18n/*/docusaurus-plugin-content-docs/current/reference/torii-app-api-parity*.md`
+- Each refreshed mirror now carries updated `source_hash`,
+  `source_last_modified`, and `translation_last_reviewed: 2026-04-05`, plus the
+  temporary English-mirror sync note where that file family already uses the
+  managed translation placeholder flow.
+- Focused validation completed:
+  - `rg -n 'DeployAndActivateInstanceDto|ActivateInstanceDto|^-[[:space:]]+POST \`/v1/contracts/instance\`|^## \`POST /v1/contracts/instance/activate\`' docs/source/governance_api.*.md docs/source/torii_contracts_api.*.md docs/source/contract_deployment.*.md docs/portal/docs/reference/torii-app-api-parity*.md docs/portal/i18n/*/docusaurus-plugin-content-docs/current/reference/torii-app-api-parity*.md docs/portal/docs/governance/api*.md docs/portal/i18n/*/docusaurus-plugin-content-docs/current/governance/api*.md` (no matches)
+  - duplicate-note scan over the resynced portal families now reports `violations 0`
+  - `rg -n 'DeployAndActivateInstanceDto|ActivateInstanceDto|^-[[:space:]]+POST \`/v1/contracts/instance\`|^## \`POST /v1/contracts/instance/activate\`|followed by \`/v1/contracts/instance\` when \`CONTRACT_STAGE\` includes \`instance\`|\`/transaction\` vs \`/v1/contracts/instance/activate\`' docs/source docs/portal IrohaSwift javascript python` (no matches)
+- Remaining follow-up after this pass is broader post-change validation rather
+  than additional contract/governance source/portal parity cleanup.
 
 ## 2026-04-05 Follow-up: SCCP transparent artifacts now carry real FASTPQ proofs
 - Replaced the SCCP message-artifact placeholder transcript path in

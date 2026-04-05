@@ -8533,7 +8533,7 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
               encoding: "abi_tuple_v1",
               submission_kind: "contract_call",
               verifier_entrypoint:
-                "submitSccpMessageProof(bytes proof_bytes, bytes public_inputs, bytes bundle_bytes)",
+                "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
               required_arguments: [
                 {
                   key: "proof_bytes",
@@ -8541,12 +8541,12 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
                 },
                 {
                   key: "public_inputs",
-                  description: "ABI-encoded SCCP public inputs in manifest order.",
+                  description: "Fixed-width ABI words for the SCCP public inputs in manifest order.",
                 },
                 {
-                  key: "bundle_bytes",
+                  key: "statement_hash",
                   description:
-                    "ABI-encoded Nexus SCCP message bundle passed to the verifier contract.",
+                    "Canonical SCCP statement hash exposed as a bytes32 verifier input.",
                 },
               ],
             },
@@ -8591,7 +8591,7 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
           encoding: "abi_tuple_v1",
           submissionKind: "contract_call",
           verifierEntrypoint:
-            "submitSccpMessageProof(bytes proof_bytes, bytes public_inputs, bytes bundle_bytes)",
+            "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
           requiredArguments: [
             {
               key: "proof_bytes",
@@ -8599,12 +8599,12 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
             },
             {
               key: "public_inputs",
-              description: "ABI-encoded SCCP public inputs in manifest order.",
+              description: "Fixed-width ABI words for the SCCP public inputs in manifest order.",
             },
             {
-              key: "bundle_bytes",
+              key: "statement_hash",
               description:
-                "ABI-encoded Nexus SCCP message bundle passed to the verifier contract.",
+                "Canonical SCCP statement hash exposed as a bytes32 verifier input.",
             },
           ],
         },
@@ -8691,6 +8691,28 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
           finality_block_hash: finalityBlockHash,
         },
         proof_bytes: "aa55",
+        submission_package: {
+          version: 1,
+          proof_family: "stark-fri-v1",
+          verifier_backend: { version: 1, key: "ton-contract-v1" },
+          envelope_encoding: "ton_message_body_v1",
+          submission_kind: "internal_message",
+          verifier_entrypoint: "op::submit_sccp_message_proof",
+          platform_payload: {
+            platform: "ton_internal_message",
+            payload: {
+              proof_cell: "aa55",
+              public_inputs_cell: "cc77",
+              bundle_cell: "dd88",
+            },
+          },
+          arguments: [
+            { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
+            { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
+            { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
+          ],
+          envelope_bytes: "ee99",
+        },
         bundle: {
           version: 1,
           commitment_root: commitmentRoot,
@@ -8742,6 +8764,28 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
       finalityBlockHash,
     },
     proofBytes: "aa55",
+    submissionPackage: {
+      version: 1,
+      proofFamily: "stark-fri-v1",
+      verifierBackendKey: "ton-contract-v1",
+      envelopeEncoding: "ton_message_body_v1",
+      submissionKind: "internal_message",
+      verifierEntrypoint: "op::submit_sccp_message_proof",
+      platformPayload: {
+        kind: "ton_internal_message",
+        value: {
+          proofCell: "aa55",
+          publicInputsCell: "cc77",
+          bundleCell: "dd88",
+        },
+      },
+      arguments: [
+        { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
+        { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
+        { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
+      ],
+      envelopeBytes: "ee99",
+    },
     bundle: {
       version: 1,
       commitmentRoot,
@@ -8795,6 +8839,50 @@ test("getSccpMessageProofArtifact rejects bundle/public input mismatch", async (
           finality_block_hash: "44".repeat(32),
         },
         proof_bytes: "aa55",
+        submission_package: {
+          version: 1,
+          proof_family: "stark-fri-v1",
+          verifier_backend: { version: 1, key: "evm-secp256k1-keccak-v1" },
+          envelope_encoding: "abi_tuple_v1",
+          submission_kind: "contract_call",
+          verifier_entrypoint:
+            "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
+          platform_payload: {
+            platform: "evm_contract_call",
+            payload: {
+              proof_bytes: "aa55",
+              public_inputs: {
+                message_id: "11".repeat(32),
+                payload_hash: "22".repeat(32),
+                target_domain_word: "00".repeat(31) + "01",
+                commitment_root: "33".repeat(32),
+                finality_height_word: "00".repeat(31) + "07",
+                finality_block_hash: "44".repeat(32),
+              },
+              public_inputs_hash: "88".repeat(32),
+              statement_hash: "55".repeat(32),
+              attestation: {
+                version: 1,
+                message_id: "11".repeat(32),
+                source_domain: 0,
+                commitment_root: "33".repeat(32),
+                native_proof_hash: "99".repeat(32),
+                signatures: [
+                  {
+                    signer_address: "12".repeat(20),
+                    signature_bytes: "34".repeat(65),
+                  },
+                ],
+              },
+            },
+          },
+          arguments: [
+            { key: "proof_bytes", encoding: "raw_bytes", bytes: "aa55" },
+            { key: "public_inputs", encoding: "abi_bytes32x6", bytes: "66".repeat(32 * 6) },
+            { key: "statement_hash", encoding: "abi_bytes32", bytes: "55".repeat(32) },
+          ],
+          envelope_bytes: "77",
+        },
         bundle: {
           version: 1,
           commitment_root: "33".repeat(32),
@@ -8861,6 +8949,28 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
                 "Cell-encoded Nexus SCCP message bundle for the TON bridge contract.",
             },
           ],
+        },
+        submission_package: {
+          version: 1,
+          proof_family: "stark-fri-v1",
+          verifier_backend: { version: 1, key: "ton-contract-v1" },
+          envelope_encoding: "ton_message_body_v1",
+          submission_kind: "internal_message",
+          verifier_entrypoint: "op::submit_sccp_message_proof",
+          platform_payload: {
+            platform: "ton_internal_message",
+            payload: {
+              proof_cell: "aa55",
+              public_inputs_cell: "cc77",
+              bundle_cell: "dd88",
+            },
+          },
+          arguments: [
+            { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
+            { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
+            { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
+          ],
+          envelope_bytes: "ee99",
         },
         public_inputs: {
           version: 1,
@@ -8943,6 +9053,28 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
           description: "Cell-encoded Nexus SCCP message bundle for the TON bridge contract.",
         },
       ],
+    },
+    submissionPackage: {
+      version: 1,
+      proofFamily: "stark-fri-v1",
+      verifierBackendKey: "ton-contract-v1",
+      envelopeEncoding: "ton_message_body_v1",
+      submissionKind: "internal_message",
+      verifierEntrypoint: "op::submit_sccp_message_proof",
+      platformPayload: {
+        kind: "ton_internal_message",
+        value: {
+          proofCell: "aa55",
+          publicInputsCell: "cc77",
+          bundleCell: "dd88",
+        },
+      },
+      arguments: [
+        { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
+        { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
+        { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
+      ],
+      envelopeBytes: "ee99",
     },
     publicInputs: {
       version: 1,

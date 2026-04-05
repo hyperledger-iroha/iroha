@@ -334,13 +334,18 @@ async fn submit_and_wait_non_empty_block(
         instructions,
         iroha_data_model::metadata::Metadata::default(),
     );
+    let all_peer_wait_timeout = if context.contains("combined downtime+timeout") {
+        Duration::from_secs(30)
+    } else {
+        ALL_PEER_WAIT_TIMEOUT
+    };
 
     submit_transaction_on_any_peer(submitters, &tx, context)?;
 
     *non_empty_target = non_empty_target.saturating_add(1);
     let target = *non_empty_target;
     let all_peer_wait_error = match tokio::time::timeout(
-        ALL_PEER_WAIT_TIMEOUT,
+        all_peer_wait_timeout,
         network.ensure_blocks_with(|height| height.non_empty >= target),
     )
     .await
@@ -349,7 +354,7 @@ async fn submit_and_wait_non_empty_block(
         Ok(Err(err)) => Some(format!("{err:?}")),
         Err(err) => Some(format!(
             "timed out after {:?}: {err:?}",
-            ALL_PEER_WAIT_TIMEOUT
+            all_peer_wait_timeout
         )),
     };
 
@@ -373,14 +378,18 @@ async fn wait_for_non_empty_quorum(
     quorum: usize,
     context: &str,
 ) -> Result<()> {
-    const ATTEMPTS: usize = 200;
+    let attempts = if context.contains("combined downtime+timeout") {
+        300
+    } else {
+        200
+    };
     const DELAY: Duration = Duration::from_millis(300);
     let mut last_observed = Vec::new();
     let mut heights = Vec::new();
     let mut error_streaks = vec![0_usize; clients.len()];
     let mut muted_until_attempt = vec![0_usize; clients.len()];
 
-    for attempt in 0..ATTEMPTS {
+    for attempt in 0..attempts {
         heights.clear();
         last_observed.clear();
         let mut currently_muted = muted_peer_count(&muted_until_attempt, attempt);

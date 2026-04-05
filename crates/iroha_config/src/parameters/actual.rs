@@ -6852,6 +6852,8 @@ pub struct SorafsGateway {
     pub rollout_phase: SorafsRolloutPhase,
     /// Optional staged anonymity policy override.
     pub anonymity_policy: Option<SorafsAnonymityStage>,
+    /// Per-CID untrusted-host routing configuration.
+    pub untrusted_hosting: SorafsGatewayUntrustedHosting,
     /// ACME automation configuration.
     pub acme: SorafsGatewayAcme,
     /// Optional direct-mode override configuration.
@@ -6873,6 +6875,7 @@ impl Default for SorafsGateway {
                 SorafsAnonymityStage::parse(defaults::sorafs::gateway::DEFAULT_ANONYMITY_POLICY)
                     .unwrap_or_else(|| SorafsRolloutPhase::default().default_anonymity_policy()),
             ),
+            untrusted_hosting: SorafsGatewayUntrustedHosting::default(),
             acme: SorafsGatewayAcme::default(),
             direct_mode: None,
         }
@@ -6885,6 +6888,48 @@ impl SorafsGateway {
     pub fn effective_anonymity_policy(&self) -> SorafsAnonymityStage {
         self.anonymity_policy
             .unwrap_or_else(|| self.rollout_phase.default_anonymity_policy())
+    }
+}
+
+/// Canonical CID-host suffixes for untrusted browser app delivery.
+#[derive(Debug, Clone)]
+pub struct SorafsGatewayCidHostSuffixes {
+    /// Live-network CID-host suffix.
+    pub live: String,
+    /// Taira-network CID-host suffix.
+    pub taira: String,
+}
+
+impl Default for SorafsGatewayCidHostSuffixes {
+    fn default() -> Self {
+        Self {
+            live: defaults::sorafs::gateway::untrusted_hosting::live_cid_host_suffix(),
+            taira: defaults::sorafs::gateway::untrusted_hosting::taira_cid_host_suffix(),
+        }
+    }
+}
+
+/// Configuration for serving untrusted apps on CID-derived origins.
+#[derive(Debug, Clone)]
+pub struct SorafsGatewayUntrustedHosting {
+    /// Enable per-CID host routing.
+    pub enabled: bool,
+    /// Canonical live/test host suffixes used for browser delivery.
+    pub cid_host_suffixes: SorafsGatewayCidHostSuffixes,
+    /// Redirect path-gateway requests to the canonical CID host.
+    pub path_gateway_redirect: bool,
+    /// Restrict canonical redirects to browser HTML navigations.
+    pub redirect_html_only: bool,
+}
+
+impl Default for SorafsGatewayUntrustedHosting {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::gateway::UNTRUSTED_HOSTING_ENABLED,
+            cid_host_suffixes: SorafsGatewayCidHostSuffixes::default(),
+            path_gateway_redirect: defaults::sorafs::gateway::PATH_GATEWAY_REDIRECT,
+            redirect_html_only: defaults::sorafs::gateway::REDIRECT_HTML_ONLY,
+        }
     }
 }
 

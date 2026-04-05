@@ -218,7 +218,7 @@ impl AccountRecoveryRequest {
     }
 
     /// Add an approval keyed by guardian subject id.
-    pub fn approve(&mut self, account: AccountId) {
+    pub fn approve(&mut self, account: &AccountId) {
         self.approvals.insert(account.subject_id());
     }
 

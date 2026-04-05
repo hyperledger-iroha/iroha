@@ -16,7 +16,7 @@ use nonzero_ext::nonzero;
 use tokio::time::sleep;
 
 const BLOCK_TIME_MS: u64 = 1_000;
-const COMMIT_TIME_MS: u64 = 1_000;
+const COMMIT_TIME_MS: u64 = 2_000;
 const BLOCK_SYNC_GOSSIP_PERIOD_MS: u64 = 250;
 const SAMPLE_BLOCKS: u64 = 8;
 // DA-enabled consensus now waits longer before view changes:

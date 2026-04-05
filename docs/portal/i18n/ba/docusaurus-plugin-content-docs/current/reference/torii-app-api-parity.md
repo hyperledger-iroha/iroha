@@ -3,146 +3,154 @@ id: torii-app-api-parity
 lang: ba
 direction: ltr
 source: docs/portal/docs/reference/torii-app-api-parity.md
-status: complete
+status: needs-update
 generator: docs/portal/scripts/sync-i18n.mjs
 title: Torii app API parity audit
 description: Mirror of the TORII-APP-1 review so SDK and platform teams can confirm public coverage.
 translator: machine-google-reviewed
-translation_last_reviewed: 2026-02-07
+translation_last_reviewed: 2026-04-05
+source_hash: ec765900dcd2920e68a6fc313df50b90809d6382368009a3b6863a20999847c2
+source_last_modified: "2026-04-04T12:14:32.425313+00:00"
 ---
 
-Статус: 2026-03-21 йылдарҙы тамамланы.  
-Хужалары: I18NT0000000008X платформаһы, SDK программаһы етәксеһе  
-Юл картаһы һылтанмаһы: TORIII-APP-1 — I18NI0000000027X паритет аудиты
+> Translation sync note (2026-04-05): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
-Был бит эске I18NI000000028X аудитын көҙгөләй (`docs/source/torii/app_api_parity_audit.md`)
-тимәк, моно-репо тыш уҡыусылар күрә ала, ниндәй I18NI000000000030X өҫтө проводной, һынау,
-һәм документлаштырылған. Аудит I18NI000000031X аша яңынан экспортланған маршруттарҙы күҙәтә,
-I18NI000000032X, һәм I18NI000000033X.
+Status: Completed 2026-03-21
+Owners: Torii Platform, SDK Program Lead
+Roadmap reference: TORII-APP-1 — `app_api` parity audit
 
-## Scope & ысулы
+This page mirrors the internal `TORII-APP-1` audit (`docs/source/torii/app_api_parity_audit.md`)
+so readers outside the mono-repo can see which `/v1/*` surfaces are wired, tested,
+and documented. The audit tracks the routes re-exported through `Torii::add_app_api_routes`,
+`add_contracts_and_vk_routes`, and `add_connect_routes`.
 
-Аудит йәмәғәт ҡабаттан экспортын тикшерә I18NI000000034X һәм
-функция-ҡапҡа маршрут төҙөүселәр. Юл картаһында беҙ раҫланған һәр I18NI00000000035X өсөн беҙ раҫланыҡ:
+## Scope & method
 
-- I18NI000000036X-та ручканы тормошҡа ашырыу һәм ДТО аныҡлауҙары.
-- I18NI000000037X йәки I18NI0000000038X функцияһы төркөмдәре буйынса маршрутизатор теркәү.
-- Ғәмәлдәге интеграция/блок һынауҙары һәм оҙайлы ваҡытҡа ҡаплау өсөн яуаплы милек командаһы.
+The audit inspects the public re-exports in `crates/iroha_torii/src/lib.rs:256-522` and the
+feature-gated route builders. For every `/v1/*` surface in the roadmap we verified:
 
-Иҫәп активтары/транзакциялар һәм актив-холдер исемлеге ҡабул итеү опциональ I18NI000000039X эҙләү параметрҙары .
-өсөн алдан фильтрлау, өҫтәүенә, ғәмәлдәге pagination/кире баҫым сиктәре.
+- Handler implementation and DTO definitions in `crates/iroha_torii/src/routing.rs`.
+- Router registration under the `app_api` or `connect` feature groups.
+- Existing integration/unit tests and the owning team responsible for long-term coverage.
 
-## Аут & канон ҡул ҡуйыу
+Account assets/transactions and asset-holder listings accept optional `asset_id` query parameters
+for pre-filtering, in addition to the existing pagination/backpressure limits.
 
-- App-йөҙ GET/POST ос нөктәләре ҡабул итеү опциональ канон запрос башлыҡтары (I18NI000000040X, `X-Iroha-Signature`) төҙөлгән I18NI0000000042Х; Torii уларҙы уратып I18NI000000043X башҡарыусы раҫлау алдынан, шулай итеп, улар көҙгө `/query`.
-- SDK ярҙамсылары бөтә төп клиенттарҙа ла ташый:
-  - JS/TS: I18NI0000045X I18NI000000046X-тан.
-  - Свифт: `CanonicalRequest.signingHeaders(accountId:method:path:query:body:signer:)`.
-  - Андроид (Котлин/Ява): I18NI000000048X.
-- Миҫал өҙөктәре:
+## Auth & canonical signing
+
+- App-facing GET/POST endpoints accept optional canonical request headers (`X-Iroha-Account`, `X-Iroha-Signature`) built from `METHOD\n/path\nsorted_query\nsha256(body)`; Torii wraps them into `QueryRequestWithAuthority` before executor validation so they mirror `/query`.
+- SDK helpers ship in all primary clients:
+  - JS/TS: `buildCanonicalRequestHeaders({ accountId, method, path, query, body, privateKey })` from `canonicalRequest.js`.
+  - Swift: `CanonicalRequest.signingHeaders(accountId:method:path:query:body:signer:)`.
+  - Android (Kotlin/Java): `CanonicalRequestSigner.signingHeaders(accountId, method, path, query, body, signer)`.
+- Example snippets:
 ```ts
 import { buildCanonicalRequestHeaders } from "@iroha2/iroha-js";
 const headers = buildCanonicalRequestHeaders({ accountId: "<i105-account-id>", method: "get", path: "/v1/accounts/<i105-account-id>/assets", query: "limit=5", body: "", privateKey });
 await fetch(`${torii}/v1/accounts/<i105-account-id>/assets?limit=5`, { headers });
 ```
-I18NF000000025X
+```swift
+let headers = try CanonicalRequest.signingHeaders(accountId: "<i105-account-id>",
+                                                  method: "get",
+                                                  path: "/v1/accounts/<i105-account-id>/assets",
+                                                  query: "limit=5",
+                                                  body: Data(),
+                                                  signer: signingKey)
+```
 ```kotlin
 val signer = Ed25519Signer(privateKey, publicKey)
 val headers = CanonicalRequestSigner.signingHeaders("<i105-account-id>", "get", "/v1/accounts/<i105-account-id>/assets", "limit=5", ByteArray(0), signer)
 ```
 
-## Аҙаҡҡы нөктә инвентаризацияһы
+## Endpoint inventory
 
-### Иҫәп рөхсәттәре (I18NI0000000049X) — Ҡапланған
-- Ҡулға алынған: `handle_v1_account_permissions` (I18NI000000051X).
-- ДТО: `filter::Pagination` + `AccountPermissionListItem` (I18NI000000054X).
-- Маршрут бәйләүе: `Torii::add_app_api_routes` (I18NI000000056X).
-- Һынауҙар: `crates/iroha_torii/tests/accounts_endpoints.rs:126` һәм I18NI000000058X.
-- Хужа: I18NT000000012X платформаһы.
-- Иҫкәрмәләр: Яуап I18NT0000000001X JSON органы менән I18NI000000059X X/I18NI00000000060X, SDK-ның ярҙамсыларына тап килгән.
+### Account permissions (`/v1/accounts/{id}/permissions`) — Covered
+- Handler: `handle_v1_account_permissions` (`crates/iroha_torii/src/routing.rs:16873`).
+- DTOs: `filter::Pagination` + `AccountPermissionListItem` (`crates/iroha_torii/src/routing.rs:16867`).
+- Router binding: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
+- Tests: `crates/iroha_torii/tests/accounts_endpoints.rs:126` and `crates/iroha_torii/tests/account_query_subrouter_smoke.rs:146`.
+- Owner: Torii Platform.
+- Notes: Response is a Norito JSON body with `items`/`total`, matching SDK pagination helpers.
 
-### псевдоним OPRF баһалау (I18NI0000000061X) — Ҡапланған
-- Ҡулға алынған: I18NI000000062X (`crates/iroha_torii/src/lib.rs:5645-5660`).
-- ДТО: I18NI000000064X, I18NI000000065X, I18NI000000066X XX
+### Alias OPRF evaluate (`POST /v1/aliases/voprf/evaluate`) — Covered
+- Handler: `handler_alias_voprf_evaluate` (`crates/iroha_torii/src/lib.rs:5645-5660`).
+- DTOs: `AliasVoprfEvaluateRequestDto`, `AliasVoprfEvaluateResponseDto`, `AliasVoprfBackendDto`
   (`crates/iroha_torii/src/routing.rs:809-865`).
-- Маршрут бәйләүе: I18NI000000068X X (`crates/iroha_torii/src/lib.rs:6357-6380`).
-- Һынауҙар: руль артында йөрөүсе һынауҙар (I18NI000000070X) плюс SDK ҡаплау
+- Router binding: `Torii::add_alias_routes` (`crates/iroha_torii/src/lib.rs:6357-6380`).
+- Tests: inline handler tests (`crates/iroha_torii/src/lib.rs:9945-9986`) plus SDK coverage
   (`javascript/iroha_js/test/toriiClient.test.js:72`).
-- Хужа: I18NT000000014X платформаһы.
-- Иҫкәрмәләр: Яуап өҫтө детерминистик гекс һәм бэкэнд идентификаторҙарын үтәй; СДК-лар ДТО ҡуллана.
+- Owner: Torii Platform.
+- Notes: Response surface enforces deterministic hex and backend identifiers; SDKs consume the DTO.
 
-### иҫбатлау саралары SSE (I18NI000000072X) — ҡапланған
-- Ҡулға алынған: `handle_v1_events_sse` фильтр ярҙамы менән (`crates/iroha_torii/src/routing.rs:14008-14133`).
-- ДТО: `EventsSseParams` (I18NI000000076X) плюс иҫбатлау фильтр проводкаһы.
-- Маршрут бәйләүе: `Torii::add_app_api_routes` (I18NI000000078X).
-- Һынауҙар: иҫбатлау өсөн махсус SSE люкстары (`crates/iroha_torii/tests/sse_proof_envelope_hash.rs`,
-  I18NI000000080X, `sse_proof_verified_fields.rs`, `sse_proof_rejected_fields.rs`) һәм торба SSE төтөн һынау
+### Proof events SSE (`GET /v1/events/sse`) — Covered
+- Handler: `handle_v1_events_sse` with filter support (`crates/iroha_torii/src/routing.rs:14008-14133`).
+- DTOs: `EventsSseParams` (`crates/iroha_torii/src/routing.rs:14000-14006`) plus proof filter wiring.
+- Router binding: `Torii::add_app_api_routes` (`crates/iroha_torii/src/lib.rs:6678-6797`).
+- Tests: proof-specific SSE suites (`crates/iroha_torii/tests/sse_proof_envelope_hash.rs`,
+  `sse_proof_callhash.rs`, `sse_proof_verified_fields.rs`, `sse_proof_rejected_fields.rs`) and pipeline SSE smoke test
   (`integration_tests/tests/events/sse_smoke.rs`).
-- Хужа: I18NT000000016X платформаһы (йүгереү ваҡыты), Интеграция һынауҙары WG (фикстуралар).
-- Иҫкәрмәләр: Дәлил фильтр юлдары раҫланған ос-осҡа; документация I18NI000000084X буйынса йәшәй.
+- Owner: Torii Platform (runtime), Integration Tests WG (fixtures).
+- Notes: Proof filter paths validated end-to-end; documentation lives under `docs/source/zk_app_api.md`.
 
-### Контракт тормош циклы (I18NI000000085X) — Ҡапланған
-- Ҡулға алыусылар: I18NI000000086X X (`crates/iroha_torii/src/routing.rs:5511-5566`),
-  I18NI000000088X X (I18NI000000089X, 1990 й.
-  I18NI000000090X (I18NI000000091X), 1990 й.
-  I18NI000000092X (I18NI000000093X, 1990 й.
-  `handle_get_contract_code_bytes` (I18NI0000000955Х).
-- ДТО: I18NI000000096X, `DeployAndActivateInstanceDto`, I18NI000000098X, I18NI0000009XX
+### Contract lifecycle (`/v1/contracts/*`) — Covered
+- Handlers: `handle_post_contract_deploy` (`crates/iroha_torii/src/routing.rs:5511-5566`),
+  `handle_post_contract_call` (`crates/iroha_torii/src/routing.rs:3534-3607`),
+  `handle_get_contract_code_bytes` (`crates/iroha_torii/src/routing.rs:3237-3304`).
+- DTOs: `DeployContractDto`, `ContractCallDto`
   (`crates/iroha_torii/src/routing.rs:3124-3463`).
-- Маршрут бәйләүе: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
-- Һынауҙар: маршрутизатор/интеграция люкстары I18NI000000103X, `contracts_activate_integration.rs`,
-  `contracts_instance_activate_integration.rs`, I18NI000000106X,
+- Router binding: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
+- Tests: router/integration suites `contracts_deploy_integration.rs`, `contracts_call_integration.rs`,
   `contracts_instances_list_router.rs`.
-- Хужа: аҡыллы контракт WG менән I18NT00000000018X платформаһы.
-- Иҫкәрмәләр: Andpoints сиратҡа ҡул ҡуйылған операциялар һәм дөйөм телеметрия метрикаларын ҡабаттан ҡулланырға (`handle_transaction_with_metrics`).
+- Owner: Smart Contract WG with Torii Platform.
+- Notes: Public contract lifecycle is alias-first: deploy requires `contract_alias`, returns a fresh immutable `contract_address`, and call/view flows accept `contract_address` or `contract_alias`.
 
-### Төп тормош циклы (I18NI000000109X) — ҡапланған
-- Ҡулға алыусылар: `handle_post_vk_register`, I18NI000000111X, `handle_post_vk_deprecate`
-  (`crates/iroha_torii/src/routing.rs:4282-4382`) һәм `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
-- ДТО: I18NI000000116X, I18NI000000117X, I18NI0000000118X, I18NI000000119X, `ProofFindByIdQueryDto`
+### Verifying key lifecycle (`/v1/zk/vk/*`) — Covered
+- Handlers: `handle_post_vk_register`, `handle_post_vk_update`, `handle_post_vk_deprecate`
+  (`crates/iroha_torii/src/routing.rs:4282-4382`) and `handle_get_vk` (`crates/iroha_torii/src/routing.rs:4384-4418`).
+- DTOs: `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`, `VkListQuery`, `ProofFindByIdQueryDto`
   (`crates/iroha_torii/src/routing.rs:3619-4279`).
-- Маршруттарҙы бәйләү: I18NI000000122X (I18NI000000123X).
-— Һынауҙар: I18NI000000124X,
+- Router binding: `Torii::add_contracts_and_vk_routes` (`crates/iroha_torii/src/lib.rs:6456-6483`).
+- Tests: `crates/iroha_torii/tests/zk_vk_get_integration.rs`,
   `crates/iroha_torii/tests/zk_verify_handler_integration.rs`,
   `crates/iroha_torii/tests/zk_vote_tally_handler.rs`.
-- Хужаһы: ZK эшсе төркөмө менән I18NT00000000020X Платформа ярҙамы.
-- Иҫкәрмәләр: ДТО-лар I18NT000000002X схемалары менән тура килә, улар СДК-лар тарафынан һылтанма яһаған; ставка сикләү аша үтәлгән I18NI000000127X.
+- Owner: ZK Working Group with Torii Platform support.
+- Notes: DTOs align with Norito schemas referenced by SDKs; rate limiting enforced via `limits.rs`.
 
-### I18NT0000000005X тоташтырыу (I18NI000000128X) — ҡапланған (функцияһы `connect`)
-- Ҡулға алыусылар: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
-  `handle_connect_status` (I18NI000000134X).
-- ДТО: I18NI000000135X, I18NI000000136X X (`crates/iroha_torii/src/routing.rs:1534-1559`),
-  I18NI000000138X (I18NI000000139X X).
-- Маршрут бәйләүе: `Torii::add_connect_routes` (`crates/iroha_torii/src/lib.rs:6645-6661`).
-- Һынауҙар: `crates/iroha_torii/tests/connect_gating.rs` (функция ҡапҡаһы, сеанс йәшәү циклы, WS ҡул ҡыҫыу) һәм
-  маршрутизатор функцияһы матрица ҡаплау (`crates/iroha_torii/tests/router_feature_matrix.rs:804-876`).
-- Хужаһы: Nexus X Connect WG.
-- Иҫкәрмәләр: `limits::rate_limit_key` аша күҙәтелгән ставка сик асҡыстары; телеметрия иҫәпләүселәре `connect.*` метрикаһы каналы.
+### Nexus Connect (`/v1/connect/*`) — Covered (feature `connect`)
+- Handlers: `handle_connect_session`, `handler_connect_session_delete`, `handle_connect_ws`,
+  `handle_connect_status` (`crates/iroha_torii/src/routing.rs:1562-2136`).
+- DTOs: `ConnectSessionRequest`, `ConnectSessionResponse` (`crates/iroha_torii/src/routing.rs:1534-1559`),
+  `ConnectSessionStatusDto` (`crates/iroha_torii/src/routing.rs:2004-2035`).
+- Router binding: `Torii::add_connect_routes` (`crates/iroha_torii/src/lib.rs:6645-6661`).
+- Tests: `crates/iroha_torii/tests/connect_gating.rs` (feature gating, session lifecycle, WS handshake) and
+  router feature matrix coverage (`crates/iroha_torii/tests/router_feature_matrix.rs:804-876`).
+- Owner: Nexus Connect WG.
+- Notes: Rate limit keys tracked via `limits::rate_limit_key`; telemetry counters feed `connect.*` metrics.
 
-### Кайги реле телеметрия — ҡапланған
-- Ҡулға алынғандар: `handle_v1_kaigi_relays`, `handle_v1_kaigi_relay_detail`,
-  I18NI000000148X, `handle_v1_kaigi_relays_sse` X.
+### Kaigi relay telemetry — Covered
+- Handlers: `handle_v1_kaigi_relays`, `handle_v1_kaigi_relay_detail`,
+  `handle_v1_kaigi_relays_health`, `handle_v1_kaigi_relays_sse`
   (`crates/iroha_torii/src/routing.rs:14510-14787`).
-- ДТО-лар: `KaigiRelaySummaryDto`, I18NI000000152X, 1990 й.
-  I18NI000000153X, I18NI000000154X,
-  I18NI000000155X (I18NI000000156X).
-- Маршрут бәйләүе: I18NI000000157X
+- DTOs: `KaigiRelaySummaryDto`, `KaigiRelaySummaryListDto`,
+  `KaigiRelayDetailDto`, `KaigiRelayDomainMetricsDto`,
+  `KaigiRelayHealthSnapshotDto` (`crates/iroha_torii/src/routing.rs:932-1046`).
+- Router binding: `Torii::add_app_api_routes`
   (`crates/iroha_torii/src/lib.rs:6805-6840`).
-- Һынауҙар: `crates/iroha_torii/tests/kaigi_endpoints.rs`.
-- Иҫкәрмәләр: SSE ағымы глобаль эфир каналын ҡабаттан файҙалана, шул уҡ ваҡытта үтәү
-  телеметрия профиле ҡапҡаһы; яуап схемалары 2012 йылда документлаштырылған.
+- Tests: `crates/iroha_torii/tests/kaigi_endpoints.rs`.
+- Notes: SSE stream reuses the global broadcast channel while enforcing
+  telemetry profile gating; response schemas documented in
   `docs/source/torii/kaigi_telemetry_api.md`.
 
-## Һынау ҡаплау резюме
+## Test coverage summary
 
-- Маршрут төтөн анализдары (I18NI000000161X) тәьмин итеү функциялары комбинациялары һәр теркәү
-  маршруты һәм был I18NT0000000000X быуын синхронизацияла ҡала.
-- Andpoint-конкрет люкстар иҫәп яҙмаһы эҙләү, контракт йәшәү циклы, ZK тикшерергә асҡыс, SSE иҫбатлау фильтрҙары, һәм I18NT000000007X .
-  Тоташтырыу тәртибе.
-- SDK паритеты йүгәндәре (JavaScript, Swift, Python) инде псевдоним VOPRF һәм SSE ос нөктәләрен ҡуллана; өҫтәмә эш юҡ
-  биргеҙәм.
+- Router smoke tests (`crates/iroha_torii/tests/router_feature_matrix.rs`) ensure feature combinations register every
+  route and that OpenAPI generation stays in sync.
+- Endpoint-specific suites cover account queries, contract lifecycle, ZK verifying keys, SSE proof filters, and Nexus
+  Connect behaviours.
+- SDK parity harnesses (JavaScript, Swift, Python) already consume Alias VOPRF and SSE endpoints; no additional work
+  required.
 
-## Был көҙгө заманса тотоу
+## Keeping this mirror up to date
 
-Яңыртыу һәм был битте һәм сығанаҡ аудит (I18NI000000162X)
-Ҡасан да булһа I18NT000000023X ҡушымта API тәртибе үҙгәрә, шулай SDK хужалары һәм тышҡы уҡыусылар тура килә ҡала.
+Update both this page and the source audit (`docs/source/torii/app_api_parity_audit.md`)
+whenever Torii app API behaviour changes so SDK owners and external readers stay aligned.

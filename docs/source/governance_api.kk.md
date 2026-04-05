@@ -3,12 +3,11 @@ lang: kk
 direction: ltr
 source: docs/source/governance_api.md
 status: needs-update
-generator: scripts/sync_docs_i18n.py
+title: Governance App API — Endpoints (Draft)
+translator: machine-google-reviewed
 source_hash: 3983e71384a729b529151c230d8e3bcb570f7f12e8115c084fa74124355eb1c2
 source_last_modified: "2026-04-04T15:26:22.741039+00:00"
 translation_last_reviewed: 2026-04-05
-title: Governance App API — Endpoints (Draft)
-translator: machine-google-reviewed
 ---
 
 > Translation sync note (2026-04-05): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.

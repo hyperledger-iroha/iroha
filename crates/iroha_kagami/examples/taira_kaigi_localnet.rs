@@ -263,18 +263,18 @@ fn append_bootstrap_authority_overlay(
         .build_raw()
 }
 
-fn derive_localnet_genesis_key_pair(base_seed: Option<&str>) -> Result<KeyPair> {
-    match base_seed {
-        Some(seed) => Ok(KeyPair::from_seed(
-            seed.bytes()
-                .chain(LOCALNET_GENESIS_SEED_SUFFIX.iter().copied())
-                .collect::<Vec<_>>(),
-            Algorithm::default(),
-        )),
-        None => Ok(KeyPair::from(
-            REAL_GENESIS_ACCOUNT_KEYPAIR.private_key().clone(),
-        )),
-    }
+fn derive_localnet_genesis_key_pair(base_seed: Option<&str>) -> KeyPair {
+    base_seed.map_or_else(
+        || KeyPair::from(REAL_GENESIS_ACCOUNT_KEYPAIR.private_key().clone()),
+        |seed| {
+            KeyPair::from_seed(
+                seed.bytes()
+                    .chain(LOCALNET_GENESIS_SEED_SUFFIX.iter().copied())
+                    .collect::<Vec<_>>(),
+                Algorithm::default(),
+            )
+        },
+    )
 }
 
 fn load_genesis_key_pair(args: &Args) -> Result<KeyPair> {
@@ -284,7 +284,7 @@ fn load_genesis_key_pair(args: &Args) -> Result<KeyPair> {
                 .wrap_err("failed to parse explicit genesis private key")?;
             Ok(KeyPair::from(private_key))
         }
-        (None, seed) => derive_localnet_genesis_key_pair(seed.as_deref()),
+        (None, seed) => Ok(derive_localnet_genesis_key_pair(seed.as_deref())),
         (Some(_), Some(_)) => unreachable!("clap enforces conflicts"),
     }
 }

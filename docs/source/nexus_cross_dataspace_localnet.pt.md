@@ -76,7 +76,7 @@ Teste de prova direcionado:
 
 ```bash
 IROHA_TEST_SKIP_BUILD=1 NORITO_SKIP_BINDINGS_SYNC=1 \
-  cargo test -p integration_tests --test mod \
+  cargo test -p integration_tests --test nexus_and_streaming \
   nexus::cross_dataspace_localnet::cross_dataspace_atomic_swap_is_all_or_nothing \
   -- --nocapture --test-threads=1
 ```
@@ -85,7 +85,7 @@ Subconjunto Nexus completo:
 
 ```bash
 IROHA_TEST_SKIP_BUILD=1 NORITO_SKIP_BINDINGS_SYNC=1 \
-  cargo test -p integration_tests --test mod nexus:: -- --nocapture --test-threads=1
+  cargo test -p integration_tests --test nexus_and_streaming nexus:: -- --nocapture --test-threads=1
 ```
 
 ## Sinais de prova esperados- O teste passa.
