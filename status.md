@@ -2,6 +2,102 @@
 
 Last updated: 2026-04-05
 
+## 2026-04-05 Follow-up: SCCP transparent artifacts now carry real FASTPQ proofs
+- Replaced the SCCP message-artifact placeholder transcript path in
+  `crates/iroha_sccp/src/lib.rs` with a real
+  Norito-encoded `fastpq_prover::Proof` over a canonical SCCP statement batch:
+  - `build_nexus_sccp_message_transparent_proof(...)` now derives a
+    deterministic FASTPQ `TransitionBatch` from the embedded bundle plus the
+    shared SCCP manifest/public-input contract and serializes the resulting
+    STARK-FRI proof into `proof_bytes`;
+  - verification now reconstructs the same batch and replays
+    `fastpq_prover::verify(...)` instead of accepting the old synthetic digest
+    or placeholder inner envelope; and
+  - legacy 32-byte placeholder digests are now rejected, so silent fake-proof
+    acceptance is gone.
+- Updated the SCCP-facing readers to derive statement metadata from the bundle
+  instead of decoding the removed placeholder envelope:
+  - `crates/iroha_cli/src/bridge.rs` still prints chain family, payload kind,
+    and statement hash for `sccp artifact`, but now derives them from the
+    canonical SCCP statement context while reporting the FASTPQ parameter set;
+    and
+  - `crates/iroha_torii/src/routing.rs` now exposes the same
+    `inner_chain_family`, `inner_payload_kind`, and `inner_statement_hash`
+    bridge summary fields from reconstructed SCCP context rather than from
+    embedded placeholder bytes.
+- Updated `docs/source/bridge_proofs.md` so the API contract now states that
+  SCCP artifact `proof_bytes` are real FASTPQ proofs and that placeholder
+  digests are no longer valid.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_sccp message_transparent_proof -- --nocapture`
+  - `cargo test -p iroha_cli --features bridge --bin iroha bridge::tests::sccp_ -- --nocapture`
+  - `cargo test -p iroha_torii sccp_ --lib -- --nocapture`
+- Current verification boundary:
+  - the SCCP proof builder/verifier, bridge CLI summaries, and Torii SCCP
+    artifact/summary handlers are green for the new real-proof path; and
+  - broader workspace execution beyond those SCCP-focused slices still has not
+    been rerun after this proof swap.
+
+## 2026-04-05 Follow-up: SCCP manifests and proof jobs now advertise chain-specific submission templates
+- Extended the shared SCCP proof-manifest / proof-job contract in
+  `crates/iroha_sccp/src/lib.rs` with a typed
+  `SccpCounterpartySubmissionTemplateV1`:
+  - manifests and normalized proof jobs now expose the target verifier
+    entrypoint, envelope encoding, submission kind, and required argument keys;
+  - the template is specialized per chain family (`abi_tuple_v1` for EVM/BSC,
+    `borsh_instruction_v1` for Solana, `ton_cell_v1` for TON,
+    `tron_abi_tuple_v1` for TRON, and `scale_call_v1` for Substrate-style
+    runtimes); and
+  - the bridge CLI now prints that submission contract in `sccp manifests`,
+    `sccp artifact`, and `sccp job` text summaries instead of forcing relayers
+    to infer it from backend labels alone.
+- Flowed the same typed field through the checked-in SDKs:
+  - Python now exports and parses `SccpSubmissionArgument` and
+    `SccpCounterpartySubmissionTemplate`;
+  - JavaScript / TypeScript now normalize and type the same manifest/job field;
+    and
+  - the Python SCCP mock fixtures and targeted SDK tests were updated to carry
+    the new payload shape.
+- Updated the SCCP bridge-proof docs so the relayer-facing API surface makes
+  the submission contract explicit.
+- Focused validation completed:
+  - `rustfmt --edition 2024 crates/iroha_sccp/src/lib.rs`
+  - `rustfmt --edition 2024 crates/iroha_cli/src/bridge.rs`
+  - `python3 -m py_compile python/iroha_torii_client/__init__.py python/iroha_torii_client/client.py python/iroha_torii_client/mock.py python/iroha_torii_client/tests/test_client.py`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-sccp-submission-target cargo test --offline -p iroha_sccp --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-cli-submission-target cargo test --offline -p iroha_cli --features bridge --bin iroha bridge::tests::sccp_ -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-cli-submission-target cargo test --offline -p iroha get_sccp_ --lib -- --nocapture`
+  - `source /tmp/iroha-pytest-venv/bin/activate && python -m pytest python/iroha_torii_client/tests/test_client.py -k "sccp_proof_manifests or sccp_message_proof_job"`
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test javascript/iroha_js/test/toriiClient.test.js --test-name-pattern "getSccpProofManifests|getSccpMessageProofArtifact|getSccpMessageProofJob"`
+  - `npm run build:dist` (from `javascript/iroha_js`)
+- Current verification boundary:
+  - the shared SCCP type layer, bridge CLI summaries, Python client, and
+    JavaScript client are green for the new submission-template field; and
+  - actual prover outputs are still placeholder-backed, so the remaining hard
+    gap stays the real TON / Solana / Ethereum-BSC / TRON / Substrate prover
+    implementations rather than discovery or SDK plumbing.
+
+## 2026-04-05 Follow-up: unstable-network bootstrap now waits for a Torii-ready ingress peer
+- Hardened `integration_tests/tests/extra_functional/unstable_network.rs`
+  against the startup/readiness race behind the earlier
+  `asset definition ... stayed absent after tx confirmation timeout` report.
+- The bootstrap path now:
+  - waits for any peer whose Torii `/status` is actually reachable before
+    submitting the bootstrap asset-definition registration; and
+  - if submit confirmation still times out, confirms the asset definition by
+    querying across peers instead of only retrying through `network.client()`
+    / peer `0`.
+- Added focused coverage for the new readiness-timeout helper.
+- Focused validation completed:
+  - `rustfmt --edition 2024 integration_tests/tests/extra_functional/unstable_network.rs`
+  - `cargo test -p integration_tests --test mod extra_functional::unstable_network::tests::bootstrap_torii_ready_timeout_has_floor_and_cap -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target cargo test -p integration_tests --test mod extra_functional::unstable_network::unstable_network_12_peers_4_faults -- --nocapture`
+- Current verification boundary:
+  - the targeted unstable-network bootstrap race is green on the patched tree;
+    and
+  - a fresh broad `cargo test --workspace` replay still has not been rerun.
+
 ## 2026-04-05 Follow-up: SCCP message-job route is wired through Rust, Python, and JavaScript clients
 - Added first-class client fetch helpers for
   `GET /v1/sccp/jobs/message/{message_id}` across the checked-in SDK layers:

@@ -8528,6 +8528,28 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
               "finality_block_hash",
             ],
             message_payload_kinds: ["asset_register", "route_activate", "transfer"],
+            submission_template: {
+              version: 1,
+              encoding: "abi_tuple_v1",
+              submission_kind: "contract_call",
+              verifier_entrypoint:
+                "submitSccpMessageProof(bytes proof_bytes, bytes public_inputs, bytes bundle_bytes)",
+              required_arguments: [
+                {
+                  key: "proof_bytes",
+                  description: "Transparent SCCP proof bytes emitted by the prover backend.",
+                },
+                {
+                  key: "public_inputs",
+                  description: "ABI-encoded SCCP public inputs in manifest order.",
+                },
+                {
+                  key: "bundle_bytes",
+                  description:
+                    "ABI-encoded Nexus SCCP message bundle passed to the verifier contract.",
+                },
+              ],
+            },
           },
         ],
       },
@@ -8564,6 +8586,28 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
           "finality_block_hash",
         ],
         messagePayloadKinds: ["asset_register", "route_activate", "transfer"],
+        submissionTemplate: {
+          version: 1,
+          encoding: "abi_tuple_v1",
+          submissionKind: "contract_call",
+          verifierEntrypoint:
+            "submitSccpMessageProof(bytes proof_bytes, bytes public_inputs, bytes bundle_bytes)",
+          requiredArguments: [
+            {
+              key: "proof_bytes",
+              description: "Transparent SCCP proof bytes emitted by the prover backend.",
+            },
+            {
+              key: "public_inputs",
+              description: "ABI-encoded SCCP public inputs in manifest order.",
+            },
+            {
+              key: "bundle_bytes",
+              description:
+                "ABI-encoded Nexus SCCP message bundle passed to the verifier contract.",
+            },
+          ],
+        },
       },
     ],
   });
@@ -8594,6 +8638,18 @@ test("getSccpProofManifests rejects unsupported verifier target", async () => {
             manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
             required_public_inputs: ["message_id"],
             message_payload_kinds: ["transfer"],
+            submission_template: {
+              version: 1,
+              encoding: "ton_cell_v1",
+              submission_kind: "internal_message",
+              verifier_entrypoint: "op::submit_sccp_message_proof",
+              required_arguments: [
+                {
+                  key: "proof_cell",
+                  description: "Transparent SCCP proof cell emitted by the TON prover backend.",
+                },
+              ],
+            },
           },
         ],
       },
@@ -8785,6 +8841,27 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
         manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
         finality_model: "TonMasterchain",
         verifier_target: "TonContract",
+        submission_template: {
+          version: 1,
+          encoding: "ton_cell_v1",
+          submission_kind: "internal_message",
+          verifier_entrypoint: "op::submit_sccp_message_proof",
+          required_arguments: [
+            {
+              key: "proof_cell",
+              description: "Transparent SCCP proof cell emitted by the TON prover backend.",
+            },
+            {
+              key: "public_inputs_cell",
+              description: "Cell-encoded SCCP public inputs in manifest order.",
+            },
+            {
+              key: "bundle_cell",
+              description:
+                "Cell-encoded Nexus SCCP message bundle for the TON bridge contract.",
+            },
+          ],
+        },
         public_inputs: {
           version: 1,
           message_id: messageId,
@@ -8847,6 +8924,26 @@ test("getSccpMessageProofJob normalizes typed job response", async () => {
     manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
     finalityModel: "TonMasterchain",
     verifierTarget: "TonContract",
+    submissionTemplate: {
+      version: 1,
+      encoding: "ton_cell_v1",
+      submissionKind: "internal_message",
+      verifierEntrypoint: "op::submit_sccp_message_proof",
+      requiredArguments: [
+        {
+          key: "proof_cell",
+          description: "Transparent SCCP proof cell emitted by the TON prover backend.",
+        },
+        {
+          key: "public_inputs_cell",
+          description: "Cell-encoded SCCP public inputs in manifest order.",
+        },
+        {
+          key: "bundle_cell",
+          description: "Cell-encoded Nexus SCCP message bundle for the TON bridge contract.",
+        },
+      ],
+    },
     publicInputs: {
       version: 1,
       messageId,

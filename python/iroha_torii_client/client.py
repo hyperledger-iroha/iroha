@@ -256,6 +256,8 @@ __all__ = [
     "SccpMessageProofBundle",
     "SccpMessageTransparentPublicInputs",
     "SccpMessageTransparentProofArtifact",
+    "SccpSubmissionArgument",
+    "SccpCounterpartySubmissionTemplate",
     "SccpNormalizedCodecValue",
     "SccpPayloadProjection",
     "SccpCounterpartyProofJob",
@@ -1005,6 +1007,7 @@ class SccpProofManifest:
     manifest_seed: str
     required_public_inputs: List[str]
     message_payload_kinds: List[str]
+    submission_template: "SccpCounterpartySubmissionTemplate"
 
 
 @dataclass(frozen=True)
@@ -1096,6 +1099,25 @@ class SccpMessageTransparentProofArtifact:
 
 
 @dataclass(frozen=True)
+class SccpSubmissionArgument:
+    """Submission argument required by a chain-specific SCCP verifier entrypoint."""
+
+    key: str
+    description: str
+
+
+@dataclass(frozen=True)
+class SccpCounterpartySubmissionTemplate:
+    """Chain-specific submission envelope for a counterparty SCCP verifier."""
+
+    version: int
+    encoding: str
+    submission_kind: str
+    verifier_entrypoint: str
+    required_arguments: List[SccpSubmissionArgument]
+
+
+@dataclass(frozen=True)
 class SccpNormalizedCodecValue:
     """Normalized chain-specific codec value collapsed from the SCCP job enum surface."""
 
@@ -1129,6 +1151,7 @@ class SccpCounterpartyProofJob:
     public_inputs: SccpMessageTransparentPublicInputs
     payload_kind: str
     payload_projection: SccpPayloadProjection
+    submission_template: SccpCounterpartySubmissionTemplate
     bundle: SccpMessageProofBundle
 
 
@@ -7437,6 +7460,13 @@ class ToriiClient:
                 record.get("message_payload_kinds"),
                 context=f"{context}.message_payload_kinds",
             ),
+            submission_template=ToriiClient._parse_sccp_counterparty_submission_template(
+                ToriiClient._ensure_mapping(
+                    record.get("submission_template"),
+                    f"{context}.submission_template",
+                ),
+                context=f"{context}.submission_template",
+            ),
         )
 
     @staticmethod
@@ -7496,6 +7526,53 @@ class ToriiClient:
                 f"{context}.bundle.commitment_root must match {context}.public_inputs.commitment_root"
             )
         return artifact
+
+    @staticmethod
+    def _parse_sccp_submission_argument(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpSubmissionArgument:
+        record = ToriiClient._ensure_mapping(payload, context)
+        return SccpSubmissionArgument(
+            key=ToriiClient._require_string(record.get("key"), f"{context}.key"),
+            description=ToriiClient._require_string(
+                record.get("description"),
+                f"{context}.description",
+            ),
+        )
+
+    @staticmethod
+    def _parse_sccp_counterparty_submission_template(
+        payload: Mapping[str, Any],
+        *,
+        context: str,
+    ) -> SccpCounterpartySubmissionTemplate:
+        record = ToriiClient._ensure_mapping(payload, context)
+        return SccpCounterpartySubmissionTemplate(
+            version=ToriiClient._coerce_unsigned(record.get("version"), f"{context}.version"),
+            encoding=ToriiClient._require_string(record.get("encoding"), f"{context}.encoding"),
+            submission_kind=ToriiClient._require_string(
+                record.get("submission_kind"),
+                f"{context}.submission_kind",
+            ),
+            verifier_entrypoint=ToriiClient._require_string(
+                record.get("verifier_entrypoint"),
+                f"{context}.verifier_entrypoint",
+            ),
+            required_arguments=[
+                ToriiClient._parse_sccp_submission_argument(
+                    entry,
+                    context=f"{context}.required_arguments[{index}]",
+                )
+                for index, entry in enumerate(
+                    ToriiClient._parse_mapping_list(
+                        record.get("required_arguments"),
+                        context=f"{context}.required_arguments",
+                    )
+                )
+            ],
+        )
 
     @staticmethod
     def _coerce_sccp_codec_scalar(value: Any, *, context: str) -> str:
@@ -7761,6 +7838,13 @@ class ToriiClient:
                     f"{context}.payload_projection",
                 ),
                 context=f"{context}.payload_projection",
+            ),
+            submission_template=ToriiClient._parse_sccp_counterparty_submission_template(
+                ToriiClient._ensure_mapping(
+                    record.get("submission_template"),
+                    f"{context}.submission_template",
+                ),
+                context=f"{context}.submission_template",
             ),
             bundle=ToriiClient._parse_sccp_message_proof_bundle(
                 ToriiClient._ensure_mapping(record.get("bundle"), f"{context}.bundle"),

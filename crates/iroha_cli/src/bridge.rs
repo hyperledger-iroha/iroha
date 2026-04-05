@@ -237,22 +237,17 @@ fn render_sccp_artifact_summary(
             ),
             None => String::new(),
         };
-    let inner_summary =
-        match iroha_sccp::decode_canonical_sccp_message_transparent_inner_proof_bytes(
-            &artifact.proof_bytes,
-        ) {
-            Some(inner) => format!(
-                " inner_family={:?} inner_payload={} statement_hash={}",
-                inner.chain_family,
-                inner.payload_kind,
-                hex::encode(inner.statement_hash)
-            ),
-            None if artifact.proof_bytes.len() == 32 => " inner_family=LegacyDigest".to_owned(),
-            None => format!(
-                " inner_family=Unknown proof_bytes_len={}",
-                artifact.proof_bytes.len()
-            ),
-        };
+    let inner_summary = match iroha_sccp::build_sccp_message_transparent_inner_proof_from_artifact(
+        artifact,
+    ) {
+        Some(inner) => format!(
+            " inner_family={:?} inner_payload={} statement_hash={} proof_parameter=fastpq-lane-balanced",
+            inner.chain_family,
+            inner.payload_kind,
+            hex::encode(inner.statement_hash)
+        ),
+        None => format!(" proof_bytes_len={}", artifact.proof_bytes.len()),
+    };
     format!(
         "sccp artifact: message_id={} payload={} chain={}({}) backend={} proof_family={} finality_height={} commitment_root={}{}{}",
         hex::encode(artifact.public_inputs.message_id),
@@ -294,7 +289,7 @@ fn render_sccp_submission_template_summary(
         .collect::<Vec<_>>()
         .join(",");
     format!(
-        "{}/{}/{}({})",
+        "{}/{}/{} args=[{}]",
         template.submission_kind, template.encoding, template.verifier_entrypoint, arguments
     )
 }
@@ -864,6 +859,9 @@ mod tests {
         assert!(rendered.contains(
             "recipient=ton:0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
         ));
+        assert!(rendered.contains(
+            "submit=internal_message/ton_cell_v1/op::submit_sccp_message_proof args=[proof_cell,public_inputs_cell,bundle_cell]"
+        ));
         assert!(rendered.contains("inner_family=Ton"));
         assert!(rendered.contains("inner_payload=transfer"));
     }
@@ -895,6 +893,9 @@ mod tests {
         assert!(rendered.contains("projection=transfer"));
         assert!(rendered.contains(
             "recipient=ton:0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+        ));
+        assert!(rendered.contains(
+            "submit=internal_message/ton_cell_v1/op::submit_sccp_message_proof args=[proof_cell,public_inputs_cell,bundle_cell]"
         ));
     }
 }

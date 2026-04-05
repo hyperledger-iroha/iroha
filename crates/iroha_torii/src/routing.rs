@@ -3066,9 +3066,7 @@ fn bridge_record_to_json(
                     norito::json::Value::from(proof.proof_bytes.len()),
                 );
                 if let Some(inner) =
-                    iroha_sccp::decode_canonical_sccp_message_transparent_inner_proof_bytes(
-                        &proof.proof_bytes,
-                    )
+                    iroha_sccp::build_sccp_message_transparent_inner_proof_from_artifact(&proof)
                 {
                     payload.insert(
                         "inner_chain_family".into(),
@@ -5189,10 +5187,8 @@ mod sccp_message_backend_tests {
         };
         let artifact =
             build_nexus_sccp_message_transparent_proof(&bundle).expect("build SCCP artifact");
-        let inner = iroha_sccp::decode_canonical_sccp_message_transparent_inner_proof_bytes(
-            &artifact.proof_bytes,
-        )
-        .expect("decode inner proof");
+        let inner = iroha_sccp::build_sccp_message_transparent_inner_proof_from_artifact(&artifact)
+            .expect("derive inner proof context");
         let proof_bytes = norito::to_bytes(&artifact).expect("encode artifact");
         let record = iroha_data_model::bridge::BridgeProofRecord {
             proof: iroha_data_model::bridge::BridgeProof {

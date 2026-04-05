@@ -2,6 +2,101 @@
 
 Last updated: 2026-04-05
 
+Latest sync (2026-04-05 SCCP transparent artifacts now use real FASTPQ proofs):
+the SCCP message-artifact path no longer emits or accepts placeholder
+transcripts. `crates/iroha_sccp/src/lib.rs` now derives a deterministic FASTPQ
+`TransitionBatch` from the canonical SCCP statement context and serializes a
+real `fastpq_prover::Proof` into artifact `proof_bytes`, while verification
+reconstructs that batch and replays `fastpq_prover::verify(...)`. The bridge
+CLI and Torii summaries were updated to derive `inner_*` metadata from the
+bundle/manifest context instead of decoding the removed placeholder envelope,
+and the bridge-proof docs now describe `proof_bytes` as real FASTPQ proofs.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_sccp/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/bridge.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/bridge_proofs.md`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_sccp message_transparent_proof -- --nocapture`
+  - `cargo test -p iroha_cli --features bridge --bin iroha bridge::tests::sccp_ -- --nocapture`
+  - `cargo test -p iroha_torii sccp_ --lib -- --nocapture`
+- open work for this slice now remains:
+  - decide whether the generic FASTPQ SCCP proof should stay the production
+    transparent backend or be specialized further per counterparty family while
+    keeping the same manifest/public-input contract;
+  - specify and implement the counterparty-side verifier packaging/runtime for
+    those real FASTPQ proofs so the advertised submission templates map to
+    executable contracts/programs; and
+  - rerun the broader workspace test matrix after the real-proof swap so the
+    SCCP slice is closed beyond the targeted builder/reader coverage.
+
+Latest sync (2026-04-05 SCCP submission templates landed):
+the SCCP proof discovery surface now tells relayers not just what to prove but
+also how each counterparty expects that proof to be submitted. The shared
+manifest/job types now carry a typed chain-specific submission template with
+the verifier entrypoint, envelope encoding, submission kind, and required
+argument keys for EVM/BSC, Solana, TON, TRON, and Substrate-style runtimes.
+The bridge CLI text summaries now print that contract directly, and the Python
+and JavaScript SDKs now parse and type the same field instead of leaving
+submission packaging implicit.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_sccp/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/bridge.rs`
+  - `/Users/takemiyamakoto/dev/iroha/python/iroha_torii_client/__init__.py`
+  - `/Users/takemiyamakoto/dev/iroha/python/iroha_torii_client/client.py`
+  - `/Users/takemiyamakoto/dev/iroha/python/iroha_torii_client/tests/test_client.py`
+  - `/Users/takemiyamakoto/dev/iroha/javascript/iroha_js/src/toriiClient.js`
+  - `/Users/takemiyamakoto/dev/iroha/javascript/iroha_js/index.d.ts`
+  - `/Users/takemiyamakoto/dev/iroha/javascript/iroha_js/test/toriiClient.test.js`
+  - `/Users/takemiyamakoto/dev/iroha/docs/source/bridge_proofs.md`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-sccp-submission-target cargo test --offline -p iroha_sccp --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-cli-submission-target cargo test --offline -p iroha_cli --features bridge --bin iroha bridge::tests::sccp_ -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-cli-submission-target cargo test --offline -p iroha get_sccp_ --lib -- --nocapture`
+  - `python3 -m py_compile python/iroha_torii_client/__init__.py python/iroha_torii_client/client.py python/iroha_torii_client/mock.py python/iroha_torii_client/tests/test_client.py`
+  - `source /tmp/iroha-pytest-venv/bin/activate && python -m pytest python/iroha_torii_client/tests/test_client.py -k "sccp_proof_manifests or sccp_message_proof_job"`
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test javascript/iroha_js/test/toriiClient.test.js --test-name-pattern "getSccpProofManifests|getSccpMessageProofArtifact|getSccpMessageProofJob"`
+  - `npm run build:dist` (from `/Users/takemiyamakoto/dev/iroha/javascript/iroha_js`)
+- open work for this slice now remains:
+  - add the same submission-template contract to any future non-SCCP bridge
+    proof families so relayer packaging stays uniform across routes; and
+  - keep the Torii / SDK surfaces green as the real-proof backend evolves and
+    the counterparty verifier packaging firms up.
+
+Latest sync (2026-04-05 unstable-network bootstrap ingress-readiness hardening):
+the targeted unstable-network bootstrap path no longer assumes peer `0` is
+ready for Torii traffic as soon as the relay-started network has block `1`.
+`register_numeric_asset(...)` now waits for any peer whose `/status` is
+actually reachable before submitting the bootstrap asset-definition
+registration, and a submit-time confirmation timeout now checks visibility
+across peers instead of only querying back through `network.client()`. This is
+aimed at the observed env-side startup race where block `1` is already visible
+via storage snapshots while some peers still take tens of seconds to expose
+Torii `/status`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/extra_functional/unstable_network.rs`
+- verified in this slice:
+  - `rustfmt --edition 2024 integration_tests/tests/extra_functional/unstable_network.rs`
+  - `cargo test -p integration_tests --test mod extra_functional::unstable_network::tests::bootstrap_torii_ready_timeout_has_floor_and_cap -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target cargo test -p integration_tests --test mod extra_functional::unstable_network::unstable_network_12_peers_4_faults -- --nocapture`
+- open work for this slice now remains:
+  - rerun the broader `cargo test --workspace` matrix before treating this
+    failure family as fully closed outside the focused unstable-network slice;
+  - decide whether the same “block `1` is visible before Torii is ready”
+    pattern should be lifted into a reusable `iroha_test_network` ingress-ready
+    helper for other network-heavy tests; and
+  - reduce whole-suite discovery/build overhead for targeted integration
+    filters, because even a bad filter still walks a large number of test
+    binaries in this workspace.
+
 Latest sync (2026-04-05 SCCP message-job clients landed):
 the normalized SCCP proof-job route is no longer server-only. The Rust client
 now fetches typed or JSON jobs directly, the bridge CLI now has
@@ -66,15 +161,13 @@ fallback.
 
 Latest sync (2026-04-05 SCCP inner proof transcripts and normalized proof jobs landed):
 the generic SCCP message artifact format is now stricter internally. New
-`proof_bytes` values are no longer just an opaque placeholder hash. They now
-carry a canonical manifest-bound inner proof envelope with the chain family,
-chain key, counterparty codec, payload kind, SCCP public inputs, statement
-hash, and placeholder proof hash, while verification still accepts the legacy
-32-byte digest format for backward compatibility with already-recorded bridge
-proofs. The same slice also pushed those decoded fields up into operator
-surfaces: the bridge CLI artifact summary now prints the inner proof family and
-statement hash, and Torii bridge-proof summaries expose the inner chain family,
-payload kind, and statement hash directly.
+`proof_bytes` are no longer opaque data. They now resolve to the canonical SCCP
+statement context and, in the current tree, that context is fed into the real
+FASTPQ proof path recorded in the newer follow-up above. The same slice also
+pushed those decoded fields up into operator surfaces: the bridge CLI artifact
+summary now prints the inner proof family and statement hash, and Torii
+bridge-proof summaries expose the inner chain family, payload kind, and
+statement hash directly.
 
 That core slice is now extended one step closer to real prover workers:
 `iroha_sccp` now canonicalizes codec-bearing payload fields into typed EVM /
@@ -100,10 +193,8 @@ discover that route without hard-coding it.
   - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-torii-sccp-target cargo test --offline -p iroha_torii bridge_record_to_json_includes_sccp_ --lib -- --nocapture`
   - `CARGO_HOME=/tmp/iroha-cargo-home CARGO_TARGET_DIR=/tmp/iroha-cli-bridge-target cargo test --offline -p iroha_cli --features bridge --bin iroha bridge::tests::sccp_artifact_text_command_prints_summary -- --nocapture`
 - open work for this slice now remains:
-  - replace the placeholder inner-proof transcript with actual chain-specific
-    prover output for TON, Solana, Ethereum/BSC, Tron, and Substrate lanes;
   - keep the Torii / bridge-proof registry paths green against the stricter
-    inner envelope plus normalized payload projection contract.
+    real-proof path plus normalized payload projection contract.
 
 Latest sync (2026-04-04 Taira public-node hardening landed in repo tooling/docs):
 the repo-side Taira rollout contract no longer treats

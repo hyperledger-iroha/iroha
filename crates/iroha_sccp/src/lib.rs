@@ -12,6 +12,15 @@ use blake2::{
 };
 use sha2::{Digest, Sha256};
 use tiny_keccak::Hasher;
+#[cfg(feature = "std")]
+use {
+    fastpq_prover::{
+        OperationKind as FastpqOperationKind, Prover as FastpqProver,
+        PublicInputs as FastpqPublicInputs, StateTransition as FastpqStateTransition,
+        TransitionBatch as FastpqTransitionBatch,
+    },
+    norito::to_bytes,
+};
 
 pub const SCCP_DOMAIN_SORA: u32 = 0;
 pub const SCCP_DOMAIN_ETH: u32 = 1;
@@ -55,6 +64,11 @@ const SCCP_HUB_NODE_PREFIX_V1: &[u8] = b"sccp:hub:node:v1";
 const SCCP_PAYLOAD_HASH_PREFIX_V1: &[u8] = b"sccp:payload:v1";
 const SCCP_PARLIAMENT_HASH_PREFIX_V1: &[u8] = b"sccp:parliament:v1";
 const SCCP_TRANSPARENT_STATEMENT_PREFIX_V1: &[u8] = b"sccp:transparent:statement:v1";
+const SCCP_TRANSPARENT_FASTPQ_DSID_PREFIX_V1: &[u8] = b"sccp:transparent:fastpq:dsid:v1";
+const SCCP_TRANSPARENT_FASTPQ_PARAMETER_SET_V1: &str = "fastpq-lane-balanced";
+const SCCP_TRANSPARENT_FASTPQ_STATEMENT_KEY_V1: &[u8] = b"sccp:transparent:v1:statement";
+const SCCP_TRANSPARENT_FASTPQ_CONTEXT_KEY_V1: &[u8] = b"sccp:transparent:v1:context";
+const SCCP_TRANSPARENT_FASTPQ_PAYLOAD_KEY_V1: &[u8] = b"sccp:transparent:v1:payload";
 
 pub type H256 = [u8; 32];
 
@@ -835,8 +849,6 @@ pub struct SccpMessageTransparentInnerProofV1 {
     pub payload_hash: H256,
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub statement_hash: H256,
-    #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
-    pub placeholder_proof_hash: H256,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1359,18 +1371,6 @@ fn sccp_proof_finality_model_code(model: SccpProofFinalityModelV1) -> u8 {
     }
 }
 
-fn sccp_proof_finality_model_from_code(code: u8) -> Option<SccpProofFinalityModelV1> {
-    match code {
-        1 => Some(SccpProofFinalityModelV1::EthereumBeaconExecution),
-        2 => Some(SccpProofFinalityModelV1::BscValidatorSet),
-        3 => Some(SccpProofFinalityModelV1::SolanaFinalizedSlot),
-        4 => Some(SccpProofFinalityModelV1::TonMasterchain),
-        5 => Some(SccpProofFinalityModelV1::TronDpos),
-        6 => Some(SccpProofFinalityModelV1::SubstrateGrandpa),
-        _ => None,
-    }
-}
-
 fn sccp_proof_verifier_target_code(target: SccpProofVerifierTargetV1) -> u8 {
     match target {
         SccpProofVerifierTargetV1::EvmContract => 1,
@@ -1378,17 +1378,6 @@ fn sccp_proof_verifier_target_code(target: SccpProofVerifierTargetV1) -> u8 {
         SccpProofVerifierTargetV1::TonContract => 3,
         SccpProofVerifierTargetV1::TronContract => 4,
         SccpProofVerifierTargetV1::SubstrateRuntime => 5,
-    }
-}
-
-fn sccp_proof_verifier_target_from_code(code: u8) -> Option<SccpProofVerifierTargetV1> {
-    match code {
-        1 => Some(SccpProofVerifierTargetV1::EvmContract),
-        2 => Some(SccpProofVerifierTargetV1::SolanaProgram),
-        3 => Some(SccpProofVerifierTargetV1::TonContract),
-        4 => Some(SccpProofVerifierTargetV1::TronContract),
-        5 => Some(SccpProofVerifierTargetV1::SubstrateRuntime),
-        _ => None,
     }
 }
 
@@ -1412,17 +1401,6 @@ fn sccp_transparent_chain_family_code(family: SccpTransparentChainFamilyV1) -> u
         SccpTransparentChainFamilyV1::Ton => 3,
         SccpTransparentChainFamilyV1::Tron => 4,
         SccpTransparentChainFamilyV1::Substrate => 5,
-    }
-}
-
-fn sccp_transparent_chain_family_from_code(code: u8) -> Option<SccpTransparentChainFamilyV1> {
-    match code {
-        1 => Some(SccpTransparentChainFamilyV1::Evm),
-        2 => Some(SccpTransparentChainFamilyV1::Solana),
-        3 => Some(SccpTransparentChainFamilyV1::Ton),
-        4 => Some(SccpTransparentChainFamilyV1::Tron),
-        5 => Some(SccpTransparentChainFamilyV1::Substrate),
-        _ => None,
     }
 }
 
@@ -1619,7 +1597,6 @@ pub fn build_sccp_message_transparent_inner_proof(
     let statement =
         canonical_sccp_message_transparent_statement_bytes(bundle, manifest, &public_inputs)?;
     let statement_hash = prefixed_blake2b(SCCP_TRANSPARENT_STATEMENT_PREFIX_V1, &statement);
-    let placeholder_proof_hash = prefixed_blake2b(b"sccp:transparent:placeholder:v1", &statement);
     Some(SccpMessageTransparentInnerProofV1 {
         version: 1,
         chain_family,
@@ -1638,61 +1615,111 @@ pub fn build_sccp_message_transparent_inner_proof(
         payload_kind: payload_kind.to_owned(),
         payload_hash,
         statement_hash,
-        placeholder_proof_hash,
     })
 }
 
-pub fn canonical_sccp_message_transparent_inner_proof_bytes(
-    proof: &SccpMessageTransparentInnerProofV1,
-) -> Vec<u8> {
-    let mut out = Vec::new();
-    push_u8(&mut out, proof.version);
-    push_u8(
-        &mut out,
-        sccp_transparent_chain_family_code(proof.chain_family),
-    );
-    push_vec(&mut out, proof.chain.as_bytes());
-    push_u32(&mut out, proof.local_domain);
-    push_u32(&mut out, proof.counterparty_domain);
-    push_u8(&mut out, proof.counterparty_account_codec);
-    push_vec(&mut out, proof.counterparty_account_codec_key.as_bytes());
-    push_vec(&mut out, proof.proof_family.as_bytes());
-    push_vec(&mut out, proof.message_backend.as_bytes());
-    push_vec(&mut out, proof.registry_backend.as_bytes());
-    push_vec(&mut out, proof.manifest_seed.as_bytes());
-    push_u8(
-        &mut out,
-        sccp_proof_finality_model_code(proof.finality_model),
-    );
-    push_u8(
-        &mut out,
-        sccp_proof_verifier_target_code(proof.verifier_target),
-    );
-    out.extend_from_slice(&canonical_sccp_message_transparent_public_inputs_bytes(
-        &proof.public_inputs,
-    ));
-    push_vec(&mut out, proof.payload_kind.as_bytes());
-    out.extend_from_slice(&proof.payload_hash);
-    out.extend_from_slice(&proof.statement_hash);
-    out.extend_from_slice(&proof.placeholder_proof_hash);
-    out
+pub fn build_sccp_message_transparent_inner_proof_from_bundle(
+    bundle: &NexusSccpMessageProofV1,
+) -> Option<SccpMessageTransparentInnerProofV1> {
+    let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
+    let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
+    build_sccp_message_transparent_inner_proof(bundle, &manifest)
 }
 
-pub fn sccp_message_transparent_placeholder_proof_bytes(
+pub fn build_sccp_message_transparent_inner_proof_from_artifact(
+    artifact: &NexusSccpMessageTransparentProofV1,
+) -> Option<SccpMessageTransparentInnerProofV1> {
+    if sccp_counterparty_domain_for_message_payload(&artifact.bundle.payload)
+        != Some(artifact.counterparty_domain)
+    {
+        return None;
+    }
+    build_sccp_message_transparent_inner_proof_from_bundle(&artifact.bundle)
+}
+
+#[cfg(feature = "std")]
+fn sccp_message_transparent_fastpq_public_inputs(
+    inner: &SccpMessageTransparentInnerProofV1,
+) -> FastpqPublicInputs {
+    let mut dsid = [0u8; 16];
+    let dsid_hash = prefixed_blake2b(
+        SCCP_TRANSPARENT_FASTPQ_DSID_PREFIX_V1,
+        &inner.statement_hash,
+    );
+    dsid.copy_from_slice(&dsid_hash[..16]);
+    FastpqPublicInputs {
+        dsid,
+        slot: inner.public_inputs.finality_height,
+        old_root: inner.public_inputs.payload_hash,
+        new_root: inner.public_inputs.commitment_root,
+        perm_root: inner.public_inputs.finality_block_hash,
+        tx_set_hash: inner.statement_hash,
+    }
+}
+
+#[cfg(feature = "std")]
+fn build_sccp_message_transparent_fastpq_batch(
+    bundle: &NexusSccpMessageProofV1,
+    manifest: &SccpProofManifestV1,
+) -> Option<FastpqTransitionBatch> {
+    let inner = build_sccp_message_transparent_inner_proof(bundle, manifest)?;
+    let statement =
+        canonical_sccp_message_transparent_statement_bytes(bundle, manifest, &inner.public_inputs)?;
+    let context = to_bytes(&inner).ok()?;
+    let payload = canonical_sccp_payload_bytes(&bundle.payload);
+
+    let mut batch = FastpqTransitionBatch::new(
+        SCCP_TRANSPARENT_FASTPQ_PARAMETER_SET_V1,
+        sccp_message_transparent_fastpq_public_inputs(&inner),
+    );
+    batch.push(FastpqStateTransition::new(
+        SCCP_TRANSPARENT_FASTPQ_STATEMENT_KEY_V1.to_vec(),
+        Vec::new(),
+        statement,
+        FastpqOperationKind::MetaSet,
+    ));
+    batch.push(FastpqStateTransition::new(
+        SCCP_TRANSPARENT_FASTPQ_CONTEXT_KEY_V1.to_vec(),
+        Vec::new(),
+        context,
+        FastpqOperationKind::MetaSet,
+    ));
+    batch.push(FastpqStateTransition::new(
+        SCCP_TRANSPARENT_FASTPQ_PAYLOAD_KEY_V1.to_vec(),
+        Vec::new(),
+        payload,
+        FastpqOperationKind::MetaSet,
+    ));
+    batch.sort();
+    Some(batch)
+}
+
+#[cfg(feature = "std")]
+fn build_sccp_message_transparent_fastpq_proof_bytes(
     bundle: &NexusSccpMessageProofV1,
     manifest: &SccpProofManifestV1,
 ) -> Option<Vec<u8>> {
-    let proof = build_sccp_message_transparent_inner_proof(bundle, manifest)?;
-    Some(canonical_sccp_message_transparent_inner_proof_bytes(&proof))
+    let batch = build_sccp_message_transparent_fastpq_batch(bundle, manifest)?;
+    let proof = FastpqProver::canonical(SCCP_TRANSPARENT_FASTPQ_PARAMETER_SET_V1)
+        .ok()?
+        .prove(&batch)
+        .ok()?;
+    to_bytes(&proof).ok()
 }
 
 pub fn build_nexus_sccp_message_transparent_proof(
     bundle: &NexusSccpMessageProofV1,
 ) -> Option<NexusSccpMessageTransparentProofV1> {
+    #[cfg(not(feature = "std"))]
+    {
+        let _ = bundle;
+        return None;
+    }
+
     let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
     let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
     let public_inputs = sccp_message_transparent_public_inputs(bundle)?;
-    let proof_bytes = sccp_message_transparent_placeholder_proof_bytes(bundle, &manifest)?;
+    let proof_bytes = build_sccp_message_transparent_fastpq_proof_bytes(bundle, &manifest)?;
     Some(NexusSccpMessageTransparentProofV1 {
         version: 1,
         local_domain: manifest.local_domain,
@@ -1723,16 +1750,23 @@ fn verify_sccp_message_transparent_inner_proof_bytes(
         return false;
     }
 
-    if proof_bytes == expected.placeholder_proof_hash.as_slice() {
-        return true;
+    #[cfg(feature = "std")]
+    {
+        let Some(batch) = build_sccp_message_transparent_fastpq_batch(bundle, manifest) else {
+            return false;
+        };
+        let Ok(proof) = norito::decode_from_bytes::<fastpq_prover::Proof>(proof_bytes) else {
+            return false;
+        };
+        fastpq_prover::verify(&batch, &proof).is_ok()
     }
 
-    let Some(decoded) = decode_canonical_sccp_message_transparent_inner_proof_bytes(proof_bytes)
-    else {
-        return false;
-    };
-    decoded == expected
-        && canonical_sccp_message_transparent_inner_proof_bytes(&decoded) == proof_bytes
+    #[cfg(not(feature = "std"))]
+    {
+        let _ = proof_bytes;
+        let _ = expected;
+        false
+    }
 }
 
 pub fn verify_nexus_sccp_message_transparent_proof_structure(
@@ -2110,19 +2144,9 @@ impl<'a> PayloadCursor<'a> {
         Some(u128::from_le_bytes(out))
     }
 
-    fn take_h256(&mut self) -> Option<H256> {
-        let mut out = [0u8; 32];
-        out.copy_from_slice(self.take_exact(32)?);
-        Some(out)
-    }
-
     fn take_vec(&mut self) -> Option<Vec<u8>> {
         let len = usize::try_from(self.take_u32()?).ok()?;
         Some(self.take_exact(len)?.to_vec())
-    }
-
-    fn take_string(&mut self) -> Option<String> {
-        String::from_utf8(self.take_vec()?).ok()
     }
 
     fn is_finished(&self) -> bool {
@@ -2176,60 +2200,6 @@ pub fn decode_canonical_sccp_payload_bytes(payload_bytes: &[u8]) -> Option<SccpP
         _ => return None,
     };
     cursor.is_finished().then_some(payload)
-}
-
-pub fn decode_canonical_sccp_message_transparent_inner_proof_bytes(
-    proof_bytes: &[u8],
-) -> Option<SccpMessageTransparentInnerProofV1> {
-    let mut cursor = PayloadCursor::new(proof_bytes);
-    let version = cursor.take_u8()?;
-    let chain_family = sccp_transparent_chain_family_from_code(cursor.take_u8()?)?;
-    let chain = cursor.take_string()?;
-    let local_domain = cursor.take_u32()?;
-    let counterparty_domain = cursor.take_u32()?;
-    let counterparty_account_codec = cursor.take_u8()?;
-    let counterparty_account_codec_key = cursor.take_string()?;
-    let proof_family = cursor.take_string()?;
-    let message_backend = cursor.take_string()?;
-    let registry_backend = cursor.take_string()?;
-    let manifest_seed = cursor.take_string()?;
-    let finality_model = sccp_proof_finality_model_from_code(cursor.take_u8()?)?;
-    let verifier_target = sccp_proof_verifier_target_from_code(cursor.take_u8()?)?;
-    let public_inputs = SccpMessageTransparentPublicInputsV1 {
-        version: cursor.take_u8()?,
-        message_id: cursor.take_h256()?,
-        payload_hash: cursor.take_h256()?,
-        target_domain: cursor.take_u32()?,
-        commitment_root: cursor.take_h256()?,
-        finality_height: cursor.take_u64()?,
-        finality_block_hash: cursor.take_h256()?,
-    };
-    let payload_kind = cursor.take_string()?;
-    let payload_hash = cursor.take_h256()?;
-    let statement_hash = cursor.take_h256()?;
-    let placeholder_proof_hash = cursor.take_h256()?;
-    cursor
-        .is_finished()
-        .then_some(SccpMessageTransparentInnerProofV1 {
-            version,
-            chain_family,
-            chain,
-            local_domain,
-            counterparty_domain,
-            counterparty_account_codec,
-            counterparty_account_codec_key,
-            proof_family,
-            message_backend,
-            registry_backend,
-            manifest_seed,
-            finality_model,
-            verifier_target,
-            public_inputs,
-            payload_kind,
-            payload_hash,
-            statement_hash,
-            placeholder_proof_hash,
-        })
 }
 
 pub fn verify_sccp_payload_structure(payload: &SccpPayloadV1) -> bool {
@@ -3158,13 +3128,18 @@ mod tests {
         assert_eq!(proof.public_inputs.message_id, bundle.commitment.message_id);
         assert_eq!(proof.public_inputs.commitment_root, bundle.commitment_root);
         assert!(!proof.proof_bytes.is_empty());
-        let inner = decode_canonical_sccp_message_transparent_inner_proof_bytes(&proof.proof_bytes)
-            .expect("decode inner proof");
+        let inner = build_sccp_message_transparent_inner_proof_from_artifact(&proof)
+            .expect("derive inner proof context");
+        let fastpq_proof = norito::decode_from_bytes::<fastpq_prover::Proof>(&proof.proof_bytes)
+            .expect("decode fastpq proof");
         assert_eq!(inner.chain_family, SccpTransparentChainFamilyV1::Ton);
         assert_eq!(inner.chain, "ton");
         assert_eq!(inner.payload_kind, "transfer");
         assert_eq!(inner.public_inputs, proof.public_inputs);
-        assert_eq!(inner.placeholder_proof_hash.len(), 32);
+        assert_eq!(
+            fastpq_proof.parameter,
+            SCCP_TRANSPARENT_FASTPQ_PARAMETER_SET_V1
+        );
 
         let encoded = to_bytes(&proof).expect("encode transparent proof");
         let decoded = decode_nexus_sccp_message_transparent_proof(&encoded)
@@ -3173,7 +3148,7 @@ mod tests {
     }
 
     #[test]
-    fn message_transparent_proof_structure_accepts_legacy_inner_digest() {
+    fn message_transparent_proof_rejects_legacy_placeholder_digest() {
         let bundle = sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
             source_domain: SCCP_DOMAIN_SORA,
@@ -3192,18 +3167,17 @@ mod tests {
         }));
         let mut proof =
             build_nexus_sccp_message_transparent_proof(&bundle).expect("build transparent proof");
-        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_ETH).expect("eth manifest");
-        let legacy_inner = build_sccp_message_transparent_inner_proof(&bundle, &manifest)
-            .expect("build inner proof");
-        proof.proof_bytes = legacy_inner.placeholder_proof_hash.to_vec();
+        let inner = build_sccp_message_transparent_inner_proof_from_artifact(&proof)
+            .expect("derive inner proof context");
+        proof.proof_bytes = inner.statement_hash.to_vec();
 
-        assert!(verify_nexus_sccp_message_transparent_proof_structure(
+        assert!(!verify_nexus_sccp_message_transparent_proof_structure(
             &proof
         ));
     }
 
     #[test]
-    fn message_transparent_proof_rejects_tampered_inner_envelope() {
+    fn message_transparent_proof_rejects_tampered_fastpq_proof() {
         let bundle = sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
             version: 1,
             source_domain: SCCP_DOMAIN_SORA,
@@ -3222,11 +3196,11 @@ mod tests {
         }));
         let mut proof =
             build_nexus_sccp_message_transparent_proof(&bundle).expect("build transparent proof");
-        let mut inner =
-            decode_canonical_sccp_message_transparent_inner_proof_bytes(&proof.proof_bytes)
-                .expect("decode inner proof");
-        inner.payload_kind = "route_activate".to_owned();
-        proof.proof_bytes = canonical_sccp_message_transparent_inner_proof_bytes(&inner);
+        let mut fastpq_proof =
+            norito::decode_from_bytes::<fastpq_prover::Proof>(&proof.proof_bytes)
+                .expect("decode fastpq proof");
+        fastpq_proof.lookup_root[0] ^= 0x01;
+        proof.proof_bytes = norito::to_bytes(&fastpq_proof).expect("re-encode fastpq proof");
 
         assert!(!verify_nexus_sccp_message_transparent_proof_structure(
             &proof

@@ -4,16 +4,14 @@ direction: ltr
 source: docs/source/contract_deployment.md
 status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: 747a7ac905ca4b698ea6cc89d384a1ee11db13953440d3f35a1691ce78638e52
-source_last_modified: "2026-03-20T07:39:53+00:00"
-translation_last_reviewed: 2026-03-20
+source_hash: d3aefb7ebdeb3b9b2d41a3a04ca6c7007e2eb6ac9580a85b7fbdeb9392375660
+source_last_modified: "2026-04-04T12:14:12.575161+00:00"
+translation_last_reviewed: 2026-04-05
 title: Contract Deployment (.to) — API & Workflow
 translator: machine-google-reviewed
 ---
 
-> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
-
-# Contract Deployment (.to) — API & Workflow
+> Translation sync note (2026-04-05): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
 Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 2025).
 
@@ -32,7 +30,7 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
   code bytes are keyed by `code_hash`.
 - Protected namespaces can require an enacted governance proposal before a
   deployment is admitted. The admission path looks up the proposal payload and
-  enforces `(namespace, contract_id, code_hash, abi_hash)` equality when the
+  enforces `(contract_address, code_hash, abi_hash)` equality when the
   namespace is protected.
 
 ## Stored Artifacts & Retention
@@ -59,26 +57,26 @@ Status: implemented and exercised by Torii, CLI, and core admission tests (Nov 
   / ABI mismatches, or unsupported metadata.
 - The canonical manifest is built from the verified `CNTR` payload, signed by
   the submitting key, and then stored together with the uploaded bytecode.
-- Transactions targeting protected namespaces must include metadata keys
-  `gov_namespace` and `gov_contract_id`. The admission path compares them
-  against enacted `DeployContract` proposals; if no matching proposal exists the
-  transaction is rejected with `NotPermitted`.
+- Transactions targeting protected namespaces must include metadata key
+  `gov_contract_address`. The admission path compares the derived dataspace and
+  address against enacted `DeployContract` proposals; if no matching proposal
+  exists the transaction is rejected with `NotPermitted`.
 
 ## Torii endpoints (feature `app_api`)
 
 - `POST /v1/contracts/deploy`
   - Request body: `DeployContractDto` (see `docs/source/torii_contracts_api.md` for field details).
   - Torii decodes the base64 payload, verifies the embedded `CNTR` interface,
-    derives the manifest from the artifact itself, and submits `RegisterSmartContractCode` plus
-    `RegisterSmartContractBytes` in a signed transaction on behalf of the
-    caller.
-  - Response: `{ ok, code_hash_hex, abi_hash_hex }`.
-  - Errors: invalid base64, invalid contract artifact, missing permission
-    (`CanRegisterSmartContractCode`), size cap exceeded, governance gating.
-- `POST /v1/contracts/instance`
-  - Accepts `DeployAndActivateInstanceDto` (authority, private key, namespace/contract_id, `code_b64`) and deploys + activates atomically.
-- `POST /v1/contracts/instance/activate`
-  - Accepts `ActivateInstanceDto` (authority, private key, namespace, contract_id, `code_hash`) and submits only the activation instruction.
+    derives the manifest from the artifact itself, allocates a fresh immutable
+    `contract_address`, binds the requested stable `contract_alias` to that
+    address, prepends a domainless self-registration for the authority, and
+    submits the resulting transaction on behalf of the caller.
+  - Redeploying the same `contract_alias` performs an in-place upgrade:
+    Torii deploys a new address, rebinds the alias atomically, and deactivates
+    the previous address.
+  - Response: `{ ok, contract_alias, contract_address, previous_contract_address?, upgraded, dataspace, deploy_nonce, tx_hash_hex, code_hash_hex, abi_hash_hex }`.
+  - Errors: invalid base64, invalid contract artifact, size cap exceeded,
+    governance gating for protected namespaces, or fee/balance failures.
 - `GET /v1/contracts/code/{code_hash}`
   - Returns `{ manifest: { code_hash, abi_hash } }`.
     Additional manifest fields are preserved internally but omitted here for a
@@ -92,7 +90,7 @@ All contract lifecycle endpoints share a dedicated deploy limiter configured via
 8 for each token/key derived from `X-API-Token`, the remote IP, or the endpoint hint.
 Set either field to `null` to disable the limiter for trusted operators. When the
 limiter fires, Torii increments the
-`torii_contract_throttled_total{endpoint="deploy|instance|activate"}` telemetry counter and
+`torii_contract_throttled_total{endpoint="deploy"}` telemetry counter and
 returns HTTP 429; any handler error increments
 `torii_contract_errors_total{endpoint=…}` for alerting.
 
@@ -102,18 +100,16 @@ returns HTTP 429; any handler error increments
   strings) to enable admission gating. Torii exposes helpers under
   `/v1/gov/protected-namespaces` and the CLI mirrors them via
   `iroha_cli app gov protected set` / `iroha_cli app gov protected get`.
+- Unprotected namespaces are public: any signer may register code bytes,
+  register manifests, and deploy alias-backed public contracts there.
 - Proposals created with `ProposeDeployContract` (or the Torii
   `/v1/gov/proposals/deploy-contract` endpoint) capture
-  `(namespace, contract_id, code_hash, abi_hash, abi_version)`.
+  `(contract_address, code_hash, abi_hash, abi_version)`.
 - Once the referendum passes, `EnactReferendum` marks the proposal Enacted and
   admission will accept deployments that carry matching metadata and code.
-- Transactions must include the metadata pair `gov_namespace=a namespace` and
-  `gov_contract_id=an identifier` (and should set `contract_namespace` /
-  `contract_id` for call-time binding). CLI helpers populate these
-  automatically when you pass `--namespace`/`--contract-id`.
-- When protected namespaces are enabled, queue admission rejects attempts to
-  rebind an existing `contract_id` to a different namespace; use the enacted
-  proposal or retire the previous binding before deploying elsewhere.
+- Transactions must include `gov_contract_address=<contract-address>`. CLI
+  helpers populate the governance metadata automatically when you pass
+  `--contract-address` or `--contract-alias`.
 - If the lane manifest sets a validator quorum above one, include
   `gov_manifest_approvers` (JSON array of validator account IDs) so the queue can count
   the additional approvals alongside the transaction authority. Lanes also reject
@@ -122,28 +118,19 @@ returns HTTP 429; any handler error increments
 
 ## CLI helpers
 
-- `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path>`
-  submits the Torii deploy request (computing hashes on the fly).
-- `iroha_cli app contracts deploy-activate --authority <id> --private-key <hex> --namespace <ns> --contract-id <id> --code-file <path>`
-  verifies the embedded `CNTR`, derives the canonical manifest, registers bytes
-  + manifest, and activates the `(namespace, contract_id)` binding in one
-  transaction. Use `--dry-run` to print the computed hashes and instruction
-  count without submitting, and `--manifest-out` to save the signed manifest
-  JSON for inspection.
+- `iroha_cli app contracts deploy --authority <id> --private-key <hex> --code-file <path> --contract-alias <name::dataspace>`
+  submits the alias-first Torii deploy request (computing hashes on the fly).
 - `iroha_cli app contracts manifest build --code-file <path> [--sign-with <hex>]` computes
   `code_hash`/`abi_hash` for compiled `.to`, derives the manifest from the
   embedded `CNTR`, and optionally signs it for inspection, printing JSON or
   writing to `--out`.
 - `iroha_cli app contracts simulate --authority <id> --private-key <hex> --code-file <path> --gas-limit <u64>`
   runs an offline VM pass and reports ABI/hash metadata plus the queued ISIs
-  (counts and instruction ids) without touching the network. Attach
-  `--namespace/--contract-id` to mirror call-time metadata.
+  (counts and instruction ids) without touching the network.
 - `iroha_cli app contracts manifest get --code-hash <hex>` fetches the manifest via Torii
   and optionally writes it to disk.
 - `iroha_cli app contracts code get --code-hash <hex> --out <path>` downloads
   the stored `.to` image.
-- `iroha_cli app contracts instances --namespace <ns> [--table]` lists activated
-  contract instances (manifest + metadata driven).
 - Governance helpers (`iroha_cli app gov deploy propose`, `iroha_cli app gov enact`,
   `iroha_cli app gov protected set/get`) orchestrate the protected-namespace workflow and
   expose JSON artefacts for auditing.

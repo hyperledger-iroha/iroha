@@ -4211,6 +4211,7 @@ export interface ToriiSccpProofManifest {
   manifestSeed: string;
   requiredPublicInputs: ReadonlyArray<string>;
   messagePayloadKinds: ReadonlyArray<string>;
+  submissionTemplate: ToriiSccpCounterpartySubmissionTemplate;
 }
 
 export interface ToriiSccpProofManifestSet {
@@ -4288,6 +4289,19 @@ export interface ToriiSccpMessageTransparentProofArtifact {
   bundle: ToriiSccpMessageProofBundle;
 }
 
+export interface ToriiSccpSubmissionArgument {
+  key: string;
+  description: string;
+}
+
+export interface ToriiSccpCounterpartySubmissionTemplate {
+  version: number;
+  encoding: string;
+  submissionKind: string;
+  verifierEntrypoint: string;
+  requiredArguments: ReadonlyArray<ToriiSccpSubmissionArgument>;
+}
+
 export type ToriiSccpChainFamily = "Evm" | "Solana" | "Ton" | "Tron" | "Substrate";
 
 export type ToriiSccpNormalizedCodecValue =
@@ -4351,6 +4365,7 @@ export interface ToriiSccpCounterpartyProofJob {
   publicInputs: ToriiSccpMessageTransparentPublicInputs;
   payloadKind: string;
   payloadProjection: ToriiSccpPayloadProjection;
+  submissionTemplate: ToriiSccpCounterpartySubmissionTemplate;
   bundle: ToriiSccpMessageProofBundle;
 }
 

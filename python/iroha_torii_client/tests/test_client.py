@@ -563,6 +563,37 @@ def test_get_sccp_proof_manifests_parses_snapshot() -> None:
                             "finality_block_hash",
                         ],
                         "message_payload_kinds": ["asset_register", "route_activate", "transfer"],
+                        "submission_template": {
+                            "version": 1,
+                            "encoding": "abi_tuple_v1",
+                            "submission_kind": "contract_call",
+                            "verifier_entrypoint": (
+                                "submitSccpMessageProof(bytes proof_bytes, bytes public_inputs, "
+                                "bytes bundle_bytes)"
+                            ),
+                            "required_arguments": [
+                                {
+                                    "key": "proof_bytes",
+                                    "description": (
+                                        "Transparent SCCP proof bytes emitted by the prover "
+                                        "backend."
+                                    ),
+                                },
+                                {
+                                    "key": "public_inputs",
+                                    "description": (
+                                        "ABI-encoded SCCP public inputs in manifest order."
+                                    ),
+                                },
+                                {
+                                    "key": "bundle_bytes",
+                                    "description": (
+                                        "ABI-encoded Nexus SCCP message bundle passed to the "
+                                        "verifier contract."
+                                    ),
+                                },
+                            ],
+                        },
                     }
                 ],
             }
@@ -577,6 +608,8 @@ def test_get_sccp_proof_manifests_parses_snapshot() -> None:
     assert manifests.manifests[0].chain == "eth"
     assert manifests.manifests[0].verifier_target == "EvmContract"
     assert manifests.manifests[0].required_public_inputs[-1] == "finality_block_hash"
+    assert manifests.manifests[0].submission_template.encoding == "abi_tuple_v1"
+    assert manifests.manifests[0].submission_template.required_arguments[0].key == "proof_bytes"
 
 
 def test_get_sccp_proof_manifests_rejects_unknown_verifier_target() -> None:
@@ -604,6 +637,21 @@ def test_get_sccp_proof_manifests_rejects_unknown_verifier_target() -> None:
                         "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
                         "required_public_inputs": ["message_id"],
                         "message_payload_kinds": ["transfer"],
+                        "submission_template": {
+                            "version": 1,
+                            "encoding": "ton_cell_v1",
+                            "submission_kind": "internal_message",
+                            "verifier_entrypoint": "op::submit_sccp_message_proof",
+                            "required_arguments": [
+                                {
+                                    "key": "proof_cell",
+                                    "description": (
+                                        "Transparent SCCP proof cell emitted by the TON prover "
+                                        "backend."
+                                    ),
+                                }
+                            ],
+                        },
                     }
                 ],
             }
@@ -633,6 +681,31 @@ def test_get_sccp_message_proof_artifact_parses_typed_snapshot() -> None:
                 "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
                 "finality_model": "TonMasterchain",
                 "verifier_target": "TonContract",
+                "submission_template": {
+                    "version": 1,
+                    "encoding": "ton_cell_v1",
+                    "submission_kind": "internal_message",
+                    "verifier_entrypoint": "op::submit_sccp_message_proof",
+                    "required_arguments": [
+                        {
+                            "key": "proof_cell",
+                            "description": (
+                                "Transparent SCCP proof cell emitted by the TON prover backend."
+                            ),
+                        },
+                        {
+                            "key": "public_inputs_cell",
+                            "description": "Cell-encoded SCCP public inputs in manifest order.",
+                        },
+                        {
+                            "key": "bundle_cell",
+                            "description": (
+                                "Cell-encoded Nexus SCCP message bundle for the TON bridge "
+                                "contract."
+                            ),
+                        },
+                    ],
+                },
                 "public_inputs": {
                     "version": 1,
                     "message_id": message_id,
@@ -828,6 +901,31 @@ def test_get_sccp_message_proof_job_parses_typed_snapshot() -> None:
                 "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
                 "finality_model": "TonMasterchain",
                 "verifier_target": "TonContract",
+                "submission_template": {
+                    "version": 1,
+                    "encoding": "ton_cell_v1",
+                    "submission_kind": "internal_message",
+                    "verifier_entrypoint": "op::submit_sccp_message_proof",
+                    "required_arguments": [
+                        {
+                            "key": "proof_cell",
+                            "description": (
+                                "Transparent SCCP proof cell emitted by the TON prover backend."
+                            ),
+                        },
+                        {
+                            "key": "public_inputs_cell",
+                            "description": "Cell-encoded SCCP public inputs in manifest order.",
+                        },
+                        {
+                            "key": "bundle_cell",
+                            "description": (
+                                "Cell-encoded Nexus SCCP message bundle for the TON bridge "
+                                "contract."
+                            ),
+                        },
+                    ],
+                },
                 "public_inputs": {
                     "version": 1,
                     "message_id": message_id,
@@ -886,6 +984,8 @@ def test_get_sccp_message_proof_job_parses_typed_snapshot() -> None:
     assert job.payload_projection.value["amount"] == 77
     assert job.payload_projection.value["recipient"].kind == "TonRaw"
     assert job.payload_projection.value["recipient"].value["workchain"] == 0
+    assert job.submission_template.encoding == "ton_cell_v1"
+    assert job.submission_template.required_arguments[0].key == "proof_cell"
     assert session.calls[0]["url"] == f"http://node.test/v1/sccp/jobs/message/{message_id}"
 
 
@@ -909,6 +1009,34 @@ def test_get_sccp_message_proof_job_against_mock_server() -> None:
                         "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
                         "finality_model": "TonMasterchain",
                         "verifier_target": "TonContract",
+                        "submission_template": {
+                            "version": 1,
+                            "encoding": "ton_cell_v1",
+                            "submission_kind": "internal_message",
+                            "verifier_entrypoint": "op::submit_sccp_message_proof",
+                            "required_arguments": [
+                                {
+                                    "key": "proof_cell",
+                                    "description": (
+                                        "Transparent SCCP proof cell emitted by the TON prover "
+                                        "backend."
+                                    ),
+                                },
+                                {
+                                    "key": "public_inputs_cell",
+                                    "description": (
+                                        "Cell-encoded SCCP public inputs in manifest order."
+                                    ),
+                                },
+                                {
+                                    "key": "bundle_cell",
+                                    "description": (
+                                        "Cell-encoded Nexus SCCP message bundle for the TON "
+                                        "bridge contract."
+                                    ),
+                                },
+                            ],
+                        },
                         "public_inputs": {
                             "version": 1,
                             "message_id": message_id,
@@ -969,6 +1097,7 @@ def test_get_sccp_message_proof_job_against_mock_server() -> None:
         assert job.chain == "ton"
         assert job.payload_projection.kind == "Transfer"
         assert job.payload_projection.value["amount"] == 77
+        assert job.submission_template.verifier_entrypoint == "op::submit_sccp_message_proof"
     finally:
         server.stop()
 

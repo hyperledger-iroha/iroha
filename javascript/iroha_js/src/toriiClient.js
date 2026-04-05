@@ -13204,6 +13204,35 @@ function normalizeSccpCounterpartyCapability(value, context) {
   };
 }
 
+function normalizeSccpSubmissionArgument(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    key: requireNonEmptyString(record.key, `${context}.key`),
+    description: requireNonEmptyString(record.description, `${context}.description`),
+  };
+}
+
+function normalizeSccpCounterpartySubmissionTemplate(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    encoding: requireNonEmptyString(record.encoding, `${context}.encoding`),
+    submissionKind: requireNonEmptyString(record.submission_kind, `${context}.submission_kind`),
+    verifierEntrypoint: requireNonEmptyString(
+      record.verifier_entrypoint,
+      `${context}.verifier_entrypoint`,
+    ),
+    requiredArguments: parseRecordArray(
+      record.required_arguments,
+      `${context}.required_arguments`,
+    ).map((entry, index) =>
+      normalizeSccpSubmissionArgument(entry, `${context}.required_arguments[${index}]`),
+    ),
+  };
+}
+
 function normalizeSccpProofManifestSetResponse(payload) {
   const record = ensureRecord(payload, "sccp proof manifests response");
   return {
@@ -13290,6 +13319,10 @@ function normalizeSccpProofManifest(value, context) {
       `${context}.message_payload_kinds`,
     ).map((entry, index) =>
       requireNonEmptyString(entry, `${context}.message_payload_kinds[${index}]`),
+    ),
+    submissionTemplate: normalizeSccpCounterpartySubmissionTemplate(
+      record.submission_template,
+      `${context}.submission_template`,
     ),
   };
 }
@@ -13423,6 +13456,10 @@ function normalizeSccpCounterpartyProofJob(payload) {
     payloadProjection: normalizeSccpPayloadProjection(
       record.payload_projection,
       `${context}.payload_projection`,
+    ),
+    submissionTemplate: normalizeSccpCounterpartySubmissionTemplate(
+      record.submission_template,
+      `${context}.submission_template`,
     ),
     bundle: normalizeSccpMessageProofBundle(record.bundle, `${context}.bundle`),
   };

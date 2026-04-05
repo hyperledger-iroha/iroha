@@ -13,6 +13,7 @@ default = ["std"]
 std = [
     "serde/std",
     "dep:norito",
+    "dep:fastpq_prover",
 ]
 serde = ["dep:serde"]
 
@@ -23,3 +24,4 @@ sha2 = { version = "0.10.9", default-features = false }
 bs58 = { version = "0.5.1", default-features = false, features = ["alloc"] }
 serde = { version = "1.0.228", default-features = false, features = ["derive"], optional = true }
 norito = { path = "../norito", optional = true }
+fastpq_prover = { path = "../fastpq_prover", optional = true }

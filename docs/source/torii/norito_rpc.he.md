@@ -4,12 +4,12 @@ direction: rtl
 source: docs/source/torii/norito_rpc.md
 status: needs-update
 generator: scripts/sync_docs_i18n.py
-source_hash: 2dc50ed85122206ca788874d53deccb260b633cd2d54c7c097dbb894961d2d05
-source_last_modified: "2026-03-20T07:39:53+00:00"
-translation_last_reviewed: 2026-03-20
+source_hash: 74f9f6a47b99a63cb24ec644e739f00b4f55f3fe84f1855b2356cbd87bdf59c1
+source_last_modified: "2026-04-04T15:25:30.327788+00:00"
+translation_last_reviewed: 2026-04-05
 ---
 
-> Translation sync note (2026-03-20): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
+> Translation sync note (2026-04-05): this locale temporarily mirrors the updated English canonical text so the self-describing contract artifact and deploy API docs stay accurate while a refreshed translation is pending.
 
 ## Norito-RPC Transport (NRPC-1)
 
@@ -143,7 +143,7 @@ curl \
 | Group | Representative routes | Request types | Response shape | Notes |
 | --- | --- | --- | --- | --- |
 | Signed queries | `POST /query` (aliased by the pipeline router) | `SignedQuery` via `NoritoVersioned`[`crates/iroha_torii/src/lib.rs:5387`](/crates/iroha_torii/src/lib.rs#L5387) | Norito or JSON `QueryResultBox` depending on `Accept` | The handler streams results through `handle_queries`/`handle_queries_with_opts`, honouring pagination and cursor overrides (`crates/iroha_torii/src/routing.rs:9472`). |
-| Contracts & verifying keys | `POST /v1/contracts/{deploy,instance,*}`; `POST /v1/zk/vk/{register,update,deprecate}` | `DeployContractDto`, `DeployAndActivateInstanceDto`, `ActivateInstanceDto`, `ContractCallDto`, `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto`[`crates/iroha_torii/src/routing.rs:3307`](/crates/iroha_torii/src/routing.rs#L3307)[`crates/iroha_torii/src/routing.rs:4336`](/crates/iroha_torii/src/routing.rs#L4336) | Norito acknowledgement envelope mirroring `/v1/pipeline/transactions` status fields | Each DTO is decoded through `NoritoJson<T>` so callers may send Norito or Norito-backed JSON. Successful calls enqueue a signed transaction via `handle_transaction_with_metrics`. |
+| Contracts & verifying keys | `POST /v1/contracts/{deploy,call,call/simulate,view,call/multisig/propose,call/multisig/approve}`; `POST /v1/zk/vk/{register,update,deprecate}` | `DeployContractDto`, `ContractCallDto`, `ContractCallSimulateDto`, `ContractViewDto`, `MultisigContractCallProposeDto`, `MultisigContractCallApproveDto`, `ZkVkRegisterDto`, `ZkVkUpdateDto`, `ZkVkDeprecateDto` | Structured Norito/JSON DTOs for deploy, call, simulate, view, and multisig participation | Each DTO is decoded through `NoritoJson<T>` so callers may send Norito or Norito-backed JSON. Public runtime calls now build compact `Executable::ContractCall` transactions by reference, so Norito-RPC callers no longer resend full contract bytecode/manifests on every invocation. |
 | ZK proof orchestration | `POST /v1/zk/{roots,verify,submit-proof,vote/tally}`; `GET /v1/zk/proofs{,/count}` | `ZkRootsGetRequestDto`, `ZkVoteGetTallyRequestDto`, batch envelopes for proof submission[`crates/iroha_torii/src/routing.rs:2441`](/crates/iroha_torii/src/routing.rs#L2441)[`crates/iroha_torii/src/routing.rs:2497`](/crates/iroha_torii/src/routing.rs#L2497) | Norito structs (`ProofRootsResponse`, `ProofVoteTallyDto`, etc.) selected by `Accept` | NORITO requests reject malformed payloads before reaching business logic (`crates/iroha_torii/src/zk_prover.rs:985`), preserving deterministic proof verification. |
 | SoraFS storage APIs | `/v1/sorafs/{pin,capacity,deal,replication,por}/*` | `RegisterPinManifestDto`, `RegisterCapacityDeclarationDto`, `RecordDealUsageDto`, `RecordPorChallengeDto`, `RecordPorProofDto`, etc.[`crates/iroha_torii/src/routing.rs:5624`](/crates/iroha_torii/src/routing.rs#L5624)[`crates/iroha_torii/src/routing.rs:6385`](/crates/iroha_torii/src/routing.rs#L6385) | Norito acknowledgements with policy enforcement metadata | All admissions run through shared helpers that emit deterministic telemetry and queue transactions when on-chain mutations are required. |
 | Connect pairing | `POST /v1/connect/session` (plus `DELETE/GET` companions) | `ConnectSessionRequest`[`crates/iroha_torii/src/routing.rs:1613`](/crates/iroha_torii/src/routing.rs#L1613) | Norito `ConnectSessionResponse` / status DTOs | Sessions inherit the same Norito negotiation so wallets and dApps can reuse binary codecs while bridging to WebSocket upgrades. |
