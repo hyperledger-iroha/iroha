@@ -66,33 +66,29 @@ object RegisterAccountWirePayloadEncoder {
         }
 
         /**
-         * NewAccount struct (6 fields):
+         * NewAccount struct (5 fields):
          * 1. id: AccountId (transparent → AccountController)
-         * 2. linked_domains: BTreeSet<DomainId> — empty
-         * 3. metadata: Metadata — empty
-         * 4. label: Option<AccountLabel> — None
-         * 5. uaid: Option<UniversalAccountId> — None
-         * 6. opaque_ids: Vec<OpaqueAccountId> — empty
+         * 2. metadata: Metadata — empty
+         * 3. label: Option<AccountAlias> — None
+         * 4. uaid: Option<UniversalAccountId> — None
+         * 5. opaque_ids: Vec<OpaqueAccountId> — empty
          */
         private fun encodeNewAccount(encoder: NoritoEncoder, accountId: String) {
             // Field 1: id — reuse AccountId encoding from TransferWirePayloadEncoder
             val accountIdBytes = TransferWirePayloadEncoder.encodeAccountIdPayload(accountId)
             writeFieldWithLength(encoder, accountIdBytes)
 
-            // Field 2: linked_domains (empty BTreeSet) — count = 0
+            // Field 2: metadata (empty Metadata/BTreeMap) — count = 0
             writeFieldWithLength(encoder, encodeEmptySequence())
 
-            // Field 3: metadata (empty Metadata/BTreeMap) — count = 0
-            writeFieldWithLength(encoder, encodeEmptySequence())
-
-            // Field 4: label (None)
+            // Field 3: label (None)
             val noneBytes = encodeNone()
             writeFieldWithLength(encoder, noneBytes)
 
-            // Field 5: uaid (None)
+            // Field 4: uaid (None)
             writeFieldWithLength(encoder, noneBytes)
 
-            // Field 6: opaque_ids (empty Vec)
+            // Field 5: opaque_ids (empty Vec)
             writeFieldWithLength(encoder, encodeEmptySequence())
         }
 

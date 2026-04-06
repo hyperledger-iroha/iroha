@@ -216,12 +216,31 @@ public struct ToriiOfflineFoldDecommitV1: Codable, Sendable, Equatable {
 }
 
 public struct ToriiOfflineMerklePath: Codable, Sendable, Equatable {
+    /// Direction bits encoded as base64 string.
+    /// The server may return either a base64 string or an array of integers —
+    /// the custom decoder handles both formats.
     public let dirs: String
     public let siblings: [String]
 
     public init(dirs: String, siblings: [String]) {
         self.dirs = dirs
         self.siblings = siblings
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        siblings = try container.decode([String].self, forKey: .siblings)
+        // dirs may arrive as a base64 string or as an array of integers
+        if let str = try? container.decode(String.self, forKey: .dirs) {
+            dirs = str
+        } else {
+            let arr = try container.decode([UInt8].self, forKey: .dirs)
+            dirs = Data(arr).base64EncodedString()
+        }
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case dirs, siblings
     }
 }
 
