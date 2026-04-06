@@ -266,6 +266,20 @@ public final class ToriiMockServer implements AutoCloseable {
     return Collections.unmodifiableMap(copy);
   }
 
+  private static Optional<String> firstHeaderValue(
+      final Map<String, List<String>> headers, final String name) {
+    for (final Map.Entry<String, List<String>> entry : headers.entrySet()) {
+      if (entry.getKey() != null && entry.getKey().equalsIgnoreCase(name)) {
+        final List<String> values = entry.getValue();
+        if (values == null || values.isEmpty()) {
+          return Optional.empty();
+        }
+        return Optional.ofNullable(values.get(0));
+      }
+    }
+    return Optional.empty();
+  }
+
   private static String extractHashParameter(final HttpExchange exchange) {
     final String query = exchange.getRequestURI().getRawQuery();
     if (query == null || query.isEmpty()) {
@@ -316,11 +330,7 @@ public final class ToriiMockServer implements AutoCloseable {
     }
 
     public Optional<String> header(final String name) {
-      final List<String> values = headers.get(name);
-      if (values == null || values.isEmpty()) {
-        return Optional.empty();
-      }
-      return Optional.ofNullable(values.get(0));
+      return firstHeaderValue(headers, name);
     }
 
     public byte[] body() {
@@ -354,11 +364,7 @@ public final class ToriiMockServer implements AutoCloseable {
     }
 
     public Optional<String> header(final String name) {
-      final List<String> values = headers.get(name);
-      if (values == null || values.isEmpty()) {
-        return Optional.empty();
-      }
-      return Optional.ofNullable(values.get(0));
+      return firstHeaderValue(headers, name);
     }
   }
 
@@ -377,11 +383,7 @@ public final class ToriiMockServer implements AutoCloseable {
     }
 
     public Optional<String> header(final String name) {
-      final List<String> values = headers.get(name);
-      if (values == null || values.isEmpty()) {
-        return Optional.empty();
-      }
-      return Optional.ofNullable(values.get(0));
+      return firstHeaderValue(headers, name);
     }
   }
 

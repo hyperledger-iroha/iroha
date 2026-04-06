@@ -423,13 +423,30 @@ From `../iroha2-block-explorer-web`:
    - do not fold `/v1/connect/ws` into the generic `location /` or
      `location ^~ /v1/` proxy rules; it must stay an exact-match websocket
      location with `proxy_http_version 1.1`.
-   - ensure `taira.sora.org`, `taira-explorer.sora.org`, and every published
-     `taira-validator-{1,2,3,4}.sora.org` hostname resolve to the shared edge
-     host from `dns_records.json` before relying on this nginx configuration.
-4. Issue/refresh TLS certificates for every hostname served from that edge:
-   - `sudo certbot certonly --nginx -d taira.sora.org -d taira-explorer.sora.org -d taira-validator-1.sora.org -d taira-validator-2.sora.org -d taira-validator-3.sora.org -d taira-validator-4.sora.org`
-   - certbot stores this SAN cert under `.../live/taira.sora.org/` and nginx can
-     reuse it for the convenience, explorer, and per-validator server blocks.
+   - ensure `taira.sora.org`, `taira-explorer.sora.org`, every published
+     `taira-validator-{1,2,3,4}.sora.org` hostname, and any required
+     `*.sorafs.taira.sora.org` records resolve to the shared edge host from
+     `dns_records.json` before relying on this nginx configuration.
+   - add wildcard edge routing for `*.sorafs.taira.sora.org` and preserve the
+     incoming host header when proxying to Torii; the checked-in nginx example
+     now includes that wildcard `server_name`.
+4. Issue/refresh TLS certificates for the public hosts, direct validator names,
+   and CID-origin wildcard:
+   - `taira.sora.org`
+   - `taira-explorer.sora.org`
+   - `taira-validator-1.sora.org`
+   - `taira-validator-2.sora.org`
+   - `taira-validator-3.sora.org`
+   - `taira-validator-4.sora.org`
+   - `*.sorafs.taira.sora.org`
+   - the convenience, explorer, and direct validator names can share one SAN
+     certificate stored under `.../live/taira.sora.org/` if your ACME client
+     keeps those names in one lineage.
+   - the wildcard requires DNS-01 validation; `certbot --nginx` alone is not
+     enough for the `*.sorafs.taira.sora.org` SAN.
+   - if your ACME client stores all SANs under one lineage, nginx can keep
+     pointing at a single certificate bundle for all names served from this
+     edge.
    - before DNS propagates or before the SAN cert is refreshed, you can still
      validate local SNI routing on the edge host with `curl --resolve` plus
      `-k`, for example:
@@ -442,12 +459,13 @@ From `../iroha2-block-explorer-web`:
    - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}"`
    - the public check now requires `--write-config /run/secrets/taira-canary-client.toml`
      unless you explicitly opt into read-only mode with `--skip-write-canary`
-7. Verify that SNI now serves the correct cert for each host and that both MCP
-   and Connect still work through the public edge:
+7. Verify that SNI now serves the correct cert for each host and that MCP,
+   Connect, and CID-host routing still work through the public edge:
    - `curl -vI https://taira.sora.org`
    - `curl -vI https://taira-explorer.sora.org`
    - `curl -vI "${PUBLIC_TORII_ROOT}/status"`
    - `echo | openssl s_client -connect taira-explorer.sora.org:443 -servername taira-explorer.sora.org 2>/dev/null | openssl x509 -noout -subject -issuer -ext subjectAltName`
+   - `echo | openssl s_client -connect taira.sora.org:443 -servername example.sorafs.taira.sora.org 2>/dev/null | openssl x509 -noout -subject -issuer -ext subjectAltName`
    - verify MCP over the direct node host:
      `curl -sS "${PUBLIC_TORII_ROOT}/v1/mcp" | jq .`
    - verify curated `iroha.*` exposure:
@@ -460,6 +478,12 @@ From `../iroha2-block-explorer-web`:
      returned `sid` and app token:
      `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' "${PUBLIC_TORII_ROOT}/v1/connect/ws?sid=<sid>&role=app"`
      `curl --http1.1 -i -N -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' -H 'Sec-WebSocket-Key: dGVzdGtleTEyMzQ1Njc4OTA=' -H 'Sec-WebSocket-Protocol: iroha-connect.token.v1.<token_app>' 'https://taira-explorer.sora.org/v1/connect/ws?sid=<sid>&role=app'`
+   - verify CID-host origin isolation with a known site CID:
+     `curl -vkI "https://<cid>.sorafs.taira.sora.org/"`
+     `curl -vkI "https://taira.sora.org/sorafs/cid/<cid>/swap/ton/usdt" -H 'accept: text/html'`
+   - browser-style navigations should `308` to
+     `https://<cid>.sorafs.taira.sora.org/...`, while asset/tooling requests can
+     still stay on `/sorafs/cid/<cid>/...`.
    - if those websocket probes now return a Torii-generated app error
      (`400/401/...`) instead of a proxy-layer `404` / missing-upgrade failure,
      the reverse-proxy websocket hop is working and any remaining error is in

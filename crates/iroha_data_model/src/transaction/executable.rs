@@ -266,8 +266,7 @@ impl Executable {
     pub fn instruction_count(&self) -> u64 {
         match self {
             Executable::Instructions(instructions) => instructions.len() as u64,
-            Executable::ContractCall(_) => 0,
-            Executable::Ivm(_) => 0,
+            Executable::ContractCall(_) | Executable::Ivm(_) => 0,
             Executable::IvmProved(proved) => proved.overlay.len() as u64,
         }
     }
@@ -276,8 +275,7 @@ impl Executable {
     pub fn ivm_size_bytes(&self) -> usize {
         match self {
             Executable::Ivm(b) => b.size_bytes(),
-            Executable::ContractCall(_) => 0,
-            Executable::Instructions(_) => 0,
+            Executable::ContractCall(_) | Executable::Instructions(_) => 0,
             Executable::IvmProved(proved) => proved.bytecode.size_bytes(),
         }
     }

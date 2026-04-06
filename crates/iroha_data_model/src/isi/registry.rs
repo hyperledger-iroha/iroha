@@ -4,8 +4,8 @@ use crate::{
     isi::{
         InstructionRegistry, RegisterPeerWithPop, account_recovery, asset_alias,
         asset_transfer_control, bridge, consensus_keys, contract_alias, domain_link, endorsement,
-        identifier, kaigi, nexus, offline, oracle, ram_lfe, repo, runtime_upgrade, rwa, settlement,
-        smart_contract_code, social, soracloud, sorafs, space_directory,
+        identifier, kaigi, ministry, nexus, offline, oracle, ram_lfe, repo, runtime_upgrade, rwa,
+        settlement, smart_contract_code, social, soracloud, sorafs, space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -230,6 +230,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<bridge::SubmitBridgeProof>,
     InstructionRegistry::register::<bridge::RecordBridgeReceipt>,
     InstructionRegistry::register::<bridge::RecordSccpMessage>,
+    InstructionRegistry::register::<ministry::SubmitAgendaProposal>,
     #[cfg(feature = "governance")]
     InstructionRegistry::register::<governance::ProposeDeployContract>,
     #[cfg(feature = "governance")]

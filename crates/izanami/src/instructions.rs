@@ -1195,6 +1195,7 @@ impl ChaosState {
         self.produce_plan(kind, rng)
     }
 
+    #[cfg(test)]
     fn plan_register_domain(&mut self, _rng: &mut StdRng) -> Result<TransactionPlan> {
         Err(eyre!(
             "runtime domain registration requires an active SNS domain-name lease; Izanami does not synthesize leases"

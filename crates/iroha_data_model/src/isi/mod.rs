@@ -43,6 +43,8 @@ pub mod endorsement;
 /// Governance instruction module
 #[cfg(feature = "governance")]
 pub mod governance;
+/// Ministry agenda intake instructions.
+pub mod ministry;
 
 /// Owned trait-object wrapper for any [`crate::isi::Instruction`].
 ///
@@ -1054,6 +1056,11 @@ impl From<crate::isi::governance::ApproveGovernanceProposal> for InstructionBox 
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::ministry::SubmitAgendaProposal> for InstructionBox {
+    fn from(i: crate::isi::ministry::SubmitAgendaProposal) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 
 /// Object-safe cloning support for [`Instruction`] trait objects.
 pub trait InstructionDynClone {
@@ -2013,6 +2020,7 @@ pub use contract_alias::*;
 pub use domain_link::*;
 pub use identifier::*;
 pub use kaigi::*;
+pub use ministry::*;
 pub use mint_burn::*;
 pub use nexus::*;
 pub use offline::*;
@@ -2806,6 +2814,7 @@ pub mod prelude {
         identifier::{
             ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy, RevokeIdentifier,
         },
+        ministry::SubmitAgendaProposal,
         nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
         ram_lfe::{
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,

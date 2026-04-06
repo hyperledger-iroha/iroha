@@ -163,6 +163,21 @@ pub const SYSCALL_JSON_GET_BLOB_HEX: u32 = 0x7D;
 pub const SYSCALL_JSON_GET_NUMERIC: u32 = 0x7F;
 /// Args: r10 = &Json, r11 = &Name key -> r10 = &AssetDefinitionId (INPUT pointer)
 pub const SYSCALL_JSON_GET_ASSET_DEFINITION_ID: u32 = 0x80;
+/// Construct an empty JSON object.
+///
+/// Args: none
+/// Ret:  r10 = &Json (INPUT pointer)
+pub const SYSCALL_JSON_OBJECT: u32 = 0x81;
+/// Insert or replace an integer field in a JSON object.
+///
+/// Args: r10 = &Json object, r11 = &Name key, r12 = value (i64 as u64)
+/// Ret:  r10 = &Json (INPUT pointer)
+pub const SYSCALL_JSON_SET_I64: u32 = 0x82;
+/// Insert or replace an account-id field in a JSON object using canonical string encoding.
+///
+/// Args: r10 = &Json object, r11 = &Name key, r12 = &AccountId
+/// Ret:  r10 = &Json (INPUT pointer)
+pub const SYSCALL_JSON_SET_ACCOUNT_ID: u32 = 0x83;
 
 /// Build a state path from a base Name and an integer key: returns a new `&Name` TLV
 /// in INPUT with the canonical form "<base>/<key>" (decimal).
@@ -337,14 +352,16 @@ pub const SYSCALL_CREATE_NFTS_FOR_ALL_USERS: u32 = 0xA2;
 pub const SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH: u32 = 0xA3;
 /// Get current authority AccountId (writes a Norito-encoded blob to INPUT and returns pointer in x10)
 pub const SYSCALL_GET_AUTHORITY: u32 = 0xA4;
-/// Get the current trusted host time in unix milliseconds.
-pub const SYSCALL_CURRENT_TIME_MS: u32 = 0xA8;
 /// Execute subscription billing based on trigger metadata and subscription state.
 pub const SYSCALL_SUBSCRIPTION_BILL: u32 = 0xA5;
 /// Record subscription usage from trigger args payload.
 pub const SYSCALL_SUBSCRIPTION_RECORD_USAGE: u32 = 0xA6;
 /// Resolve a canonical alias literal (for example `merchant@centralbank`) to the current AccountId.
 pub const SYSCALL_RESOLVE_ACCOUNT_ALIAS: u32 = 0xA7;
+/// Get the current trusted host time in unix milliseconds.
+pub const SYSCALL_CURRENT_TIME_MS: u32 = 0xA8;
+/// Call a deployed ABI v1 contract synchronously by deterministic contract subject.
+pub const SYSCALL_CALL_CONTRACT: u32 = 0xA9;
 /// Begin an atomic cross-transaction (AXT) envelope.
 pub const SYSCALL_AXT_BEGIN: u32 = 0xB0;
 /// Declare a DS touch within an active AXT.
@@ -446,6 +463,9 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_JSON_GET_BLOB_HEX,
             SYSCALL_JSON_GET_NUMERIC,
             SYSCALL_JSON_GET_ASSET_DEFINITION_ID,
+            SYSCALL_JSON_OBJECT,
+            SYSCALL_JSON_SET_I64,
+            SYSCALL_JSON_SET_ACCOUNT_ID,
         ]);
         v.push(SYSCALL_SCHEMA_ENCODE);
         v.push(SYSCALL_SCHEMA_DECODE);
@@ -548,6 +568,7 @@ pub fn syscalls_for_policy(policy: crate::SyscallPolicy) -> &'static [u32] {
             SYSCALL_CREATE_NFTS_FOR_ALL_USERS,
             SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH,
             SYSCALL_GET_AUTHORITY,
+            SYSCALL_CALL_CONTRACT,
             SYSCALL_CURRENT_TIME_MS,
             SYSCALL_SUBSCRIPTION_BILL,
             SYSCALL_SUBSCRIPTION_RECORD_USAGE,
@@ -707,6 +728,9 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_JSON_GET_BLOB_HEX => "JSON_GET_BLOB_HEX",
         SYSCALL_JSON_GET_ASSET_DEFINITION_ID => "JSON_GET_ASSET_DEFINITION_ID",
         SYSCALL_JSON_GET_NUMERIC => "JSON_GET_NUMERIC",
+        SYSCALL_JSON_OBJECT => "JSON_OBJECT",
+        SYSCALL_JSON_SET_I64 => "JSON_SET_I64",
+        SYSCALL_JSON_SET_ACCOUNT_ID => "JSON_SET_ACCOUNT_ID",
         SYSCALL_SCHEMA_ENCODE => "SCHEMA_ENCODE",
         SYSCALL_SCHEMA_DECODE => "SCHEMA_DECODE",
         SYSCALL_SCHEMA_INFO => "SCHEMA_INFO",
@@ -724,6 +748,7 @@ pub fn syscall_name(number: u32) -> Option<&'static str> {
         SYSCALL_CREATE_NFTS_FOR_ALL_USERS => "CREATE_NFTS_FOR_ALL_USERS",
         SYSCALL_SET_SMARTCONTRACT_EXECUTION_DEPTH => "SET_SMARTCONTRACT_EXECUTION_DEPTH",
         SYSCALL_GET_AUTHORITY => "GET_AUTHORITY",
+        SYSCALL_CALL_CONTRACT => "CALL_CONTRACT",
         SYSCALL_CURRENT_TIME_MS => "CURRENT_TIME_MS",
         SYSCALL_SUBSCRIPTION_BILL => "SUBSCRIPTION_BILL",
         SYSCALL_SUBSCRIPTION_RECORD_USAGE => "SUBSCRIPTION_RECORD_USAGE",

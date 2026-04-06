@@ -71,6 +71,12 @@ pub mod uri {
     pub const PROFILE: &str = "/debug/pprof/profile";
     /// Base path for governance API endpoints
     pub const GOV_BASE: &str = "/v1/gov";
+    /// Base path for Ministry API endpoints.
+    pub const MINISTRY_BASE: &str = "/v1/ministry";
+    /// Ministry: build a draft agenda proposal transaction for local signing.
+    pub const MINISTRY_AGENDA_PROPOSAL_DRAFT: &str = "/v1/ministry/agenda/proposals/draft";
+    /// Ministry: fetch a submitted agenda proposal by proposal id.
+    pub const MINISTRY_AGENDA_PROPOSAL_GET: &str = "/v1/ministry/agenda/proposals/{proposal_id}";
     /// Governance: create a proposal to deploy IVM bytecode (.to)
     pub const GOV_PROPOSE_DEPLOY: &str = "/v1/gov/proposals/deploy-contract";
     /// Governance: submit a ZK ballot (default mode)

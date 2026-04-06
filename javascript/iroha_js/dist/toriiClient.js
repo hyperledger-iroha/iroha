@@ -179,6 +179,7 @@ const SCCP_HUB_MESSAGE_KIND_VALUES = new Set([
   "RouteActivate",
   "Transfer",
 ]);
+const SCCP_CHAIN_FAMILY_VALUES = new Set(["Evm", "Solana", "Ton", "Tron", "Substrate"]);
 const SCCP_MESSAGE_PAYLOAD_KIND_VALUES = new Set(["AssetRegister", "RouteActivate", "Transfer"]);
 const SUBSCRIPTION_STATUS_VALUES = new Set([
   "active",
@@ -4182,6 +4183,31 @@ export class ToriiClient {
   }
 
   /**
+   * Fetch a normalized SCCP counterparty proof job (`GET /v1/sccp/jobs/message/{message_id}`).
+   * @param {string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView} messageIdHex
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async getSccpMessageProofJob(messageIdHex, options = {}) {
+    const normalizedMessageId = normalizeHex32String(
+      messageIdHex,
+      "getSccpMessageProofJob.messageIdHex",
+    );
+    const { signal } = normalizeSignalOnlyOption(options, "getSccpMessageProofJob");
+    const response = await this._request(
+      "GET",
+      `/v1/sccp/jobs/message/${normalizedMessageId}`,
+      {
+        headers: { Accept: "application/json" },
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    return normalizeSccpCounterpartyProofJob(payload);
+  }
+
+  /**
    * Fetch the active ABI version (`GET /v1/runtime/abi/active`).
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiRuntimeAbiActiveResponse>}
@@ -5129,6 +5155,67 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     return normalizeGovernanceCouncilAuditResponse(payload);
+  }
+
+  /**
+   * Draft a Ministry agenda proposal submission transaction (`POST /v1/ministry/agenda/proposals/draft`).
+   * @param {{ proposal: Record<string, unknown>, authority: string }} payload
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async draftMinistryAgendaProposal(payload, options = {}) {
+    const body = JSON.stringify(normalizeMinistryAgendaProposalDraftRequest(payload));
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "draftMinistryAgendaProposal",
+    );
+    const response = await this._request(
+      "POST",
+      "/v1/ministry/agenda/proposals/draft",
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body,
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const draft = await this._maybeJson(response);
+    return normalizeMinistryAgendaProposalDraftResponse(draft);
+  }
+
+  /**
+   * Fetch a submitted Ministry agenda proposal record (`GET /v1/ministry/agenda/proposals/{proposal_id}`).
+   * @param {string} proposalId
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async getMinistryAgendaProposal(proposalId, options = {}) {
+    const normalizedProposalId = requireNonEmptyString(
+      proposalId,
+      "getMinistryAgendaProposal.proposalId",
+    );
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "getMinistryAgendaProposal",
+    );
+    const response = await this._request(
+      "GET",
+      `/v1/ministry/agenda/proposals/${encodeURIComponent(normalizedProposalId)}`,
+      {
+        headers: { Accept: "application/json" },
+        signal,
+      },
+    );
+    if (response.status === 404) {
+      return normalizeMinistryAgendaProposalGetResponse(
+        { found: false, record: null },
+        "ministry agenda proposal lookup response",
+      );
+    }
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    return normalizeMinistryAgendaProposalGetResponse(payload);
   }
 
   /**
@@ -13097,6 +13184,10 @@ function normalizeSccpCapabilitiesResponse(payload) {
       record.message_proof_path,
       "sccp capabilities response.message_proof_path",
     ),
+    messageJobPath: requireNonEmptyString(
+      record.message_job_path,
+      "sccp capabilities response.message_job_path",
+    ),
     proofManifestPath: requireNonEmptyString(
       record.proof_manifest_path,
       "sccp capabilities response.proof_manifest_path",
@@ -13171,6 +13262,161 @@ function normalizeSccpCounterpartyCapability(value, context) {
       record.counterparty_account_codec_key,
       `${context}.counterparty_account_codec_key`,
     ),
+  };
+}
+
+function normalizeSccpSubmissionArgument(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    key: requireNonEmptyString(record.key, `${context}.key`),
+    description: requireNonEmptyString(record.description, `${context}.description`),
+  };
+}
+
+function normalizeSccpCounterpartySubmissionTemplate(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    encoding: requireNonEmptyString(record.encoding, `${context}.encoding`),
+    submissionKind: requireNonEmptyString(record.submission_kind, `${context}.submission_kind`),
+    verifierEntrypoint: requireNonEmptyString(
+      record.verifier_entrypoint,
+      `${context}.verifier_entrypoint`,
+    ),
+    requiredArguments: parseRecordArray(
+      record.required_arguments,
+      `${context}.required_arguments`,
+    ).map((entry, index) =>
+      normalizeSccpSubmissionArgument(entry, `${context}.required_arguments[${index}]`),
+    ),
+  };
+}
+
+function normalizeSccpSubmissionArgumentValue(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    key: requireNonEmptyString(record.key, `${context}.key`),
+    encoding: requireNonEmptyString(record.encoding, `${context}.encoding`),
+    bytes: normalizeArbitraryHex(record.bytes, `${context}.bytes`),
+  };
+}
+
+function normalizeSccpEvmWordPublicInputs(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    messageId: normalizeHex32String(record.message_id, `${context}.message_id`),
+    payloadHash: normalizeHex32String(record.payload_hash, `${context}.payload_hash`),
+    targetDomainWord: normalizeHex32String(
+      record.target_domain_word,
+      `${context}.target_domain_word`,
+    ),
+    commitmentRoot: normalizeHex32String(record.commitment_root, `${context}.commitment_root`),
+    finalityHeightWord: normalizeHex32String(
+      record.finality_height_word,
+      `${context}.finality_height_word`,
+    ),
+    finalityBlockHash: normalizeHex32String(
+      record.finality_block_hash,
+      `${context}.finality_block_hash`,
+    ),
+  };
+}
+
+function normalizeSccpPlatformSubmissionPayload(value, context) {
+  const record = ensureRecord(value, context);
+  const platform = requireNonEmptyString(record.platform, `${context}.platform`);
+  const payload = ensureRecord(record.payload, `${context}.payload`);
+  switch (platform) {
+    case "evm_contract_call":
+    case "tron_contract_call":
+      return {
+        kind: platform,
+        value: {
+          proofBytes: normalizeArbitraryHex(payload.proof_bytes, `${context}.payload.proof_bytes`),
+          publicInputs: normalizeSccpEvmWordPublicInputs(
+            payload.public_inputs,
+            `${context}.payload.public_inputs`,
+          ),
+          statementHash: normalizeHex32String(
+            payload.statement_hash,
+            `${context}.payload.statement_hash`,
+          ),
+        },
+      };
+    case "solana_program_instruction":
+    case "substrate_runtime_call":
+      return {
+        kind: platform,
+        value: {
+          proofBytes: normalizeArbitraryHex(payload.proof_bytes, `${context}.payload.proof_bytes`),
+          publicInputsBytes: normalizeArbitraryHex(
+            payload.public_inputs_bytes,
+            `${context}.payload.public_inputs_bytes`,
+          ),
+          bundleBytes: normalizeArbitraryHex(
+            payload.bundle_bytes,
+            `${context}.payload.bundle_bytes`,
+          ),
+        },
+      };
+    case "ton_internal_message":
+      return {
+        kind: platform,
+        value: {
+          proofCell: normalizeArbitraryHex(payload.proof_cell, `${context}.payload.proof_cell`),
+          publicInputsCell: normalizeArbitraryHex(
+            payload.public_inputs_cell,
+            `${context}.payload.public_inputs_cell`,
+          ),
+          bundleCell: normalizeArbitraryHex(
+            payload.bundle_cell,
+            `${context}.payload.bundle_cell`,
+          ),
+        },
+      };
+    default:
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.platform must be a supported SCCP platform payload`,
+        `${context}.platform`,
+      );
+  }
+}
+
+function normalizeSccpCounterpartySubmissionPackage(value, context) {
+  const record = ensureRecord(value, context);
+  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    proofFamily: requireNonEmptyString(record.proof_family, `${context}.proof_family`),
+    verifierBackendKey: requireNonEmptyString(
+      verifierBackend.key,
+      `${context}.verifier_backend.key`,
+    ),
+    envelopeEncoding: requireNonEmptyString(
+      record.envelope_encoding,
+      `${context}.envelope_encoding`,
+    ),
+    submissionKind: requireNonEmptyString(
+      record.submission_kind,
+      `${context}.submission_kind`,
+    ),
+    verifierEntrypoint: requireNonEmptyString(
+      record.verifier_entrypoint,
+      `${context}.verifier_entrypoint`,
+    ),
+    platformPayload: normalizeSccpPlatformSubmissionPayload(
+      record.platform_payload,
+      `${context}.platform_payload`,
+    ),
+    arguments: parseRecordArray(record.arguments, `${context}.arguments`).map((entry, index) =>
+      normalizeSccpSubmissionArgumentValue(entry, `${context}.arguments[${index}]`),
+    ),
+    envelopeBytes: normalizeArbitraryHex(record.envelope_bytes, `${context}.envelope_bytes`),
   };
 }
 
@@ -13261,6 +13507,10 @@ function normalizeSccpProofManifest(value, context) {
     ).map((entry, index) =>
       requireNonEmptyString(entry, `${context}.message_payload_kinds[${index}]`),
     ),
+    submissionTemplate: normalizeSccpCounterpartySubmissionTemplate(
+      record.submission_template,
+      `${context}.submission_template`,
+    ),
   };
 }
 
@@ -13309,6 +13559,10 @@ function normalizeSccpMessageTransparentProofArtifact(payload) {
       `${context}.public_inputs`,
     ),
     proofBytes: normalizeArbitraryHex(record.proof_bytes, `${context}.proof_bytes`),
+    submissionPackage: normalizeSccpCounterpartySubmissionPackage(
+      record.submission_package,
+      `${context}.submission_package`,
+    ),
     bundle: normalizeSccpMessageProofBundle(record.bundle, `${context}.bundle`),
   };
   if (artifact.bundle.commitment.messageId !== artifact.publicInputs.messageId) {
@@ -13333,6 +13587,227 @@ function normalizeSccpMessageTransparentProofArtifact(payload) {
     );
   }
   return artifact;
+}
+
+function normalizeSccpCounterpartyProofJob(payload) {
+  const context = "sccp message proof job response";
+  const record = ensureRecord(payload, context);
+  const chainFamily = requireNonEmptyString(record.chain_family, `${context}.chain_family`);
+  const finalityModel = requireNonEmptyString(record.finality_model, `${context}.finality_model`);
+  const verifierTarget = requireNonEmptyString(
+    record.verifier_target,
+    `${context}.verifier_target`,
+  );
+  if (!SCCP_CHAIN_FAMILY_VALUES.has(chainFamily)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.chain_family must be a supported SCCP chain family`,
+      `${context}.chain_family`,
+    );
+  }
+  if (!SCCP_FINALITY_MODEL_VALUES.has(finalityModel)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.finality_model must be a supported SCCP finality model`,
+      `${context}.finality_model`,
+    );
+  }
+  if (!SCCP_VERIFIER_TARGET_VALUES.has(verifierTarget)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.verifier_target must be a supported SCCP verifier target`,
+      `${context}.verifier_target`,
+    );
+  }
+  const job = {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    chainFamily,
+    chain: requireNonEmptyString(record.chain, `${context}.chain`),
+    localDomain: ToriiClient._normalizeUnsignedInteger(record.local_domain, `${context}.local_domain`, {
+      allowZero: true,
+    }),
+    counterpartyDomain: ToriiClient._normalizeUnsignedInteger(
+      record.counterparty_domain,
+      `${context}.counterparty_domain`,
+      { allowZero: true },
+    ),
+    proofFamily: requireNonEmptyString(record.proof_family, `${context}.proof_family`),
+    messageBackend: requireNonEmptyString(record.message_backend, `${context}.message_backend`),
+    registryBackend: requireNonEmptyString(record.registry_backend, `${context}.registry_backend`),
+    manifestSeed: requireNonEmptyString(record.manifest_seed, `${context}.manifest_seed`),
+    finalityModel,
+    verifierTarget,
+    publicInputs: normalizeSccpMessageTransparentPublicInputs(
+      record.public_inputs,
+      `${context}.public_inputs`,
+    ),
+    payloadKind: requireNonEmptyString(record.payload_kind, `${context}.payload_kind`),
+    payloadProjection: normalizeSccpPayloadProjection(
+      record.payload_projection,
+      `${context}.payload_projection`,
+    ),
+    submissionTemplate: normalizeSccpCounterpartySubmissionTemplate(
+      record.submission_template,
+      `${context}.submission_template`,
+    ),
+    submissionPackage: normalizeSccpCounterpartySubmissionPackage(
+      record.submission_package,
+      `${context}.submission_package`,
+    ),
+    bundle: normalizeSccpMessageProofBundle(record.bundle, `${context}.bundle`),
+  };
+  if (job.bundle.commitment.messageId !== job.publicInputs.messageId) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.bundle.commitment.message_id must match public_inputs.message_id`,
+      `${context}.bundle.commitment.message_id`,
+    );
+  }
+  if (job.bundle.commitment.payloadHash !== job.publicInputs.payloadHash) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.bundle.commitment.payload_hash must match public_inputs.payload_hash`,
+      `${context}.bundle.commitment.payload_hash`,
+    );
+  }
+  if (job.bundle.commitmentRoot !== job.publicInputs.commitmentRoot) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.bundle.commitment_root must match public_inputs.commitment_root`,
+      `${context}.bundle.commitment_root`,
+    );
+  }
+  return job;
+}
+
+function normalizeSccpPayloadProjection(value, context) {
+  const record = ensureRecord(value, context);
+  const entries = Object.entries(record);
+  if (entries.length !== 1) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must contain exactly one SCCP payload projection variant`,
+      context,
+    );
+  }
+  const [[kind, body]] = entries;
+  const variant = ensureRecord(body, `${context}.${kind}`);
+  if (!SCCP_MESSAGE_PAYLOAD_KIND_VALUES.has(kind)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} has unsupported SCCP payload projection variant`,
+      context,
+    );
+  }
+  const payload = { ...variant };
+  const numericFields = {
+    AssetRegister: ["version", "target_domain", "home_domain", "nonce", "decimals"],
+    RouteActivate: ["version", "source_domain", "target_domain", "nonce"],
+    Transfer: [
+      "version",
+      "source_domain",
+      "dest_domain",
+      "nonce",
+      "asset_home_domain",
+      "amount",
+    ],
+  }[kind];
+  for (const field of numericFields) {
+    payload[field] = ToriiClient._normalizeUnsignedInteger(
+      payload[field],
+      `${context}.${kind}.${field}`,
+      { allowZero: true },
+    );
+  }
+  if (kind === "AssetRegister" || kind === "RouteActivate" || kind === "Transfer") {
+    payload.asset_id = normalizeSccpNormalizedCodecValue(
+      payload.asset_id,
+      `${context}.${kind}.asset_id`,
+    );
+  }
+  if (kind === "RouteActivate" || kind === "Transfer") {
+    payload.route_id = normalizeSccpNormalizedCodecValue(
+      payload.route_id,
+      `${context}.${kind}.route_id`,
+    );
+  }
+  if (kind === "Transfer") {
+    payload.sender = normalizeSccpNormalizedCodecValue(
+      payload.sender,
+      `${context}.${kind}.sender`,
+    );
+    payload.recipient = normalizeSccpNormalizedCodecValue(
+      payload.recipient,
+      `${context}.${kind}.recipient`,
+    );
+  }
+  return { kind, value: payload };
+}
+
+function normalizeSccpNormalizedCodecValue(value, context) {
+  const record = ensureRecord(value, context);
+  const entries = Object.entries(record);
+  if (entries.length !== 1) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must contain exactly one SCCP codec variant`,
+      context,
+    );
+  }
+  const [[kind, body]] = entries;
+  const variant = ensureRecord(body, `${context}.${kind}`);
+  switch (kind) {
+    case "TextUtf8":
+      return {
+        kind,
+        value: requireNonEmptyString(variant.value, `${context}.${kind}.value`),
+      };
+    case "EvmHex":
+    case "SolanaBase58":
+      return {
+        kind,
+        bytes: normalizeSccpCodecScalarValue(variant.bytes, `${context}.${kind}.bytes`),
+      };
+    case "TonRaw":
+      return {
+        kind,
+        workchain: coerceInteger(variant.workchain, `${context}.${kind}.workchain`),
+        account: normalizeSccpCodecScalarValue(variant.account, `${context}.${kind}.account`),
+      };
+    case "TronBase58Check":
+      return {
+        kind,
+        payload: normalizeSccpCodecScalarValue(variant.payload, `${context}.${kind}.payload`),
+      };
+    default:
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} has unsupported SCCP codec variant`,
+        context,
+      );
+  }
+}
+
+function normalizeSccpCodecScalarValue(value, context) {
+  if (Buffer.isBuffer(value)) {
+    return value.toString("hex");
+  }
+  if (ArrayBuffer.isView(value)) {
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("hex");
+  }
+  if (value instanceof ArrayBuffer) {
+    return Buffer.from(value).toString("hex");
+  }
+  if (Array.isArray(value)) {
+    return normalizeByteArray(value, context).toString("hex");
+  }
+  const text = requireNonEmptyString(value, context).trim();
+  if (/^(0x)?[0-9a-fA-F]+$/.test(text)) {
+    return normalizeArbitraryHex(text, context);
+  }
+  return text;
 }
 
 function normalizeSccpMessageTransparentPublicInputs(value, context) {
@@ -17903,6 +18378,83 @@ function normalizeGovernanceEnactPayload(input) {
     );
   }
   return payload;
+}
+
+function normalizeMinistryAgendaProposalDraftRequest(input) {
+  const record = ensureRecord(input, "draftMinistryAgendaProposal payload");
+  return {
+    proposal: ensureRecord(
+      record.proposal,
+      "draftMinistryAgendaProposal.proposal",
+    ),
+    authority: requireNonEmptyString(
+      record.authority,
+      "draftMinistryAgendaProposal.authority",
+    ),
+  };
+}
+
+function normalizeMinistryAgendaProposalRecord(
+  payload,
+  context = "ministry agenda proposal record",
+) {
+  const record = ensureRecord(payload, context);
+  return {
+    proposal: ensureRecord(record.proposal, `${context}.proposal`),
+    authority: requireNonEmptyString(record.authority, `${context}.authority`),
+    submitted_tx_hash_hex: normalizeHex32String(
+      record.submitted_tx_hash_hex,
+      `${context}.submitted_tx_hash_hex`,
+    ),
+    submitted_height: ToriiClient._normalizeUnsignedInteger(
+      record.submitted_height,
+      `${context}.submitted_height`,
+      { allowZero: true },
+    ),
+  };
+}
+
+function normalizeMinistryAgendaProposalDraftResponse(
+  payload,
+  context = "ministry agenda proposal draft response",
+) {
+  const record = ensureRecord(payload, context);
+  const base = normalizeGovernanceDraftResponse(
+    {
+      ok: record.ok,
+      tx_instructions: record.tx_instructions ?? [],
+    },
+    context,
+  );
+  return {
+    ok: base.ok,
+    agenda_proposal_id: requireNonEmptyString(
+      record.agenda_proposal_id,
+      `${context}.agenda_proposal_id`,
+    ),
+    authority: requireNonEmptyString(record.authority, `${context}.authority`),
+    tx_instructions: base.tx_instructions,
+    signable_transaction_b64: requireNonEmptyString(
+      record.signable_transaction_b64,
+      `${context}.signable_transaction_b64`,
+    ),
+  };
+}
+
+function normalizeMinistryAgendaProposalGetResponse(
+  payload,
+  context = "ministry agenda proposal lookup response",
+) {
+  const record = ensureRecord(payload, context);
+  const found = Boolean(record.found);
+  const proposalRecord =
+    record.record === undefined || record.record === null
+      ? null
+      : normalizeMinistryAgendaProposalRecord(record.record, `${context}.record`);
+  return {
+    found,
+    record: proposalRecord,
+  };
 }
 
 function normalizeGovernanceWindow(value, name) {

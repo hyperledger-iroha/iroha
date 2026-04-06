@@ -17,9 +17,12 @@ Options:
   --runtime-timeout-s <N>          Timeout in seconds for one runtime run (default: 0, disabled)
   --target-dir <PATH>              Set CARGO_TARGET_DIR (default: /tmp/iroha_target_cross_opt_rolling)
   --output-dir <PATH>              Matrix output directory (default: /tmp/iroha_gapfill_matrix)
+  --fast                           Run cargo via scripts/cargo_fast.sh when available
+  --fast-zero-debug                With --fast, set CARGO_PROFILE_{DEV,TEST}_DEBUG=0
+  --fast-no-incremental            With --fast, set CARGO_INCREMENTAL=0
   --cargo-jobs <N>                 Set CARGO_BUILD_JOBS for cargo test (default: 1)
   --test-threads <N>               --test-threads for cargo test (default: 1)
-  --prefer-test-binary             Prefer running prebuilt test binary from <target-dir>/debug/deps/mod-*
+  --prefer-test-binary             Prefer running prebuilt test binary from <target-dir>/debug/deps/nexus_and_streaming-*
   --summary-json-rows              Include per-run row arrays in matrix_summary.json
   --skip-cross                     Skip all cross-dataspace runs
   --skip-runtime                   Skip all runtime-registration runs
@@ -97,6 +100,10 @@ PREFER_TEST_BINARY=false
 SUMMARY_JSON_ROWS=false
 CACHED_CROSS_TEST_BIN=""
 CACHED_RUNTIME_TEST_BIN=""
+USE_CARGO_FAST=false
+FAST_ZERO_DEBUG=false
+FAST_NO_INCREMENTAL=false
+PERMIT_DIR_OVERRIDE=""
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -139,6 +146,18 @@ while [[ $# -gt 0 ]]; do
       require_option_value "--output-dir" "${2-}" true
       OUTPUT_DIR="$2"
       shift 2
+      ;;
+    --fast)
+      USE_CARGO_FAST=true
+      shift
+      ;;
+    --fast-zero-debug)
+      FAST_ZERO_DEBUG=true
+      shift
+      ;;
+    --fast-no-incremental)
+      FAST_NO_INCREMENTAL=true
+      shift
       ;;
     --cargo-jobs)
       require_option_value "--cargo-jobs" "${2-}"
@@ -199,6 +218,31 @@ require_nonnegative_int "--runtime-timeout-s" "$RUNTIME_TIMEOUT_S"
 require_positive_int "--cargo-jobs" "$CARGO_JOBS"
 require_positive_int "--test-threads" "$TEST_THREADS"
 
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")"/../.. && pwd)"
+cargo_runner=(cargo)
+if [[ "${USE_CARGO_FAST}" == true ]]; then
+  cargo_fast_script="${repo_root}/scripts/cargo_fast.sh"
+  if [[ ! -x "${cargo_fast_script}" ]]; then
+    echo "scripts/cargo_fast.sh is not available or not executable" >&2
+    exit 2
+  fi
+  cargo_runner=("${cargo_fast_script}")
+  if [[ "${FAST_ZERO_DEBUG}" == true ]]; then
+    cargo_runner+=("--zero-debug")
+  fi
+  if [[ "${FAST_NO_INCREMENTAL}" == true ]]; then
+    cargo_runner+=("--no-incremental")
+  fi
+  echo "[matrix] using scripts/cargo_fast.sh for cargo commands"
+elif [[ "${FAST_ZERO_DEBUG}" == true || "${FAST_NO_INCREMENTAL}" == true ]]; then
+  echo "--fast-zero-debug and --fast-no-incremental require --fast" >&2
+  exit 2
+fi
+
+if [[ -z "${IROHA_TEST_NETWORK_PERMIT_DIR+x}" ]]; then
+  PERMIT_DIR_OVERRIDE="$(mktemp -d)"
+fi
+
 if [[ "$CROSS_RUNS" -eq 0 ]]; then
   RUN_CROSS=false
 fi
@@ -238,6 +282,9 @@ build_env_vars() {
   fi
   if [[ "$SKIP_BINDINGS_SYNC" == true ]]; then
     ENV_VARS+=("NORITO_SKIP_BINDINGS_SYNC=1")
+  fi
+  if [[ -n "${PERMIT_DIR_OVERRIDE}" ]]; then
+    ENV_VARS+=("IROHA_TEST_NETWORK_PERMIT_DIR=${PERMIT_DIR_OVERRIDE}")
   fi
 }
 
@@ -314,7 +361,7 @@ file_mtime_epoch() {
   printf '0\n'
 }
 
-list_mod_test_binaries_by_mtime_desc() {
+list_nexus_test_binaries_by_mtime_desc() {
   local deps_dir="${TARGET_DIR}/debug/deps"
   local candidate mtime
   if [[ ! -d "${deps_dir}" ]]; then
@@ -323,10 +370,10 @@ list_mod_test_binaries_by_mtime_desc() {
   while IFS= read -r candidate; do
     mtime=$(file_mtime_epoch "${candidate}")
     printf '%s\t%s\n' "${mtime}" "${candidate}"
-  done < <(find "${deps_dir}" -maxdepth 1 -type f -name 'mod-*' -perm -111)
+  done < <(find "${deps_dir}" -maxdepth 1 -type f -name 'nexus_and_streaming-*' -perm -111)
 }
 
-resolve_mod_test_binary_for_filter() {
+resolve_nexus_test_binary_for_filter() {
   local test_filter="$1"
   local candidate list_output expected_test_id
   expected_test_id=$(expected_test_id_for_filter "${test_filter}")
@@ -346,7 +393,7 @@ resolve_mod_test_binary_for_filter() {
       printf '%s\n' "${candidate}"
       return 0
     fi
-  done < <(list_mod_test_binaries_by_mtime_desc | sort -rn -k1,1)
+  done < <(list_nexus_test_binaries_by_mtime_desc | sort -rn -k1,1)
 
   return 1
 }
@@ -370,9 +417,9 @@ require_resolved_test_binary() {
   local test_filter="$1"
   local test_bin
 
-  test_bin=$(resolve_mod_test_binary_for_filter "${test_filter}" || true)
+  test_bin=$(resolve_nexus_test_binary_for_filter "${test_filter}" || true)
   if [[ -z "${test_bin}" ]]; then
-    echo "Unable to locate executable mod-* test binary under ${TARGET_DIR}/debug/deps containing test filter '${test_filter}'" >&2
+    echo "Unable to locate executable nexus_and_streaming-* test binary under ${TARGET_DIR}/debug/deps containing test filter '${test_filter}'" >&2
     exit 2
   fi
   printf '%s\n' "${test_bin}"
@@ -397,7 +444,7 @@ run_cross() {
     echo "[matrix] resolved test binary for ${test_filter}: ${test_bin}"
     command=("${test_bin}" "${test_filter}" "--nocapture" "--test-threads=${TEST_THREADS}")
   else
-    command=(cargo test -p integration_tests --test mod "${test_filter}" -- --nocapture --test-threads="${TEST_THREADS}")
+    command=("${cargo_runner[@]}" -- test -p integration_tests --test nexus_and_streaming "${test_filter}" -- --nocapture --test-threads="${TEST_THREADS}")
   fi
   start_ts=$(date +%s)
   if run_with_timeout "${CROSS_TIMEOUT_S}" "${timeout_marker}" env "${ENV_VARS[@]}" "${command[@]}" >"${log_path}" 2>&1; then
@@ -454,7 +501,7 @@ run_runtime() {
     echo "[matrix] resolved test binary for ${test_filter}: ${test_bin}"
     command=("${test_bin}" "${test_filter}" "--nocapture" "--test-threads=${TEST_THREADS}")
   else
-    command=(cargo test -p integration_tests --test mod "${test_filter}" -- --nocapture --test-threads="${TEST_THREADS}")
+    command=("${cargo_runner[@]}" -- test -p integration_tests --test nexus_and_streaming "${test_filter}" -- --nocapture --test-threads="${TEST_THREADS}")
   fi
   start_ts=$(date +%s)
   if run_with_timeout "${RUNTIME_TIMEOUT_S}" "${timeout_marker}" env "${ENV_VARS[@]}" "${command[@]}" >"${log_path}" 2>&1; then

@@ -39,7 +39,7 @@ use iroha_crypto::{Hash, KeyPair};
 use iroha_executor_data_model::permission::governance::{
     CanEnactGovernance, CanProposeContractDeployment, CanSubmitGovernanceBallot,
 };
-use iroha_test_network::NetworkBuilder;
+use iroha_test_network::{NetworkBuilder, ensure_domain_registration_lease_for_network};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, gen_account_in};
 
 const CITIZEN_COUNT: usize = 20;
@@ -1000,14 +1000,16 @@ async fn setup_hostile_fixture(
 
     let gov_domain_id = DomainId::parse_fully_qualified(GOV_DOMAIN_ID)?;
     let asset_def_id = governance_asset_definition_id();
+    ensure_domain_registration_lease_for_network(&network, &gov_domain_id)
+        .wrap_err("seed governance domain registration lease for hostile fixture")?;
     alice
-        .submit(Register::domain(Domain::new(gov_domain_id.clone())))
+        .submit_blocking(Register::domain(Domain::new(gov_domain_id.clone())))
         .wrap_err("register governance domain for hostile fixture")?;
     wait_for_domain_registration(&alice, &gov_domain_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for governance domain registration in hostile fixture")?;
     alice
-        .submit(Register::asset_definition(
+        .submit_blocking(Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
         ))
@@ -1026,7 +1028,7 @@ async fn setup_hostile_fixture(
     .into();
     let enact_perm: Permission = CanEnactGovernance.into();
     alice
-        .submit_all([
+        .submit_all_blocking([
             Grant::account_permission(deploy_perm, ALICE_ID.clone()),
             Grant::account_permission(runtime_perm, ALICE_ID.clone()),
             Grant::account_permission(enact_perm, ALICE_ID.clone()),
@@ -1034,7 +1036,7 @@ async fn setup_hostile_fixture(
         .wrap_err("grant hostile-fixture governance permissions to alice")?;
 
     alice
-        .submit_all(
+        .submit_all_blocking(
             attackers
                 .iter()
                 .chain(honest.iter())
@@ -1052,12 +1054,21 @@ async fn setup_hostile_fixture(
     let total_accounts = attacker_count.saturating_add(honest_count);
     let total_fund = CITIZEN_FUND.saturating_mul(u128::try_from(total_accounts).expect("count"));
     let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-    alice
+    let funding_mint_tx_hash = alice
         .submit(Mint::asset_numeric(
             u64::try_from(total_fund).expect("mint amount should fit u64"),
             alice_asset_id.clone(),
         ))
         .wrap_err("mint hostile-fixture governance balances")?;
+    wait_for_tx_applied(
+        &http,
+        &alice.torii_url,
+        &hex::encode(funding_mint_tx_hash.as_ref()),
+        Duration::from_secs(180),
+        "wait for hostile-fixture proposer mint tx to be applied",
+    )
+    .await
+    .wrap_err("wait for hostile-fixture proposer mint tx")?;
     wait_for_asset_balance(
         &alice,
         alice_asset_id.clone(),
@@ -1069,7 +1080,7 @@ async fn setup_hostile_fixture(
     .wrap_err("wait for hostile-fixture proposer mint balance")?;
 
     alice
-        .submit_all(
+        .submit_all_blocking(
             attackers
                 .iter()
                 .chain(honest.iter())
@@ -1228,14 +1239,16 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
 
     let gov_domain_id = DomainId::parse_fully_qualified(GOV_DOMAIN_ID)?;
     let asset_def_id = governance_asset_definition_id();
+    ensure_domain_registration_lease_for_network(&network, &gov_domain_id)
+        .wrap_err("seed governance domain registration lease")?;
     alice
-        .submit(Register::domain(Domain::new(gov_domain_id.clone())))
+        .submit_blocking(Register::domain(Domain::new(gov_domain_id.clone())))
         .wrap_err("register governance domain")?;
     wait_for_domain_registration(&alice, &gov_domain_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for governance domain registration")?;
     alice
-        .submit(Register::asset_definition(
+        .submit_blocking(Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
         ))
@@ -1255,7 +1268,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     .into();
     let enact_perm: Permission = CanEnactGovernance.into();
     alice
-        .submit_all([
+        .submit_all_blocking([
             Grant::account_permission(propose_perm, ALICE_ID.clone()),
             Grant::account_permission(reject_propose_perm, ALICE_ID.clone()),
             Grant::account_permission(enact_perm, ALICE_ID.clone()),
@@ -1263,7 +1276,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .wrap_err("grant governance proposal/enact permissions to alice")?;
 
     alice
-        .submit_all(
+        .submit_all_blocking(
             citizens
                 .iter()
                 .map(|(account_id, _)| Register::account(Account::new(account_id.clone()))),
@@ -1275,7 +1288,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
             .wrap_err_with(|| format!("wait for account registration `{account_id}`"))?;
     }
     alice
-        .submit(Register::account(Account::new(outsider_id.clone())))
+        .submit_blocking(Register::account(Account::new(outsider_id.clone())))
         .wrap_err("register outsider account for negative authorization tests")?;
     wait_for_account_registration(&alice, &outsider_id, Duration::from_secs(180))
         .await
@@ -1284,12 +1297,21 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
 
     let total_fund = CITIZEN_FUND.saturating_mul(u128::try_from(CITIZEN_COUNT).expect("count"));
     let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-    alice
+    let funding_mint_tx_hash = alice
         .submit(Mint::asset_numeric(
             u64::try_from(total_fund).expect("total fund should fit u64"),
             alice_asset_id.clone(),
         ))
         .wrap_err("mint total governance balances for citizen funding")?;
+    wait_for_tx_applied(
+        &http,
+        &alice.torii_url,
+        &hex::encode(funding_mint_tx_hash.as_ref()),
+        Duration::from_secs(180),
+        "wait for proposer funding mint tx to be applied",
+    )
+    .await
+    .wrap_err("wait for proposer funding mint tx")?;
     if let Err(initial_mint_wait_err) = wait_for_asset_balance(
         &alice,
         alice_asset_id.clone(),
@@ -1307,7 +1329,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         }
         let missing = total_fund.saturating_sub(observed);
         if missing > 0 {
-            alice
+            let retry_mint_tx_hash = alice
                 .submit(Mint::asset_numeric(
                     u64::try_from(missing).expect("missing fund should fit u64"),
                     alice_asset_id.clone(),
@@ -1315,6 +1337,15 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
                 .wrap_err(
                     "retry minting missing governance balances for citizen funding after timeout",
                 )?;
+            wait_for_tx_applied(
+                &http,
+                &alice.torii_url,
+                &hex::encode(retry_mint_tx_hash.as_ref()),
+                Duration::from_secs(180),
+                "wait for retry proposer funding mint tx to be applied",
+            )
+            .await
+            .wrap_err("wait for retry proposer funding mint tx")?;
         }
         wait_for_asset_balance(
             &alice,
@@ -1329,7 +1360,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
     eprintln!("sora smoke: proposer funding minted");
 
     alice
-        .submit_all(citizens.iter().flat_map(|(account_id, _)| {
+        .submit_all_blocking(citizens.iter().flat_map(|(account_id, _)| {
             let first_ballot_perm: Permission = CanSubmitGovernanceBallot {
                 referendum_id: referendum_id.clone(),
             }
@@ -1346,7 +1377,7 @@ async fn sora_parliament_lifecycle_smoke() -> Result<()> {
         .wrap_err("grant ballot permissions for both referenda")?;
 
     alice
-        .submit_all(citizens.iter().map(|(account_id, _)| {
+        .submit_all_blocking(citizens.iter().map(|(account_id, _)| {
             Transfer::asset_numeric(
                 AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
                 u64::try_from(CITIZEN_FUND).expect("fund amount should fit u64"),

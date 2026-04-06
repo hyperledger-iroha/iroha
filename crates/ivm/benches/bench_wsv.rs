@@ -141,7 +141,8 @@ fn bench_massive_wsv(c: &mut Criterion) {
     c.bench_function("create_1m_assets_transfer_multi_account", |b| {
         let cores = num_cpus::get_physical();
         let scheduler = Scheduler::new(cores);
-        let domain: Arc<DomainId> = Arc::new("domain".parse().unwrap());
+        let domain: Arc<DomainId> =
+            Arc::new(DomainId::try_new("domain", "universal").expect("benchmark domain id"));
         let precomputed_accounts: Arc<Vec<AccountId>> = Arc::new(
             (0..10)
                 .map(|_| {

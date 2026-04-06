@@ -5,6 +5,7 @@ import json
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
+from urllib.parse import quote
 
 import pytest
 import requests
@@ -15,7 +16,10 @@ if str(PACKAGE_ROOT) not in sys.path:
     sys.path.insert(0, str(PACKAGE_ROOT))
 
 from iroha_torii_client import (  # noqa: E402  (import depends on sys.path mutation)
+    ContractCallResponse,
+    ContractDeployResponse,
     ExplorerAccountQr,
+    GovernanceContractResponse,
     NetworkTimeSnapshot,
     NetworkTimeStatus,
     ToriiClient,
@@ -115,6 +119,140 @@ def test_list_peers_returns_typed_records() -> None:
             "data": None,
         }
     ]
+
+
+def test_deploy_contract_encodes_alias_first_payload_and_parses_response() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            status_code=202,
+            payload={
+                "ok": True,
+                "contract_alias": "router::universal",
+                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                "previous_contract_address": None,
+                "upgraded": False,
+                "dataspace": "universal",
+                "deploy_nonce": 7,
+                "tx_hash_hex": "11" * 32,
+                "code_hash_hex": "22" * 32,
+                "abi_hash_hex": "33" * 32,
+            },
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    result = client.deploy_contract(
+        authority=CANONICAL_OWNER,
+        private_key="00" * 32,
+        code_b64="AQID",
+        contract_alias="router::universal",
+        lease_expiry_ms=1234,
+    )
+
+    assert isinstance(result, ContractDeployResponse)
+    assert result is not None
+    assert result.contract_alias == "router::universal"
+    assert result.deploy_nonce == 7
+    assert len(session.calls) == 1
+    assert session.calls[0]["method"] == "POST"
+    assert session.calls[0]["url"] == "http://node.test/v1/contracts/deploy"
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert payload == {
+        "authority": CANONICAL_OWNER,
+        "private_key": "00" * 32,
+        "code_b64": "AQID",
+        "contract_alias": "router::universal",
+        "lease_expiry_ms": 1234,
+    }
+
+
+def test_call_contract_posts_selector_payload_and_parses_response() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            status_code=202,
+            payload={
+                "ok": True,
+                "submitted": True,
+                "dataspace": "universal",
+                "code_hash_hex": "22" * 32,
+                "abi_hash_hex": "33" * 32,
+                "creation_time_ms": 42,
+                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                "tx_hash_hex": "44" * 32,
+                "entrypoint": "ping",
+                "transaction_scaffold_b64": "AQID",
+                "signed_transaction_b64": "BAUG",
+                "signing_message_b64": "BwgJ",
+            },
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    result = client.call_contract(
+        authority=CANONICAL_OWNER,
+        private_key="00" * 32,
+        contract_alias="router::universal",
+        entrypoint="ping",
+        payload={"value": 1, "labels": ["alpha"]},
+        gas_asset_id="xor#wonderland",
+        gas_limit=5000,
+    )
+
+    assert isinstance(result, ContractCallResponse)
+    assert result.entrypoint == "ping"
+    assert result.creation_time_ms == 42
+    payload = json.loads(session.calls[0]["data"].decode("utf-8"))
+    assert payload == {
+        "authority": CANONICAL_OWNER,
+        "private_key": "00" * 32,
+        "contract_alias": "router::universal",
+        "entrypoint": "ping",
+        "payload": {"value": 1, "labels": ["alpha"]},
+        "gas_asset_id": "xor#wonderland",
+        "gas_limit": 5000,
+    }
+
+
+def test_call_contract_rejects_ambiguous_selector() -> None:
+    client = ToriiClient("http://node.test", session=RecordingSession())
+
+    with pytest.raises(ValueError, match="exactly one of contract_address or contract_alias"):
+        client.call_contract(
+            authority=CANONICAL_OWNER,
+            private_key="00" * 32,
+            contract_address="tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+            contract_alias="router::universal",
+            gas_limit=1,
+        )
+
+
+def test_get_governance_contract_parses_response() -> None:
+    session = RecordingSession()
+    session.queue(
+        StubResponse(
+            payload={
+                "found": True,
+                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                "dataspace": "universal",
+                "code_hash_hex": "22" * 32,
+            },
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    result = client.get_governance_contract(
+        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+    )
+
+    assert isinstance(result, GovernanceContractResponse)
+    assert result.found is True
+    assert result.code_hash_hex == "22" * 32
+    assert session.calls[0]["url"] == (
+        "http://node.test/v1/gov/contracts/"
+        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+    )
 
 
 def test_list_telemetry_peers_info_parses_payload() -> None:
@@ -370,9 +508,7 @@ def test_get_explorer_account_qr_parses_payload_and_params() -> None:
     )
     call = session.calls[0]
     assert call["method"] == "GET"
-    assert call["url"].endswith(
-        "/v1/explorer/accounts/sorauロ1NcMBm2dフBokヱDムナekAbカヘワヌミMFスヱヒZリ2u4WGUMMS63EY6/qr"
-    )
+    assert call["url"].endswith(f"/v1/explorer/accounts/{quote(CANONICAL_OWNER, safe='')}/qr")
     assert call["params"] == {}
     assert call["headers"]["Accept"] == "application/json"
 
@@ -399,7 +535,7 @@ def test_get_explorer_account_qr_accepts_account_alias_path_literal() -> None:
     assert qr.literal == "operator@banka.universal"
     call = session.calls[0]
     assert call["method"] == "GET"
-    assert call["url"].endswith("/v1/explorer/accounts/operator%40hbl.universal/qr")
+    assert call["url"].endswith("/v1/explorer/accounts/operator%40banka.universal/qr")
     assert call["params"] == {}
 
 
@@ -490,6 +626,7 @@ def test_get_sccp_capabilities_parses_snapshot() -> None:
                 "governance_bundle_path": "/v1/sccp/proofs/governance/{message_id}",
                 "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
                 "message_proof_path": "/v1/sccp/artifacts/message/{message_id}",
+                "message_job_path": "/v1/sccp/jobs/message/{message_id}",
                 "proof_manifest_path": "/v1/sccp/manifests",
                 "legacy_burn_registry_backend": "bridge/sccp/burn-v1",
                 "legacy_governance_registry_backend": "bridge/sccp/governance-v1",
@@ -523,6 +660,7 @@ def test_get_sccp_capabilities_parses_snapshot() -> None:
     assert capabilities.local_domain == 0
     assert capabilities.local_chain == "sora"
     assert capabilities.message_proof_path == "/v1/sccp/artifacts/message/{message_id}"
+    assert capabilities.message_job_path == "/v1/sccp/jobs/message/{message_id}"
     assert capabilities.proof_manifest_path == "/v1/sccp/manifests"
     assert capabilities.message_payload_kinds == ["asset_register", "route_activate", "transfer"]
     assert capabilities.codecs[0].key == "ton_raw"
@@ -561,6 +699,37 @@ def test_get_sccp_proof_manifests_parses_snapshot() -> None:
                             "finality_block_hash",
                         ],
                         "message_payload_kinds": ["asset_register", "route_activate", "transfer"],
+                        "submission_template": {
+                            "version": 1,
+                            "encoding": "abi_tuple_v1",
+                            "submission_kind": "contract_call",
+                            "verifier_entrypoint": (
+                                "submitSccpMessageProof(bytes proof_bytes, bytes public_inputs, "
+                                "bytes bundle_bytes)"
+                            ),
+                            "required_arguments": [
+                                {
+                                    "key": "proof_bytes",
+                                    "description": (
+                                        "Transparent SCCP proof bytes emitted by the prover "
+                                        "backend."
+                                    ),
+                                },
+                                {
+                                    "key": "public_inputs",
+                                    "description": (
+                                        "ABI-encoded SCCP public inputs in manifest order."
+                                    ),
+                                },
+                                {
+                                    "key": "bundle_bytes",
+                                    "description": (
+                                        "ABI-encoded Nexus SCCP message bundle passed to the "
+                                        "verifier contract."
+                                    ),
+                                },
+                            ],
+                        },
                     }
                 ],
             }
@@ -575,6 +744,8 @@ def test_get_sccp_proof_manifests_parses_snapshot() -> None:
     assert manifests.manifests[0].chain == "eth"
     assert manifests.manifests[0].verifier_target == "EvmContract"
     assert manifests.manifests[0].required_public_inputs[-1] == "finality_block_hash"
+    assert manifests.manifests[0].submission_template.encoding == "abi_tuple_v1"
+    assert manifests.manifests[0].submission_template.required_arguments[0].key == "proof_bytes"
 
 
 def test_get_sccp_proof_manifests_rejects_unknown_verifier_target() -> None:
@@ -602,6 +773,21 @@ def test_get_sccp_proof_manifests_rejects_unknown_verifier_target() -> None:
                         "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
                         "required_public_inputs": ["message_id"],
                         "message_payload_kinds": ["transfer"],
+                        "submission_template": {
+                            "version": 1,
+                            "encoding": "ton_cell_v1",
+                            "submission_kind": "internal_message",
+                            "verifier_entrypoint": "op::submit_sccp_message_proof",
+                            "required_arguments": [
+                                {
+                                    "key": "proof_cell",
+                                    "description": (
+                                        "Transparent SCCP proof cell emitted by the TON prover "
+                                        "backend."
+                                    ),
+                                }
+                            ],
+                        },
                     }
                 ],
             }
@@ -631,6 +817,53 @@ def test_get_sccp_message_proof_artifact_parses_typed_snapshot() -> None:
                 "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
                 "finality_model": "TonMasterchain",
                 "verifier_target": "TonContract",
+                "submission_template": {
+                    "version": 1,
+                    "encoding": "ton_cell_v1",
+                    "submission_kind": "internal_message",
+                    "verifier_entrypoint": "op::submit_sccp_message_proof",
+                    "required_arguments": [
+                        {
+                            "key": "proof_cell",
+                            "description": (
+                                "Transparent SCCP proof cell emitted by the TON prover backend."
+                            ),
+                        },
+                        {
+                            "key": "public_inputs_cell",
+                            "description": "Cell-encoded SCCP public inputs in manifest order.",
+                        },
+                        {
+                            "key": "bundle_cell",
+                            "description": (
+                                "Cell-encoded Nexus SCCP message bundle for the TON bridge "
+                                "contract."
+                            ),
+                        },
+                    ],
+                },
+                "submission_package": {
+                    "version": 1,
+                    "proof_family": "stark-fri-v1",
+                    "verifier_backend": {"version": 1, "key": "ton-contract-v1"},
+                    "envelope_encoding": "ton_message_body_v1",
+                    "submission_kind": "internal_message",
+                    "verifier_entrypoint": "op::submit_sccp_message_proof",
+                    "platform_payload": {
+                        "platform": "ton_internal_message",
+                        "payload": {
+                            "proof_cell": "aa55",
+                            "public_inputs_cell": "cc77",
+                            "bundle_cell": "dd88",
+                        },
+                    },
+                    "arguments": [
+                        {"key": "proof_cell", "encoding": "raw_bytes", "bytes": "aa55"},
+                        {"key": "public_inputs_cell", "encoding": "raw_bytes", "bytes": "cc77"},
+                        {"key": "bundle_cell", "encoding": "raw_bytes", "bytes": "dd88"},
+                    ],
+                    "envelope_bytes": "ee99",
+                },
                 "public_inputs": {
                     "version": 1,
                     "message_id": message_id,
@@ -641,6 +874,28 @@ def test_get_sccp_message_proof_artifact_parses_typed_snapshot() -> None:
                     "finality_block_hash": finality_block_hash,
                 },
                 "proof_bytes": "aa55",
+                "submission_package": {
+                    "version": 1,
+                    "proof_family": "stark-fri-v1",
+                    "verifier_backend": {"version": 1, "key": "ton-contract-v1"},
+                    "envelope_encoding": "ton_message_body_v1",
+                    "submission_kind": "internal_message",
+                    "verifier_entrypoint": "op::submit_sccp_message_proof",
+                    "platform_payload": {
+                        "platform": "ton_internal_message",
+                        "payload": {
+                            "proof_cell": "aa55",
+                            "public_inputs_cell": "cc77",
+                            "bundle_cell": "dd88",
+                        },
+                    },
+                    "arguments": [
+                        {"key": "proof_cell", "encoding": "raw_bytes", "bytes": "aa55"},
+                        {"key": "public_inputs_cell", "encoding": "raw_bytes", "bytes": "cc77"},
+                        {"key": "bundle_cell", "encoding": "raw_bytes", "bytes": "dd88"},
+                    ],
+                    "envelope_bytes": "ee99",
+                },
                 "bundle": {
                     "version": 1,
                     "commitment_root": commitment_root,
@@ -693,6 +948,8 @@ def test_get_sccp_message_proof_artifact_parses_typed_snapshot() -> None:
     assert artifact.counterparty_domain == 4
     assert artifact.finality_model == "TonMasterchain"
     assert artifact.public_inputs.message_id == message_id
+    assert artifact.submission_package.platform_payload.kind == "ton_internal_message"
+    assert artifact.submission_package.platform_payload.value["proof_cell"] == "aa55"
     assert artifact.bundle.payload.kind == "Transfer"
     assert artifact.bundle.payload.value["amount"] == "77"
     assert session.calls[0]["url"] == f"http://node.test/v1/sccp/artifacts/message/{message_id}"
@@ -722,6 +979,52 @@ def test_get_sccp_message_proof_artifact_rejects_mismatched_public_inputs() -> N
                     "finality_block_hash": "44" * 32,
                 },
                 "proof_bytes": "aa55",
+                "submission_package": {
+                    "version": 1,
+                    "proof_family": "stark-fri-v1",
+                    "verifier_backend": {"version": 1, "key": "evm-secp256k1-keccak-v1"},
+                    "envelope_encoding": "abi_tuple_v1",
+                    "submission_kind": "contract_call",
+                    "verifier_entrypoint": (
+                        "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, "
+                        "bytes32 statement_hash)"
+                    ),
+                    "platform_payload": {
+                        "platform": "evm_contract_call",
+                        "payload": {
+                            "proof_bytes": "aa55",
+                            "public_inputs": {
+                                "message_id": "11" * 32,
+                                "payload_hash": "22" * 32,
+                                "target_domain_word": "00" * 31 + "01",
+                                "commitment_root": "33" * 32,
+                                "finality_height_word": "00" * 31 + "07",
+                                "finality_block_hash": "44" * 32,
+                            },
+                            "public_inputs_hash": "88" * 32,
+                            "statement_hash": "55" * 32,
+                            "attestation": {
+                                "version": 1,
+                                "message_id": "11" * 32,
+                                "source_domain": 0,
+                                "commitment_root": "33" * 32,
+                                "native_proof_hash": "99" * 32,
+                                "signatures": [
+                                    {
+                                        "signer_address": "12" * 20,
+                                        "signature_bytes": "34" * 65,
+                                    }
+                                ],
+                            },
+                        },
+                    },
+                    "arguments": [
+                        {"key": "proof_bytes", "encoding": "raw_bytes", "bytes": "aa55"},
+                        {"key": "public_inputs", "encoding": "abi_bytes32x6", "bytes": "66" * (32 * 6)},
+                        {"key": "statement_hash", "encoding": "abi_bytes32", "bytes": "55" * 32},
+                    ],
+                    "envelope_bytes": "77",
+                },
                 "bundle": {
                     "version": 1,
                     "commitment_root": "33" * 32,
@@ -774,6 +1077,28 @@ def test_get_sccp_message_proof_artifact_against_mock_server() -> None:
                             "finality_block_hash": "44" * 32,
                         },
                         "proof_bytes": "aa55",
+                        "submission_package": {
+                            "version": 1,
+                            "proof_family": "stark-fri-v1",
+                            "verifier_backend": {"version": 1, "key": "ton-contract-v1"},
+                            "envelope_encoding": "ton_message_body_v1",
+                            "submission_kind": "internal_message",
+                            "verifier_entrypoint": "op::submit_sccp_message_proof",
+                            "platform_payload": {
+                                "platform": "ton_internal_message",
+                                "payload": {
+                                    "proof_cell": "aa55",
+                                    "public_inputs_cell": "cc77",
+                                    "bundle_cell": "dd88",
+                                },
+                            },
+                            "arguments": [
+                                {"key": "proof_cell", "encoding": "raw_bytes", "bytes": "aa55"},
+                                {"key": "public_inputs_cell", "encoding": "raw_bytes", "bytes": "cc77"},
+                                {"key": "bundle_cell", "encoding": "raw_bytes", "bytes": "dd88"},
+                            ],
+                            "envelope_bytes": "ee99",
+                        },
                         "bundle": {
                             "version": 1,
                             "commitment_root": "33" * 32,
@@ -802,6 +1127,345 @@ def test_get_sccp_message_proof_artifact_against_mock_server() -> None:
         assert artifact.bundle.payload.kind == "Transfer"
         assert artifact.bundle.payload.value["amount"] == "77"
         assert artifact.message_backend == "sccp/stark-fri-v1/ton"
+        assert artifact.submission_package.platform_payload.kind == "ton_internal_message"
+    finally:
+        server.stop()
+
+
+def test_get_sccp_message_proof_job_parses_typed_snapshot() -> None:
+    session = RecordingSession()
+    message_id = "11" * 32
+    payload_hash = "22" * 32
+    commitment_root = "33" * 32
+    finality_block_hash = "44" * 32
+    session.queue(
+        StubResponse(
+            payload={
+                "version": 1,
+                "chain_family": "Ton",
+                "chain": "ton",
+                "local_domain": 0,
+                "counterparty_domain": 4,
+                "proof_family": "stark-fri-v1",
+                "message_backend": "sccp/stark-fri-v1/ton",
+                "registry_backend": "bridge/sccp/stark-fri-v1/ton",
+                "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+                "finality_model": "TonMasterchain",
+                "verifier_target": "TonContract",
+                "submission_template": {
+                    "version": 1,
+                    "encoding": "ton_cell_v1",
+                    "submission_kind": "internal_message",
+                    "verifier_entrypoint": "op::submit_sccp_message_proof",
+                    "required_arguments": [
+                        {
+                            "key": "proof_cell",
+                            "description": (
+                                "Transparent SCCP proof cell emitted by the TON prover backend."
+                            ),
+                        },
+                        {
+                            "key": "public_inputs_cell",
+                            "description": "Cell-encoded SCCP public inputs in manifest order.",
+                        },
+                        {
+                            "key": "bundle_cell",
+                            "description": (
+                                "Cell-encoded Nexus SCCP message bundle for the TON bridge "
+                                "contract."
+                            ),
+                        },
+                    ],
+                },
+                "submission_package": {
+                    "version": 1,
+                    "proof_family": "stark-fri-v1",
+                    "verifier_backend": {"version": 1, "key": "ton-contract-v1"},
+                    "envelope_encoding": "ton_message_body_v1",
+                    "submission_kind": "internal_message",
+                    "verifier_entrypoint": "op::submit_sccp_message_proof",
+                    "platform_payload": {
+                        "platform": "ton_internal_message",
+                        "payload": {
+                            "proof_cell": "aa55",
+                            "public_inputs_cell": "cc77",
+                            "bundle_cell": "dd88",
+                        },
+                    },
+                    "arguments": [
+                        {"key": "proof_cell", "encoding": "raw_bytes", "bytes": "aa55"},
+                        {"key": "public_inputs_cell", "encoding": "raw_bytes", "bytes": "cc77"},
+                        {"key": "bundle_cell", "encoding": "raw_bytes", "bytes": "dd88"},
+                    ],
+                    "envelope_bytes": "ee99",
+                },
+                "public_inputs": {
+                    "version": 1,
+                    "message_id": message_id,
+                    "payload_hash": payload_hash,
+                    "target_domain": 4,
+                    "commitment_root": commitment_root,
+                    "finality_height": "19",
+                    "finality_block_hash": finality_block_hash,
+                },
+                "payload_kind": "transfer",
+                "payload_projection": {
+                    "Transfer": {
+                        "version": 1,
+                        "source_domain": 0,
+                        "dest_domain": 4,
+                        "nonce": "21",
+                        "asset_home_domain": 0,
+                        "asset_id": {"TextUtf8": {"value": "xor#universal"}},
+                        "amount": "77",
+                        "sender": {"TextUtf8": {"value": "nexus:soraswap"}},
+                        "recipient": {
+                            "TonRaw": {
+                                "workchain": 0,
+                                "account": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+                            }
+                        },
+                        "route_id": {"TextUtf8": {"value": "nexus:ton:xor"}},
+                    }
+                },
+                "bundle": {
+                    "version": 1,
+                    "commitment_root": commitment_root,
+                    "commitment": {
+                        "version": 1,
+                        "kind": "Transfer",
+                        "target_domain": 4,
+                        "message_id": message_id,
+                        "payload_hash": payload_hash,
+                        "parliament_certificate_hash": None,
+                    },
+                    "merkle_proof": {"steps": []},
+                    "payload": {"Transfer": {"version": 1, "amount": "77"}},
+                    "finality_proof": "bb66",
+                },
+            }
+        )
+    )
+    client = ToriiClient("http://node.test", session=session)
+
+    job = client.get_sccp_message_proof_job(f"0x{message_id}")
+
+    assert job.chain_family == "Ton"
+    assert job.chain == "ton"
+    assert job.payload_kind == "transfer"
+    assert job.payload_projection.kind == "Transfer"
+    assert job.payload_projection.value["amount"] == 77
+    assert job.payload_projection.value["recipient"].kind == "TonRaw"
+    assert job.payload_projection.value["recipient"].value["workchain"] == 0
+    assert job.submission_template.encoding == "ton_cell_v1"
+    assert job.submission_template.required_arguments[0].key == "proof_cell"
+    assert job.submission_package.platform_payload.kind == "ton_internal_message"
+    assert session.calls[0]["url"] == f"http://node.test/v1/sccp/jobs/message/{message_id}"
+
+
+def test_get_sccp_message_proof_job_against_mock_server() -> None:
+    server = ToriiMockServer().start()
+    message_id = "11" * 32
+    try:
+        response = requests.post(
+            f"{server.base_url.rstrip('/')}/__mock__/sccp/config",
+            json={
+                "message_jobs": {
+                    message_id: {
+                        "version": 1,
+                        "chain_family": "Ton",
+                        "chain": "ton",
+                        "local_domain": 0,
+                        "counterparty_domain": 4,
+                        "proof_family": "stark-fri-v1",
+                        "message_backend": "sccp/stark-fri-v1/ton",
+                        "registry_backend": "bridge/sccp/stark-fri-v1/ton",
+                        "manifest_seed": "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+                        "finality_model": "TonMasterchain",
+                        "verifier_target": "TonContract",
+                        "submission_template": {
+                            "version": 1,
+                            "encoding": "ton_cell_v1",
+                            "submission_kind": "internal_message",
+                            "verifier_entrypoint": "op::submit_sccp_message_proof",
+                            "required_arguments": [
+                                {
+                                    "key": "proof_cell",
+                                    "description": (
+                                        "Transparent SCCP proof cell emitted by the TON prover "
+                                        "backend."
+                                    ),
+                                },
+                                {
+                                    "key": "public_inputs_cell",
+                                    "description": (
+                                        "Cell-encoded SCCP public inputs in manifest order."
+                                    ),
+                                },
+                                {
+                                    "key": "bundle_cell",
+                                    "description": (
+                                        "Cell-encoded Nexus SCCP message bundle for the TON "
+                                        "bridge contract."
+                                    ),
+                                },
+                            ],
+                        },
+                        "submission_package": {
+                            "version": 1,
+                            "proof_family": "stark-fri-v1",
+                            "verifier_backend": {"version": 1, "key": "ton-contract-v1"},
+                            "envelope_encoding": "ton_message_body_v1",
+                            "submission_kind": "internal_message",
+                            "verifier_entrypoint": "op::submit_sccp_message_proof",
+                            "platform_payload": {
+                                "platform": "ton_internal_message",
+                                "payload": {
+                                    "proof_cell": "aa55",
+                                    "public_inputs_cell": "cc77",
+                                    "bundle_cell": "dd88",
+                                },
+                            },
+                            "arguments": [
+                                {"key": "proof_cell", "encoding": "raw_bytes", "bytes": "aa55"},
+                                {"key": "public_inputs_cell", "encoding": "raw_bytes", "bytes": "cc77"},
+                                {"key": "bundle_cell", "encoding": "raw_bytes", "bytes": "dd88"},
+                            ],
+                            "envelope_bytes": "ee99",
+                        },
+                        "public_inputs": {
+                            "version": 1,
+                            "message_id": message_id,
+                            "payload_hash": "22" * 32,
+                            "target_domain": 4,
+                            "commitment_root": "33" * 32,
+                            "finality_height": "19",
+                            "finality_block_hash": "44" * 32,
+                        },
+                        "payload_kind": "transfer",
+                        "payload_projection": {
+                            "Transfer": {
+                                "version": 1,
+                                "source_domain": 0,
+                                "dest_domain": 4,
+                                "nonce": "21",
+                                "asset_home_domain": 0,
+                                "asset_id": {"TextUtf8": {"value": "xor#universal"}},
+                                "amount": "77",
+                                "sender": {"TextUtf8": {"value": "nexus:soraswap"}},
+                                "recipient": {
+                                    "TonRaw": {
+                                        "workchain": 0,
+                                        "account": (
+                                            "0123456789abcdef0123456789abcdef0123456789abcdef"
+                                            "0123456789abcdef"
+                                        ),
+                                    }
+                                },
+                                "route_id": {"TextUtf8": {"value": "nexus:ton:xor"}},
+                            }
+                        },
+                        "bundle": {
+                            "version": 1,
+                            "commitment_root": "33" * 32,
+                            "commitment": {
+                                "version": 1,
+                                "kind": "Transfer",
+                                "target_domain": 4,
+                                "message_id": message_id,
+                                "payload_hash": "22" * 32,
+                                "parliament_certificate_hash": None,
+                            },
+                            "merkle_proof": {"steps": []},
+                            "payload": {"Transfer": {"version": 1, "amount": "77"}},
+                            "finality_proof": "bb66",
+                        },
+                    }
+                }
+            },
+            timeout=5.0,
+        )
+        response.raise_for_status()
+
+        client = ToriiClient(server.base_url)
+        job = client.get_sccp_message_proof_job(message_id)
+
+        assert job.chain == "ton"
+        assert job.payload_projection.kind == "Transfer"
+        assert job.payload_projection.value["amount"] == 77
+        assert job.submission_package.platform_payload.kind == "ton_internal_message"
+        assert job.submission_template.verifier_entrypoint == "op::submit_sccp_message_proof"
+    finally:
+        server.stop()
+
+
+def test_contract_helpers_against_mock_server() -> None:
+    server = ToriiMockServer().start()
+    contract_address = "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+    try:
+        response = requests.post(
+            f"{server.base_url.rstrip('/')}/__mock__/gov/config",
+            json={
+                "gov_contracts": {
+                    contract_address: {
+                        "found": True,
+                        "dataspace": "universal",
+                        "code_hash_hex": "22" * 32,
+                    }
+                },
+                "contract_deploy_response": {
+                    "ok": True,
+                    "contract_alias": "router::universal",
+                    "contract_address": contract_address,
+                    "previous_contract_address": None,
+                    "upgraded": False,
+                    "dataspace": "universal",
+                    "deploy_nonce": 1,
+                    "tx_hash_hex": "11" * 32,
+                    "code_hash_hex": "22" * 32,
+                    "abi_hash_hex": "33" * 32,
+                },
+                "contract_call_response": {
+                    "ok": True,
+                    "submitted": True,
+                    "dataspace": "universal",
+                    "code_hash_hex": "22" * 32,
+                    "abi_hash_hex": "33" * 32,
+                    "creation_time_ms": 9,
+                    "contract_address": contract_address,
+                    "tx_hash_hex": "44" * 32,
+                    "entrypoint": "ping",
+                    "transaction_scaffold_b64": "AQID",
+                    "signed_transaction_b64": "BAUG",
+                    "signing_message_b64": "BwgJ",
+                },
+            },
+            timeout=5.0,
+        )
+        response.raise_for_status()
+
+        client = ToriiClient(server.base_url)
+        deploy = client.deploy_contract(
+            authority=CANONICAL_OWNER,
+            private_key="00" * 32,
+            code_b64="AQID",
+            contract_alias="router::universal",
+        )
+        call = client.call_contract(
+            authority=CANONICAL_OWNER,
+            private_key="00" * 32,
+            contract_address=contract_address,
+            entrypoint="ping",
+            payload={"value": 1},
+            gas_limit=5000,
+        )
+        governed = client.get_governance_contract(contract_address)
+
+        assert deploy is not None
+        assert deploy.contract_address == contract_address
+        assert call.contract_address == contract_address
+        assert governed.contract_address == contract_address
+        assert governed.code_hash_hex == "22" * 32
     finally:
         server.stop()
 
@@ -1946,13 +2610,14 @@ def test_list_kaigi_relays_parses_summary() -> None:
 
 
 def test_get_kaigi_relay_returns_detail_and_none_on_404() -> None:
+    relay_id = CANONICAL_OWNER
     session = RecordingSession()
     session.queue(StubResponse(status_code=404))
     session.queue(
         StubResponse(
             payload={
                 "relay": {
-                    "relay_id": "relay-alpha",
+                    "relay_id": relay_id,
                     "domain": "kaigi.core",
                     "bandwidth_class": 3,
                     "hpke_fingerprint_hex": "cd" * 32,
@@ -1973,15 +2638,15 @@ def test_get_kaigi_relay_returns_detail_and_none_on_404() -> None:
     )
     client = ToriiClient("http://node.test", session=session)
 
-    assert client.get_kaigi_relay("relay-alpha") is None
-    detail = client.get_kaigi_relay("relay-alpha")
+    assert client.get_kaigi_relay(relay_id) is None
+    detail = client.get_kaigi_relay(relay_id)
 
     assert detail is not None
     assert detail.relay.domain == "kaigi.core"
     assert detail.metrics is not None and detail.metrics.failovers_total == 1
     assert detail.reported_call is not None
     assert detail.reported_call.call_name == "register"
-    assert session.calls[1]["url"].endswith("/v1/kaigi/relays/relay-alpha")
+    assert session.calls[1]["url"].endswith(f"/v1/kaigi/relays/{quote(relay_id, safe='')}")
 
 
 def test_get_kaigi_relays_health_snapshot() -> None:

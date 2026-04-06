@@ -3432,6 +3432,24 @@ export function buildPersistCouncilForEpochInstruction(options) {
 }
 
 /**
+ * Build a `SubmitAgendaProposal` instruction payload.
+ * @param {{ proposal: object }} options
+ * @returns {{SubmitAgendaProposal: { proposal: object }}}
+ */
+export function buildSubmitAgendaProposalInstruction(options) {
+  const source = assertPlainObject(options, "submitAgendaProposal");
+  const proposal = assertPlainObject(
+    source.proposal,
+    "submitAgendaProposal.proposal",
+  );
+  return {
+    SubmitAgendaProposal: {
+      proposal,
+    },
+  };
+}
+
+/**
  * Build a `RegisterSmartContractCode` instruction payload.
  * @param {{manifest: object}} options
  * @returns {{RegisterSmartContractCode: {manifest: object}}}

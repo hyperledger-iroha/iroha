@@ -68,6 +68,15 @@ catalog_path = "configs/soranexus/taira/sorafs_gateway_denylist.catalog.json"
 opt_out_packs = []
 extra_packs = []
 
+[sorafs.gateway.untrusted_hosting]
+enabled = true
+path_gateway_redirect = true
+redirect_html_only = true
+
+[sorafs.gateway.untrusted_hosting.cid_host_suffixes]
+live = "sorafs.sora.org"
+taira = "sorafs.taira.sora.org"
+
 [sorafs.quota]
 storage_pin_max_events = 64
 storage_pin_window_secs = 3600

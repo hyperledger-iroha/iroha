@@ -144,11 +144,14 @@ use iroha_sccp::{
     NexusConsensusPhaseV1, NexusParliamentCertificateV1, NexusParliamentRosterMemberV1,
     NexusParliamentSignatureSchemeV1, NexusParliamentSignatureV1, NexusSccpBurnProofV1,
     NexusSccpGovernanceProofV1, NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
-    SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1, SccpPayloadV1, SccpProofManifestV1,
-    build_nexus_sccp_message_transparent_proof, burn_message_id, canonical_burn_payload_bytes,
-    canonical_governance_payload_bytes, canonical_sccp_payload_bytes, commitment_leaf_hash,
-    decode_nexus_bridge_finality_proof, parliament_certificate_hash, payload_hash,
-    recover_nexus_sccp_message_transparent_proof, sccp_message_id, sccp_message_kind,
+    SccpCounterpartyProofJobV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
+    SccpPayloadV1, SccpProofManifestV1, build_nexus_sccp_message_transparent_proof,
+    build_nexus_sccp_message_transparent_proof_with_signer,
+    build_sccp_counterparty_proof_job_from_bundle,
+    build_sccp_counterparty_proof_job_from_bundle_with_signer, burn_message_id,
+    canonical_burn_payload_bytes, canonical_governance_payload_bytes, canonical_sccp_payload_bytes,
+    commitment_leaf_hash, decode_nexus_bridge_finality_proof, parliament_certificate_hash,
+    payload_hash, recover_nexus_sccp_message_transparent_proof, sccp_message_id, sccp_message_kind,
     sccp_message_target_domain, verify_burn_bundle_structure, verify_governance_bundle_structure,
     verify_message_bundle_structure,
 };
@@ -3037,6 +3040,10 @@ fn bridge_record_to_json(
                     norito::json::Value::from(proof.proof_family.clone()),
                 );
                 payload.insert(
+                    "verifier_backend".into(),
+                    norito::json::Value::from(proof.verifier_backend.key.clone()),
+                );
+                payload.insert(
                     "target_domain".into(),
                     norito::json::Value::from(proof.public_inputs.target_domain),
                 );
@@ -3065,13 +3072,15 @@ fn bridge_record_to_json(
                     norito::json::Value::from(proof.proof_bytes.len()),
                 );
                 if let Some(inner) =
-                    iroha_sccp::decode_canonical_sccp_message_transparent_inner_proof_bytes(
-                        &proof.proof_bytes,
-                    )
+                    iroha_sccp::build_sccp_message_transparent_inner_proof_from_artifact(&proof)
                 {
                     payload.insert(
                         "inner_chain_family".into(),
                         norito::json::Value::from(sccp_chain_family_key(inner.chain_family)),
+                    );
+                    payload.insert(
+                        "inner_verifier_backend".into(),
+                        norito::json::Value::from(inner.verifier_backend.key.clone()),
                     );
                     payload.insert(
                         "inner_payload_kind".into(),
@@ -4613,6 +4622,8 @@ pub struct SccpCounterpartyCapabilityDto {
     pub domain: u32,
     /// Stable logical chain key.
     pub chain: String,
+    /// Target verifier backend family for the counterparty submission path.
+    pub verifier_backend: iroha_sccp::SccpVerifierBackendV1,
     /// Generic SCCP message proof backend emitted before bridge-registry prefixing.
     pub message_backend: String,
     /// Bridge proof registry backend label returned by Torii proof-submit APIs.
@@ -4649,6 +4660,8 @@ pub struct SccpCapabilitiesDto {
     pub message_bundle_path: String,
     /// Generic SCCP typed proof-artifact fetch path.
     pub message_proof_path: String,
+    /// Generic SCCP normalized counterparty proof-job fetch path.
+    pub message_job_path: String,
     /// SCCP proof manifest discovery path.
     pub proof_manifest_path: String,
     /// Registry backend label used by legacy burn proofs.
@@ -4744,6 +4757,7 @@ fn sccp_counterparty_capabilities() -> Result<Vec<SccpCounterpartyCapabilityDto>
             Ok(SccpCounterpartyCapabilityDto {
                 domain,
                 chain: manifest.chain,
+                verifier_backend: manifest.verifier_backend,
                 message_backend: manifest.message_backend,
                 registry_backend: manifest.registry_backend,
                 counterparty_account_codec: manifest.counterparty_account_codec,
@@ -4762,6 +4776,7 @@ fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
         governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}".to_owned(),
         message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
         message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
+        message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
         proof_manifest_path: "/v1/sccp/manifests".to_owned(),
         legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
         legacy_governance_registry_backend: "bridge/sccp/governance-v1".to_owned(),
@@ -4969,9 +4984,26 @@ fn sccp_counterparty_from_backend(backend: &str) -> Option<(u32, &'static str)> 
     Some((domain, iroha_sccp::sccp_chain_key_for_domain(domain)?))
 }
 
+fn sccp_message_proof_build_error_message(
+    bundle: &NexusSccpMessageProofV1,
+    signer: &KeyPair,
+    target: &str,
+) -> String {
+    let mut message = format!("failed to build SCCP {target}");
+    let needs_evm_attestation = matches!(
+        iroha_sccp::sccp_counterparty_domain_for_message_payload(&bundle.payload),
+        Some(iroha_sccp::SCCP_DOMAIN_ETH | iroha_sccp::SCCP_DOMAIN_BSC)
+    );
+    if needs_evm_attestation && signer.algorithm() != Algorithm::Secp256k1 {
+        message.push_str(": EVM/BSC SCCP proofs require da_receipt_signer to use secp256k1");
+    }
+    message
+}
+
 #[cfg(feature = "app_api")]
 fn bridge_proof_from_sccp_message_bundle(
     bundle: &NexusSccpMessageProofV1,
+    signer: &KeyPair,
 ) -> Result<iroha_data_model::bridge::BridgeProof> {
     if !verify_message_bundle_structure(bundle) {
         return Err(conversion_error(
@@ -4982,9 +5014,15 @@ fn bridge_proof_from_sccp_message_bundle(
         conversion_error("SCCP message bundle finality proof could not be decoded".to_owned())
     })?;
     let (backend, manifest_hash, _) = sccp_message_backend_descriptor(&bundle.payload)?;
-    let artifact = build_nexus_sccp_message_transparent_proof(bundle).ok_or_else(|| {
-        conversion_error("failed to build SCCP transparent proof artifact".to_owned())
-    })?;
+    let artifact = build_nexus_sccp_message_transparent_proof_with_signer(bundle, signer)
+        .or_else(|| build_nexus_sccp_message_transparent_proof(bundle))
+        .ok_or_else(|| {
+            conversion_error(sccp_message_proof_build_error_message(
+                bundle,
+                signer,
+                "transparent proof artifact",
+            ))
+        })?;
     let proof_bytes = to_bytes(&artifact).map_err(|err| {
         conversion_error(format!(
             "failed to encode SCCP transparent proof artifact: {err}"
@@ -5185,10 +5223,8 @@ mod sccp_message_backend_tests {
         };
         let artifact =
             build_nexus_sccp_message_transparent_proof(&bundle).expect("build SCCP artifact");
-        let inner = iroha_sccp::decode_canonical_sccp_message_transparent_inner_proof_bytes(
-            &artifact.proof_bytes,
-        )
-        .expect("decode inner proof");
+        let inner = iroha_sccp::build_sccp_message_transparent_inner_proof_from_artifact(&artifact)
+            .expect("derive inner proof context");
         let proof_bytes = norito::to_bytes(&artifact).expect("encode artifact");
         let record = iroha_data_model::bridge::BridgeProofRecord {
             proof: iroha_data_model::bridge::BridgeProof {
@@ -5236,6 +5272,18 @@ mod sccp_message_backend_tests {
                 .get("inner_payload_kind")
                 .and_then(norito::json::Value::as_str),
             Some("transfer")
+        );
+        assert_eq!(
+            payload
+                .get("verifier_backend")
+                .and_then(norito::json::Value::as_str),
+            Some("ton-contract-v1")
+        );
+        assert_eq!(
+            payload
+                .get("inner_verifier_backend")
+                .and_then(norito::json::Value::as_str),
+            Some("ton-contract-v1")
         );
         assert_eq!(
             payload
@@ -5290,6 +5338,7 @@ mod sccp_message_backend_tests {
             .iter()
             .find(|entry| entry.chain == "ton")
             .expect("ton counterparty");
+        assert_eq!(ton.verifier_backend.key.as_str(), "ton-contract-v1");
         assert_eq!(ton.message_backend, "sccp/stark-fri-v1/ton");
         assert_eq!(ton.registry_backend, "bridge/sccp/stark-fri-v1/ton");
         assert_eq!(
@@ -5318,6 +5367,10 @@ mod sccp_message_backend_tests {
             .iter()
             .find(|manifest| manifest.counterparty_domain == iroha_sccp::SCCP_DOMAIN_ETH)
             .expect("eth manifest");
+        assert_eq!(
+            eth.verifier_backend.key.as_str(),
+            iroha_sccp::SCCP_EVM_SECP256K1_PROOF_BACKEND_V1
+        );
         assert_eq!(eth.message_backend, "sccp/stark-fri-v1/eth");
         assert_eq!(eth.registry_backend, "bridge/sccp/stark-fri-v1/eth");
         assert_eq!(
@@ -5331,6 +5384,7 @@ mod sccp_message_backend_tests {
             .find(|manifest| manifest.counterparty_domain == iroha_sccp::SCCP_DOMAIN_TON)
             .expect("ton manifest");
         assert_eq!(ton.chain, "ton");
+        assert_eq!(ton.verifier_backend.key.as_str(), "ton-contract-v1");
         assert_eq!(ton.counterparty_account_codec_key, "ton_raw");
     }
 
@@ -5506,8 +5560,12 @@ mod sccp_message_backend_tests {
             .expect("encode finality"),
         };
 
+        let signer = KeyPair::from_seed(
+            b"iroha:torii:routing:test:evm-attestor".to_vec(),
+            Algorithm::Secp256k1,
+        );
         let bridge_proof =
-            bridge_proof_from_sccp_message_bundle(&bundle).expect("build bridge proof");
+            bridge_proof_from_sccp_message_bundle(&bundle, &signer).expect("build bridge proof");
         let iroha_data_model::bridge::BridgeProofPayload::TransparentZk(tp) = bridge_proof.payload
         else {
             panic!("expected transparent proof payload");
@@ -6062,6 +6120,7 @@ pub async fn handle_v1_sccp_message_bundle(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_message_proof_artifact(
     state: &CoreState,
+    signer: &KeyPair,
     message_id_hex: String,
     accept: Option<axum::http::HeaderValue>,
 ) -> Result<Response> {
@@ -6075,9 +6134,46 @@ pub async fn handle_v1_sccp_message_proof_artifact(
                 .cloned()
         })
         .ok_or_else(sccp_not_found)?;
-    let artifact = build_nexus_sccp_message_transparent_proof(&bundle)
-        .ok_or_else(|| sccp_internal_error("failed to build SCCP proof artifact".to_owned()))?;
+    let artifact = build_nexus_sccp_message_transparent_proof_with_signer(&bundle, signer)
+        .or_else(|| build_nexus_sccp_message_transparent_proof(&bundle))
+        .ok_or_else(|| {
+            sccp_internal_error(sccp_message_proof_build_error_message(
+                &bundle,
+                signer,
+                "proof artifact",
+            ))
+        })?;
     sccp_bundle_response(&artifact, accept.as_ref())
+}
+
+/// GET /v1/sccp/jobs/message/{message_id} — normalized SCCP counterparty proof job keyed by canonical message id.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sccp_message_proof_job(
+    state: &CoreState,
+    signer: &KeyPair,
+    message_id_hex: String,
+    accept: Option<axum::http::HeaderValue>,
+) -> Result<Response> {
+    let message_id = parse_sccp_message_id_hex(&message_id_hex)?;
+    let bundle = reconstruct_sccp_message_bundle_from_committed_blocks(state, message_id)?
+        .or_else(|| {
+            SCCP_MESSAGE_BUNDLES
+                .read()
+                .expect("SCCP message bundle registry poisoned")
+                .get(&message_id)
+                .cloned()
+        })
+        .ok_or_else(sccp_not_found)?;
+    let job = build_sccp_counterparty_proof_job_from_bundle_with_signer(&bundle, signer)
+        .or_else(|| build_sccp_counterparty_proof_job_from_bundle(&bundle))
+        .ok_or_else(|| {
+            sccp_internal_error(sccp_message_proof_build_error_message(
+                &bundle,
+                signer,
+                "normalized proof job",
+            ))
+        })?;
+    sccp_bundle_response(&job, accept.as_ref())
 }
 
 /// GET /v1/sccp/capabilities — relayer-facing SCCP capability discovery for proof backends, codecs, and routes.
@@ -6789,6 +6885,12 @@ fn test_asset_definition_id_from_hex(hex_literal: &str) -> AssetDefinitionId {
 #[cfg(test)]
 fn test_asset_definition_literal_from_hex(hex_literal: &str) -> String {
     test_asset_definition_id_from_hex(hex_literal).to_string()
+}
+
+fn asset_definition_display_name(id: &AssetDefinitionId) -> String {
+    id.try_name()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| id.to_string())
 }
 
 #[cfg(test)]
@@ -9769,6 +9871,7 @@ pub async fn handle_post_bridge_proof_submit(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
+    signer: &KeyPair,
     telemetry: MaybeTelemetry,
     JsonOnly(req): JsonOnly<BridgeProofSubmitDto>,
 ) -> Result<impl IntoResponse> {
@@ -9851,7 +9954,7 @@ pub async fn handle_post_bridge_proof_submit(
                 sccp_counterparty_for_message_payload(&bundle.payload)?;
             (
                 "message",
-                bridge_proof_from_sccp_message_bundle(bundle)?,
+                bridge_proof_from_sccp_message_bundle(bundle, signer)?,
                 counterparty_domain,
                 counterparty_chain.to_owned(),
             )
@@ -10015,6 +10118,7 @@ pub async fn handle_post_bridge_message_submit(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
+    signer: &KeyPair,
     telemetry: MaybeTelemetry,
     JsonOnly(req): JsonOnly<BridgeMessageSubmitDto>,
 ) -> Result<impl IntoResponse> {
@@ -10052,7 +10156,7 @@ pub async fn handle_post_bridge_message_submit(
     let (counterparty_domain, counterparty_chain) =
         sccp_counterparty_for_message_payload(&message_bundle.payload)?;
     let message_id_hex = hex::encode(message_bundle.commitment.message_id);
-    let bridge_proof = bridge_proof_from_sccp_message_bundle(&message_bundle)?;
+    let bridge_proof = bridge_proof_from_sccp_message_bundle(&message_bundle, signer)?;
     let range_start_height = bridge_proof.range.start_height;
     let range_end_height = bridge_proof.range.end_height;
     let manifest_hash_hex = hex::encode(bridge_proof.manifest_hash);
@@ -10610,7 +10714,13 @@ fn normalize_contract_value(
             ))
         }),
         ContractSchemaType::AccountId => match value {
-            Value::String(raw) => iroha_data_model::account::AccountId::parse_encoded(raw).is_ok(),
+            Value::String(raw) => iroha_data_model::account::AccountId::parse_encoded(raw)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .or_else(|_| {
+                    raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
+                        .map(|address| address.subject_id())
+                })
+                .is_ok(),
             _ => false,
         }
         .then(|| value.clone())
@@ -11214,15 +11324,36 @@ fn execute_contract_call_simulation(
 #[cfg(feature = "app_api")]
 fn build_contract_call_metadata(
     _manifest: &manifest::ContractManifest,
-    _contract_address: &iroha_data_model::smart_contract::ContractAddress,
-    _contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
-    _entrypoint: Option<&str>,
-    _payload: Option<&IrohaJson>,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
+    entrypoint: Option<&str>,
+    payload: Option<&IrohaJson>,
     gas_asset_id: Option<&str>,
     fee_sponsor: Option<&iroha_data_model::account::AccountId>,
     gas_limit: u64,
 ) -> Metadata {
     let mut metadata = Metadata::default();
+    let contract_address_key =
+        Name::from_str("contract_address").expect("static metadata key `contract_address`");
+    metadata.insert(
+        contract_address_key,
+        IrohaJson::new(contract_address.to_string()),
+    );
+    if let Some(alias) = contract_alias {
+        let alias_key =
+            Name::from_str("contract_alias").expect("static metadata key `contract_alias`");
+        metadata.insert(alias_key, IrohaJson::new(alias.to_string()));
+    }
+    if let Some(entrypoint) = entrypoint {
+        let entrypoint_key = Name::from_str("contract_entrypoint")
+            .expect("static metadata key `contract_entrypoint`");
+        metadata.insert(entrypoint_key, IrohaJson::new(entrypoint.to_owned()));
+    }
+    if let Some(payload) = payload {
+        let payload_key =
+            Name::from_str("contract_payload").expect("static metadata key `contract_payload`");
+        metadata.insert(payload_key, payload.clone());
+    }
     if let Some(asset_id) = gas_asset_id {
         let gas_asset_key =
             Name::from_str("gas_asset_id").expect("static metadata key `gas_asset_id`");
@@ -12784,12 +12915,12 @@ mod multisig_contract_call_tests {
         );
         assert_eq!(
             metadata.iter().count(),
-            3,
-            "only gas asset, fee sponsor, and gas limit should remain"
+            5,
+            "contract address and entrypoint should stay alongside the fee metadata"
         );
         assert!(metadata.get("gov_contract_address").is_none());
-        assert!(metadata.get("contract_address").is_none());
-        assert!(metadata.get("contract_entrypoint").is_none());
+        assert!(metadata.get("contract_address").is_some());
+        assert!(metadata.get("contract_entrypoint").is_some());
         assert!(metadata.get("contract_payload").is_none());
     }
 }
@@ -12890,7 +13021,10 @@ mod contract_payload_normalization_tests {
     use iroha_data_model::smart_contract::manifest::{
         EntryPointKind, EntrypointDescriptor, EntrypointParamDescriptor,
     };
-    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
+    use iroha_data_model::{
+        ValidationFail, nexus::DataSpaceId, query::error::QueryExecutionFail,
+        smart_contract::ContractAddress,
+    };
 
     use super::*;
 
@@ -12919,6 +13053,24 @@ mod contract_payload_normalization_tests {
             params: vec![EntrypointParamDescriptor {
                 name: "alias_literal".to_owned(),
                 type_name: "Blob".to_owned(),
+            }],
+            return_type: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+        }
+    }
+
+    fn account_id_descriptor() -> EntrypointDescriptor {
+        EntrypointDescriptor {
+            name: "bind".to_owned(),
+            kind: EntryPointKind::Public,
+            params: vec![EntrypointParamDescriptor {
+                name: "controller".to_owned(),
+                type_name: "AccountId".to_owned(),
             }],
             return_type: None,
             permission: None,
@@ -12989,6 +13141,31 @@ mod contract_payload_normalization_tests {
             "alias_literal".into(),
             Value::from(hex::encode("banking@centralbank".as_bytes())),
         );
+        assert_eq!(value, Value::Object(expected));
+    }
+
+    #[test]
+    fn normalize_contract_payload_accepts_contract_address_for_account_id_fields() {
+        let descriptor = account_id_descriptor();
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            7,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("derive contract address");
+        let mut expected = std::collections::BTreeMap::new();
+        expected.insert(
+            "controller".to_owned(),
+            Value::from(contract_address.to_string()),
+        );
+        let payload = IrohaJson::new(Value::Object(expected.clone()));
+
+        let normalized = normalize_contract_payload(&descriptor, Some(&payload))
+            .expect("contract address payload should normalize")
+            .expect("payload");
+        let value = json::parse_value(normalized.get()).expect("normalized payload json");
         assert_eq!(value, Value::Object(expected));
     }
 }
@@ -13106,7 +13283,7 @@ mod multisig_selector_tests {
     ) {
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let label_name: Name = "cbdc".parse().expect("label");
-        let alias_literal = format!("{}@{}.universal", label_name, domain_id);
+        let alias_literal = format!("{label_name}@{domain_id}");
 
         let signer_one = KeyPair::random();
         let signer_two = KeyPair::random();
@@ -13232,6 +13409,99 @@ mod multisig_selector_tests {
         )
     }
 
+    fn overlong_multisig_test_world() -> (World, dm::AccountId, dm::AccountId, String) {
+        let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
+        let domain = Domain::new(domain_id).build(&authority);
+
+        let viewer_key = KeyPair::random();
+        let viewer_id = dm::AccountId::new(viewer_key.public_key().clone());
+        let filler_members = (0..160_u16)
+            .map(|seed| {
+                let mut material = [0_u8; 32];
+                material[..2].copy_from_slice(&seed.to_le_bytes());
+                let key_pair =
+                    KeyPair::from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519);
+                MultisigMember::new(key_pair.public_key().clone(), 1).expect("member")
+            })
+            .collect::<Vec<_>>();
+        let policy = MultisigPolicy::new(
+            2,
+            std::iter::once(
+                MultisigMember::new(viewer_key.public_key().clone(), 1).expect("viewer member"),
+            )
+            .chain(filler_members.into_iter())
+            .collect(),
+        )
+        .expect("policy");
+        let multisig_id = dm::AccountId::new_multisig(policy);
+        let multisig_account_id: dm::AccountId = multisig_id.clone().into();
+
+        assert!(
+            multisig_account_id
+                .canonical_i105()
+                .expect("canonical multisig literal")
+                .len()
+                > 128,
+            "fixture must exercise an overlong canonical multisig literal",
+        );
+
+        let mut signatories = BTreeMap::from([(viewer_id.clone(), 1_u8)]);
+        for seed in 0..160_u16 {
+            let mut material = [0_u8; 32];
+            material[..2].copy_from_slice(&seed.to_le_bytes());
+            let key_pair = KeyPair::from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519);
+            let _ = signatories.insert(dm::AccountId::new(key_pair.public_key().clone()), 1_u8);
+        }
+        let spec = MultisigSpec {
+            signatories,
+            quorum: NonZeroU16::new(2).expect("quorum"),
+            transaction_ttl_ms: NonZeroU64::new(60_000).expect("ttl"),
+        };
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("spec key"),
+            IrohaJson::new(spec),
+        );
+
+        let active_instructions = vec![dm::Log::new(dm::Level::INFO, "overlong".to_owned()).into()];
+        let active_hash = HashOf::new(&active_instructions);
+
+        let multisig_account = Account::new(multisig_id.account().clone())
+            .with_metadata(metadata)
+            .build(&authority);
+        let viewer_account = Account::new(viewer_id.clone()).build(&authority);
+        let mut world = World::with([domain], [multisig_account, viewer_account], []);
+        world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_contract_key(&multisig_account_id, &active_hash),
+            norito::to_bytes(
+                &iroha_executor_data_model::isi::multisig::MultisigProposalState::new(
+                    multisig_account_id.clone(),
+                    active_hash,
+                    active_instructions,
+                    1_700_000_001_000,
+                    4_000_000_000_000,
+                    BTreeSet::new(),
+                    None,
+                ),
+            )
+            .expect("encode active proposal state"),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            multisig_signatory_index_contract_key(&viewer_id),
+            norito::to_bytes(&BTreeSet::from([multisig_account_id.clone()]))
+                .expect("encode signatory index state"),
+        );
+
+        (
+            world,
+            multisig_account_id,
+            viewer_id,
+            active_hash.to_string(),
+        )
+    }
+
     fn minimal_ivm_program(abi_version: u8) -> Vec<u8> {
         let meta = ivm::ProgramMetadata {
             version_major: 1,
@@ -13277,7 +13547,7 @@ mod multisig_selector_tests {
     ) {
         let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
         let label_name: Name = "cbdc".parse().expect("label");
-        let alias_literal = format!("{}@{}.universal", label_name, domain_id);
+        let alias_literal = format!("{label_name}@{domain_id}");
 
         let signer_one = KeyPair::random();
         let signer_two = KeyPair::random();
@@ -13741,7 +14011,7 @@ mod multisig_selector_tests {
         let JsonBody(response) = handle_post_multisig_spec(
             state,
             NoritoJson(MultisigSpecRequestDto {
-                selector: alias_selector(&format!("{label_name}@{domain_id}.universal")),
+                selector: alias_selector(&format!("{label_name}@{domain_id}")),
             }),
         )
         .await
@@ -13981,6 +14251,90 @@ mod multisig_selector_tests {
         assert_eq!(second_page.items.len(), 1);
         assert_eq!(second_page.items[0].status, "EXPIRED");
         assert!(second_page.next_cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn multisig_approvals_list_for_authority_supports_overlong_multisig_membership() {
+        let (world, multisig_account_id, viewer_id, active_hash) = overlong_multisig_test_world();
+        let state = build_state(world);
+
+        let JsonBody(response) = handle_post_multisig_approvals_list_for_authority(
+            state,
+            MultisigApprovalsListRequestDto {
+                status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                operation_type: vec![],
+                requires_my_signature: false,
+                cursor: None,
+                limit: Some(10),
+            },
+            viewer_id,
+        )
+        .await
+        .expect("list approvals for authority");
+
+        assert_eq!(response.items.len(), 1);
+        assert_eq!(response.items[0].multisig_account_id, multisig_account_id);
+        assert_eq!(response.items[0].instructions_hash, active_hash);
+    }
+
+    #[tokio::test]
+    async fn multisig_approvals_list_for_authority_continues_pagination_cursor() {
+        let (
+            world,
+            _multisig_account_id,
+            _signer_one_id,
+            signer_two_id,
+            _alias_literal,
+            active_hash,
+        ) = multisig_test_world();
+        let state = build_state(world);
+
+        let JsonBody(first_page) = handle_post_multisig_approvals_list_for_authority(
+            state.clone(),
+            MultisigApprovalsListRequestDto {
+                status: vec!["COLLECTING_SIGNATURES".to_owned(), "EXPIRED".to_owned()],
+                operation_type: vec![],
+                requires_my_signature: false,
+                cursor: None,
+                limit: Some(1),
+            },
+            signer_two_id.clone(),
+        )
+        .await
+        .expect("first approvals page for authority");
+        assert_eq!(first_page.items.len(), 1);
+        assert_eq!(first_page.items[0].instructions_hash, active_hash);
+        let next_cursor = first_page.next_cursor.clone().expect("next cursor");
+
+        let JsonBody(second_page) = handle_post_multisig_approvals_list_for_authority(
+            state.clone(),
+            MultisigApprovalsListRequestDto {
+                status: vec!["COLLECTING_SIGNATURES".to_owned(), "EXPIRED".to_owned()],
+                operation_type: vec![],
+                requires_my_signature: false,
+                cursor: Some(next_cursor),
+                limit: Some(1),
+            },
+            signer_two_id.clone(),
+        )
+        .await
+        .expect("second approvals page for authority");
+        assert_eq!(second_page.items.len(), 1);
+        assert_eq!(second_page.items[0].status, "EXPIRED");
+        assert!(second_page.next_cursor.is_none());
+
+        let JsonBody(get_response) = handle_post_multisig_approvals_get_for_authority(
+            state,
+            MultisigApprovalsGetRequestDto {
+                proposal_id: Some(active_hash.clone()),
+                instructions_hash: None,
+            },
+            signer_two_id,
+        )
+        .await
+        .expect("get approvals entry for authority");
+        assert_eq!(get_response.item.instructions_hash, active_hash);
+        assert_eq!(get_response.item.status, "COLLECTING_SIGNATURES");
     }
 
     #[tokio::test]
@@ -16210,6 +16564,34 @@ pub async fn handle_post_multisig_approvals_list(
     viewer_scope: MultisigApprovalsViewerScope,
     NoritoJson(req): NoritoJson<MultisigApprovalsListRequestDto>,
 ) -> Result<JsonBody<MultisigApprovalsListResponseDto>> {
+    Ok(JsonBody(multisig_approvals_list_response(
+        &state,
+        &viewer_scope,
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_multisig_approvals_list_for_authority(
+    state: Arc<CoreState>,
+    req: MultisigApprovalsListRequestDto,
+    resolve_authority: AccountId,
+) -> Result<JsonBody<MultisigApprovalsListResponseDto>> {
+    Ok(JsonBody(multisig_approvals_list_response(
+        &state,
+        &MultisigApprovalsViewerScope {
+            viewer_account_ids: vec![resolve_authority],
+        },
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approvals_list_response(
+    state: &Arc<CoreState>,
+    viewer_scope: &MultisigApprovalsViewerScope,
+    req: &MultisigApprovalsListRequestDto,
+) -> Result<MultisigApprovalsListResponseDto> {
     let requested_statuses = requested_multisig_statuses(&req.status);
     let requested_operation_types = requested_multisig_operation_types(&req.operation_type);
     let page_limit = app_query_limits().clamp_page_limit(req.limit)?;
@@ -16276,10 +16658,7 @@ pub async fn handle_post_multisig_approvals_list(
         items.truncate(page_limit);
     }
 
-    Ok(JsonBody(MultisigApprovalsListResponseDto {
-        items,
-        next_cursor,
-    }))
+    Ok(MultisigApprovalsListResponseDto { items, next_cursor })
 }
 
 /// POST /v1/multisig/approvals/get — fetch a signer-visible multisig approval by id/hash.
@@ -16290,16 +16669,44 @@ pub async fn handle_post_multisig_approvals_get(
     viewer_scope: MultisigApprovalsViewerScope,
     NoritoJson(req): NoritoJson<MultisigApprovalsGetRequestDto>,
 ) -> Result<JsonBody<MultisigApprovalsGetResponseDto>> {
+    Ok(JsonBody(multisig_approvals_get_response(
+        &state,
+        &viewer_scope,
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_multisig_approvals_get_for_authority(
+    state: Arc<CoreState>,
+    req: MultisigApprovalsGetRequestDto,
+    resolve_authority: AccountId,
+) -> Result<JsonBody<MultisigApprovalsGetResponseDto>> {
+    Ok(JsonBody(multisig_approvals_get_response(
+        &state,
+        &MultisigApprovalsViewerScope {
+            viewer_account_ids: vec![resolve_authority],
+        },
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approvals_get_response(
+    state: &Arc<CoreState>,
+    viewer_scope: &MultisigApprovalsViewerScope,
+    req: &MultisigApprovalsGetRequestDto,
+) -> Result<MultisigApprovalsGetResponseDto> {
     let (hash_literal, instructions_hash) =
         resolve_multisig_proposal_hash(req.proposal_id.clone(), req.instructions_hash.clone())?;
     let mut matches = Vec::new();
 
-    for (multisig_account_id, spec) in viewer_multisig_accounts(&state, &viewer_scope)? {
-        if !multisig_approval_is_viewer_relevant(&spec, &viewer_scope) {
+    for (multisig_account_id, spec) in viewer_multisig_accounts(state, viewer_scope)? {
+        if !multisig_approval_is_viewer_relevant(&spec, viewer_scope) {
             continue;
         }
         let Some(proposal_record) =
-            load_multisig_proposal_record(&state, &multisig_account_id, &spec, &instructions_hash)?
+            load_multisig_proposal_record(state, &multisig_account_id, &spec, &instructions_hash)?
         else {
             continue;
         };
@@ -16334,7 +16741,7 @@ pub async fn handle_post_multisig_approvals_get(
         .next()
         .ok_or_else(multisig_not_found_error)?;
 
-    Ok(JsonBody(MultisigApprovalsGetResponseDto { item }))
+    Ok(MultisigApprovalsGetResponseDto { item })
 }
 
 #[cfg(feature = "app_api")]
@@ -21725,7 +22132,13 @@ mod repair_worker_tests {
                 Ok(_) => panic!("alias worker id must be rejected"),
                 Err(err) => err,
             };
-            assert!(err.to_string().contains("canonical I105 account id"));
+            let crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) = err
+            else {
+                panic!("unexpected error: {err:?}");
+            };
+            assert!(message.contains("canonical I105 account id"));
         });
     }
 }
@@ -24353,6 +24766,37 @@ fn filter_contains_asset_id(expr: &FilterExpr) -> bool {
 }
 
 #[cfg(feature = "app_api")]
+enum TxAssetSelector {
+    AssetId(iroha_data_model::asset::AssetId),
+    DefinitionId(iroha_data_model::asset::AssetDefinitionId),
+}
+
+#[cfg(feature = "app_api")]
+fn parse_tx_asset_selector(literal: &str) -> Option<TxAssetSelector> {
+    iroha_data_model::asset::AssetId::parse_literal(literal)
+        .ok()
+        .map(TxAssetSelector::AssetId)
+        .or_else(|| {
+            iroha_data_model::asset::AssetDefinitionId::parse_address_literal(literal)
+                .ok()
+                .map(TxAssetSelector::DefinitionId)
+        })
+}
+
+#[cfg(feature = "app_api")]
+fn tx_asset_matches_selector(
+    assets: &[iroha_data_model::asset::AssetId],
+    selector: &TxAssetSelector,
+) -> bool {
+    match selector {
+        TxAssetSelector::AssetId(expected) => assets.iter().any(|candidate| candidate == expected),
+        TxAssetSelector::DefinitionId(expected) => assets
+            .iter()
+            .any(|candidate| candidate.definition() == expected),
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> Result<()> {
     // Strict adapter validation with depth and set-size limits + value parsing
     const MAX_DEPTH: usize = 10;
@@ -24411,9 +24855,9 @@ fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> 
                     let s = v
                         .as_str()
                         .ok_or_else(|| Error::Query(dm::ValidationFail::TooComplex))?;
-                    iroha_data_model::asset::AssetId::parse_literal(s)
+                    parse_tx_asset_selector(s)
                         .map(|_| ())
-                        .map_err(|_| Error::Query(dm::ValidationFail::TooComplex))
+                        .ok_or_else(|| Error::Query(dm::ValidationFail::TooComplex))
                 }
                 "result_ok" => {
                     if !matches!(v, Value::Bool(_)) {
@@ -24499,7 +24943,7 @@ fn validate_tx_filter_adapter(expr: &FilterExpr, telemetry: &MaybeTelemetry) -> 
                             let Some(s) = value.as_str() else {
                                 return Err(Error::Query(dm::ValidationFail::TooComplex));
                             };
-                            if s.parse::<iroha_data_model::asset::AssetId>().is_err() {
+                            if parse_tx_asset_selector(s).is_none() {
                                 return Err(Error::Query(dm::ValidationFail::TooComplex));
                             }
                         }
@@ -24648,8 +25092,8 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 }
                 "asset_id" => v
                     .as_str()
-                    .and_then(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
-                    .map(|id| asset_ids_for_tx().iter().any(|candidate| candidate == &id))
+                    .and_then(parse_tx_asset_selector)
+                    .map(|selector| tx_asset_matches_selector(asset_ids_for_tx(), &selector))
                     .unwrap_or(false),
                 "entrypoint_hash" => v
                     .as_str()
@@ -24701,8 +25145,8 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 }
                 "asset_id" => v
                     .as_str()
-                    .and_then(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
-                    .map(|id| !asset_ids_for_tx().iter().any(|candidate| candidate == &id))
+                    .and_then(parse_tx_asset_selector)
+                    .map(|selector| !tx_asset_matches_selector(asset_ids_for_tx(), &selector))
                     .unwrap_or(false),
                 // For app-facing queries, treat NE(entrypoint_hash) as a no-op filter
                 // to avoid surprising interactions with on-chain hashing nuances. In
@@ -24793,8 +25237,8 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 "asset_id" => list
                     .iter()
                     .filter_map(|v| v.as_str())
-                    .filter_map(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
-                    .any(|id| asset_ids_for_tx().iter().any(|candidate| candidate == &id)),
+                    .filter_map(parse_tx_asset_selector)
+                    .any(|selector| tx_asset_matches_selector(asset_ids_for_tx(), &selector)),
                 _ => match tx_field_value(tx, &f.0) {
                     Some(val) => list.iter().any(|v| v.as_str() == Some(&val)),
                     None => false,
@@ -24853,8 +25297,8 @@ fn filter_tx(expr: &FilterExpr, tx: &iroha_data_model::query::CommittedTransacti
                 "asset_id" => list
                     .iter()
                     .filter_map(|v| v.as_str())
-                    .filter_map(|s| s.parse::<iroha_data_model::asset::AssetId>().ok())
-                    .all(|id| !asset_ids_for_tx().iter().any(|candidate| candidate == &id)),
+                    .filter_map(parse_tx_asset_selector)
+                    .all(|selector| !tx_asset_matches_selector(asset_ids_for_tx(), &selector)),
                 _ => match tx_field_value(tx, &f.0) {
                     Some(val) => list.iter().all(|v| v.as_str() != Some(&val)),
                     None => true,
@@ -25095,14 +25539,28 @@ fn tx_predicate_from_filter(
                 }
                 F::Not(inner) => convert(inner).map(|p| TP::Not(Box::new(p))),
                 F::Eq(field, value) => match field_name(field) {
-                    "authority" => None,
+                    "authority" => value
+                        .as_str()
+                        .and_then(|s| {
+                            iroha_data_model::account::AccountId::parse_encoded(s)
+                                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                                .ok()
+                        })
+                        .map(TP::AuthorityEq),
                     "timestamp_ms" => parse_u64(value).map(TP::TsEq),
                     "result_ok" => None,
                     "entrypoint_hash" => parse_entry_hash(value).map(TP::EntryEq),
                     _ => None,
                 },
                 F::Ne(field, value) => match field_name(field) {
-                    "authority" => None,
+                    "authority" => value
+                        .as_str()
+                        .and_then(|s| {
+                            iroha_data_model::account::AccountId::parse_encoded(s)
+                                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                                .ok()
+                        })
+                        .map(TP::AuthorityNe),
                     "timestamp_ms" => parse_u64(value).map(|n| TP::Not(Box::new(TP::TsEq(n)))),
                     "result_ok" => None,
                     "entrypoint_hash" => parse_entry_hash(value).map(TP::EntryNe),
@@ -25124,53 +25582,79 @@ fn tx_predicate_from_filter(
                     "timestamp_ms" => parse_u64(value).map(TP::TsGte),
                     _ => None,
                 },
-                F::In(field, values) => match field_name(field) {
-                    "authority" => None,
-                    "timestamp_ms" => {
-                        let mut out = Vec::new();
-                        for v in values {
-                            out.push(parse_u64(v)?);
+                F::In(field, values) => {
+                    match field_name(field) {
+                        "authority" => {
+                            let mut out = Vec::new();
+                            for v in values {
+                                let id = v.as_str().and_then(|s| {
+                                iroha_data_model::account::AccountId::parse_encoded(s)
+                                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                                    .ok()
+                            })?;
+                                out.push(id);
+                            }
+                            Some(TP::AuthorityIn(out))
                         }
-                        Some(TP::TsIn(out))
-                    }
-                    "result_ok" => None,
-                    "entrypoint_hash" => {
-                        let mut out = Vec::new();
-                        for v in values {
-                            out.push(parse_entry_hash(v)?);
+                        "timestamp_ms" => {
+                            let mut out = Vec::new();
+                            for v in values {
+                                out.push(parse_u64(v)?);
+                            }
+                            Some(TP::TsIn(out))
                         }
-                        Some(TP::EntryIn(out))
-                    }
-                    _ => None,
-                },
-                F::Nin(field, values) => match field_name(field) {
-                    "authority" => None,
-                    "timestamp_ms" => {
-                        let mut out = Vec::new();
-                        for v in values {
-                            out.push(parse_u64(v)?);
+                        "result_ok" => None,
+                        "entrypoint_hash" => {
+                            let mut out = Vec::new();
+                            for v in values {
+                                out.push(parse_entry_hash(v)?);
+                            }
+                            Some(TP::EntryIn(out))
                         }
-                        Some(TP::TsNin(out))
+                        _ => None,
                     }
-                    "result_ok" => None,
-                    "entrypoint_hash" => {
-                        let mut out = Vec::new();
-                        for v in values {
-                            out.push(parse_entry_hash(v)?);
+                }
+                F::Nin(field, values) => {
+                    match field_name(field) {
+                        "authority" => {
+                            let mut out = Vec::new();
+                            for v in values {
+                                let id = v.as_str().and_then(|s| {
+                                iroha_data_model::account::AccountId::parse_encoded(s)
+                                    .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                                    .ok()
+                            })?;
+                                out.push(id);
+                            }
+                            Some(TP::AuthorityNin(out))
                         }
-                        Some(TP::EntryNin(out))
+                        "timestamp_ms" => {
+                            let mut out = Vec::new();
+                            for v in values {
+                                out.push(parse_u64(v)?);
+                            }
+                            Some(TP::TsNin(out))
+                        }
+                        "result_ok" => None,
+                        "entrypoint_hash" => {
+                            let mut out = Vec::new();
+                            for v in values {
+                                out.push(parse_entry_hash(v)?);
+                            }
+                            Some(TP::EntryNin(out))
+                        }
+                        _ => None,
                     }
-                    _ => None,
-                },
+                }
                 F::Exists(field) => match field_name(field) {
-                    "authority" => None,
+                    "authority" => Some(TP::AuthorityExists(true)),
                     "timestamp_ms" => Some(TP::TsExists(true)),
                     "result_ok" => None,
                     "entrypoint_hash" => Some(TP::EntryExists(true)),
                     _ => None,
                 },
                 F::IsNull(field) => match field_name(field) {
-                    "authority" => None,
+                    "authority" => Some(TP::AuthorityExists(false)),
                     "timestamp_ms" => Some(TP::TsExists(false)),
                     "result_ok" => None,
                     "entrypoint_hash" => Some(TP::EntryExists(false)),
@@ -29115,7 +29599,7 @@ mod tx_query_integration_smoke {
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
             dm::AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+                .with_name(asset_definition_display_name(&__asset_definition_id))
         })
         .execute(exec_id.account(), &mut stx0)
         .ok();
@@ -29427,12 +29911,8 @@ mod tx_query_integration_smoke {
             .unpack(|_| {});
         let mut st_block0 = state.block(unverified0.header());
         let mut stx0 = st_block0.transaction();
-        let domain_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kp_exec = KeyPair::random_with_algorithm(Algorithm::Ed25519);
         let exec_id = dm::AccountId::new(kp_exec.public_key().clone());
-        dm::Register::domain(dm::Domain::new(domain_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .unwrap();
         dm::Register::account(dm::Account::new(exec_id.account().clone()))
             .execute(exec_id.account(), &mut stx0)
             .unwrap();
@@ -29522,7 +30002,6 @@ mod tx_query_integration_smoke {
         ));
 
         // Ensure domain and accounts exist before committing txs
-        let dom_id: dm::DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let acc_a = dm::AccountId::new(kp_a.public_key().clone());
@@ -29537,9 +30016,6 @@ mod tx_query_integration_smoke {
         let mut stx0 = st_block0.transaction();
         let kp_seed = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
         let exec_id = dm::AccountId::new(kp_seed.public_key().clone());
-        dm::Register::domain(dm::Domain::new(dom_id.clone()))
-            .execute(exec_id.account(), &mut stx0)
-            .unwrap();
         dm::Register::account(dm::Account::new(exec_id.account().clone()))
             .execute(exec_id.account(), &mut stx0)
             .unwrap();
@@ -32565,21 +33041,18 @@ mod app_api_integration_tests {
             DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         ))
+        .with_name("rose".to_owned())
         .confidential_policy(policy)
         .build(&alice_id);
-        let expected_asset_id = asset_def.id().to_string();
+        let asset_def_id = asset_def.id().clone();
+        let expected_asset_id = asset_def_id.to_string();
         let world = World::with([domain], [account], [asset_def]);
         let state = Arc::new(iroha_core::state::State::new_for_testing(
             world,
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        bind_permanent_asset_alias_for_test(
-            &state,
-            &alice_id,
-            &test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400dd"),
-            "rose#centralbank",
-        );
+        bind_permanent_asset_alias_for_test(&state, &alice_id, &asset_def_id, "rose#centralbank");
 
         let app = Router::new().route(
             "/v1/confidential/assets/{definition_id}/transitions",
@@ -42304,11 +42777,6 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     let mut sblock = state.block(header);
     let mut stx = sblock.transaction();
 
-    Register::domain(Domain::new(
-        DomainId::try_new("wonderland", "universal").unwrap(),
-    ))
-    .execute(&authority_id, &mut stx)
-    .unwrap();
     Register::account(Account::new(initiator_id.clone()))
         .execute(&authority_id, &mut stx)
         .unwrap();
@@ -42318,14 +42786,14 @@ fn build_repo_state_for_tests() -> RepoTestFixture {
     Register::asset_definition({
         let __asset_definition_id = cash_def_id.clone();
         AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
+            .with_name(asset_definition_display_name(&__asset_definition_id))
     })
     .execute(&authority_id, &mut stx)
     .unwrap();
     Register::asset_definition({
         let __asset_definition_id = collateral_def_id.clone();
         AssetDefinition::numeric(__asset_definition_id.clone())
-            .with_name(__asset_definition_id.name().to_string())
+            .with_name(asset_definition_display_name(&__asset_definition_id))
     })
     .execute(&authority_id, &mut stx)
     .unwrap();
@@ -46294,7 +46762,7 @@ mod asset_definitions_query_tests {
             Kura::blank_kura_for_testing(),
             LiveQueryStore::start_test(),
         ));
-        bind_permanent_asset_alias_for_test(&state, &authority, &cbdc_id, "cbdc#centralbank");
+        bind_permanent_asset_alias_for_test(&state, &authority, &cbdc_id, "CBDC#centralbank");
         state
     }
 
@@ -46331,7 +46799,7 @@ mod asset_definitions_query_tests {
         assert_eq!(items.len(), 2);
 
         assert_eq!(items[0]["name"].as_str(), Some("CBDC"));
-        assert_eq!(items[0]["alias"].as_str(), Some("cbdc#centralbank"));
+        assert_eq!(items[0]["alias"].as_str(), Some("CBDC#centralbank"));
         assert_eq!(items[1]["name"].as_str(), Some("USD"));
         assert!(items[1]["alias"].is_null());
     }
@@ -46372,7 +46840,7 @@ mod asset_definitions_query_tests {
             query: None,
             filter: Some(crate::filter::FilterExpr::Eq(
                 crate::filter::FieldPath("alias".into()),
-                norito::json::Value::from("cbdc#centralbank"),
+                norito::json::Value::from("CBDC#centralbank"),
             )),
             select: None,
             sort: Vec::new(),
@@ -46394,7 +46862,7 @@ mod asset_definitions_query_tests {
         let items = doc["items"].as_array().expect("items");
         assert_eq!(items.len(), 1);
         assert_eq!(items[0]["name"].as_str(), Some("CBDC"));
-        assert_eq!(items[0]["alias"].as_str(), Some("cbdc#centralbank"));
+        assert_eq!(items[0]["alias"].as_str(), Some("CBDC#centralbank"));
 
         let null_alias = crate::filter::QueryEnvelope {
             query: None,
@@ -48602,7 +49070,7 @@ mod explorer_asset_definition_econometrics_tests {
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
             dm::AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+                .with_name(asset_definition_display_name(&__asset_definition_id))
         })
         .execute(exec_id.account(), &mut stx0)
         .ok();
@@ -48906,7 +49374,7 @@ mod explorer_asset_definition_snapshot_tests {
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
             dm::AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+                .with_name(asset_definition_display_name(&__asset_definition_id))
         })
         .execute(exec_id.account(), &mut stx0)
         .ok();
@@ -49076,7 +49544,7 @@ mod explorer_asset_definition_snapshot_tests {
         dm::Register::asset_definition({
             let __asset_definition_id = def_id.clone();
             dm::AssetDefinition::numeric(__asset_definition_id.clone())
-                .with_name(__asset_definition_id.name().to_string())
+                .with_name(asset_definition_display_name(&__asset_definition_id))
         })
         .execute(exec_id.account(), &mut stx0)
         .ok();
@@ -57047,7 +57515,8 @@ pub async fn handle_post_v1_subscription_plan(
     let plan_key = (*SUBSCRIPTION_PLAN_KEY).clone();
     let instructions = vec![
         InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(plan_id.clone()).with_name(plan_id.name().to_string()),
+            AssetDefinition::numeric(plan_id.clone())
+                .with_name(asset_definition_display_name(&plan_id)),
         )),
         InstructionBox::from(SetKeyValue::asset_definition(
             plan_id.clone(),
@@ -57987,7 +58456,7 @@ mod subscription_api_tests {
 
     #[test]
     fn derive_trigger_id_is_deterministic() {
-        let subscription_id: NftId = "sub1$wonderland".parse().unwrap();
+        let subscription_id: NftId = "sub1$wonderland.universal".parse().unwrap();
         let bill = derive_trigger_id("sub_bill_", &subscription_id).unwrap();
         let bill2 = derive_trigger_id("sub_bill_", &subscription_id).unwrap();
         let usage = derive_trigger_id("sub_usage_", &subscription_id).unwrap();
@@ -58101,7 +58570,7 @@ mod subscription_api_tests {
             billing_trigger_id,
         };
         let invoice = SubscriptionInvoice {
-            subscription_nft_id: "sub1$wonderland".parse().unwrap(),
+            subscription_nft_id: "sub1$wonderland.universal".parse().unwrap(),
             period_start_ms: 1_000,
             period_end_ms: 2_000,
             attempted_at_ms: 2_000,
@@ -58145,7 +58614,7 @@ mod subscription_api_tests {
 
     #[test]
     fn resolve_trigger_id_prefers_explicit() {
-        let subscription_id: NftId = "sub2$wonderland".parse().unwrap();
+        let subscription_id: NftId = "sub2$wonderland.universal".parse().unwrap();
         let explicit: TriggerId = "explicit_trigger".parse().unwrap();
         let resolved =
             resolve_trigger_id("sub_bill_", &subscription_id, Some(explicit.clone())).unwrap();
@@ -58168,7 +58637,7 @@ mod subscription_api_tests {
     fn build_billing_trigger_attaches_metadata_and_schedule() {
         use iroha_data_model::events::{EventFilterBox, time::ExecutionTime};
         let trigger_id: TriggerId = "bill_trigger".parse().unwrap();
-        let subscription_id: NftId = "sub3$wonderland".parse().unwrap();
+        let subscription_id: NftId = "sub3$wonderland.universal".parse().unwrap();
         let authority = ALICE_ID.clone();
         let trigger = build_billing_trigger(
             trigger_id.clone(),
@@ -58464,8 +58933,8 @@ mod subscription_api_tests {
                 ),
             }),
         };
-        let active_id: NftId = "sub-active$wonderland".parse().unwrap();
-        let paused_id: NftId = "sub-paused$wonderland".parse().unwrap();
+        let active_id: NftId = "sub-active$wonderland.universal".parse().unwrap();
+        let paused_id: NftId = "sub-paused$wonderland.universal".parse().unwrap();
         let active_state = SubscriptionState {
             plan_id: plan_id.clone(),
             provider: provider.clone(),
@@ -58543,8 +59012,8 @@ mod subscription_api_tests {
                 ),
             }),
         };
-        let active_id: NftId = "sub-alias-active$wonderland".parse().unwrap();
-        let paused_id: NftId = "sub-alias-paused$wonderland".parse().unwrap();
+        let active_id: NftId = "sub-alias-active$wonderland.universal".parse().unwrap();
+        let paused_id: NftId = "sub-alias-paused$wonderland.universal".parse().unwrap();
         let active_state = SubscriptionState {
             plan_id: plan_id.clone(),
             provider: provider.clone(),
@@ -58625,7 +59094,7 @@ mod subscription_api_tests {
                 ),
             }),
         };
-        let subscription_id: NftId = "sub-invoice$wonderland".parse().unwrap();
+        let subscription_id: NftId = "sub-invoice$wonderland.universal".parse().unwrap();
         let subscription_state = SubscriptionState {
             plan_id: plan_id.clone(),
             provider: provider.clone(),
@@ -58727,7 +59196,7 @@ mod subscription_api_tests {
             Vec::new(),
         );
         let (queue, chain_id, telemetry) = test_queue_components();
-        let subscription_id: NftId = "sub-create$wonderland".parse().unwrap();
+        let subscription_id: NftId = "sub-create$wonderland.universal".parse().unwrap();
         let req = SubscriptionCreateDto {
             authority: subscriber,
             private_key: ExposedPrivateKey(BOB_KEYPAIR.private_key().clone()),
@@ -58766,8 +59235,8 @@ mod subscription_api_tests {
         let plan_id: AssetDefinitionId =
             test_asset_definition_id_from_hex("550e8400e29b41d4a7164466554400fa");
         let plan = sample_plan(provider.clone());
-        let active_id: NftId = "sub-active-actions$wonderland".parse().unwrap();
-        let paused_id: NftId = "sub-paused-actions$wonderland".parse().unwrap();
+        let active_id: NftId = "sub-active-actions$wonderland.universal".parse().unwrap();
+        let paused_id: NftId = "sub-paused-actions$wonderland.universal".parse().unwrap();
         let active_state = sample_subscription_state(
             plan_id.clone(),
             provider.clone(),
@@ -58782,7 +59251,7 @@ mod subscription_api_tests {
             SubscriptionStatus::Paused,
             "bill_paused_actions".parse().unwrap(),
         );
-        let keep_id: NftId = "sub-keep-actions$wonderland".parse().unwrap();
+        let keep_id: NftId = "sub-keep-actions$wonderland.universal".parse().unwrap();
         let mut keep_state = sample_subscription_state(
             plan_id.clone(),
             provider.clone(),
@@ -59059,9 +59528,9 @@ mod adapter_filter_tests {
             definition,
             id: "66owaQmAQMuHxPzxUN3bqZ6FJfDa".to_owned(),
             name: "CBDC".to_owned(),
-            alias: Some("cbdc#centralbank".to_owned()),
+            alias: Some("CBDC#centralbank".to_owned()),
             alias_binding: Some(AssetAliasBindingDto {
-                alias: "cbdc#centralbank".to_owned(),
+                alias: "CBDC#centralbank".to_owned(),
                 status: "leased_grace".to_owned(),
                 lease_expiry_ms: Some(100),
                 grace_until_ms: Some(200),
@@ -59074,7 +59543,7 @@ mod adapter_filter_tests {
             &item,
         ));
         assert!(asset_definition_filter_projection(
-            &FilterExpr::Eq(FieldPath("alias".into()), Value::from("cbdc#centralbank"),),
+            &FilterExpr::Eq(FieldPath("alias".into()), Value::from("CBDC#centralbank"),),
             &item,
         ));
         assert!(asset_definition_filter_projection(
@@ -59267,20 +59736,7 @@ mod adapter_filter_tests {
 
     #[cfg(all(test, feature = "app_api"))]
     fn sample_allowance_world(record: &OfflineAllowanceRecord) -> World {
-        let domain_id = record
-            .certificate
-            .allowance
-            .asset
-            .definition()
-            .domain()
-            .clone();
         let controller = record.certificate.controller.clone();
-        let domain = Domain {
-            id: domain_id.clone(),
-            logo: None,
-            metadata: Metadata::default(),
-            owned_by: controller.clone(),
-        };
         let account = Account {
             id: controller.clone(),
             metadata: Metadata::default(),
@@ -59302,7 +59758,7 @@ mod adapter_filter_tests {
             total_quantity: Numeric::zero(),
             confidential_policy: Default::default(),
         };
-        World::with([domain], [account], [asset_definition])
+        World::with(Vec::<Domain>::new(), [account], [asset_definition])
     }
 
     #[cfg(feature = "app_api")]
@@ -59460,21 +59916,9 @@ mod adapter_filter_tests {
     #[test]
     fn offline_allowance_projection_missing_asset_definition_returns_internal_error() {
         let record = sample_allowance_record();
-        let domain_id = record
-            .certificate
-            .allowance
-            .asset
-            .definition()
-            .domain()
-            .clone();
         let controller = record.certificate.controller.clone();
         let world = World::with(
-            [Domain {
-                id: domain_id.clone(),
-                logo: None,
-                metadata: Metadata::default(),
-                owned_by: controller.clone(),
-            }],
+            Vec::<Domain>::new(),
             [Account {
                 id: controller,
                 metadata: Metadata::default(),
@@ -59949,10 +60393,10 @@ fn sample_transfer_record() -> OfflineTransferRecord {
             amount: Numeric::new(1_000, 0),
             commitment: vec![0xAB; 32],
         },
-        spend_public_key: PublicKey::from_str(
-            "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE",
-        )
-        .expect("public key"),
+        spend_public_key: controller
+            .try_signatory()
+            .expect("single-signature controller")
+            .clone(),
         attestation_report: Vec::new(),
         issued_at_ms: 1_700_000_000_000,
         expires_at_ms: 1_900_000_000_000,

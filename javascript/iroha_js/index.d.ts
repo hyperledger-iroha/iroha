@@ -3498,6 +3498,31 @@ export interface ToriiGovernanceDraftResponse {
   reason?: string | null;
 }
 
+export interface MinistryAgendaProposalDraftRequest {
+  proposal: Record<string, unknown>;
+  authority: string;
+}
+
+export interface MinistryAgendaProposalDraftResponse {
+  ok: boolean;
+  agenda_proposal_id: string;
+  authority: string;
+  tx_instructions: ReadonlyArray<ToriiGovernanceDraftInstruction>;
+  signable_transaction_b64: string;
+}
+
+export interface MinistryAgendaProposalRecord {
+  proposal: Record<string, unknown>;
+  authority: string;
+  submitted_tx_hash_hex: string;
+  submitted_height: number;
+}
+
+export interface MinistryAgendaProposalGetResponse {
+  found: boolean;
+  record: MinistryAgendaProposalRecord | null;
+}
+
 export type ToriiGovernanceBallotDirection = "Aye" | "Nay" | "Abstain";
 
 export interface ToriiGovernanceDeployContractProposalRequest {
@@ -4169,6 +4194,7 @@ export interface ToriiSccpCapabilities {
   governanceBundlePath: string;
   messageBundlePath: string;
   messageProofPath: string;
+  messageJobPath: string;
   proofManifestPath: string;
   legacyBurnRegistryBackend: string;
   legacyGovernanceRegistryBackend: string;
@@ -4210,6 +4236,7 @@ export interface ToriiSccpProofManifest {
   manifestSeed: string;
   requiredPublicInputs: ReadonlyArray<string>;
   messagePayloadKinds: ReadonlyArray<string>;
+  submissionTemplate: ToriiSccpCounterpartySubmissionTemplate;
 }
 
 export interface ToriiSccpProofManifestSet {
@@ -4284,6 +4311,86 @@ export interface ToriiSccpMessageTransparentProofArtifact {
   verifierTarget: ToriiSccpProofVerifierTarget;
   publicInputs: ToriiSccpMessageTransparentPublicInputs;
   proofBytes: string;
+  bundle: ToriiSccpMessageProofBundle;
+}
+
+export interface ToriiSccpSubmissionArgument {
+  key: string;
+  description: string;
+}
+
+export interface ToriiSccpCounterpartySubmissionTemplate {
+  version: number;
+  encoding: string;
+  submissionKind: string;
+  verifierEntrypoint: string;
+  requiredArguments: ReadonlyArray<ToriiSccpSubmissionArgument>;
+}
+
+export type ToriiSccpChainFamily = "Evm" | "Solana" | "Ton" | "Tron" | "Substrate";
+
+export type ToriiSccpNormalizedCodecValue =
+  | { kind: "TextUtf8"; value: string }
+  | { kind: "EvmHex"; bytes: string }
+  | { kind: "SolanaBase58"; bytes: string }
+  | { kind: "TonRaw"; workchain: number; account: string }
+  | { kind: "TronBase58Check"; payload: string };
+
+export type ToriiSccpPayloadProjection =
+  | {
+      kind: "AssetRegister";
+      value: {
+        version: number;
+        target_domain: number;
+        home_domain: number;
+        nonce: number;
+        asset_id: ToriiSccpNormalizedCodecValue;
+        decimals: number;
+      };
+    }
+  | {
+      kind: "RouteActivate";
+      value: {
+        version: number;
+        source_domain: number;
+        target_domain: number;
+        nonce: number;
+        asset_id: ToriiSccpNormalizedCodecValue;
+        route_id: ToriiSccpNormalizedCodecValue;
+      };
+    }
+  | {
+      kind: "Transfer";
+      value: {
+        version: number;
+        source_domain: number;
+        dest_domain: number;
+        nonce: number;
+        asset_home_domain: number;
+        asset_id: ToriiSccpNormalizedCodecValue;
+        amount: number;
+        sender: ToriiSccpNormalizedCodecValue;
+        recipient: ToriiSccpNormalizedCodecValue;
+        route_id: ToriiSccpNormalizedCodecValue;
+      };
+    };
+
+export interface ToriiSccpCounterpartyProofJob {
+  version: number;
+  chainFamily: ToriiSccpChainFamily;
+  chain: string;
+  localDomain: number;
+  counterpartyDomain: number;
+  proofFamily: string;
+  messageBackend: string;
+  registryBackend: string;
+  manifestSeed: string;
+  finalityModel: ToriiSccpProofFinalityModel;
+  verifierTarget: ToriiSccpProofVerifierTarget;
+  publicInputs: ToriiSccpMessageTransparentPublicInputs;
+  payloadKind: string;
+  payloadProjection: ToriiSccpPayloadProjection;
+  submissionTemplate: ToriiSccpCounterpartySubmissionTemplate;
   bundle: ToriiSccpMessageProofBundle;
 }
 
@@ -7410,6 +7517,10 @@ export declare class ToriiClient {
     messageIdHex: string | Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
     options?: { signal?: AbortSignal },
   ): Promise<ToriiSccpMessageTransparentProofArtifact>;
+  getSccpMessageProofJob(
+    messageIdHex: string | Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiSccpCounterpartyProofJob>;
   getRuntimeAbiActive(
     options?: { signal?: AbortSignal },
   ): Promise<ToriiRuntimeAbiActiveResponse>;
@@ -7570,6 +7681,14 @@ export declare class ToriiClient {
   getGovernanceCouncilAudit(
     options?: ToriiGovernanceCouncilAuditOptions,
   ): Promise<ToriiGovernanceCouncilAuditResponse>;
+  draftMinistryAgendaProposal(
+    payload: MinistryAgendaProposalDraftRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<MinistryAgendaProposalDraftResponse>;
+  getMinistryAgendaProposal(
+    proposalId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<MinistryAgendaProposalGetResponse>;
   governanceFinalizeReferendum(
     payload: ToriiGovernanceFinalizeRequest,
     options?: { signal?: AbortSignal },
@@ -8223,6 +8342,11 @@ export function resignSignedTransaction(
 
 export function encodeSignedTransactionNorito(
   signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+): Buffer;
+
+export function finalizeSignedTransaction(
+  unsignedTxBytes: ArrayBufferView | ArrayBuffer | Buffer,
+  detachedSignature: ArrayBufferView | ArrayBuffer | Buffer,
 ): Buffer;
 
 export interface OfflineEnvelope {
@@ -9170,6 +9294,10 @@ export function buildFinalizeReferendumInstruction(
 
 export function buildPersistCouncilForEpochInstruction(
   input: PersistCouncilForEpochInstructionInput,
+): object;
+
+export function buildSubmitAgendaProposalInstruction(
+  input: { proposal: Record<string, unknown> },
 ): object;
 
 export interface ClaimTwitterFollowRewardInstructionInput {

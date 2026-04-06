@@ -438,6 +438,7 @@ impl EndpointHealthPool {
         )
     }
 
+    #[cfg(test)]
     fn select_endpoint_at(&self, op_name: &'static str, now: Instant) -> Result<usize> {
         self.select_endpoint_at_with_preference(op_name, None, now)
     }
@@ -515,6 +516,7 @@ impl EndpointHealthPool {
         }
     }
 
+    #[cfg(test)]
     fn run_with_failover_at<T, F>(
         &self,
         op_name: &'static str,
@@ -1322,6 +1324,7 @@ fn is_ingress_queue_timeout_retryable(error: &color_eyre::Report) -> bool {
         || is_ingress_endpoint_backpressure_message(&message)
 }
 
+#[cfg(test)]
 fn queue_timeout_retry_delay(
     backoff: Duration,
     endpoint_backpressure: bool,
@@ -1356,6 +1359,7 @@ where
     )
 }
 
+#[cfg(test)]
 fn run_with_queue_timeout_retry_with_policy_and_delay<F, G>(
     plan_label: &'static str,
     max_retry_attempts: u32,

@@ -61237,6 +61237,65 @@ async fn prune_stale_view_state_preserves_live_frontier_owner_and_validation_inf
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn prune_stale_view_state_preserves_live_frontier_owner_with_commit_qc_observed() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0u64;
+    let now = Instant::now();
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(&super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block, payload_hash, height, view);
+    pending.note_commit_qc_observed(actor.epoch_for_height(height));
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.frontier_slot = Some(super::FrontierSlot::new(
+        height,
+        view,
+        block_hash,
+        now,
+        Duration::from_millis(1),
+        None,
+        BTreeSet::new(),
+        true,
+        true,
+        true,
+        None,
+        None,
+    ));
+    {
+        let slot = actor.frontier_slot.as_mut().expect("frontier slot");
+        slot.active_view = view.saturating_add(1);
+        slot.quorum_progress.commit_qc_observed = true;
+        slot.sync_compat_fields();
+    }
+
+    actor.prune_stale_view_state(height, view.saturating_add(1));
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("live frontier owner pending block");
+    assert!(
+        !pending_after.aborted,
+        "frontier payload with observed commit QC must stay active across the first same-height view change"
+    );
+    assert!(
+        !pending_after.is_retired_same_height(),
+        "frontier payload with observed commit QC must not be downgraded into a passive retained branch before finalize"
+    );
+    assert!(
+        pending_after.commit_qc_observed(),
+        "same-height cleanup must preserve the observed commit QC on the active frontier payload"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn prune_stale_view_state_retires_old_view_frontier_pending_without_inflight() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;

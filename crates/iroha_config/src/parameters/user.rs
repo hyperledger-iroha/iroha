@@ -17269,6 +17269,9 @@ pub struct SorafsGateway {
     pub rollout_phase: String,
     /// Optional staged anonymity policy override for SoraNet transports.
     pub anonymity_policy: Option<String>,
+    /// Untrusted per-CID host routing configuration.
+    #[config(nested)]
+    pub untrusted_hosting: SorafsGatewayUntrustedHosting,
     /// Optional direct-mode override configuration.
     pub direct_mode: Option<SorafsGatewayDirectMode>,
 }
@@ -17285,6 +17288,7 @@ impl Default for SorafsGateway {
             acme: SorafsGatewayAcme::default(),
             rollout_phase: defaults::sorafs::gateway::rollout_phase(),
             anonymity_policy: defaults::sorafs::gateway::anonymity_policy(),
+            untrusted_hosting: SorafsGatewayUntrustedHosting::default(),
             direct_mode: None,
         }
     }
@@ -17302,6 +17306,7 @@ impl SorafsGateway {
             acme,
             rollout_phase,
             anonymity_policy,
+            untrusted_hosting,
             direct_mode,
         } = self;
 
@@ -17327,12 +17332,81 @@ impl SorafsGateway {
             cdn_policy_path: None,
             rate_limit: rate_limit.parse(),
             denylist: denylist.parse(),
+            untrusted_hosting: untrusted_hosting.parse(),
             acme: acme.parse(),
             rollout_phase,
             anonymity_policy: Some(
                 explicit_stage.unwrap_or_else(|| rollout_phase.default_anonymity_policy()),
             ),
             direct_mode: direct_mode.map(SorafsGatewayDirectMode::parse),
+        }
+    }
+}
+
+/// Canonical CID-host suffixes for untrusted browser app delivery.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsGatewayCidHostSuffixes {
+    /// Live-network CID-host suffix.
+    #[config(default = "defaults::sorafs::gateway::untrusted_hosting::live_cid_host_suffix()")]
+    pub live: String,
+    /// Taira-network CID-host suffix.
+    #[config(default = "defaults::sorafs::gateway::untrusted_hosting::taira_cid_host_suffix()")]
+    pub taira: String,
+}
+
+impl Default for SorafsGatewayCidHostSuffixes {
+    fn default() -> Self {
+        Self {
+            live: defaults::sorafs::gateway::untrusted_hosting::live_cid_host_suffix(),
+            taira: defaults::sorafs::gateway::untrusted_hosting::taira_cid_host_suffix(),
+        }
+    }
+}
+
+impl SorafsGatewayCidHostSuffixes {
+    fn parse(self) -> actual::SorafsGatewayCidHostSuffixes {
+        actual::SorafsGatewayCidHostSuffixes {
+            live: self.live.trim().trim_end_matches('.').to_ascii_lowercase(),
+            taira: self.taira.trim().trim_end_matches('.').to_ascii_lowercase(),
+        }
+    }
+}
+
+/// User-level configuration for serving untrusted apps on CID-derived origins.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsGatewayUntrustedHosting {
+    /// Enable per-CID host routing.
+    #[config(default = "defaults::sorafs::gateway::UNTRUSTED_HOSTING_ENABLED")]
+    pub enabled: bool,
+    /// Canonical live/test CID-host suffixes.
+    #[config(nested)]
+    pub cid_host_suffixes: SorafsGatewayCidHostSuffixes,
+    /// Redirect path-gateway requests to the canonical CID host.
+    #[config(default = "defaults::sorafs::gateway::PATH_GATEWAY_REDIRECT")]
+    pub path_gateway_redirect: bool,
+    /// Restrict canonical redirects to browser HTML navigations.
+    #[config(default = "defaults::sorafs::gateway::REDIRECT_HTML_ONLY")]
+    pub redirect_html_only: bool,
+}
+
+impl Default for SorafsGatewayUntrustedHosting {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::gateway::UNTRUSTED_HOSTING_ENABLED,
+            cid_host_suffixes: SorafsGatewayCidHostSuffixes::default(),
+            path_gateway_redirect: defaults::sorafs::gateway::PATH_GATEWAY_REDIRECT,
+            redirect_html_only: defaults::sorafs::gateway::REDIRECT_HTML_ONLY,
+        }
+    }
+}
+
+impl SorafsGatewayUntrustedHosting {
+    fn parse(self) -> actual::SorafsGatewayUntrustedHosting {
+        actual::SorafsGatewayUntrustedHosting {
+            enabled: self.enabled,
+            cid_host_suffixes: self.cid_host_suffixes.parse(),
+            path_gateway_redirect: self.path_gateway_redirect,
+            redirect_html_only: self.redirect_html_only,
         }
     }
 }

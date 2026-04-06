@@ -19,7 +19,7 @@ fn base_dir_slot() -> &'static RwLock<PathBuf> {
 }
 
 struct ExclusiveState {
-    owner: Option<ThreadId>,
+    owner: Option<OverrideOwner>,
     depth: usize,
 }
 
@@ -31,24 +31,24 @@ impl ExclusiveState {
         }
     }
 
-    fn acquire(&mut self, thread_id: ThreadId) {
+    fn acquire(&mut self, owner: OverrideOwner) {
         match self.owner {
-            Some(owner) if owner == thread_id => {
+            Some(current_owner) if current_owner == owner => {
                 self.depth += 1;
             }
             None => {
-                self.owner = Some(thread_id);
+                self.owner = Some(owner);
                 self.depth = 1;
             }
             Some(_) => unreachable!("exclusive state acquire should wait before retrying"),
         }
     }
 
-    fn try_release(&mut self, thread_id: ThreadId) -> bool {
-        let owner = self.owner.expect("exclusive lock owned when releasing");
+    fn try_release(&mut self, owner: OverrideOwner) -> bool {
+        let current_owner = self.owner.expect("exclusive lock owned when releasing");
         assert_eq!(
-            owner, thread_id,
-            "override guard released by non-owner thread"
+            current_owner, owner,
+            "override guard released by non-owner task/thread"
         );
         self.depth -= 1;
         if self.depth == 0 {
@@ -64,28 +64,40 @@ fn exclusive_state() -> &'static (Mutex<ExclusiveState>, Condvar) {
     STATE.get_or_init(|| (Mutex::new(ExclusiveState::new()), Condvar::new()))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum OverrideOwner {
+    Task(tokio::task::Id),
+    Thread(ThreadId),
+}
+
+impl OverrideOwner {
+    fn current() -> Self {
+        tokio::task::try_id().map_or_else(|| Self::Thread(std::thread::current().id()), Self::Task)
+    }
+}
+
 #[must_use]
 pub struct OverrideGuard {
     previous: Option<PathBuf>,
-    owner: ThreadId,
+    owner: OverrideOwner,
 }
 
 impl OverrideGuard {
     pub fn new(path: &Path) -> Self {
-        let thread_id = std::thread::current().id();
+        let owner = OverrideOwner::current();
         let (lock, cvar) = exclusive_state();
         let mut state = lock
             .lock()
             .expect("failed to acquire override exclusivity lock");
-        while let Some(owner) = state.owner {
-            if owner == thread_id {
+        while let Some(current_owner) = state.owner {
+            if current_owner == owner {
                 break;
             }
             state = cvar
                 .wait(state)
                 .expect("failed waiting on override exclusivity");
         }
-        state.acquire(thread_id);
+        state.acquire(owner);
         drop(state);
 
         let mut guard = override_slot()
@@ -93,10 +105,7 @@ impl OverrideGuard {
             .expect("failed to acquire data dir override lock");
         let previous = guard.replace(path.to_path_buf());
 
-        Self {
-            previous,
-            owner: thread_id,
-        }
+        Self { previous, owner }
     }
 }
 
@@ -143,15 +152,41 @@ pub fn base_dir() -> PathBuf {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
+    use std::{
+        path::Path,
+        sync::{Mutex, MutexGuard, OnceLock},
+    };
 
     use super::*;
 
     fn clear_override() {
+        let owner = OverrideOwner::current();
+        let (lock, cvar) = exclusive_state();
+        let mut state = lock
+            .lock()
+            .expect("failed to acquire override exclusivity lock");
+        while let Some(current_owner) = state.owner {
+            if current_owner == owner {
+                break;
+            }
+            state = cvar
+                .wait(state)
+                .expect("failed waiting on override exclusivity");
+        }
+        state.acquire(owner);
+        drop(state);
+
         override_slot()
             .lock()
             .expect("failed to acquire data dir override lock")
             .take();
+
+        let mut state = lock
+            .lock()
+            .expect("failed to reacquire override exclusivity lock");
+        if state.try_release(owner) {
+            cvar.notify_one();
+        }
     }
 
     #[test]
@@ -188,14 +223,26 @@ mod tests {
     }
 
     struct BaseDirResetGuard {
+        _lock: MutexGuard<'static, ()>,
         previous: PathBuf,
+    }
+
+    fn base_dir_test_lock() -> &'static Mutex<()> {
+        static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+        LOCK.get_or_init(|| Mutex::new(()))
     }
 
     impl BaseDirResetGuard {
         fn new(path: &Path) -> Self {
+            let lock = base_dir_test_lock()
+                .lock()
+                .expect("failed to acquire base dir test lock");
             let previous = base_dir();
             set_base_dir(path.to_path_buf());
-            Self { previous }
+            Self {
+                _lock: lock,
+                previous,
+            }
         }
     }
 

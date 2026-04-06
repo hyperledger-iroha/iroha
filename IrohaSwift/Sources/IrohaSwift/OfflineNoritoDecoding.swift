@@ -70,7 +70,56 @@ struct OfflineNoritoReader {
     }
 }
 
+struct ParsedPublicAssetLiteral {
+    let assetDefinitionId: String
+    let accountId: String
+    let dataspaceId: UInt64?
+}
+
 extension OfflineNorito {
+    static func parsePublicAssetIdLiteral(_ literal: String) -> ParsedPublicAssetLiteral? {
+        let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty,
+              trimmed == literal,
+              !trimmed.contains(where: \.isWhitespace) else {
+            return nil
+        }
+        let components = trimmed.split(separator: "#", omittingEmptySubsequences: false)
+        guard (components.count == 2 || components.count == 3),
+              !components[0].isEmpty,
+              !components[1].isEmpty else {
+            return nil
+        }
+        let assetDefinitionId = String(components[0])
+        guard AssetDefinitionAddress.decode(assetDefinitionId) != nil else {
+            return nil
+        }
+        let accountId = String(components[1])
+        guard (try? AccountAddress.parseEncoded(accountId)) != nil else {
+            return nil
+        }
+        var dataspaceId: UInt64?
+        if components.count == 3 {
+            let scope = String(components[2])
+            guard let rawDataspace = scope.split(
+                separator: ":",
+                maxSplits: 1,
+                omittingEmptySubsequences: false
+            ).dropFirst().first,
+            scope.lowercased().hasPrefix("dataspace:"),
+            !rawDataspace.isEmpty,
+            let parsedDataspaceId = UInt64(rawDataspace) else {
+                return nil
+            }
+            dataspaceId = parsedDataspaceId
+        }
+        return ParsedPublicAssetLiteral(
+            assetDefinitionId: assetDefinitionId,
+            accountId: accountId,
+            dataspaceId: dataspaceId
+        )
+    }
+
     static func decodeString(_ data: Data) throws -> String {
         var reader = OfflineNoritoReader(data: data)
         let length = try reader.readUInt64LE()
@@ -85,6 +134,9 @@ extension OfflineNorito {
     }
 
     static func assetDefinitionIdFromLiteral(_ literal: String) -> String? {
+        if let parsed = parsePublicAssetIdLiteral(literal) {
+            return parsed.assetDefinitionId
+        }
         let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return nil
@@ -94,5 +146,9 @@ extension OfflineNorito {
             return nil
         }
         return trimmed
+    }
+
+    static func accountIdFromLiteral(_ literal: String) -> String? {
+        parsePublicAssetIdLiteral(literal)?.accountId
     }
 }

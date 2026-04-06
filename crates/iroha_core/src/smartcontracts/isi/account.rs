@@ -488,7 +488,7 @@ pub mod isi {
                     "account recovery request for `{alias:?}` is not pending"
                 )));
             }
-            request.approve(authority.clone());
+            request.approve(authority);
             let updated_request = request.clone();
             state_transaction
                 .world

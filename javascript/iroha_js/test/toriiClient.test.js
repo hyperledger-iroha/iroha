@@ -8430,6 +8430,7 @@ test("getSccpCapabilities normalizes discovery response", async () => {
         governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}",
         message_bundle_path: "/v1/sccp/proofs/message/{message_id}",
         message_proof_path: "/v1/sccp/artifacts/message/{message_id}",
+        message_job_path: "/v1/sccp/jobs/message/{message_id}",
         proof_manifest_path: "/v1/sccp/manifests",
         legacy_burn_registry_backend: "bridge/sccp/burn-v1",
         legacy_governance_registry_backend: "bridge/sccp/governance-v1",
@@ -8467,6 +8468,7 @@ test("getSccpCapabilities normalizes discovery response", async () => {
     governanceBundlePath: "/v1/sccp/proofs/governance/{message_id}",
     messageBundlePath: "/v1/sccp/proofs/message/{message_id}",
     messageProofPath: "/v1/sccp/artifacts/message/{message_id}",
+    messageJobPath: "/v1/sccp/jobs/message/{message_id}",
     proofManifestPath: "/v1/sccp/manifests",
     legacyBurnRegistryBackend: "bridge/sccp/burn-v1",
     legacyGovernanceRegistryBackend: "bridge/sccp/governance-v1",
@@ -8526,6 +8528,28 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
               "finality_block_hash",
             ],
             message_payload_kinds: ["asset_register", "route_activate", "transfer"],
+            submission_template: {
+              version: 1,
+              encoding: "abi_tuple_v1",
+              submission_kind: "contract_call",
+              verifier_entrypoint:
+                "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
+              required_arguments: [
+                {
+                  key: "proof_bytes",
+                  description: "Transparent SCCP proof bytes emitted by the prover backend.",
+                },
+                {
+                  key: "public_inputs",
+                  description: "Fixed-width ABI words for the SCCP public inputs in manifest order.",
+                },
+                {
+                  key: "statement_hash",
+                  description:
+                    "Canonical SCCP statement hash exposed as a bytes32 verifier input.",
+                },
+              ],
+            },
           },
         ],
       },
@@ -8562,6 +8586,28 @@ test("getSccpProofManifests normalizes typed manifest response", async () => {
           "finality_block_hash",
         ],
         messagePayloadKinds: ["asset_register", "route_activate", "transfer"],
+        submissionTemplate: {
+          version: 1,
+          encoding: "abi_tuple_v1",
+          submissionKind: "contract_call",
+          verifierEntrypoint:
+            "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
+          requiredArguments: [
+            {
+              key: "proof_bytes",
+              description: "Transparent SCCP proof bytes emitted by the prover backend.",
+            },
+            {
+              key: "public_inputs",
+              description: "Fixed-width ABI words for the SCCP public inputs in manifest order.",
+            },
+            {
+              key: "statement_hash",
+              description:
+                "Canonical SCCP statement hash exposed as a bytes32 verifier input.",
+            },
+          ],
+        },
       },
     ],
   });
@@ -8592,6 +8638,18 @@ test("getSccpProofManifests rejects unsupported verifier target", async () => {
             manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
             required_public_inputs: ["message_id"],
             message_payload_kinds: ["transfer"],
+            submission_template: {
+              version: 1,
+              encoding: "ton_cell_v1",
+              submission_kind: "internal_message",
+              verifier_entrypoint: "op::submit_sccp_message_proof",
+              required_arguments: [
+                {
+                  key: "proof_cell",
+                  description: "Transparent SCCP proof cell emitted by the TON prover backend.",
+                },
+              ],
+            },
           },
         ],
       },
@@ -8633,6 +8691,28 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
           finality_block_hash: finalityBlockHash,
         },
         proof_bytes: "aa55",
+        submission_package: {
+          version: 1,
+          proof_family: "stark-fri-v1",
+          verifier_backend: { version: 1, key: "ton-contract-v1" },
+          envelope_encoding: "ton_message_body_v1",
+          submission_kind: "internal_message",
+          verifier_entrypoint: "op::submit_sccp_message_proof",
+          platform_payload: {
+            platform: "ton_internal_message",
+            payload: {
+              proof_cell: "aa55",
+              public_inputs_cell: "cc77",
+              bundle_cell: "dd88",
+            },
+          },
+          arguments: [
+            { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
+            { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
+            { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
+          ],
+          envelope_bytes: "ee99",
+        },
         bundle: {
           version: 1,
           commitment_root: commitmentRoot,
@@ -8684,6 +8764,28 @@ test("getSccpMessageProofArtifact normalizes typed artifact response", async () 
       finalityBlockHash,
     },
     proofBytes: "aa55",
+    submissionPackage: {
+      version: 1,
+      proofFamily: "stark-fri-v1",
+      verifierBackendKey: "ton-contract-v1",
+      envelopeEncoding: "ton_message_body_v1",
+      submissionKind: "internal_message",
+      verifierEntrypoint: "op::submit_sccp_message_proof",
+      platformPayload: {
+        kind: "ton_internal_message",
+        value: {
+          proofCell: "aa55",
+          publicInputsCell: "cc77",
+          bundleCell: "dd88",
+        },
+      },
+      arguments: [
+        { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
+        { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
+        { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
+      ],
+      envelopeBytes: "ee99",
+    },
     bundle: {
       version: 1,
       commitmentRoot,
@@ -8737,6 +8839,50 @@ test("getSccpMessageProofArtifact rejects bundle/public input mismatch", async (
           finality_block_hash: "44".repeat(32),
         },
         proof_bytes: "aa55",
+        submission_package: {
+          version: 1,
+          proof_family: "stark-fri-v1",
+          verifier_backend: { version: 1, key: "evm-secp256k1-keccak-v1" },
+          envelope_encoding: "abi_tuple_v1",
+          submission_kind: "contract_call",
+          verifier_entrypoint:
+            "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
+          platform_payload: {
+            platform: "evm_contract_call",
+            payload: {
+              proof_bytes: "aa55",
+              public_inputs: {
+                message_id: "11".repeat(32),
+                payload_hash: "22".repeat(32),
+                target_domain_word: "00".repeat(31) + "01",
+                commitment_root: "33".repeat(32),
+                finality_height_word: "00".repeat(31) + "07",
+                finality_block_hash: "44".repeat(32),
+              },
+              public_inputs_hash: "88".repeat(32),
+              statement_hash: "55".repeat(32),
+              attestation: {
+                version: 1,
+                message_id: "11".repeat(32),
+                source_domain: 0,
+                commitment_root: "33".repeat(32),
+                native_proof_hash: "99".repeat(32),
+                signatures: [
+                  {
+                    signer_address: "12".repeat(20),
+                    signature_bytes: "34".repeat(65),
+                  },
+                ],
+              },
+            },
+          },
+          arguments: [
+            { key: "proof_bytes", encoding: "raw_bytes", bytes: "aa55" },
+            { key: "public_inputs", encoding: "abi_bytes32x6", bytes: "66".repeat(32 * 6) },
+            { key: "statement_hash", encoding: "abi_bytes32", bytes: "55".repeat(32) },
+          ],
+          envelope_bytes: "77",
+        },
         bundle: {
           version: 1,
           commitment_root: "33".repeat(32),
@@ -8760,6 +8906,224 @@ test("getSccpMessageProofArtifact rejects bundle/public input mismatch", async (
     () => client.getSccpMessageProofArtifact("11".repeat(32)),
     /bundle\.commitment\.message_id must match public_inputs\.message_id/,
   );
+});
+
+test("getSccpMessageProofJob normalizes typed job response", async () => {
+  const messageId = "11".repeat(32);
+  const payloadHash = "22".repeat(32);
+  const commitmentRoot = "33".repeat(32);
+  const finalityBlockHash = "44".repeat(32);
+  const fetchImpl = async (url) => {
+    assert.equal(url, `${BASE_URL}/v1/sccp/jobs/message/${messageId}`);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        version: 1,
+        chain_family: "Ton",
+        chain: "ton",
+        local_domain: 0,
+        counterparty_domain: 4,
+        proof_family: "stark-fri-v1",
+        message_backend: "sccp/stark-fri-v1/ton",
+        registry_backend: "bridge/sccp/stark-fri-v1/ton",
+        manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+        finality_model: "TonMasterchain",
+        verifier_target: "TonContract",
+        submission_template: {
+          version: 1,
+          encoding: "ton_cell_v1",
+          submission_kind: "internal_message",
+          verifier_entrypoint: "op::submit_sccp_message_proof",
+          required_arguments: [
+            {
+              key: "proof_cell",
+              description: "Transparent SCCP proof cell emitted by the TON prover backend.",
+            },
+            {
+              key: "public_inputs_cell",
+              description: "Cell-encoded SCCP public inputs in manifest order.",
+            },
+            {
+              key: "bundle_cell",
+              description:
+                "Cell-encoded Nexus SCCP message bundle for the TON bridge contract.",
+            },
+          ],
+        },
+        submission_package: {
+          version: 1,
+          proof_family: "stark-fri-v1",
+          verifier_backend: { version: 1, key: "ton-contract-v1" },
+          envelope_encoding: "ton_message_body_v1",
+          submission_kind: "internal_message",
+          verifier_entrypoint: "op::submit_sccp_message_proof",
+          platform_payload: {
+            platform: "ton_internal_message",
+            payload: {
+              proof_cell: "aa55",
+              public_inputs_cell: "cc77",
+              bundle_cell: "dd88",
+            },
+          },
+          arguments: [
+            { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
+            { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
+            { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
+          ],
+          envelope_bytes: "ee99",
+        },
+        public_inputs: {
+          version: 1,
+          message_id: messageId,
+          payload_hash: payloadHash,
+          target_domain: 4,
+          commitment_root: commitmentRoot,
+          finality_height: "19",
+          finality_block_hash: finalityBlockHash,
+        },
+        payload_kind: "transfer",
+        payload_projection: {
+          Transfer: {
+            version: 1,
+            source_domain: 0,
+            dest_domain: 4,
+            nonce: "21",
+            asset_home_domain: 0,
+            asset_id: { TextUtf8: { value: "xor#universal" } },
+            amount: "77",
+            sender: { TextUtf8: { value: "nexus:soraswap" } },
+            recipient: {
+              TonRaw: {
+                workchain: 0,
+                account: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              },
+            },
+            route_id: { TextUtf8: { value: "nexus:ton:xor" } },
+          },
+        },
+        bundle: {
+          version: 1,
+          commitment_root: commitmentRoot,
+          commitment: {
+            version: 1,
+            kind: "Transfer",
+            target_domain: 4,
+            message_id: messageId,
+            payload_hash: payloadHash,
+            parliament_certificate_hash: null,
+          },
+          merkle_proof: { steps: [] },
+          payload: { Transfer: { version: 1, amount: "77" } },
+          finality_proof: "bb66",
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getSccpMessageProofJob(`0x${messageId}`);
+  assert.deepEqual(result, {
+    version: 1,
+    chainFamily: "Ton",
+    chain: "ton",
+    localDomain: 0,
+    counterpartyDomain: 4,
+    proofFamily: "stark-fri-v1",
+    messageBackend: "sccp/stark-fri-v1/ton",
+    registryBackend: "bridge/sccp/stark-fri-v1/ton",
+    manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+    finalityModel: "TonMasterchain",
+    verifierTarget: "TonContract",
+    submissionTemplate: {
+      version: 1,
+      encoding: "ton_cell_v1",
+      submissionKind: "internal_message",
+      verifierEntrypoint: "op::submit_sccp_message_proof",
+      requiredArguments: [
+        {
+          key: "proof_cell",
+          description: "Transparent SCCP proof cell emitted by the TON prover backend.",
+        },
+        {
+          key: "public_inputs_cell",
+          description: "Cell-encoded SCCP public inputs in manifest order.",
+        },
+        {
+          key: "bundle_cell",
+          description: "Cell-encoded Nexus SCCP message bundle for the TON bridge contract.",
+        },
+      ],
+    },
+    submissionPackage: {
+      version: 1,
+      proofFamily: "stark-fri-v1",
+      verifierBackendKey: "ton-contract-v1",
+      envelopeEncoding: "ton_message_body_v1",
+      submissionKind: "internal_message",
+      verifierEntrypoint: "op::submit_sccp_message_proof",
+      platformPayload: {
+        kind: "ton_internal_message",
+        value: {
+          proofCell: "aa55",
+          publicInputsCell: "cc77",
+          bundleCell: "dd88",
+        },
+      },
+      arguments: [
+        { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
+        { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
+        { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
+      ],
+      envelopeBytes: "ee99",
+    },
+    publicInputs: {
+      version: 1,
+      messageId,
+      payloadHash,
+      targetDomain: 4,
+      commitmentRoot,
+      finalityHeight: 19,
+      finalityBlockHash,
+    },
+    payloadKind: "transfer",
+    payloadProjection: {
+      kind: "Transfer",
+      value: {
+        version: 1,
+        source_domain: 0,
+        dest_domain: 4,
+        nonce: 21,
+        asset_home_domain: 0,
+        asset_id: { kind: "TextUtf8", value: "xor#universal" },
+        amount: 77,
+        sender: { kind: "TextUtf8", value: "nexus:soraswap" },
+        recipient: {
+          kind: "TonRaw",
+          workchain: 0,
+          account: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        },
+        route_id: { kind: "TextUtf8", value: "nexus:ton:xor" },
+      },
+    },
+    bundle: {
+      version: 1,
+      commitmentRoot,
+      commitment: {
+        version: 1,
+        kind: "Transfer",
+        targetDomain: 4,
+        messageId,
+        payloadHash,
+        parliamentCertificateHash: null,
+      },
+      merkleProof: { steps: [] },
+      payload: {
+        kind: "Transfer",
+        value: { version: 1, amount: "77" },
+      },
+      finalityProof: "bb66",
+    },
+  });
 });
 
 test("getRuntimeAbiActive normalizes ABI version", async () => {
@@ -9457,6 +9821,107 @@ test("typed governance finalize/enact helpers always return drafts", async () =>
   assert.equal(captures.length, 2);
   assert.equal(captures[0].url, `${BASE_URL}/v1/gov/finalize`);
   assert.equal(captures[1].url, `${BASE_URL}/v1/gov/enact`);
+});
+
+test("draftMinistryAgendaProposal normalizes the draft response payload", async () => {
+  let capturedBody;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      capturedBody = JSON.parse(String(init.body));
+      assert.equal(url, `${BASE_URL}/v1/ministry/agenda/proposals/draft`);
+      return createResponse({
+        status: 200,
+        jsonData: {
+          ok: true,
+          agenda_proposal_id: "AC-2026-001",
+          authority: "i105-test-account",
+          tx_instructions: [
+            { wire_id: "SubmitAgendaProposal", payload_hex: "aa55" },
+          ],
+          signable_transaction_b64: "AQID",
+        },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const proposal = {
+    proposal_id: "AC-2026-001",
+    action: "add-to-denylist",
+  };
+  const draft = await client.draftMinistryAgendaProposal({
+    proposal,
+    authority: " i105-test-account ",
+  });
+
+  assert.deepEqual(capturedBody, {
+    proposal,
+    authority: "i105-test-account",
+  });
+  assert.deepEqual(draft, {
+    ok: true,
+    agenda_proposal_id: "AC-2026-001",
+    authority: "i105-test-account",
+    tx_instructions: [
+      { wire_id: "SubmitAgendaProposal", payload_hex: "aa55" },
+    ],
+    signable_transaction_b64: "AQID",
+  });
+});
+
+test("getMinistryAgendaProposal returns missing and persisted records", async () => {
+  let call = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url) => {
+      call += 1;
+      assert.equal(url, `${BASE_URL}/v1/ministry/agenda/proposals/AC-2026-001`);
+      if (call === 1) {
+        return createResponse({
+          status: 200,
+          jsonData: {
+            found: false,
+            record: null,
+          },
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return createResponse({
+        status: 200,
+        jsonData: {
+          found: true,
+          record: {
+            proposal: {
+              proposal_id: "AC-2026-001",
+              action: "add-to-denylist",
+            },
+            authority: "i105-test-account",
+            submitted_tx_hash_hex: "ab".repeat(32),
+            submitted_height: 44,
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  const missing = await client.getMinistryAgendaProposal(" AC-2026-001 ");
+  const found = await client.getMinistryAgendaProposal("AC-2026-001");
+
+  assert.deepEqual(missing, {
+    found: false,
+    record: null,
+  });
+  assert.deepEqual(found, {
+    found: true,
+    record: {
+      proposal: {
+        proposal_id: "AC-2026-001",
+        action: "add-to-denylist",
+      },
+      authority: "i105-test-account",
+      submitted_tx_hash_hex: "ab".repeat(32),
+      submitted_height: 44,
+    },
+  });
 });
 
 test("governanceProposeDeployContract normalizes payloads", async () => {

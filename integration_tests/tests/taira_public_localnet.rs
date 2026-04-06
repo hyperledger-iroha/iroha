@@ -13,15 +13,16 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, ensure, eyre};
-use integration_tests::sandbox;
+use integration_tests::{kagami::resolve_kagami_bin, sandbox};
 use iroha::{
     client::Client,
     config::{Config, LoadPath},
-    crypto::{Algorithm, ExposedPrivateKey, KeyPair, bls_normal_pop_prove},
+    crypto::{Algorithm, ExposedPrivateKey, KeyPair, PrivateKey, PublicKey, bls_normal_pop_prove},
     data_model::{
         Level,
         isi::{InstructionBox, Log, Unregister, register::RegisterPeerWithPop},
         peer::PeerId,
+        prelude::AccountId,
         prelude::QueryBuilderExt,
         query::peer::prelude::FindPeers,
     },
@@ -1337,7 +1338,9 @@ async fn setup_taira_harness(out_dir: &Path, seed: &str) -> Result<TairaHarness>
         (api_ports, p2p_ports),
     )?;
 
-    let mut primary_client = load_localnet_client(out_dir)?;
+    let generic_client = load_localnet_client(out_dir)?;
+    let mut primary_client =
+        load_validator_authority_client(out_dir, &generic_client, base_api_port, 0)?;
     primary_client.transaction_status_timeout = READY_TIMEOUT;
     let validator_clients =
         build_validator_clients(&primary_client, base_api_port, TAIRA_VALIDATORS)?;
@@ -1584,6 +1587,40 @@ fn build_client_for_port(template: &Client, api_port: u16) -> Result<Client> {
         .wrap_err("parse torii URL")?;
     client.torii_request_timeout = TORII_REQUEST_TIMEOUT;
     client.transaction_status_timeout = READY_TIMEOUT;
+    Ok(client)
+}
+
+fn load_validator_authority_client(
+    out_dir: &Path,
+    template: &Client,
+    api_port: u16,
+    validator_index: usize,
+) -> Result<Client> {
+    let config_path = out_dir.join(format!("peer{validator_index}.toml"));
+    let config_text = fs::read_to_string(&config_path)
+        .wrap_err_with(|| format!("read validator config {}", config_path.display()))?;
+    let parsed: TomlValue = toml::from_str(&config_text)
+        .wrap_err_with(|| format!("parse validator config {}", config_path.display()))?;
+    let root = parsed
+        .as_table()
+        .ok_or_else(|| eyre!("validator config root must be a TOML table"))?;
+    let public_key: PublicKey = root
+        .get("public_key")
+        .and_then(TomlValue::as_str)
+        .ok_or_else(|| eyre!("validator config missing public_key"))?
+        .parse()
+        .wrap_err("parse validator public_key")?;
+    let private_key: PrivateKey = root
+        .get("private_key")
+        .and_then(TomlValue::as_str)
+        .ok_or_else(|| eyre!("validator config missing private_key"))?
+        .parse()
+        .wrap_err("parse validator private_key")?;
+
+    let mut client = build_client_for_port(template, api_port)?;
+    client.key_pair = KeyPair::new(public_key.clone(), private_key)
+        .wrap_err("construct validator authority key pair")?;
+    client.account = AccountId::new(public_key);
     Ok(client)
 }
 
@@ -2459,85 +2496,6 @@ fn generate_localnet(
     );
     override_localnet_transaction_ttl(out_dir, peers, LOCALNET_TRANSACTION_TTL_MS)?;
     Ok(())
-}
-
-fn resolve_kagami_bin() -> Result<PathBuf> {
-    if let Ok(path) = std::env::var("KAGAMI_BIN") {
-        return Ok(PathBuf::from(path));
-    }
-    if let Ok(path) = std::env::var("CARGO_BIN_EXE_kagami") {
-        return Ok(PathBuf::from(path));
-    }
-
-    let repo = repo_root();
-    let target_dir = resolve_target_dir(&repo);
-    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_owned());
-    let bin = bin_name("kagami");
-    let mut candidates = vec![
-        target_dir.join(format!("{profile}/{bin}")),
-        target_dir.join(format!("debug/{bin}")),
-        target_dir.join(format!("release/{bin}")),
-        repo.join(format!("target/{profile}/{bin}")),
-        repo.join(format!("target/debug/{bin}")),
-        repo.join(format!("target/release/{bin}")),
-    ];
-
-    if let Some(found) = try_candidates(&candidates) {
-        return Ok(found);
-    }
-
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_owned());
-    let mut command = Command::new(cargo);
-    command
-        .current_dir(&repo)
-        .arg("build")
-        .arg("-p")
-        .arg("iroha_kagami")
-        .arg("--bin")
-        .arg("kagami");
-    if profile != "debug" {
-        command.arg("--profile").arg(&profile);
-    }
-    let output = command.output().wrap_err("build kagami binary")?;
-    ensure!(
-        output.status.success(),
-        "failed to build kagami: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    candidates.insert(0, target_dir.join(format!("{profile}/{bin}")));
-    try_candidates(&candidates).ok_or_else(|| eyre!("kagami binary not found after build"))
-}
-
-fn resolve_target_dir(repo: &Path) -> PathBuf {
-    std::env::var("CARGO_TARGET_DIR").map_or_else(
-        |_| repo.join("target"),
-        |path| {
-            let candidate = PathBuf::from(path);
-            if candidate.is_absolute() {
-                candidate
-            } else {
-                repo.join(candidate)
-            }
-        },
-    )
-}
-
-fn bin_name(raw: &str) -> String {
-    if cfg!(windows) {
-        format!("{raw}.exe")
-    } else {
-        raw.to_owned()
-    }
-}
-
-fn try_candidates(candidates: &[PathBuf]) -> Option<PathBuf> {
-    for candidate in candidates {
-        if let Ok(path) = candidate.canonicalize() {
-            return Some(path);
-        }
-    }
-    None
 }
 
 fn load_localnet_client(out_dir: &Path) -> Result<Client> {

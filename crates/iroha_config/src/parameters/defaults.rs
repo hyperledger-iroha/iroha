@@ -1256,6 +1256,12 @@ pub mod sorafs {
         pub const ENFORCE_ADMISSION: bool = true;
         /// Enforce advertised capabilities (e.g., chunk-range fetch) before serving data.
         pub const ENFORCE_CAPABILITIES: bool = false;
+        /// Enable per-CID untrusted host routing.
+        pub const UNTRUSTED_HOSTING_ENABLED: bool = false;
+        /// Redirect browser path-gateway requests to the canonical CID host.
+        pub const PATH_GATEWAY_REDIRECT: bool = true;
+        /// Limit canonical redirects to browser HTML navigations.
+        pub const REDIRECT_HTML_ONLY: bool = true;
 
         /// Rate-limiting defaults applied to gateway clients.
         pub mod rate_limit {
@@ -1305,6 +1311,26 @@ pub mod sorafs {
         #[allow(clippy::unnecessary_wraps)]
         pub fn anonymity_policy() -> Option<String> {
             Some(DEFAULT_ANONYMITY_POLICY.to_string())
+        }
+
+        /// Untrusted-hosting defaults for per-CID browser origins.
+        pub mod untrusted_hosting {
+            /// Canonical live CID-host suffix.
+            pub const LIVE_CID_HOST_SUFFIX: &str = "sorafs.sora.org";
+            /// Canonical Taira CID-host suffix.
+            pub const TAIRA_CID_HOST_SUFFIX: &str = "sorafs.taira.sora.org";
+
+            /// Return the default live CID-host suffix.
+            #[must_use]
+            pub fn live_cid_host_suffix() -> String {
+                LIVE_CID_HOST_SUFFIX.to_string()
+            }
+
+            /// Return the default Taira CID-host suffix.
+            #[must_use]
+            pub fn taira_cid_host_suffix() -> String {
+                TAIRA_CID_HOST_SUFFIX.to_string()
+            }
         }
 
         /// ACME automation defaults.

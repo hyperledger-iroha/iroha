@@ -20,6 +20,8 @@ public final class GovernanceInstructionBuilderTests {
 
   public static void main(final String[] args) {
     proposeDeployContractRoundTrip();
+    proposeDeployContractFromArgumentsRoundTrip();
+    proposeDeployContractRejectsAmbiguousTarget();
     castZkBallotRoundTrip();
     castZkBallotRejectsDeprecatedPublicInputs();
     castZkBallotNormalizesPublicInputs();
@@ -37,8 +39,7 @@ public final class GovernanceInstructionBuilderTests {
   private static void proposeDeployContractRoundTrip() {
     final ProposeDeployContractInstruction instruction =
         ProposeDeployContractInstruction.builder()
-            .setNamespace("apps")
-            .setContractId("demo.contract")
+            .setContractAlias("router::universal")
             .setCodeHashHex("a0".repeat(32))
             .setAbiHashHex("b1".repeat(32))
             .setAbiVersion("1")
@@ -46,12 +47,49 @@ public final class GovernanceInstructionBuilderTests {
             .setVotingMode(GovernanceInstructionUtils.VotingMode.PLAIN)
             .build();
     final Map<String, String> args = instruction.toArguments();
-    assert "apps".equals(args.get("namespace")) : "namespace mismatch";
+    assert "router::universal".equals(args.get("contract_alias")) : "contract_alias mismatch";
     assert "Plain".equals(args.get("mode")) : "mode mismatch";
-    assert "demo.contract".equals(instruction.contractId()) : "contract id mismatch";
+    assert "router::universal".equals(instruction.contractAlias()) : "contract alias mismatch";
+    assert instruction.contractAddress() == null : "contract address should be absent";
     assert instruction.window() != null : "window missing";
     assert instruction.window().lower() == 10 : "window lower mismatch";
     assert instruction.votingMode() == GovernanceInstructionUtils.VotingMode.PLAIN : "mode mismatch";
+  }
+
+  private static void proposeDeployContractFromArgumentsRoundTrip() {
+    final Map<String, String> args = new java.util.LinkedHashMap<>();
+    args.put("action", "ProposeDeployContract");
+    args.put(
+        "contract_address",
+        "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7");
+    args.put("code_hash_hex", "a2".repeat(32));
+    args.put("abi_hash_hex", "b3".repeat(32));
+    args.put("abi_version", "1");
+
+    final ProposeDeployContractInstruction instruction =
+        ProposeDeployContractInstruction.fromArguments(args);
+
+    assert instruction.contractAlias() == null : "contract alias should be absent";
+    assert "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        .equals(instruction.contractAddress()) : "contract address mismatch";
+    assert instruction.toArguments().equals(args) : "arguments should round-trip";
+  }
+
+  private static void proposeDeployContractRejectsAmbiguousTarget() {
+    boolean failed = false;
+    try {
+      ProposeDeployContractInstruction.builder()
+          .setContractAlias("router::universal")
+          .setContractAddress(
+              "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7")
+          .setCodeHashHex("a4".repeat(32))
+          .setAbiHashHex("b5".repeat(32))
+          .setAbiVersion("1")
+          .build();
+    } catch (final IllegalStateException ex) {
+      failed = ex.getMessage().contains("Exactly one");
+    }
+    assert failed : "expected ambiguous selector rejection";
   }
 
   private static void castZkBallotRoundTrip() {

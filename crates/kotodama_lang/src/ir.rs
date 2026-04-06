@@ -509,6 +509,13 @@ pub enum Instr {
         dest: Temp,
         alias: Temp,
     },
+    /// Synchronous deployed-contract call using AccountId(contract subject), entrypoint name, and Json payload.
+    CallContract {
+        dest: Temp,
+        contract: Temp,
+        entrypoint: Temp,
+        payload: Temp,
+    },
     /// Load trigger event payload (`Json*`) into `dest` (host-provided).
     GetTriggerEvent {
         dest: Temp,
@@ -593,6 +600,24 @@ pub enum Instr {
     /// Return the payload length of an arbitrary pointer-ABI TLV.
     TlvLen {
         dest: Temp,
+        value: Temp,
+    },
+    /// Construct an empty Json object.
+    JsonObject {
+        dest: Temp,
+    },
+    /// Insert or replace an integer field in a Json object.
+    JsonSetInt {
+        dest: Temp,
+        json: Temp,
+        key: Temp,
+        value: Temp,
+    },
+    /// Insert or replace an AccountId field in a Json object.
+    JsonSetAccountId {
+        dest: Temp,
+        json: Temp,
+        key: Temp,
         value: Temp,
     },
     /// JSON getters: (&Json, &Name key) -> int
@@ -1983,6 +2008,37 @@ fn lower_surface_builtin_call(
     vars: &mut HashMap<String, Temp>,
 ) -> Temp {
     match builtin {
+        Builtin::JsonObject => {
+            let d = ctx.new_temp();
+            ctx.current_instr(Instr::JsonObject { dest: d });
+            d
+        }
+        Builtin::JsonSetInt => {
+            let j = lower_expr(ctx, &args[0], vars);
+            let k = lower_expr(ctx, &args[1], vars);
+            let v = lower_expr_as_int(ctx, &args[2], vars);
+            let d = ctx.new_temp();
+            ctx.current_instr(Instr::JsonSetInt {
+                dest: d,
+                json: j,
+                key: k,
+                value: v,
+            });
+            d
+        }
+        Builtin::JsonSetAccountId => {
+            let j = lower_expr(ctx, &args[0], vars);
+            let k = lower_expr(ctx, &args[1], vars);
+            let v = lower_expr(ctx, &args[2], vars);
+            let d = ctx.new_temp();
+            ctx.current_instr(Instr::JsonSetAccountId {
+                dest: d,
+                json: j,
+                key: k,
+                value: v,
+            });
+            d
+        }
         Builtin::GetInt => {
             let j = lower_expr(ctx, &args[0], vars);
             let k = lower_expr(ctx, &args[1], vars);
@@ -4089,6 +4145,19 @@ fn lower_expr(ctx: &mut LowerCtx, expr: &TypedExpr, vars: &mut HashMap<String, T
                     let alias = lower_expr(ctx, &args[0], vars);
                     let dest = ctx.new_temp();
                     ctx.current_instr(Instr::ResolveAccountAlias { dest, alias });
+                    dest
+                }
+                "call_contract" => {
+                    let contract = lower_expr(ctx, &args[0], vars);
+                    let entrypoint = lower_expr(ctx, &args[1], vars);
+                    let payload = lower_expr(ctx, &args[2], vars);
+                    let dest = ctx.new_temp();
+                    ctx.current_instr(Instr::CallContract {
+                        dest,
+                        contract,
+                        entrypoint,
+                        payload,
+                    });
                     dest
                 }
                 "build_submit_ballot_inline" => {

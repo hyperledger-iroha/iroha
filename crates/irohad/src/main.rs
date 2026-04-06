@@ -116,6 +116,17 @@ use tokio::{
     task,
 };
 
+fn torii_receipt_signer_or_ephemeral(receipt_signer: Option<KeyPair>) -> KeyPair {
+    receipt_signer.unwrap_or_else(|| {
+        let key = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Secp256k1);
+        iroha_logger::info!(
+            algorithm = ?key.public_key().algorithm(),
+            "torii receipt signer not configured; generated ephemeral secp256k1 key"
+        );
+        key
+    })
+}
+
 #[derive(Clone, Debug, JsonDeserialize)]
 struct ConsensusHandshakeMeta {
     mode: String,
@@ -4914,14 +4925,7 @@ impl Iroha {
         let (kiso, child) = KisoHandle::start(config.clone());
         supervisor.monitor(child);
 
-        let receipt_signer = config.torii.receipt_signer.clone().unwrap_or_else(|| {
-            let key = iroha_crypto::KeyPair::random_with_algorithm(Algorithm::Ed25519);
-            iroha_logger::info!(
-                algorithm = ?key.public_key().algorithm(),
-                "torii receipt signer not configured; generated ephemeral key"
-            );
-            key
-        });
+        let receipt_signer = torii_receipt_signer_or_ephemeral(config.torii.receipt_signer.clone());
         let runtime_deps = iroha_torii::ToriiRuntimeDeps::new(torii_telemetry)
             .with_soracloud_runtime(Arc::new(soracloud_runtime.clone()))
             .with_soracloud_hf_config(config.soracloud_runtime.hf.clone())
@@ -8835,6 +8839,24 @@ mod tests {
             assert!(overrides.dispatch_trace);
             assert!(overrides.debug_enum);
             assert!(!overrides.debug_fused);
+        }
+    }
+
+    mod torii_receipt_signer_selection {
+        use super::*;
+
+        #[test]
+        fn defaults_to_ephemeral_secp256k1() {
+            let signer = torii_receipt_signer_or_ephemeral(None);
+            assert_eq!(signer.algorithm(), Algorithm::Secp256k1);
+        }
+
+        #[test]
+        fn preserves_configured_receipt_signer() {
+            let configured = KeyPair::random_with_algorithm(Algorithm::Ed25519);
+            let signer = torii_receipt_signer_or_ephemeral(Some(configured.clone()));
+            assert_eq!(signer.public_key(), configured.public_key());
+            assert_eq!(signer.algorithm(), Algorithm::Ed25519);
         }
     }
 

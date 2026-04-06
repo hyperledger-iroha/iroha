@@ -268,15 +268,19 @@ fn apply_sm_openssl_preview(_: bool) {}
 /// overlay when access logging is enabled for prepass execution.
 pub struct CoreHostImpl<QS> {
     authority: AccountId,
+    current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     default: ivm::host::DefaultHost,
     codec_host: IvmCodecHost,
     access_log_enabled: bool,
     halo2_config: ivm::host::ZkHalo2Config,
     crypto: Arc<iroha_config::parameters::actual::Crypto>,
-    queued: Vec<InstructionBox>,
+    queued: Vec<QueuedInstruction>,
     fastpq_batch_entries: Option<Vec<TransferAssetBatchEntry>>,
     // Snapshot of accounts available for simple iteration helpers used by samples.
     accounts_snapshot: Arc<Vec<AccountId>>,
+    // Optional owned contract registry snapshot for c2c resolution when a live query view is unavailable.
+    bound_contract_records_by_subject:
+        BTreeMap<AccountId, crate::smartcontracts::code::BoundContractRecord>,
     // Live read-only state view used to execute queries during IVM runs.
     query_state: QS,
     // Simple counter for sample-generated NFT ids to guarantee uniqueness across calls.
@@ -541,6 +545,13 @@ fn map_query_validation_error(error: &ValidationFail) -> ivm::VMError {
     }
 }
 
+fn map_validation_fail(error: &ValidationFail) -> ivm::VMError {
+    match error {
+        ValidationFail::NotPermitted(_) => ivm::VMError::PermissionDenied,
+        _ => ivm::VMError::DecodeError,
+    }
+}
+
 fn map_query_execution_error(error: &QueryExecutionFail) -> ivm::VMError {
     match error {
         QueryExecutionFail::GasBudgetExceeded => ivm::VMError::OutOfGas,
@@ -718,6 +729,11 @@ pub trait QueryStateRefOps {
         &self,
         plan_id: &AssetDefinitionId,
     ) -> Result<SubscriptionPlan, ivm::VMError>;
+    /// Resolve the fully bound contract record for a deterministic contract subject.
+    fn bound_contract_record_by_subject(
+        &self,
+        contract_subject: &AccountId,
+    ) -> Option<crate::smartcontracts::code::BoundContractRecord>;
 }
 
 impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
@@ -801,6 +817,84 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
             }
         }
     }
+
+    fn bound_contract_record_by_subject(
+        &self,
+        contract_subject: &AccountId,
+    ) -> Option<crate::smartcontracts::code::BoundContractRecord> {
+        match *self {
+            QueryStateRef::View(view) => {
+                crate::smartcontracts::code::fetch_bound_contract_record_by_subject(
+                    view,
+                    contract_subject,
+                )
+            }
+            QueryStateRef::QueryView(view) => {
+                crate::smartcontracts::code::fetch_bound_contract_record_by_subject(
+                    view,
+                    contract_subject,
+                )
+            }
+            QueryStateRef::Block(block) => {
+                crate::smartcontracts::code::fetch_bound_contract_record_by_subject(
+                    block,
+                    contract_subject,
+                )
+            }
+            QueryStateRef::Transaction(tx) => {
+                crate::smartcontracts::code::fetch_bound_contract_record_by_subject(
+                    tx,
+                    contract_subject,
+                )
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum NestedCallReturnSchema {
+    Unit,
+    Int,
+    Bool,
+    Numeric,
+    Json,
+    Name,
+    AccountId,
+    AssetDefinitionId,
+    AssetId,
+    DomainId,
+    NftId,
+    Blob,
+    Bytes,
+    DataSpaceId,
+    AxtDescriptor,
+    AssetHandle,
+}
+
+impl NestedCallReturnSchema {
+    fn parse(raw: Option<&str>) -> Result<Self, ivm::VMError> {
+        let Some(raw) = raw.map(str::trim).filter(|raw| !raw.is_empty()) else {
+            return Ok(Self::Unit);
+        };
+        match raw {
+            "int" => Ok(Self::Int),
+            "fixed_u128" | "Amount" | "Balance" => Ok(Self::Numeric),
+            "bool" => Ok(Self::Bool),
+            "Json" => Ok(Self::Json),
+            "Name" => Ok(Self::Name),
+            "AccountId" => Ok(Self::AccountId),
+            "AssetDefinitionId" => Ok(Self::AssetDefinitionId),
+            "AssetId" => Ok(Self::AssetId),
+            "DomainId" => Ok(Self::DomainId),
+            "NftId" => Ok(Self::NftId),
+            "Blob" => Ok(Self::Blob),
+            "bytes" => Ok(Self::Bytes),
+            "DataSpaceId" => Ok(Self::DataSpaceId),
+            "AxtDescriptor" => Ok(Self::AxtDescriptor),
+            "AssetHandle" => Ok(Self::AssetHandle),
+            _ => Err(ivm::VMError::DecodeError),
+        }
+    }
 }
 
 /// Structured details about an AMX budget violation captured by the host.
@@ -831,26 +925,78 @@ impl AmxBudgetViolation {
 
 /// Execution artifacts extracted from a host run that can be applied to state later.
 pub(crate) struct HostExecutionArtifacts {
-    queued: Vec<InstructionBox>,
+    queued: Vec<QueuedInstruction>,
     confidential_gas_delta: u64,
     completed_axt: Vec<axt::HostAxtState>,
     durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+}
+
+#[derive(Clone)]
+struct QueuedInstruction {
+    instruction: InstructionBox,
+    authority: AccountId,
     contract_runtime_context: Option<ContractRuntimeExecutionContext>,
+}
+
+impl core::fmt::Debug for QueuedInstruction {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        f.debug_struct("QueuedInstruction")
+            .field("instruction", &self.instruction)
+            .field("authority", &self.authority)
+            .field(
+                "has_contract_runtime_context",
+                &self.contract_runtime_context.is_some(),
+            )
+            .finish()
+    }
+}
+
+impl PartialEq<InstructionBox> for QueuedInstruction {
+    fn eq(&self, other: &InstructionBox) -> bool {
+        self.contract_runtime_context.is_none() && self.instruction == *other
+    }
+}
+
+#[derive(Clone)]
+struct NestedContractCallHostSnapshot {
+    authority: AccountId,
+    current_contract_runtime_context: Option<ContractRuntimeExecutionContext>,
+    args: Option<iroha_primitives::json::Json>,
+    fastpq_batch_entries: Option<Vec<TransferAssetBatchEntry>>,
+    nft_seq: u64,
+    queued: Vec<QueuedInstruction>,
+    durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+    state_access_log: ivm::host::AccessLog,
+    axt_state: Option<axt::HostAxtState>,
+    completed_axt: Vec<axt::HostAxtState>,
+    zk_verified_transfer: VecDeque<[u8; 32]>,
+    zk_verified_unshield: VecDeque<[u8; 32]>,
+    zk_verified_ballot: VecDeque<[u8; 32]>,
+    zk_verified_tally: VecDeque<[u8; 32]>,
+    zk_last_env_hash_transfer: VecDeque<[u8; 32]>,
+    zk_last_env_hash_unshield: VecDeque<[u8; 32]>,
+    zk_last_env_hash_ballot: VecDeque<[u8; 32]>,
+    zk_last_env_hash_tally: VecDeque<[u8; 32]>,
+    axt_replay_ledger: BTreeMap<AxtHandleReplayKey, AxtReplayRecord>,
+    axt_proof_cache_slot: Option<u64>,
+    axt_proof_cache: BTreeMap<DataSpaceId, CachedProofEntry>,
+    last_axt_reject: Option<AxtRejectContext>,
+    amx_budget_violation: Option<AmxBudgetViolation>,
 }
 
 impl HostExecutionArtifacts {
     pub(crate) fn apply_to_transaction(
         self,
         tx: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
+        _authority: &AccountId,
     ) -> Result<Vec<InstructionBox>, ValidationFail> {
         let executor = tx.world.executor.clone();
-        for instr in &self.queued {
+        for queued in &self.queued {
             executor.execute_instruction_with_contract_runtime_context(
                 tx,
-                authority,
-                instr.clone(),
-                self.contract_runtime_context.as_ref(),
+                &queued.authority,
+                queued.instruction.clone(),
+                queued.contract_runtime_context.as_ref(),
             )?;
         }
         if self.confidential_gas_delta > 0 {
@@ -883,7 +1029,11 @@ impl HostExecutionArtifacts {
                 }
             }
         }
-        Ok(self.queued)
+        Ok(self
+            .queued
+            .into_iter()
+            .map(|queued| queued.instruction)
+            .collect())
     }
 }
 
@@ -908,6 +1058,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let crypto = Arc::new(default_crypto);
         Self {
             authority,
+            current_contract_runtime_context: None,
             default,
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
@@ -916,6 +1067,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             queued: Vec::new(),
             fastpq_batch_entries: None,
             accounts_snapshot: Arc::new(Vec::new()),
+            bound_contract_records_by_subject: BTreeMap::new(),
             query_state: QS::default(),
             nft_seq: 0,
             args: None,
@@ -990,6 +1142,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let crypto = Arc::new(default_crypto);
         Self {
             authority,
+            current_contract_runtime_context: None,
             default,
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
@@ -998,6 +1151,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             queued: Vec::new(),
             fastpq_batch_entries: None,
             accounts_snapshot: accounts,
+            bound_contract_records_by_subject: BTreeMap::new(),
             query_state: QS::default(),
             nft_seq: 0,
             args: None,
@@ -1056,6 +1210,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let crypto = Arc::new(default_crypto);
         Self {
             authority,
+            current_contract_runtime_context: None,
             default,
             codec_host: IvmCodecHost::new(),
             access_log_enabled: false,
@@ -1064,6 +1219,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             queued: Vec::new(),
             fastpq_batch_entries: None,
             accounts_snapshot: accounts,
+            bound_contract_records_by_subject: BTreeMap::new(),
             query_state: QS::default(),
             nft_seq: 0,
             args: Some(args),
@@ -1107,6 +1263,22 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             #[cfg(feature = "telemetry")]
             telemetry: None,
         }
+    }
+
+    /// Preserve the currently executing contract identity for queued runtime instructions.
+    pub(crate) fn set_contract_runtime_context(
+        &mut self,
+        contract_runtime_context: Option<ContractRuntimeExecutionContext>,
+    ) {
+        self.current_contract_runtime_context = contract_runtime_context;
+    }
+
+    /// Seed deployed contract records for nested c2c resolution when a live query view is unavailable.
+    pub(crate) fn set_bound_contract_records_by_subject_snapshot(
+        &mut self,
+        snapshot: BTreeMap<AccountId, crate::smartcontracts::code::BoundContractRecord>,
+    ) {
+        self.bound_contract_records_by_subject = snapshot;
     }
 
     /// Enable access logging for prepass execution.
@@ -2155,8 +2327,31 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     /// Drain queued ISIs collected during the last VM run.
     pub fn drain_instructions(&mut self) -> Vec<InstructionBox> {
+        self.drain_queued_instructions()
+            .into_iter()
+            .map(|queued| queued.instruction)
+            .collect()
+    }
+
+    fn drain_queued_instructions(&mut self) -> Vec<QueuedInstruction> {
         self.flush_pending_fastpq_batch();
         mem::take(&mut self.queued)
+    }
+
+    fn drain_queued_instructions_with_fallback(
+        &mut self,
+        fallback: Option<ContractRuntimeExecutionContext>,
+    ) -> Vec<QueuedInstruction> {
+        let fallback = fallback.or_else(|| self.current_contract_runtime_context.clone());
+        self.drain_queued_instructions()
+            .into_iter()
+            .map(|mut queued| {
+                if queued.contract_runtime_context.is_none() {
+                    queued.contract_runtime_context = fallback.clone();
+                }
+                queued
+            })
+            .collect()
     }
 
     /// Drain durable contract-state writes collected during the last VM run.
@@ -2298,11 +2493,16 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         mut self,
         contract_runtime_context: Option<ContractRuntimeExecutionContext>,
     ) -> Result<HostExecutionArtifacts, ValidationFail> {
-        let queued = self.drain_instructions();
-        self.validate_queued_for_zk(&queued)?;
+        let queued = self.drain_queued_instructions_with_fallback(contract_runtime_context);
+        self.validate_queued_for_zk(
+            &queued
+                .iter()
+                .map(|queued| queued.instruction.clone())
+                .collect::<Vec<_>>(),
+        )?;
         let confidential_gas_delta = queued
             .iter()
-            .map(crate::gas::confidential_gas_cost)
+            .map(|queued| crate::gas::confidential_gas_cost(&queued.instruction))
             .sum::<u64>();
         let completed_axt = mem::take(&mut self.completed_axt);
         let durable_state_overlay = mem::take(&mut self.durable_state_overlay);
@@ -2311,7 +2511,6 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             confidential_gas_delta,
             completed_axt,
             durable_state_overlay,
-            contract_runtime_context,
         })
     }
 
@@ -2332,25 +2531,33 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     pub(crate) fn apply_queued_with_contract_runtime_context(
         &mut self,
         tx: &mut StateTransaction<'_, '_>,
-        authority: &AccountId,
+        _authority: &AccountId,
         contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<Vec<InstructionBox>, ValidationFail> {
-        let queued = self.drain_instructions();
-        self.validate_queued_for_zk(&queued)?;
+        let queued =
+            self.drain_queued_instructions_with_fallback(contract_runtime_context.cloned());
+        self.validate_queued_for_zk(
+            &queued
+                .iter()
+                .map(|queued| queued.instruction.clone())
+                .collect::<Vec<_>>(),
+        )?;
         let executor = tx.world.executor.clone();
-        for instr in &queued {
-            let instr = instr.clone();
+        for queued in &queued {
             executor.execute_instruction_with_contract_runtime_context(
                 tx,
-                authority,
-                instr,
-                contract_runtime_context,
+                &queued.authority,
+                queued.instruction.clone(),
+                queued
+                    .contract_runtime_context
+                    .as_ref()
+                    .or(contract_runtime_context),
             )?;
         }
         if !queued.is_empty() {
             let delta = queued
                 .iter()
-                .map(crate::gas::confidential_gas_cost)
+                .map(|queued| crate::gas::confidential_gas_cost(&queued.instruction))
                 .sum::<u64>();
             if delta > 0 {
                 tx.record_confidential_gas_delta(delta);
@@ -2358,7 +2565,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         self.flush_completed_axt(tx);
         self.flush_durable_state(tx);
-        Ok(queued)
+        Ok(queued
+            .into_iter()
+            .map(|queued| queued.instruction)
+            .collect())
     }
 
     fn log_state_read_key(&mut self, key: &str) {
@@ -3104,6 +3314,282 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         u32::try_from(len).map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
+    fn alloc_tlv_payload(
+        vm: &mut IVM,
+        pointer_type: PointerType,
+        payload: &[u8],
+    ) -> Result<u64, ivm::VMError> {
+        let payload_len = Self::len_to_u32(payload.len())?;
+        let mut out = Vec::with_capacity(7 + payload.len() + Hash::LENGTH);
+        out.extend_from_slice(&(pointer_type as u16).to_be_bytes());
+        out.push(1);
+        out.extend_from_slice(&payload_len.to_be_bytes());
+        out.extend_from_slice(payload);
+        let h: [u8; Hash::LENGTH] = Hash::new(payload).into();
+        out.extend_from_slice(&h);
+        vm.alloc_input_tlv(&out)
+    }
+
+    fn alloc_norito_bytes(vm: &mut IVM, payload: &[u8]) -> Result<u64, ivm::VMError> {
+        Self::alloc_tlv_payload(vm, PointerType::NoritoBytes, payload)
+    }
+
+    fn snapshot_nested_contract_call(&self) -> NestedContractCallHostSnapshot {
+        NestedContractCallHostSnapshot {
+            authority: self.authority.clone(),
+            current_contract_runtime_context: self.current_contract_runtime_context.clone(),
+            args: self.args.clone(),
+            fastpq_batch_entries: self.fastpq_batch_entries.clone(),
+            nft_seq: self.nft_seq,
+            queued: self.queued.clone(),
+            durable_state_overlay: self.durable_state_overlay.clone(),
+            state_access_log: self.state_access_log.clone(),
+            axt_state: self.axt_state.clone(),
+            completed_axt: self.completed_axt.clone(),
+            zk_verified_transfer: self.zk_verified_transfer.clone(),
+            zk_verified_unshield: self.zk_verified_unshield.clone(),
+            zk_verified_ballot: self.zk_verified_ballot.clone(),
+            zk_verified_tally: self.zk_verified_tally.clone(),
+            zk_last_env_hash_transfer: self.zk_last_env_hash_transfer.clone(),
+            zk_last_env_hash_unshield: self.zk_last_env_hash_unshield.clone(),
+            zk_last_env_hash_ballot: self.zk_last_env_hash_ballot.clone(),
+            zk_last_env_hash_tally: self.zk_last_env_hash_tally.clone(),
+            axt_replay_ledger: self.axt_replay_ledger.clone(),
+            axt_proof_cache_slot: self.axt_proof_cache_slot,
+            axt_proof_cache: self.axt_proof_cache.clone(),
+            last_axt_reject: self.last_axt_reject.clone(),
+            amx_budget_violation: self.amx_budget_violation,
+        }
+    }
+
+    fn restore_nested_contract_call_frame(&mut self, snapshot: &NestedContractCallHostSnapshot) {
+        self.authority = snapshot.authority.clone();
+        self.current_contract_runtime_context = snapshot.current_contract_runtime_context.clone();
+        self.args = snapshot.args.clone();
+        self.fastpq_batch_entries = snapshot.fastpq_batch_entries.clone();
+    }
+
+    fn rollback_nested_contract_call(&mut self, snapshot: &NestedContractCallHostSnapshot) {
+        self.restore_nested_contract_call_frame(snapshot);
+        self.nft_seq = snapshot.nft_seq;
+        self.queued = snapshot.queued.clone();
+        self.durable_state_overlay = snapshot.durable_state_overlay.clone();
+        self.state_access_log = snapshot.state_access_log.clone();
+        self.axt_state = snapshot.axt_state.clone();
+        self.completed_axt = snapshot.completed_axt.clone();
+        self.zk_verified_transfer = snapshot.zk_verified_transfer.clone();
+        self.zk_verified_unshield = snapshot.zk_verified_unshield.clone();
+        self.zk_verified_ballot = snapshot.zk_verified_ballot.clone();
+        self.zk_verified_tally = snapshot.zk_verified_tally.clone();
+        self.zk_last_env_hash_transfer = snapshot.zk_last_env_hash_transfer.clone();
+        self.zk_last_env_hash_unshield = snapshot.zk_last_env_hash_unshield.clone();
+        self.zk_last_env_hash_ballot = snapshot.zk_last_env_hash_ballot.clone();
+        self.zk_last_env_hash_tally = snapshot.zk_last_env_hash_tally.clone();
+        self.axt_replay_ledger = snapshot.axt_replay_ledger.clone();
+        self.axt_proof_cache_slot = snapshot.axt_proof_cache_slot;
+        self.axt_proof_cache = snapshot.axt_proof_cache.clone();
+        self.last_axt_reject = snapshot.last_axt_reject.clone();
+        self.amx_budget_violation = snapshot.amx_budget_violation;
+    }
+
+    fn encode_nested_contract_return(
+        vm: &IVM,
+        schema: &NestedCallReturnSchema,
+    ) -> Result<Option<Vec<u8>>, ivm::VMError> {
+        match schema {
+            NestedCallReturnSchema::Unit => Ok(None),
+            NestedCallReturnSchema::Int => {
+                let value = vm.register(10) as i64;
+                norito::to_bytes(&value)
+                    .map(Some)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)
+            }
+            NestedCallReturnSchema::Bool => norito::to_bytes(&(vm.register(10) != 0))
+                .map(Some)
+                .map_err(|_| ivm::VMError::NoritoInvalid),
+            NestedCallReturnSchema::Numeric => {
+                let value: iroha_primitives::numeric::Numeric =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::NoritoBytes)?;
+                norito::to_bytes(&value)
+                    .map(Some)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)
+            }
+            NestedCallReturnSchema::Json => {
+                let value = Self::decode_tlv_json(vm, vm.register(10))?;
+                norito::to_bytes(&value)
+                    .map(Some)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)
+            }
+            NestedCallReturnSchema::Name => {
+                let value: Name = Self::decode_tlv_typed(vm, vm.register(10), PointerType::Name)?;
+                norito::to_bytes(&value)
+                    .map(Some)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)
+            }
+            NestedCallReturnSchema::AccountId => {
+                let value: AccountId =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+                norito::to_bytes(&value)
+                    .map(Some)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)
+            }
+            NestedCallReturnSchema::AssetDefinitionId => {
+                let value: AssetDefinitionId =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::AssetDefinitionId)?;
+                norito::to_bytes(&value)
+                    .map(Some)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)
+            }
+            NestedCallReturnSchema::AssetId => {
+                let value: AssetId =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::AssetId)?;
+                norito::to_bytes(&value)
+                    .map(Some)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)
+            }
+            NestedCallReturnSchema::DomainId => {
+                let value: DomainId =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::DomainId)?;
+                norito::to_bytes(&value)
+                    .map(Some)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)
+            }
+            NestedCallReturnSchema::NftId => {
+                let value: NftId = Self::decode_tlv_typed(vm, vm.register(10), PointerType::NftId)?;
+                norito::to_bytes(&value)
+                    .map(Some)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)
+            }
+            NestedCallReturnSchema::Blob | NestedCallReturnSchema::Bytes => {
+                let value = Self::decode_tlv_blob(vm, vm.register(10))?;
+                norito::to_bytes(&value)
+                    .map(Some)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)
+            }
+            NestedCallReturnSchema::DataSpaceId => {
+                let value: DataSpaceId =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::DataSpaceId)?;
+                norito::to_bytes(&value)
+                    .map(Some)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)
+            }
+            NestedCallReturnSchema::AxtDescriptor => {
+                let value: iroha_data_model::nexus::AxtDescriptor =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::AxtDescriptor)?;
+                norito::to_bytes(&value)
+                    .map(Some)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)
+            }
+            NestedCallReturnSchema::AssetHandle => {
+                let value: iroha_data_model::nexus::AssetHandle =
+                    Self::decode_tlv_typed(vm, vm.register(10), PointerType::AssetHandle)?;
+                norito::to_bytes(&value)
+                    .map(Some)
+                    .map_err(|_| ivm::VMError::NoritoInvalid)
+            }
+        }
+    }
+
+    fn resolve_bound_contract_record_by_subject(
+        &self,
+        contract_subject: &AccountId,
+    ) -> Option<crate::smartcontracts::code::BoundContractRecord> {
+        if let Some(record) = self
+            .bound_contract_records_by_subject
+            .get(contract_subject)
+            .cloned()
+        {
+            return Some(record);
+        }
+
+        self.query_state
+            .get()
+            .and_then(|state_ref| state_ref.bound_contract_record_by_subject(contract_subject))
+    }
+
+    fn handle_call_contract(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
+        let caller_context = self
+            .current_contract_runtime_context
+            .clone()
+            .ok_or(ivm::VMError::PermissionDenied)?;
+        let contract_subject: AccountId =
+            Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+        let entrypoint_blob = Self::decode_tlv_blob(vm, vm.register(11))?;
+        let entrypoint =
+            String::from_utf8(entrypoint_blob).map_err(|_| ivm::VMError::DecodeError)?;
+        if entrypoint.trim().is_empty() {
+            return Err(ivm::VMError::PermissionDenied);
+        }
+        let payload = Self::decode_tlv_json(vm, vm.register(12))?;
+        let record = self
+            .resolve_bound_contract_record_by_subject(&contract_subject)
+            .ok_or(ivm::VMError::PermissionDenied)?;
+        let invocation = iroha_data_model::transaction::executable::ContractInvocation {
+            contract_address: record.contract_address.clone(),
+            entrypoint,
+            payload: Some(payload),
+        };
+        let entrypoint_name = invocation.entrypoint.clone();
+        let call_context = crate::executor::parse_contract_invocation_execution_context(
+            &invocation,
+            record.code_bytes.as_ref(),
+            record.contract_alias.clone(),
+        )
+        .map_err(|err| map_validation_fail(&err))?;
+        let callee_context = call_context
+            .runtime_context()
+            .ok_or(ivm::VMError::PermissionDenied)?;
+        let return_type = record
+            .manifest
+            .entrypoints
+            .as_ref()
+            .and_then(|entrypoints| {
+                entrypoints
+                    .iter()
+                    .find(|descriptor| descriptor.name == entrypoint_name)
+            })
+            .and_then(|descriptor| descriptor.return_type.as_deref());
+        let return_schema = NestedCallReturnSchema::parse(return_type)?;
+        let child_gas_limit = vm.remaining_gas();
+        let mut child_vm = IVM::new(child_gas_limit);
+        child_vm
+            .load_program(record.code_bytes.as_ref())
+            .map_err(|_| ivm::VMError::DecodeError)?;
+        if let Some(entrypoint_pc) = call_context.entrypoint_pc() {
+            child_vm.set_register(1, child_vm.memory.code_len());
+            child_vm.set_program_counter(entrypoint_pc)?;
+        }
+        child_vm.set_gas_limit(child_gas_limit);
+
+        let snapshot = self.snapshot_nested_contract_call();
+        self.authority = caller_context.contract_subject.clone();
+        self.current_contract_runtime_context = Some(callee_context);
+        self.args = Some(call_context.args().clone());
+        self.fastpq_batch_entries = None;
+
+        let run_result = child_vm.run_with_host(self);
+        match run_result {
+            Ok(()) => {
+                let encoded_return =
+                    Self::encode_nested_contract_return(&child_vm, &return_schema)?;
+                vm.gas_remaining = child_vm.remaining_gas();
+                self.restore_nested_contract_call_frame(&snapshot);
+                match encoded_return {
+                    Some(encoded_return) => {
+                        let ptr = Self::alloc_norito_bytes(vm, &encoded_return)?;
+                        vm.set_register(10, ptr);
+                    }
+                    None => vm.set_register(10, 0),
+                }
+                Ok(0)
+            }
+            Err(err) => {
+                self.rollback_nested_contract_call(&snapshot);
+                Err(err)
+            }
+        }
+    }
+
     const QUERY_GAS_BASE_SINGULAR: u64 = 1_000;
     const QUERY_GAS_BASE_ITERABLE: u64 = 2_500;
     const QUERY_GAS_PER_ITEM: u64 = 250;
@@ -3708,7 +4194,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
     fn queue_instruction(&mut self, instr: InstructionBox) -> u64 {
         let gas = crate::gas::meter_instruction(&instr);
-        self.queued.push(instr);
+        self.queued.push(QueuedInstruction {
+            instruction: instr,
+            authority: self.authority.clone(),
+            contract_runtime_context: self.current_contract_runtime_context.clone(),
+        });
         gas
     }
 
@@ -3720,14 +4210,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let mut gas = 0_u64;
         for instr in instrs {
             gas = gas.saturating_add(crate::gas::meter_instruction(&instr));
-            self.queued.push(instr);
+            self.queued.push(QueuedInstruction {
+                instruction: instr,
+                authority: self.authority.clone(),
+                contract_runtime_context: self.current_contract_runtime_context.clone(),
+            });
         }
         gas
     }
 
     fn enqueue_fastpq_batch(&mut self, entries: Vec<TransferAssetBatchEntry>) {
-        self.queued
-            .push(InstructionBox::from(TransferAssetBatch::new(entries)));
+        self.queued.push(QueuedInstruction {
+            instruction: InstructionBox::from(TransferAssetBatch::new(entries)),
+            authority: self.authority.clone(),
+            contract_runtime_context: self.current_contract_runtime_context.clone(),
+        });
     }
 
     fn flush_pending_fastpq_batch(&mut self) {
@@ -5827,6 +6324,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             | ivm::syscalls::SYSCALL_NUMERIC_GE
             | ivm::syscalls::SYSCALL_JSON_ENCODE
             | ivm::syscalls::SYSCALL_JSON_DECODE
+            | ivm::syscalls::SYSCALL_JSON_OBJECT
+            | ivm::syscalls::SYSCALL_JSON_SET_I64
+            | ivm::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
             | ivm::syscalls::SYSCALL_TLV_LEN
             | ivm::syscalls::SYSCALL_JSON_GET_I64
             | ivm::syscalls::SYSCALL_JSON_GET_JSON
@@ -5891,6 +6391,7 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 vm.set_register(10, self.current_block_time_ms.unwrap_or(0));
                 Ok(0)
             }
+            ivm::syscalls::SYSCALL_CALL_CONTRACT => self.handle_call_contract(vm),
 
             ivm::syscalls::SYSCALL_AXT_BEGIN => self.handle_axt_begin(vm),
             ivm::syscalls::SYSCALL_AXT_TOUCH => self.handle_axt_touch(vm),
@@ -8492,7 +8993,7 @@ mod tests {
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanResolveAccountAlias,
     };
-    use iroha_test_samples::{ALICE_ID, BOB_ID};
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR};
     use ivm::{IVM, encoding, instruction, syscalls as ivm_sys};
     use nonzero_ext::nonzero;
 
@@ -8500,6 +9001,7 @@ mod tests {
     use crate::{
         kura::Kura,
         query::store::LiveQueryStore,
+        smartcontracts::code::{activate_instance, register_code_bytes, register_manifest},
         smartcontracts::{
             isi::triggers::specialized::{SpecializedAction, SpecializedTrigger},
             ivm::host::pointer_abi_tests::make_tlv,
@@ -8561,6 +9063,100 @@ mod tests {
 
     fn build_fixture_account(id: &AccountId, authority: &AccountId) -> Account {
         Account::new(id.clone()).build(authority)
+    }
+
+    fn fixture_signing_keypair(authority: &AccountId) -> KeyPair {
+        if authority == &*ALICE_ID {
+            return (*ALICE_KEYPAIR).clone();
+        }
+        if authority == &*BOB_ID {
+            return (*BOB_KEYPAIR).clone();
+        }
+        panic!("unsupported fixture signing authority: {authority}");
+    }
+
+    fn contract_test_state(authority: &AccountId) -> State {
+        let domain = Domain::new(fixture_domain_id()).build(authority);
+        let account = build_fixture_account(authority, authority);
+        let world = World::with([domain], [account], []);
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        State::new_for_testing(world, kura, query)
+    }
+
+    fn install_contract(
+        state: &State,
+        authority: &AccountId,
+        source: &str,
+        nonce: u64,
+    ) -> ContractAddress {
+        let compiler = ivm::KotodamaCompiler::new();
+        let (code, mut manifest) = compiler
+            .compile_source_with_manifest(source)
+            .expect("compile contract with manifest");
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height must fit in u64 and be non-zero");
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut tx = block.transaction();
+        let code_hash =
+            register_code_bytes(authority, code, &mut tx).expect("register contract bytecode");
+        manifest.code_hash = Some(code_hash);
+        manifest = manifest.signed(&fixture_signing_keypair(authority));
+        register_manifest(authority, manifest, &mut tx).expect("register contract manifest");
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            authority,
+            nonce,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("derive contract address");
+        activate_instance(authority, contract_address.clone(), code_hash, &mut tx)
+            .expect("activate contract");
+        tx.apply();
+        block.commit().expect("commit contract registration block");
+        contract_address
+    }
+
+    fn call_contract_syscall(
+        state: &State,
+        outer_authority: &AccountId,
+        caller_contract: &ContractAddress,
+        callee_contract: &ContractAddress,
+        entrypoint: &str,
+        payload: Json,
+    ) -> (
+        Result<u64, ivm::VMError>,
+        IVM,
+        BTreeMap<Name, Option<Vec<u8>>>,
+    ) {
+        let view = state.view();
+        let mut host = CoreHostImpl::new(outer_authority.clone());
+        host.set_query_state(&view);
+        host.set_durable_state_snapshot_from_world(view.world());
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_address: caller_contract.clone(),
+            contract_subject: caller_contract.subject_id(),
+            contract_alias: None,
+            entrypoint: "invoke".to_owned(),
+        }));
+        let mut vm = IVM::new(1_000_000);
+        vm.load_program(&ivm::ProgramMetadata::default().encode())
+            .expect("load metadata-only program");
+        let target_ptr = store_tlv(
+            &mut vm,
+            PointerType::AccountId,
+            &norito_blob(&callee_contract.subject_id()),
+        );
+        let entrypoint_ptr = store_tlv(&mut vm, PointerType::Blob, entrypoint.as_bytes());
+        let payload_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&payload));
+        vm.set_register(10, target_ptr);
+        vm.set_register(11, entrypoint_ptr);
+        vm.set_register(12, payload_ptr);
+        let result = host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm);
+        let durable_state_overlay = host.drain_durable_state_overlay();
+        (result, vm, durable_state_overlay)
     }
 
     #[test]
@@ -9827,6 +10423,366 @@ mod tests {
             CoreHost::decode_tlv_typed(&vm, vm.register(10), PointerType::AccountId)
                 .expect("resolved account id");
         assert_eq!(resolved, alias_account_id);
+    }
+
+    #[test]
+    fn call_contract_syscall_returns_norito_encoded_int() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let caller_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Caller {
+  kotoage fn main() -> int { return 0; }
+}
+"#,
+            0,
+        );
+        let callee_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Callee {
+  kotoage fn value() -> int {
+    return 42;
+  }
+}
+"#,
+            1,
+        );
+
+        let (result, vm, durable_state_overlay) = call_contract_syscall(
+            &state,
+            &authority,
+            &caller_contract,
+            &callee_contract,
+            "value",
+            Json::new(()),
+        );
+        let gas = result.expect("call_contract syscall should succeed");
+        assert_eq!(gas, 0);
+        assert!(durable_state_overlay.is_empty());
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("returned NoritoBytes tlv");
+        assert_eq!(tlv.type_id, PointerType::NoritoBytes);
+        let value: i64 = norito::decode_from_bytes(tlv.payload).expect("decode int return");
+        assert_eq!(value, 42);
+    }
+
+    #[test]
+    fn call_contract_syscall_sets_nested_authority_to_caller_contract_subject() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let caller_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Caller {
+  kotoage fn main() -> int { return 0; }
+}
+"#,
+            0,
+        );
+        let callee_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Callee {
+  kotoage fn who_called() -> AccountId {
+    return authority();
+  }
+}
+"#,
+            1,
+        );
+
+        let (result, vm, _) = call_contract_syscall(
+            &state,
+            &authority,
+            &caller_contract,
+            &callee_contract,
+            "who_called",
+            Json::new(()),
+        );
+        result.expect("call_contract syscall should succeed");
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("returned NoritoBytes tlv");
+        let returned: AccountId =
+            norito::decode_from_bytes(tlv.payload).expect("decode AccountId return");
+        assert_eq!(returned, caller_contract.subject_id());
+    }
+
+    #[test]
+    fn call_contract_syscall_rolls_back_failed_nested_state_mutation() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let caller_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Caller {
+  kotoage fn main() -> int { return 0; }
+}
+"#,
+            0,
+        );
+        let callee_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Callee {
+  state int counter;
+
+  kotoage fn fail_after_write() -> int {
+    counter = 9;
+    assert(false);
+    return 0;
+  }
+}
+"#,
+            1,
+        );
+
+        let (result, _vm, durable_state_overlay) = call_contract_syscall(
+            &state,
+            &authority,
+            &caller_contract,
+            &callee_contract,
+            "fail_after_write",
+            Json::new(()),
+        );
+        assert!(result.is_err(), "nested contract call should fail");
+        assert!(
+            durable_state_overlay.is_empty(),
+            "failed nested call must not leak contract-state writes",
+        );
+    }
+
+    #[test]
+    fn call_contract_syscall_preserves_root_and_nested_transfer_authorities_in_artifacts() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
+        let account = build_fixture_account(&authority, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
+        let state = State::new_for_testing(world, kura, query);
+        let caller_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Caller {
+  kotoage fn main() -> int { return 0; }
+}
+"#,
+            0,
+        );
+        let callee_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Callee {
+  kotoage fn pull_into_vault(target: AccountId,
+                             asset: AssetDefinitionId,
+                             amount: int) -> int permission(AssetOps) {
+    transfer_asset(authority(), target, asset, amount);
+    return amount;
+  }
+}
+"#,
+            1,
+        );
+
+        let view = state.view();
+        let caller_context = ContractRuntimeExecutionContext {
+            contract_address: caller_contract.clone(),
+            contract_subject: caller_contract.subject_id(),
+            contract_alias: None,
+            entrypoint: "open_position".to_owned(),
+        };
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        host.set_durable_state_snapshot_from_world(view.world());
+        host.set_contract_runtime_context(Some(caller_context.clone()));
+        let mut vm = IVM::new(1_000_000);
+        vm.load_program(&ivm::ProgramMetadata::default().encode())
+            .expect("load metadata-only program");
+
+        let amount = Numeric::new(3_u32, 0);
+        let from_ptr = store_tlv(&mut vm, PointerType::AccountId, &norito_blob(&authority));
+        let to_ptr = store_tlv(
+            &mut vm,
+            PointerType::AccountId,
+            &norito_blob(&caller_contract.subject_id()),
+        );
+        let asset_ptr = store_tlv(
+            &mut vm,
+            PointerType::AssetDefinitionId,
+            &norito_blob(&asset_def_id),
+        );
+        let amount_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito::to_bytes(&amount).expect("encode amount"),
+        );
+        vm.set_register(10, from_ptr);
+        vm.set_register(11, to_ptr);
+        vm.set_register(12, asset_ptr);
+        vm.set_register(13, amount_ptr);
+        host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET, &mut vm)
+            .expect("root transfer should enqueue");
+
+        let nested_target = callee_contract.subject_id().to_string();
+        let nested_asset = asset_def_id.to_string();
+        let nested_payload = Json::from(norito::json!({
+            "target": nested_target,
+            "asset": nested_asset,
+            "amount": 3
+        }));
+        let target_ptr = store_tlv(
+            &mut vm,
+            PointerType::AccountId,
+            &norito_blob(&callee_contract.subject_id()),
+        );
+        let entrypoint_ptr = store_tlv(&mut vm, PointerType::Blob, b"pull_into_vault");
+        let payload_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&nested_payload));
+        vm.set_register(10, target_ptr);
+        vm.set_register(11, entrypoint_ptr);
+        vm.set_register(12, payload_ptr);
+        host.syscall(ivm_sys::SYSCALL_CALL_CONTRACT, &mut vm)
+            .expect("nested call should succeed");
+
+        let artifacts = host
+            .into_execution_artifacts(Some(caller_context))
+            .expect("extract execution artifacts");
+
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height");
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut stx = block.transaction();
+        artifacts
+            .apply_to_transaction(&mut stx, &authority)
+            .expect("root and nested transfers should apply");
+
+        let authority_balance = stx
+            .world
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let caller_asset_id = AssetId::of(asset_def_id.clone(), caller_contract.subject_id());
+        let callee_asset_id = AssetId::of(asset_def_id, callee_contract.subject_id());
+        let callee_balance = stx
+            .world
+            .asset(&callee_asset_id)
+            .expect("callee contract asset exists")
+            .value()
+            .clone();
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert!(
+            stx.world.asset(&caller_asset_id).is_err(),
+            "fully drained caller balance should remove the asset entry",
+        );
+        assert_eq!(callee_balance.as_ref(), &Numeric::new(3_u32, 0));
+    }
+
+    #[test]
+    fn host_execution_artifacts_apply_queued_uses_queued_authority_snapshot() {
+        crate::test_alias::ensure();
+        let outer_authority = fixture_account("alice");
+        let nested_authority = fixture_account("bob");
+        let recipient = fixture_account("carol");
+        let domain = Domain::new(fixture_domain_id()).build(&outer_authority);
+        let outer_account = build_fixture_account(&outer_authority, &outer_authority);
+        let nested_account = build_fixture_account(&nested_authority, &outer_authority);
+        let recipient_account = build_fixture_account(&recipient, &outer_authority);
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&outer_authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), nested_authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let world = World::with_assets(
+            [domain],
+            [outer_account, nested_account, recipient_account],
+            [asset_def],
+            [source_asset],
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let genesis_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        state
+            .block(genesis_header)
+            .commit()
+            .expect("commit bootstrap block");
+        let header = BlockHeader::new(nonzero!(2_u64), None, None, None, 0, 0);
+        let mut block = state.block(header);
+        let mut stx = block.transaction();
+
+        let callee_contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &outer_authority,
+            99,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("derive contract address");
+        let context = ContractRuntimeExecutionContext {
+            contract_subject: callee_contract.subject_id(),
+            contract_address: callee_contract,
+            contract_alias: Some("risk::vault".parse().expect("contract alias")),
+            entrypoint: "deposit".to_owned(),
+        };
+        let artifacts = HostExecutionArtifacts {
+            queued: vec![QueuedInstruction {
+                instruction: InstructionBox::from(Transfer::asset_numeric(
+                    source_asset_id.clone(),
+                    1_u32,
+                    recipient.clone(),
+                )),
+                authority: nested_authority.clone(),
+                contract_runtime_context: Some(context),
+            }],
+            confidential_gas_delta: 0,
+            completed_axt: Vec::new(),
+            durable_state_overlay: BTreeMap::new(),
+        };
+
+        artifacts
+            .apply_to_transaction(&mut stx, &outer_authority)
+            .expect("queued instruction should execute under queued authority");
+
+        let source_balance = stx
+            .world
+            .asset(&source_asset_id)
+            .expect("source asset remains")
+            .value()
+            .clone();
+        let recipient_asset_id = AssetId::of(asset_def_id, recipient);
+        let recipient_balance = stx
+            .world
+            .asset(&recipient_asset_id)
+            .expect("recipient asset created")
+            .value()
+            .clone();
+        assert_eq!(source_balance.as_ref(), &Numeric::new(4_u32, 0));
+        assert_eq!(recipient_balance.as_ref(), &Numeric::new(1_u32, 0));
     }
 
     pub(super) fn begin_axt_envelope(

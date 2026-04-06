@@ -245,7 +245,7 @@ async fn stark_governance_and_shielded_ivm_paths() -> Result<()> {
     )?;
 
     let backend = "stark/fri";
-    let ivm_circuit_id = "ivm-execution";
+    let ivm_circuit_id = "ivm-execution-v1";
     let ballot_circuit_id = "vote-ballot";
     let tally_circuit_id = "vote-tally";
 

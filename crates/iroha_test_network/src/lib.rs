@@ -761,11 +761,32 @@ fn resolve_target_dir(repo: &Path) -> PathBuf {
     repo.join("target").join(IROHA_TEST_TARGET_SUBDIR)
 }
 
+fn profile_hint_from_exe_path(current_exe: &Path) -> Option<String> {
+    let mut dir = current_exe.parent()?;
+    if dir.file_name().is_some_and(|value| value == "deps") {
+        dir = dir.parent()?;
+    }
+    let profile = dir.file_name()?.to_str()?.trim();
+    if profile.is_empty() {
+        None
+    } else {
+        Some(profile.to_owned())
+    }
+}
+
+fn current_exe_profile_hint() -> Option<String> {
+    let current_exe = std::env::current_exe().ok()?;
+    profile_hint_from_exe_path(&current_exe)
+}
+
 fn default_build_profile() -> String {
     if let Ok(profile) = std::env::var(IROHA_TEST_BUILD_PROFILE_ENV) {
         return profile;
     }
-    std::env::var("PROFILE").unwrap_or_else(|_| "release".to_string())
+    if let Ok(profile) = std::env::var("PROFILE") {
+        return profile;
+    }
+    current_exe_profile_hint().unwrap_or_else(|| "release".to_string())
 }
 
 fn first_existing_candidate<'a>(
@@ -1489,6 +1510,19 @@ fn allow_reentrant_build(running_under_cargo: bool) -> bool {
     bool_env_override("IROHA_TEST_ALLOW_REENTRANT_BUILD").unwrap_or(true)
 }
 
+fn cached_binary_if_present(cache: &OnceLock<PathBuf>) -> Option<PathBuf> {
+    let cached = cache.get()?;
+    if cached.exists() {
+        return Some(cached.clone());
+    }
+
+    warn!(
+        binary = %cached.display(),
+        "cached program path is missing; resolving again"
+    );
+    None
+}
+
 impl Program {
     /// Resolve program path.
     ///
@@ -1537,13 +1571,13 @@ impl Program {
         // Fast path via cache (only when no override is present)
         match self {
             Program::Irohad => {
-                if let Some(p) = IROHAD_BIN.get() {
-                    return Ok(p.clone());
+                if let Some(path) = cached_binary_if_present(&IROHAD_BIN) {
+                    return Ok(path);
                 }
             }
             Program::Iroha => {
-                if let Some(p) = IROHA_BIN.get() {
-                    return Ok(p.clone());
+                if let Some(path) = cached_binary_if_present(&IROHA_BIN) {
+                    return Ok(path);
                 }
             }
         }
@@ -5758,23 +5792,44 @@ impl NetworkPeer {
         let use_sora_profile = config_requires_sora_profile(&config_layers);
 
         let irohad = Program::Irohad.resolve_async().await?;
-        let mut cmd = tokio::process::Command::new(irohad);
-        strip_config_env_overrides(&mut cmd);
-        cmd.stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .arg("--config")
-            .arg(config_path)
-            .arg("--terminal-colors=true");
-        cmd.env("KURA_STORE_DIR", storage_dir.as_os_str());
-        if use_sora_profile {
-            cmd.arg("--sora");
-        }
-        if std::env::var_os("IROHA_SKIP_BIND_CHECKS").is_none() {
-            cmd.env("IROHA_SKIP_BIND_CHECKS", "1");
-        }
-        cmd.current_dir(&self.dir);
-        let mut child = cmd.spawn().wrap_err("failed to spawn `irohad`")?;
+        let make_irohad_command = |binary: &Path| {
+            let mut cmd = tokio::process::Command::new(binary);
+            strip_config_env_overrides(&mut cmd);
+            cmd.stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .arg("--config")
+                .arg(&config_path)
+                .arg("--terminal-colors=true");
+            cmd.env("KURA_STORE_DIR", storage_dir.as_os_str());
+            if use_sora_profile {
+                cmd.arg("--sora");
+            }
+            if std::env::var_os("IROHA_SKIP_BIND_CHECKS").is_none() {
+                cmd.env("IROHA_SKIP_BIND_CHECKS", "1");
+            }
+            cmd.current_dir(&self.dir);
+            cmd
+        };
+        let mut child = match make_irohad_command(&irohad).spawn() {
+            Ok(child) => child,
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                warn!(
+                    binary = %irohad.display(),
+                    "cached `irohad` path vanished before spawn; rebuilding and retrying once"
+                );
+                let refreshed = spawn_blocking(|| Program::Irohad.resolve_force_build())
+                    .await
+                    .wrap_err("failed to join blocking task while refreshing `irohad` path")??;
+                make_irohad_command(&refreshed).spawn().wrap_err_with(|| {
+                    eyre!(
+                        "failed to spawn `irohad` after refreshing binary path: {}",
+                        refreshed.display()
+                    )
+                })?
+            }
+            Err(err) => return Err(err).wrap_err("failed to spawn `irohad`"),
+        };
         let pid = child.id();
         let stderr_log_ready = Arc::new(Notify::new());
         let (fatal_tx, fatal_rx) = watch::channel(false);
@@ -7874,7 +7929,7 @@ impl PeerExit {
     async fn monitor(mut self, shutdown: oneshot::Receiver<()>) -> Result<()> {
         let status = if *self.fatal_rx.borrow() {
             self.span
-                .in_scope(|| warn!("forcing peer shutdown after fatal signal"));
+                .in_scope(|| debug!("forcing peer shutdown after fatal signal"));
             self.shutdown_or_kill().await?
         } else {
             tokio::select! {
@@ -7882,7 +7937,7 @@ impl PeerExit {
                 _ = shutdown => self.shutdown_or_kill().await?,
                 changed = self.fatal_rx.changed() => {
                     if changed.is_ok() && *self.fatal_rx.borrow() {
-                        self.span.in_scope(|| warn!("forcing peer shutdown after fatal signal"));
+                        self.span.in_scope(|| debug!("forcing peer shutdown after fatal signal"));
                     }
                     self.shutdown_or_kill().await?
                 }
@@ -7907,8 +7962,21 @@ impl PeerExit {
 
     async fn wait_log(&self, notify: &Arc<Notify>, label: &'static str) {
         if (timeout(LOG_FLUSH_TIMEOUT, notify.notified()).await).is_err() {
-            self.span
-                .in_scope(|| warn!(log = label, "timed out waiting for log flush"));
+            let fatal_shutdown = *self.fatal_rx.borrow();
+            let normal_shutdown = self.is_normal_shutdown_started.load(Ordering::Relaxed);
+            if fatal_shutdown || normal_shutdown {
+                self.span.in_scope(|| {
+                    debug!(
+                        log = label,
+                        fatal_shutdown,
+                        normal_shutdown,
+                        "timed out waiting for log flush during shutdown"
+                    )
+                });
+            } else {
+                self.span
+                    .in_scope(|| warn!(log = label, "timed out waiting for log flush"));
+            }
         }
     }
 
@@ -9483,13 +9551,30 @@ mod tests {
         let _clear_profile = EnvVarGuard::cleared("PROFILE");
         let _clear_override = EnvVarGuard::cleared(IROHA_TEST_BUILD_PROFILE_ENV);
         let default_profile = default_build_profile();
-        assert_eq!(default_profile, "release");
+        assert_eq!(
+            default_profile,
+            current_exe_profile_hint().unwrap_or_else(|| "release".to_string())
+        );
 
         let _override_guard = EnvVarRestore::set("PROFILE", "release");
         assert_eq!(default_build_profile(), "release");
 
         let _override_guard = EnvVarRestore::set(IROHA_TEST_BUILD_PROFILE_ENV, "debug");
         assert_eq!(default_build_profile(), "debug");
+    }
+
+    #[test]
+    fn profile_hint_from_exe_path_detects_profile_before_deps_dir() {
+        let hint = profile_hint_from_exe_path(Path::new(
+            "/tmp/iroha-target/debug/deps/integration_tests-abcdef",
+        ));
+        assert_eq!(hint.as_deref(), Some("debug"));
+    }
+
+    #[test]
+    fn profile_hint_from_exe_path_detects_non_deps_profile_dir() {
+        let hint = profile_hint_from_exe_path(Path::new("/tmp/iroha-target/ci/iroha3d"));
+        assert_eq!(hint.as_deref(), Some("ci"));
     }
 
     #[cfg(unix)]
@@ -11798,6 +11883,27 @@ exit 0
         } else {
             remove_env_var(super::PROGRAM_IROHA_ENV);
         }
+    }
+
+    #[test]
+    fn cached_binary_if_present_returns_existing_path() {
+        let cache = OnceLock::new();
+        let current_exe = env::current_exe().expect("current test binary path");
+        cache
+            .set(current_exe.clone())
+            .expect("cache should be empty for test");
+
+        assert_eq!(cached_binary_if_present(&cache), Some(current_exe));
+    }
+
+    #[test]
+    fn cached_binary_if_present_ignores_missing_path() {
+        let cache = OnceLock::new();
+        let missing = repo_root().join("target/test-bin-dummy/missing-irohad");
+        let _ = fs::remove_file(&missing);
+        cache.set(missing).expect("cache should be empty for test");
+
+        assert!(cached_binary_if_present(&cache).is_none());
     }
 
     #[test]

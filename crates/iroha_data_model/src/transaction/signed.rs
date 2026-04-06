@@ -1929,12 +1929,11 @@ mod norito_rpc_fixture_tests {
 
     fn optional_u64(map: &json::Map, key: &str, context: &str) -> Option<u64> {
         match map.get(key) {
-            Some(Value::Null) => None,
+            Some(Value::Null) | None => None,
             Some(Value::Number(number)) => number
                 .as_u64()
                 .or_else(|| panic!("{context}: {key} must be an integer or null")),
             Some(_) => panic!("{context}: {key} must be an integer or null"),
-            None => None,
         }
     }
 

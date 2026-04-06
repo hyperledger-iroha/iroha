@@ -4,8 +4,8 @@ title: Torii app API parity audit
 description: Mirror of the TORII-APP-1 review so SDK and platform teams can confirm public coverage.
 ---
 
-Status: Completed 2026-03-21  
-Owners: Torii Platform, SDK Program Lead  
+Status: Completed 2026-03-21
+Owners: Torii Platform, SDK Program Lead
 Roadmap reference: TORII-APP-1 — `app_api` parity audit
 
 This page mirrors the internal `TORII-APP-1` audit (`docs/source/torii/app_api_parity_audit.md`)
