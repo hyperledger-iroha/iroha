@@ -64,7 +64,7 @@ fn emit_register_account() {
 
 fn emit_transfer_asset() {
     let account_id = parity_account_id();
-    let domain: DomainId = "wonderland".parse().unwrap();
+    let domain = DomainId::try_new("wonderland", "universal").expect("domain id");
     let name: Name = "rose".parse().unwrap();
     let asset_def_id = AssetDefinitionId::new(domain, name);
     let asset_id = AssetId::new(asset_def_id.clone(), account_id.clone());

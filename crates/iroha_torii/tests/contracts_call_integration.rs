@@ -16,7 +16,13 @@ use iroha_core::{
     state::{State, WorldReadOnly},
 };
 use iroha_crypto::Signature;
-use iroha_data_model::{DomainId, asset::AssetDefinitionId, name::Name};
+use iroha_data_model::{
+    Registrable,
+    DomainId,
+    asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
+    name::Name,
+    smart_contract::ContractAddress,
+};
 use ivm::kotodama::compiler::CompilerOptions;
 use mv::storage::StorageReadOnly;
 use norito::json;
@@ -205,6 +211,69 @@ seiyaku ContractCallN3xLikeTest {{
     ivm::KotodamaCompiler::new()
         .compile_source(&src)
         .expect("compile contract call n3x-like test program")
+}
+
+fn contract_call_nested_transfer_caller_program() -> Vec<u8> {
+    let src = format!(
+        r#"
+seiyaku ContractCallNestedTransferCallerTest {{
+  meta {{ abi_version: 1; }}
+
+  state AccountId CallerAccount;
+  state AccountId VaultContract;
+  state AssetDefinitionId SettlementAsset;
+
+  kotoage fn main() {{}}
+
+  kotoage fn bind(caller_account: AccountId,
+                  vault_contract: AccountId,
+                  settlement_asset: AssetDefinitionId) {{
+    CallerAccount = caller_account;
+    VaultContract = vault_contract;
+    SettlementAsset = settlement_asset;
+  }}
+
+  kotoage fn open(amount: int) -> int permission(AssetOps) {{
+    transfer_asset(authority(), CallerAccount, SettlementAsset, amount);
+    let payload = json_object();
+    let payload = json_set_int(payload, name("amount"), amount);
+    return decode_int(call_contract(VaultContract, "deposit", payload));
+  }}
+}}
+"#
+    );
+    ivm::KotodamaCompiler::new()
+        .compile_source(&src)
+        .expect("compile nested transfer caller program")
+}
+
+fn contract_call_nested_transfer_vault_program() -> Vec<u8> {
+    let src = format!(
+        r#"
+seiyaku ContractCallNestedTransferVaultTest {{
+  meta {{ abi_version: 1; }}
+
+  state AccountId VaultAccount;
+  state AssetDefinitionId SettlementAsset;
+
+  kotoage fn main() {{}}
+
+  kotoage fn bind(vault_account: AccountId,
+                  settlement_asset: AssetDefinitionId) {{
+    VaultAccount = vault_account;
+    SettlementAsset = settlement_asset;
+  }}
+
+  kotoage fn deposit(amount: int) -> int permission(AssetOps) {{
+    transfer_asset(authority(), VaultAccount, SettlementAsset, amount);
+    return amount;
+  }}
+}}
+"#
+    );
+    ivm::KotodamaCompiler::new()
+        .compile_source(&src)
+        .expect("compile nested transfer vault program")
 }
 
 fn contract_view_trap_program_with_source_path(source_path: &str) -> Vec<u8> {
@@ -1561,4 +1630,210 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
     assert_eq!(snapshot.get(2).and_then(json::Value::as_i64), Some(0));
     assert_eq!(snapshot.get(3).and_then(json::Value::as_i64), Some(0));
     assert_eq!(snapshot.get(4).and_then(json::Value::as_i64), Some(0));
+}
+
+#[tokio::test]
+async fn contracts_call_preserves_root_and_nested_transfer_authorities() {
+    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
+        eprintln!(
+            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
+        );
+        return;
+    }
+
+    let creds = iroha_torii::test_utils::random_authority();
+    let domain_id = DomainId::try_new("wonderland", "universal").expect("domain id");
+    let asset_definition_id =
+        AssetDefinitionId::new(domain_id.clone(), "rose".parse().expect("asset name"));
+    let authority_asset_id = AssetId::of(asset_definition_id.clone(), creds.account.clone());
+    let authority_asset = Asset::new(
+        authority_asset_id.clone(),
+        iroha_primitives::numeric::Numeric::new(5_u32, 0),
+    );
+    let world = iroha_core::state::World::with_assets(
+        [iroha_data_model::prelude::Domain::new(domain_id.clone()).build(&creds.account)],
+        [iroha_data_model::prelude::Account::new(creds.account.clone()).build(&creds.account)],
+        [AssetDefinition::numeric(asset_definition_id.clone()).build(&creds.account)],
+        [authority_asset],
+        [],
+    );
+
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = Arc::new(State::new_for_testing(world, kura, query));
+    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
+
+    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+    let queue_cfg = iroha_config::parameters::actual::Queue::default();
+    let queue = Arc::new(Queue::from_config(queue_cfg, events));
+    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
+    #[cfg(feature = "telemetry")]
+    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
+    #[cfg(not(feature = "telemetry"))]
+    let telemetry = iroha_torii::MaybeTelemetry::disabled();
+
+    let app = contract_test_app(
+        state.clone(),
+        queue.clone(),
+        chain_id.clone(),
+        telemetry.clone(),
+    );
+
+    let vault_program = contract_call_nested_transfer_vault_program();
+    let vault_deploy_body = iroha_torii::test_utils::deploy_request_json(
+        &creds.account,
+        &creds.private_key,
+        &base64::engine::general_purpose::STANDARD.encode(&vault_program),
+    );
+    let vault_deploy_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/deploy")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(vault_deploy_body))
+        .unwrap();
+    let vault_deploy_resp = app.clone().oneshot(vault_deploy_req).await.unwrap();
+    assert_eq!(vault_deploy_resp.status(), http::StatusCode::OK);
+    let vault_deploy_bytes = vault_deploy_resp.into_body().collect().await.unwrap().to_bytes();
+    let vault_deploy_json: json::Value = json::from_slice(&vault_deploy_bytes).unwrap();
+    let vault_contract_address = deployed_contract_address(&vault_deploy_json);
+    let applied_vault_deploy =
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+    assert_eq!(applied_vault_deploy, 1);
+
+    let caller_program = contract_call_nested_transfer_caller_program();
+    let caller_deploy_body = iroha_torii::test_utils::deploy_request_json(
+        &creds.account,
+        &creds.private_key,
+        &base64::engine::general_purpose::STANDARD.encode(&caller_program),
+    );
+    let caller_deploy_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/deploy")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(caller_deploy_body))
+        .unwrap();
+    let caller_deploy_resp = app.clone().oneshot(caller_deploy_req).await.unwrap();
+    assert_eq!(caller_deploy_resp.status(), http::StatusCode::OK);
+    let caller_deploy_bytes = caller_deploy_resp.into_body().collect().await.unwrap().to_bytes();
+    let caller_deploy_json: json::Value = json::from_slice(&caller_deploy_bytes).unwrap();
+    let caller_contract_address = deployed_contract_address(&caller_deploy_json);
+    let applied_caller_deploy =
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+    assert_eq!(applied_caller_deploy, 1);
+
+    let vault_contract_subject = vault_contract_address
+        .parse::<ContractAddress>()
+        .expect("vault contract address")
+        .subject_id();
+    let caller_contract_subject = caller_contract_address
+        .parse::<ContractAddress>()
+        .expect("caller contract address")
+        .subject_id();
+
+    let vault_bind_payload = iroha_torii::json_object(vec![
+        iroha_torii::json_entry("vault_account", vault_contract_subject.clone()),
+        iroha_torii::json_entry("settlement_asset", asset_definition_id.to_string()),
+    ]);
+    let vault_bind_body = iroha_torii::test_utils::contract_call_request_json(
+        &creds.account,
+        &creds.private_key,
+        vault_contract_address.as_str(),
+        iroha_torii::test_utils::ContractCallOptions {
+            entrypoint: Some("bind"),
+            payload: Some(&vault_bind_payload),
+            gas_asset_id: None,
+            gas_limit: 10_000,
+        },
+    );
+    let vault_bind_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/call")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(vault_bind_body))
+        .unwrap();
+    let vault_bind_resp = app.clone().oneshot(vault_bind_req).await.unwrap();
+    assert_eq!(vault_bind_resp.status(), http::StatusCode::OK);
+    let applied_vault_bind =
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 3);
+    assert_eq!(applied_vault_bind, 1);
+
+    let caller_bind_payload = iroha_torii::json_object(vec![
+        iroha_torii::json_entry("caller_account", caller_contract_subject.clone()),
+        iroha_torii::json_entry("vault_contract", vault_contract_subject.clone()),
+        iroha_torii::json_entry("settlement_asset", asset_definition_id.to_string()),
+    ]);
+    let caller_bind_body = iroha_torii::test_utils::contract_call_request_json(
+        &creds.account,
+        &creds.private_key,
+        caller_contract_address.as_str(),
+        iroha_torii::test_utils::ContractCallOptions {
+            entrypoint: Some("bind"),
+            payload: Some(&caller_bind_payload),
+            gas_asset_id: None,
+            gas_limit: 10_000,
+        },
+    );
+    let caller_bind_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/call")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(caller_bind_body))
+        .unwrap();
+    let caller_bind_resp = app.clone().oneshot(caller_bind_req).await.unwrap();
+    assert_eq!(caller_bind_resp.status(), http::StatusCode::OK);
+    let applied_caller_bind =
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 4);
+    assert_eq!(applied_caller_bind, 1);
+
+    let open_payload = iroha_torii::json_object(vec![iroha_torii::json_entry("amount", 3)]);
+    let open_body = iroha_torii::test_utils::contract_call_request_json(
+        &creds.account,
+        &creds.private_key,
+        caller_contract_address.as_str(),
+        iroha_torii::test_utils::ContractCallOptions {
+            entrypoint: Some("open"),
+            payload: Some(&open_payload),
+            gas_asset_id: None,
+            gas_limit: 10_000,
+        },
+    );
+    let open_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/call")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(open_body))
+        .unwrap();
+    let open_resp = app.clone().oneshot(open_req).await.unwrap();
+    assert_eq!(open_resp.status(), http::StatusCode::OK);
+    let applied_open =
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 5);
+    assert_eq!(applied_open, 1);
+
+    let view = state.view();
+    let authority_balance = view
+        .world()
+        .asset(&authority_asset_id)
+        .expect("authority asset remains")
+        .value()
+        .clone();
+    let caller_asset_id = AssetId::of(asset_definition_id.clone(), caller_contract_subject);
+    let vault_asset_id = AssetId::of(asset_definition_id, vault_contract_subject);
+    let vault_balance = view
+        .world()
+        .asset(&vault_asset_id)
+        .expect("vault asset exists")
+        .value()
+        .clone();
+    assert_eq!(
+        authority_balance.as_ref(),
+        &iroha_primitives::numeric::Numeric::new(2_u32, 0)
+    );
+    assert!(
+        view.world().asset(&caller_asset_id).is_err(),
+        "fully drained caller balance should remove the asset entry"
+    );
+    assert_eq!(
+        vault_balance.as_ref(),
+        &iroha_primitives::numeric::Numeric::new(3_u32, 0)
+    );
 }

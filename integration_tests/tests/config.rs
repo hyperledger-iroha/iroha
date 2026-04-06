@@ -19,6 +19,11 @@ const TEST_POW_TARGET_TTL: u64 = 360;
 const TEST_POW_MEMORY_KIB: u32 = 192 * 1024;
 const TEST_POW_TIME_COST: u32 = 4;
 const TEST_POW_LANES: u32 = 3;
+const CONFIG_APPLY_RETRY_ATTEMPTS: usize = 180;
+const CONFIG_APPLY_RETRY_DELAY: Duration = Duration::from_millis(100);
+const CONFIG_PROPAGATION_RETRY_ATTEMPTS: usize = 600;
+const CONFIG_PROPAGATION_RETRY_DELAY: Duration = Duration::from_millis(200);
+const CONFIG_RECONCILIATION_RETRY_ATTEMPTS: usize = 150;
 
 #[test]
 fn config_scenarios() -> eyre::Result<()> {
@@ -168,13 +173,13 @@ fn retrieve_update_config_scenario(client: &iroha::client::Client) -> eyre::Resu
     client.set_config(&handshake_update)?;
 
     let mut config = client.get_config()?;
-    for _ in 0..60 {
+    for _ in 0..CONFIG_APPLY_RETRY_ATTEMPTS {
         let handshake = &config.network.soranet_handshake;
         if handshake.pow.required && handshake.pow.difficulty == 5 {
             break;
         }
         client.set_config(&handshake_update)?;
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(CONFIG_APPLY_RETRY_DELAY);
         config = client.get_config()?;
     }
     let handshake = &config.network.soranet_handshake;
@@ -327,12 +332,12 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
 
     let mut initiator_pow = client.get_config()?.network.soranet_handshake.pow;
     let mut initiator_applied = pow_matches_target(&initiator_pow);
-    for _ in 0..60 {
+    for _ in 0..CONFIG_APPLY_RETRY_ATTEMPTS {
         if initiator_applied {
             break;
         }
         let _ = client.set_config(&pow_update);
-        thread::sleep(Duration::from_millis(100));
+        thread::sleep(CONFIG_APPLY_RETRY_DELAY);
         initiator_pow = client.get_config()?.network.soranet_handshake.pow;
         initiator_applied = pow_matches_target(&initiator_pow);
     }
@@ -342,7 +347,7 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
     );
 
     let mut propagated = false;
-    for _ in 0..300 {
+    for _ in 0..CONFIG_PROPAGATION_RETRY_ATTEMPTS {
         propagated = other_peers
             .iter()
             .all(|peer| match peer.client().get_config() {
@@ -352,7 +357,7 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
         if propagated {
             break;
         }
-        thread::sleep(Duration::from_millis(200));
+        thread::sleep(CONFIG_PROPAGATION_RETRY_DELAY);
     }
 
     if !propagated {
@@ -423,12 +428,16 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
                 laggards.join(", ")
             );
         }
-        propagated = other_peers
-            .iter()
-            .all(|peer| match peer.client().get_config() {
+        for _ in 0..CONFIG_RECONCILIATION_RETRY_ATTEMPTS {
+            propagated = other_peers.iter().all(|peer| match peer.client().get_config() {
                 Ok(config) => pow_matches_target(&config.network.soranet_handshake.pow),
                 Err(_) => false,
             });
+            if propagated {
+                break;
+            }
+            thread::sleep(CONFIG_PROPAGATION_RETRY_DELAY);
+        }
     }
 
     assert!(

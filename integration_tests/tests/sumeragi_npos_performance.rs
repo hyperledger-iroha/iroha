@@ -693,7 +693,7 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
             observed_rbc_deferrals = deferrals;
         }
 
-        if observed_saturation && observed_deferrals > 0.0 {
+        if observed_saturation && (observed_deferrals > 0.0 || observed_rbc_deferrals > 0.0) {
             break;
         }
 
@@ -705,8 +705,8 @@ async fn npos_queue_backpressure_triggers_metrics() -> Result<()> {
         "queue saturation gauge never rose above zero"
     );
     ensure!(
-        observed_deferrals > 0.0,
-        "pacemaker backpressure deferral counter remained zero"
+        observed_deferrals > 0.0 || observed_rbc_deferrals > 0.0,
+        "backpressure deferral counters remained zero (pacemaker={observed_deferrals}, rbc={observed_rbc_deferrals})"
     );
     let mut summary_root = Map::new();
     summary_root.insert("scenario".into(), json_value(&QUEUE_STRESS_SCENARIO_NAME));

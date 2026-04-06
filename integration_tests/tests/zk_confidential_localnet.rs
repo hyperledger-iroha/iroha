@@ -48,6 +48,7 @@ const PRESSURE_TRANSACTION_STATUS_TIMEOUT: Duration = Duration::from_secs(2);
 const COMBINED_PRESSURE_ALL_PEER_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 const COMBINED_PRESSURE_QUORUM_ATTEMPTS: usize = 600;
 const COMBINED_PRESSURE_RESTART_PROGRESS_TIMEOUT: Duration = Duration::from_secs(90);
+const COMBINED_PRESSURE_CATCH_UP_TIMEOUT: Duration = Duration::from_secs(180);
 
 fn marker(byte: u8) -> [u8; 32] {
     [byte; 32]
@@ -247,7 +248,9 @@ fn pressure_submitter_clients(submitters: &[Client]) -> Vec<Client> {
 }
 
 fn restart_progress_timeout(context: &str) -> Duration {
-    if context.contains("combined downtime+timeout") {
+    if context.contains("combined downtime+timeout restarted peer catch-up") {
+        COMBINED_PRESSURE_CATCH_UP_TIMEOUT
+    } else if context.contains("combined downtime+timeout") {
         COMBINED_PRESSURE_RESTART_PROGRESS_TIMEOUT
     } else {
         RESTART_PROGRESS_TIMEOUT

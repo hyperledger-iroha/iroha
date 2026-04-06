@@ -932,10 +932,10 @@ pub(crate) struct HostExecutionArtifacts {
 }
 
 #[derive(Clone)]
-struct QueuedInstruction {
-    instruction: InstructionBox,
-    authority: AccountId,
-    contract_runtime_context: Option<ContractRuntimeExecutionContext>,
+pub(crate) struct QueuedInstruction {
+    pub(crate) instruction: InstructionBox,
+    pub(crate) authority: AccountId,
+    pub(crate) contract_runtime_context: Option<ContractRuntimeExecutionContext>,
 }
 
 impl core::fmt::Debug for QueuedInstruction {
@@ -2352,6 +2352,13 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
                 queued
             })
             .collect()
+    }
+
+    pub(crate) fn drain_queued_instructions_with_contract_runtime_context(
+        &mut self,
+        contract_runtime_context: Option<ContractRuntimeExecutionContext>,
+    ) -> Vec<QueuedInstruction> {
+        self.drain_queued_instructions_with_fallback(contract_runtime_context)
     }
 
     /// Drain durable contract-state writes collected during the last VM run.
@@ -9119,6 +9126,36 @@ mod tests {
         contract_address
     }
 
+    fn execute_contract_call_transaction(
+        state: &State,
+        authority: &AccountId,
+        keypair: &KeyPair,
+        invocation: iroha_data_model::transaction::executable::ContractInvocation,
+        ivm_cache: &mut crate::smartcontracts::ivm::cache::IvmCache,
+    ) {
+        let next_height = u64::try_from(state.view().height() + 1)
+            .ok()
+            .and_then(core::num::NonZeroU64::new)
+            .expect("next block height must fit in u64 and be non-zero");
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "gas_limit".parse().expect("static metadata key"),
+            Json::new(1_000_000_u64),
+        );
+        let tx = TransactionBuilder::new(ChainId::from("test-chain"), authority.clone())
+            .with_metadata(metadata)
+            .with_executable(Executable::ContractCall(invocation))
+            .sign(keypair.private_key());
+        let mut block = state.block(BlockHeader::new(next_height, None, None, None, 0, 0));
+        let mut stx = block.transaction();
+        crate::executor::Executor::Initial
+            .execute_transaction(&mut stx, authority, tx, ivm_cache)
+            .expect("contract call transaction should execute");
+        stx.apply();
+        block.commit()
+            .expect("commit contract call transaction block");
+    }
+
     fn call_contract_syscall(
         state: &State,
         outer_authority: &AccountId,
@@ -10697,6 +10734,148 @@ seiyaku Callee {
         assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
         assert!(
             stx.world.asset(&caller_asset_id).is_err(),
+            "fully drained caller balance should remove the asset entry",
+        );
+        assert_eq!(callee_balance.as_ref(), &Numeric::new(3_u32, 0));
+    }
+
+    #[test]
+    fn contract_call_transaction_preserves_root_and_nested_transfer_authorities() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
+        let account = build_fixture_account(&authority, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let caller_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Caller {
+  state AccountId CallerAccount;
+  state AccountId VaultContract;
+  state AssetDefinitionId SettlementAsset;
+
+  #[access(read="*", write="*")]
+  kotoage fn bind(caller_account: AccountId,
+                  vault_contract: AccountId,
+                  settlement_asset: AssetDefinitionId) {
+    CallerAccount = caller_account;
+    VaultContract = vault_contract;
+    SettlementAsset = settlement_asset;
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn open(amount: int) -> int permission(AssetOps) {
+    transfer_asset(authority(), CallerAccount, SettlementAsset, amount);
+    let payload = json_object();
+    let payload = json_set_int(payload, name("amount"), amount);
+    return decode_int(call_contract(VaultContract, "deposit", payload));
+  }
+}
+"#,
+            0,
+        );
+        let callee_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Vault {
+  state AccountId VaultAccount;
+  state AssetDefinitionId SettlementAsset;
+
+  #[access(read="*", write="*")]
+  kotoage fn bind(vault_account: AccountId,
+                  settlement_asset: AssetDefinitionId) {
+    VaultAccount = vault_account;
+    SettlementAsset = settlement_asset;
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn deposit(amount: int) -> int permission(AssetOps) {
+    transfer_asset(authority(), VaultAccount, SettlementAsset, amount);
+    return amount;
+  }
+}
+"#,
+            1,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let callee_bind_payload = Json::from_str_norito(&format!(
+            r#"{{"vault_account":"{}","settlement_asset":"{}"}}"#,
+            callee_contract.subject_id(),
+            asset_def_id
+        ))
+        .expect("callee bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: callee_contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(callee_bind_payload),
+            },
+            &mut ivm_cache,
+        );
+        let caller_bind_payload = Json::from_str_norito(&format!(
+            r#"{{"caller_account":"{}","vault_contract":"{}","settlement_asset":"{}"}}"#,
+            caller_contract.subject_id(),
+            callee_contract.subject_id(),
+            asset_def_id
+        ))
+        .expect("caller bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: caller_contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(caller_bind_payload),
+            },
+            &mut ivm_cache,
+        );
+        let open_payload =
+            Json::from_str_norito(r#"{"amount":3}"#).expect("open payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: caller_contract.clone(),
+                entrypoint: "open".to_owned(),
+                payload: Some(open_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let view = state.view();
+        let authority_balance = view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let caller_asset_id = AssetId::of(asset_def_id.clone(), caller_contract.subject_id());
+        let callee_asset_id = AssetId::of(asset_def_id, callee_contract.subject_id());
+        let callee_balance = view
+            .world()
+            .asset(&callee_asset_id)
+            .expect("vault asset exists")
+            .value()
+            .clone();
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert!(
+            view.world().asset(&caller_asset_id).is_err(),
             "fully drained caller balance should remove the asset entry",
         );
         assert_eq!(callee_balance.as_ref(), &Numeric::new(3_u32, 0));

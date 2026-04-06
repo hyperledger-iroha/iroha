@@ -12,7 +12,7 @@
 //! admission limits (`pipeline.overlay_max_*`) in one place.
 
 use core::str::FromStr;
-use std::{collections::BTreeMap, sync::Arc};
+use std::{collections::BTreeMap, mem, sync::Arc};
 #[cfg(test)]
 use std::{
     collections::VecDeque,
@@ -576,13 +576,32 @@ pub(crate) fn prune_redundant_contract_ops<R: StateReadOnly>(
     state_ro: &R,
     queued: &mut Vec<InstructionBox>,
 ) {
+    prune_redundant_contract_ops_with_metadata::<R, ()>(state_ro, queued, None);
+}
+
+fn prune_redundant_contract_ops_with_metadata<R, M>(
+    state_ro: &R,
+    queued: &mut Vec<InstructionBox>,
+    metadata: Option<&mut Vec<M>>,
+) where
+    R: StateReadOnly,
+{
     if queued.is_empty() {
         return;
+    }
+    if let Some(metadata) = metadata.as_ref() {
+        debug_assert_eq!(
+            metadata.len(),
+            queued.len(),
+            "overlay execution metadata must align with queued instructions",
+        );
     }
     let mut manifest_cache: BTreeMap<Hash, Option<ContractManifest>> = BTreeMap::new();
     let mut code_cache: BTreeMap<Hash, Option<Vec<u8>>> = BTreeMap::new();
     let mut binding_cache: BTreeMap<ContractAddress, Option<Hash>> = BTreeMap::new();
-    queued.retain(|instr| {
+    let retain: Vec<bool> = queued
+        .iter()
+        .map(|instr| {
         if let Some(reg) = instr.as_any().downcast_ref::<RegisterSmartContractCode>() {
             if let Some(hash) = reg.manifest().code_hash {
                 let existing = manifest_cache
@@ -618,13 +637,38 @@ pub(crate) fn prune_redundant_contract_ops<R: StateReadOnly>(
             }
         }
         true
-    });
+    })
+        .collect();
+    if retain.iter().all(|keep| *keep) {
+        return;
+    }
+    let prior = mem::take(queued);
+    *queued = prior
+        .into_iter()
+        .zip(retain.iter().copied())
+        .filter_map(|(instr, keep)| keep.then_some(instr))
+        .collect();
+    if let Some(metadata) = metadata {
+        let prior = mem::take(metadata);
+        *metadata = prior
+            .into_iter()
+            .zip(retain.into_iter())
+            .filter_map(|(entry, keep)| keep.then_some(entry))
+            .collect();
+    }
+}
+
+#[derive(Debug, Clone)]
+struct OverlayInstructionExecutionContext {
+    authority: AccountId,
+    contract_runtime_context: Option<crate::executor::ContractRuntimeExecutionContext>,
 }
 
 /// Overlay of a transaction's intended operations.
 #[derive(Debug, Clone, Default)]
 pub struct TxOverlay {
     instructions: Vec<InstructionBox>,
+    execution_contexts: Option<Vec<OverlayInstructionExecutionContext>>,
     ivm_gas_used: Option<u64>,
     durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
 }
@@ -634,6 +678,7 @@ impl TxOverlay {
     pub fn from_instructions(instrs: Vec<InstructionBox>) -> Self {
         Self {
             instructions: instrs,
+            execution_contexts: None,
             ivm_gas_used: None,
             durable_state_overlay: BTreeMap::new(),
         }
@@ -643,6 +688,7 @@ impl TxOverlay {
     pub fn from_ivm_instructions(instrs: Vec<InstructionBox>, ivm_gas_used: u64) -> Self {
         Self {
             instructions: instrs,
+            execution_contexts: None,
             ivm_gas_used: Some(ivm_gas_used),
             durable_state_overlay: BTreeMap::new(),
         }
@@ -656,6 +702,29 @@ impl TxOverlay {
     ) -> Self {
         Self {
             instructions: instrs,
+            execution_contexts: None,
+            ivm_gas_used: Some(ivm_gas_used),
+            durable_state_overlay,
+        }
+    }
+
+    fn from_host_execution(
+        queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
+        ivm_gas_used: u64,
+        durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+    ) -> Self {
+        let mut instructions = Vec::with_capacity(queued.len());
+        let mut execution_contexts = Vec::with_capacity(queued.len());
+        for queued in queued {
+            instructions.push(queued.instruction);
+            execution_contexts.push(OverlayInstructionExecutionContext {
+                authority: queued.authority,
+                contract_runtime_context: queued.contract_runtime_context,
+            });
+        }
+        Self {
+            instructions,
+            execution_contexts: Some(execution_contexts),
             ivm_gas_used: Some(ivm_gas_used),
             durable_state_overlay,
         }
@@ -716,6 +785,7 @@ impl TxOverlay {
         authority: &AccountId,
     ) -> Result<(), ValidationFail> {
         let executor = state_tx.world.executor.clone();
+        let mut instruction_index = 0usize;
         // Execute instructions directly; avoid registry-based roundtrips.
         for chunk_instrs in self.instructions.chunks(self.instructions.len().max(1)) {
             for instr in chunk_instrs {
@@ -733,7 +803,18 @@ impl TxOverlay {
                         &reg_asset_definition,
                     )?;
                 }
-                executor.execute_instruction(state_tx, authority, instr.clone())?;
+                if let Some(execution_contexts) = self.execution_contexts.as_ref() {
+                    let execution_context = &execution_contexts[instruction_index];
+                    executor.execute_instruction_with_contract_runtime_context(
+                        state_tx,
+                        &execution_context.authority,
+                        instr.clone(),
+                        execution_context.contract_runtime_context.as_ref(),
+                    )?;
+                } else {
+                    executor.execute_instruction(state_tx, authority, instr.clone())?;
+                }
+                instruction_index = instruction_index.saturating_add(1);
             }
         }
         for (path, value) in &self.durable_state_overlay {
@@ -762,6 +843,7 @@ impl TxOverlay {
     ) -> Result<(), ValidationFail> {
         let executor = state_tx.world.executor.clone();
         let chunk = chunk_size.max(1);
+        let mut instruction_index = 0usize;
         for chunk_instrs in self.instructions.chunks(chunk) {
             for instr in chunk_instrs {
                 if let Some(dvp) = instr.as_any().downcast_ref::<DvpIsi>() {
@@ -778,7 +860,18 @@ impl TxOverlay {
                         &reg_asset_definition,
                     )?;
                 }
-                executor.execute_instruction(state_tx, authority, instr.clone())?;
+                if let Some(execution_contexts) = self.execution_contexts.as_ref() {
+                    let execution_context = &execution_contexts[instruction_index];
+                    executor.execute_instruction_with_contract_runtime_context(
+                        state_tx,
+                        &execution_context.authority,
+                        instr.clone(),
+                        execution_context.contract_runtime_context.as_ref(),
+                    )?;
+                } else {
+                    executor.execute_instruction(state_tx, authority, instr.clone())?;
+                }
+                instruction_index = instruction_index.saturating_add(1);
             }
         }
         for (path, value) in &self.durable_state_overlay {
@@ -793,6 +886,40 @@ impl TxOverlay {
         }
         Ok(())
     }
+}
+
+fn tx_overlay_from_host_queued<R: StateReadOnly>(
+    state_ro: &R,
+    queued: Vec<crate::smartcontracts::ivm::host::QueuedInstruction>,
+    ivm_gas_used: u64,
+    durable_state_overlay: BTreeMap<Name, Option<Vec<u8>>>,
+) -> TxOverlay {
+    let mut queued_instructions: Vec<_> = queued
+        .iter()
+        .map(|queued| queued.instruction.clone())
+        .collect();
+    let mut execution_contexts: Vec<_> = queued
+        .into_iter()
+        .map(|queued| OverlayInstructionExecutionContext {
+            authority: queued.authority,
+            contract_runtime_context: queued.contract_runtime_context,
+        })
+        .collect();
+    prune_redundant_contract_ops_with_metadata(
+        state_ro,
+        &mut queued_instructions,
+        Some(&mut execution_contexts),
+    );
+    let queued = queued_instructions
+        .into_iter()
+        .zip(execution_contexts)
+        .map(|(instruction, execution_context)| crate::smartcontracts::ivm::host::QueuedInstruction {
+            instruction,
+            authority: execution_context.authority,
+            contract_runtime_context: execution_context.contract_runtime_context,
+        })
+        .collect();
+    TxOverlay::from_host_execution(queued, ivm_gas_used, durable_state_overlay)
 }
 
 /// Build an overlay for a signed transaction without mutating state.
@@ -925,7 +1052,10 @@ where
             let ivm_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
-            let mut queued = host.drain_instructions();
+            let queued =
+                host.drain_queued_instructions_with_contract_runtime_context(
+                    contract_runtime_context.clone(),
+                );
             let durable_state_overlay = host.drain_durable_state_overlay();
             if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
                 let trace = vm.register_trace();
@@ -953,8 +1083,8 @@ where
                 }
             }
 
-            prune_redundant_contract_ops(state_ro, &mut queued);
-            Ok(TxOverlay::from_ivm_execution(
+            Ok(tx_overlay_from_host_queued(
+                state_ro,
                 queued,
                 ivm_gas_used,
                 durable_state_overlay,
@@ -1348,7 +1478,10 @@ where
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
-            let mut queued = host.drain_instructions();
+            let queued =
+                host.drain_queued_instructions_with_contract_runtime_context(
+                    contract_runtime_context.clone(),
+                );
             let durable_state_overlay = host.drain_durable_state_overlay();
             if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
                 let trace = vm.register_trace();
@@ -1375,8 +1508,8 @@ where
                     let _ = crate::pipeline::zk_lane::try_submit(job);
                 }
             }
-            prune_redundant_contract_ops(state_ro, &mut queued);
-            Ok(TxOverlay::from_ivm_execution(
+            Ok(tx_overlay_from_host_queued(
+                state_ro,
                 queued,
                 ivm_gas_used,
                 durable_state_overlay,
@@ -1682,9 +1815,12 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             }
             res?;
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
-            let queued = host.drain_instructions();
+            let queued = host.drain_queued_instructions_with_contract_runtime_context(
+                contract_runtime_context.clone(),
+            );
             let durable_state_overlay = host.drain_durable_state_overlay();
-            Ok(TxOverlay::from_ivm_execution(
+            Ok(tx_overlay_from_host_queued(
+                state_ro,
                 queued,
                 ivm_gas_used,
                 durable_state_overlay,
