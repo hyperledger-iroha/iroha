@@ -137,29 +137,6 @@ pub mod isi {
         Ok(())
     }
 
-    fn ensure_active_account_alias_lease(
-        state_transaction: &StateTransaction<'_, '_>,
-        label: &AccountAlias,
-    ) -> Result<(), InstructionExecutionError> {
-        let now_ms = state_transaction.block_unix_timestamp_ms();
-        if crate::sns::active_account_alias_owner(
-            state_transaction.world(),
-            &state_transaction.nexus.dataspace_catalog,
-            label,
-            now_ms,
-        )
-        .is_some()
-        {
-            Ok(())
-        } else {
-            Err(InstructionExecutionError::InvariantViolation(
-                "account alias requires an active SNS lease"
-                    .to_owned()
-                    .into(),
-            ))
-        }
-    }
-
     fn refresh_account_alias_lease_if_requested(
         state_transaction: &mut StateTransaction<'_, '_>,
         label: &AccountAlias,
@@ -798,7 +775,15 @@ pub mod isi {
                             .into(),
                     ));
                 }
-                ensure_active_account_alias_lease(state_transaction, label)?;
+                crate::sns::ensure_account_alias_lease(
+                    &mut state_transaction.world,
+                    authority,
+                    label,
+                    &state_transaction.nexus.dataspace_catalog,
+                )
+                .map_err(|e| {
+                    InstructionExecutionError::InvariantViolation(e.to_string().into())
+                })?;
                 purge_stale_account_label_state(state_transaction, label);
                 if state_transaction.world.account_aliases.get(label).is_some()
                     || state_transaction
@@ -2587,7 +2572,15 @@ pub mod isi {
                 .into());
             }
             refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
-            ensure_active_account_alias_lease(state_transaction, &alias)?;
+            crate::sns::ensure_account_alias_lease(
+                &mut state_transaction.world,
+                authority,
+                &alias,
+                &state_transaction.nexus.dataspace_catalog,
+            )
+            .map_err(|e| {
+                InstructionExecutionError::InvariantViolation(e.to_string().into())
+            })?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
             purge_stale_account_label_state(state_transaction, &alias);
@@ -2687,7 +2680,15 @@ pub mod isi {
                 .into());
             }
             refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
-            ensure_active_account_alias_lease(state_transaction, &alias)?;
+            crate::sns::ensure_account_alias_lease(
+                &mut state_transaction.world,
+                authority,
+                &alias,
+                &state_transaction.nexus.dataspace_catalog,
+            )
+            .map_err(|e| {
+                InstructionExecutionError::InvariantViolation(e.to_string().into())
+            })?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
             purge_stale_account_label_state(state_transaction, &alias);
