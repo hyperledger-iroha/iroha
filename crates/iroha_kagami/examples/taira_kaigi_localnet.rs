@@ -475,14 +475,14 @@ mod tests {
 
     #[test]
     fn localnet_seed_derives_same_genesis_key_contract_as_kagami_localnet() {
-        let derived = derive_localnet_genesis_key_pair(Some("Iroha")).expect("derive key");
+        let derived = derive_localnet_genesis_key_pair(Some("Iroha"));
         let expected = KeyPair::from_seed(b"Irohagenesis".to_vec(), Algorithm::default());
         assert_eq!(derived.public_key(), expected.public_key());
     }
 
     #[test]
     fn missing_seed_uses_builtin_localnet_genesis_key() {
-        let derived = derive_localnet_genesis_key_pair(None).expect("derive default key");
+        let derived = derive_localnet_genesis_key_pair(None);
         assert_eq!(
             derived.public_key(),
             REAL_GENESIS_ACCOUNT_KEYPAIR.public_key()

@@ -83,8 +83,9 @@ use crate::{
         },
         encode_token_base64,
         gateway::{
-            ClientFingerprint, DenylistKind, PerceptualMatchBasis, PerceptualObservation,
-            PolicyViolation, RateLimitError, RequestContext, SORA_TLS_STATE_HEADER,
+            ClientFingerprint, DenylistHit, DenylistKind, DenylistPolicyTier, PerceptualMatchBasis,
+            PerceptualObservation, PolicyViolation, RateLimitError, RequestContext,
+            SORA_TLS_STATE_HEADER,
         },
         pin::PinAuthError,
         registry::{
@@ -3321,7 +3322,7 @@ fn cache_remote_site_bundle(
         .map_err(node_storage_error_response)
 }
 
-async fn resolve_site_manifest_by_cid(
+async fn resolve_site_manifest_by_cid_unchecked(
     state: &SharedAppState,
     cid: &str,
 ) -> Result<StoredManifest, Response> {
@@ -3335,8 +3336,15 @@ async fn resolve_site_manifest_by_cid(
         return Err(StatusCode::NOT_FOUND.into_response());
     };
 
-    enforce_site_denylist(state, &stored)?;
+    Ok(stored)
+}
 
+async fn resolve_site_manifest_by_cid(
+    state: &SharedAppState,
+    cid: &str,
+) -> Result<StoredManifest, Response> {
+    let stored = resolve_site_manifest_by_cid_unchecked(state, cid).await?;
+    enforce_site_denylist(state, &stored)?;
     Ok(stored)
 }
 
@@ -3378,6 +3386,113 @@ fn file_listing_json(stored: &StoredManifest) -> Value {
             })
             .collect(),
     )
+}
+
+fn optional_str_json(value: Option<&str>) -> Value {
+    value.map_or(Value::Null, Value::from)
+}
+
+fn optional_time_json(value: Option<SystemTime>) -> Value {
+    value
+        .and_then(format_system_time)
+        .map_or(Value::Null, Value::from)
+}
+
+fn denylist_policy_tier_label(tier: DenylistPolicyTier) -> &'static str {
+    match tier {
+        DenylistPolicyTier::Standard => "standard",
+        DenylistPolicyTier::Emergency => "emergency",
+        DenylistPolicyTier::Permanent => "permanent",
+    }
+}
+
+fn cid_lookup_moderation_match_json(match_kind: &'static str, hit: &DenylistHit) -> Value {
+    let entry = hit.entry();
+    let scope = if entry.is_governance_backed() {
+        "global"
+    } else {
+        "local"
+    };
+
+    json_object(vec![
+        json_entry("scope", Value::from(scope)),
+        json_entry("match_kind", Value::from(match_kind)),
+        json_entry("pack_id", optional_str_json(entry.source_pack_id())),
+        json_entry(
+            "policy_tier",
+            Value::from(denylist_policy_tier_label(entry.policy_tier())),
+        ),
+        json_entry("reason", optional_str_json(entry.reason())),
+        json_entry("jurisdiction", optional_str_json(entry.jurisdiction())),
+        json_entry("issued_at", optional_time_json(entry.issued_at())),
+        json_entry("expires_at", optional_time_json(entry.expires_at())),
+        json_entry("review_due_at", optional_time_json(entry.review_deadline())),
+        json_entry(
+            "issued_by_proposal_id",
+            optional_str_json(entry.issued_by_proposal_id()),
+        ),
+        json_entry(
+            "review_reference",
+            optional_str_json(entry.review_reference()),
+        ),
+        json_entry(
+            "governance_reference",
+            optional_str_json(entry.governance_reference()),
+        ),
+        json_entry(
+            "pack_manifest_cid",
+            optional_str_json(entry.source_pack_manifest_cid()),
+        ),
+        json_entry(
+            "merkle_root",
+            optional_str_json(entry.source_pack_merkle_root()),
+        ),
+    ])
+}
+
+fn cid_lookup_moderation_json(state: &SharedAppState, stored: &StoredManifest) -> Value {
+    let Some(denylist) = &state.sorafs_gateway_denylist else {
+        return Value::Null;
+    };
+
+    let now = SystemTime::now();
+    let mut has_local = false;
+    let mut has_global = false;
+    let mut matches = Vec::new();
+
+    if let Some(hit) = denylist.check_manifest_digest(stored.manifest_digest(), now) {
+        if hit.entry().is_governance_backed() {
+            has_global = true;
+        } else {
+            has_local = true;
+        }
+        matches.push(cid_lookup_moderation_match_json("manifest_digest", &hit));
+    }
+
+    if let Some(hit) = denylist.check_cid(stored.manifest_cid(), now) {
+        if hit.entry().is_governance_backed() {
+            has_global = true;
+        } else {
+            has_local = true;
+        }
+        matches.push(cid_lookup_moderation_match_json("cid", &hit));
+    }
+
+    let status = if matches.is_empty() {
+        "clear"
+    } else if has_local && has_global {
+        "mixed_blocked"
+    } else if has_global {
+        "global_blocked"
+    } else {
+        "local_blocked"
+    };
+
+    json_object(vec![
+        json_entry("status", Value::from(status)),
+        json_entry("public_links_enabled", Value::from(matches.is_empty())),
+        json_entry("matches", Value::Array(matches)),
+    ])
 }
 
 fn attach_cid_gateway_headers(response: &mut Response, stored: &StoredManifest) {
@@ -3637,7 +3752,7 @@ pub(crate) async fn handle_get_sorafs_cid_lookup(
     State(state): State<SharedAppState>,
     Path(cid): Path<String>,
 ) -> Response {
-    let stored = match resolve_site_manifest_by_cid(&state, &cid).await {
+    let stored = match resolve_site_manifest_by_cid_unchecked(&state, &cid).await {
         Ok(value) => value,
         Err(response) => return response,
     };
@@ -3663,6 +3778,7 @@ pub(crate) async fn handle_get_sorafs_cid_lookup(
                 .unwrap_or(Value::Null),
         ),
         json_entry("files", file_listing_json(&stored)),
+        json_entry("moderation", cid_lookup_moderation_json(&state, &stored)),
     ]);
     JsonBody(value).into_response()
 }
@@ -11020,6 +11136,7 @@ mod advert_tests {
             cid_lookup_value.get("content_cid").and_then(Value::as_str),
             Some(content_cid.as_str())
         );
+        assert_eq!(cid_lookup_value.get("moderation"), Some(&Value::Null));
 
         let cid_root = handle_get_sorafs_cid_root(
             State(state.clone()),
@@ -11430,6 +11547,150 @@ mod advert_tests {
                 .map(Vec::len),
             Some(2)
         );
+        assert_eq!(cid_lookup_value.get("moderation"), Some(&Value::Null));
+    }
+
+    #[tokio::test]
+    async fn cid_lookup_reports_moderation_without_unblocking_gateway_fetches() {
+        let app = mk_app_state_for_tests();
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        let (node, _dir) = sorafs_node_with_temp_storage();
+        inner.sorafs_node = node;
+
+        let payload = b"blocked site payload".to_vec();
+        let manifest = manifest_for_payload(0xD9, &payload);
+        let manifest_digest: [u8; 32] = manifest.digest().expect("manifest digest").into();
+        let content_cid = encode_content_cid(&manifest.root_cid);
+        let local_issued_at = SystemTime::now();
+        let plan =
+            CarBuildPlan::single_file_with_profile(&payload, sorafs_chunker::ChunkProfile::DEFAULT)
+                .expect("plan");
+        let mut reader = payload.as_slice();
+        inner
+            .sorafs_node
+            .ingest_manifest(&manifest, &plan, &mut reader)
+            .expect("ingest manifest");
+
+        let components = build_sorafs_gateway_security(
+            &inner.sorafs_gateway_config,
+            inner.sorafs_admission.clone(),
+        );
+        inner.sorafs_gateway_policy = Some(Arc::clone(&components.policy));
+        inner.sorafs_gateway_denylist = Some(Arc::clone(&components.denylist));
+        inner.sorafs_gateway_tls_state = Some(Arc::clone(&components.tls_state));
+        if let Some(denylist) = &inner.sorafs_gateway_denylist {
+            denylist.upsert(
+                crate::sorafs::gateway::DenylistKind::Cid(manifest.root_cid.clone()),
+                crate::sorafs::gateway::DenylistEntryBuilder::default()
+                    .reason("local operator quarantine")
+                    .policy_tier(crate::sorafs::gateway::DenylistPolicyTier::Emergency)
+                    .canon(Some("incident-42"))
+                    .issued_at(local_issued_at)
+                    .expires_at(local_issued_at + Duration::from_secs(600))
+                    .review_deadline(Some(local_issued_at + Duration::from_secs(300)))
+                    .build(),
+            );
+            denylist.upsert(
+                crate::sorafs::gateway::DenylistKind::ManifestDigest(manifest_digest),
+                crate::sorafs::gateway::DenylistEntryBuilder::default()
+                    .reason("governance-backed removal review")
+                    .policy_tier(crate::sorafs::gateway::DenylistPolicyTier::Permanent)
+                    .governance_reference(Some("council-resolution-2026-014"))
+                    .source_pack_id(Some("global-core".to_owned()))
+                    .source_pack_manifest_cid(Some("bafy-pack".to_owned()))
+                    .source_pack_merkle_root(Some("merkle-root".to_owned()))
+                    .issued_by_proposal_id(Some("AC-2026-241".to_owned()))
+                    .review_reference(Some("review-42".to_owned()))
+                    .issued_at(SystemTime::UNIX_EPOCH + Duration::from_secs(900))
+                    .build(),
+            );
+        } else {
+            panic!("gateway denylist must be configured");
+        }
+        let state = Arc::new(inner);
+
+        let cid_lookup =
+            handle_get_sorafs_cid_lookup(State(state.clone()), Path(content_cid.clone())).await;
+        assert_eq!(cid_lookup.status(), StatusCode::OK);
+        let cid_lookup_body = body::to_bytes(cid_lookup.into_body(), usize::MAX)
+            .await
+            .expect("read cid lookup body");
+        let cid_lookup_value: Value =
+            norito::json::from_slice(&cid_lookup_body).expect("decode cid lookup response");
+        let moderation = cid_lookup_value
+            .get("moderation")
+            .and_then(Value::as_object)
+            .expect("moderation payload");
+        assert_eq!(
+            moderation.get("status").and_then(Value::as_str),
+            Some("mixed_blocked")
+        );
+        assert_eq!(
+            moderation
+                .get("public_links_enabled")
+                .and_then(Value::as_bool),
+            Some(false)
+        );
+        let matches = moderation
+            .get("matches")
+            .and_then(Value::as_array)
+            .expect("moderation matches");
+        assert_eq!(matches.len(), 2);
+
+        let local_match = matches
+            .iter()
+            .find(|entry| entry.get("match_kind").and_then(Value::as_str) == Some("cid"))
+            .expect("local cid match");
+        assert_eq!(
+            local_match.get("scope").and_then(Value::as_str),
+            Some("local")
+        );
+        assert_eq!(
+            local_match.get("policy_tier").and_then(Value::as_str),
+            Some("emergency")
+        );
+        assert!(
+            local_match
+                .get("review_due_at")
+                .and_then(Value::as_str)
+                .is_some()
+        );
+
+        let global_match = matches
+            .iter()
+            .find(|entry| {
+                entry.get("match_kind").and_then(Value::as_str) == Some("manifest_digest")
+            })
+            .expect("global manifest match");
+        assert_eq!(
+            global_match.get("scope").and_then(Value::as_str),
+            Some("global")
+        );
+        assert_eq!(
+            global_match.get("pack_id").and_then(Value::as_str),
+            Some("global-core")
+        );
+        assert_eq!(
+            global_match
+                .get("issued_by_proposal_id")
+                .and_then(Value::as_str),
+            Some("AC-2026-241")
+        );
+        assert_eq!(
+            global_match.get("review_reference").and_then(Value::as_str),
+            Some("review-42")
+        );
+
+        let cid_root = handle_get_sorafs_cid_root(
+            State(state),
+            HeaderMap::new(),
+            format!("/sorafs/cid/{content_cid}/")
+                .parse::<Uri>()
+                .expect("cid root uri"),
+            Path(content_cid),
+        )
+        .await;
+        assert_eq!(cid_root.status(), StatusCode::UNAVAILABLE_FOR_LEGAL_REASONS);
     }
 
     #[tokio::test]

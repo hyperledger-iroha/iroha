@@ -2,6 +2,263 @@
 
 Last updated: 2026-04-06
 
+Latest sync (2026-04-06 multisig CLI hashed-role discovery is now covered end to end):
+the missing live proof for `ledger multisig list all` is in place now. The
+new `integration_tests/tests/multisig.rs` regression boots a real 4-peer
+network, registers an overlong multisig account whose signatory role uses the
+hashed suffix, leaves a proposal in `COLLECTING_SIGNATURES`, and asserts that
+the CLI can still discover it from a signatory account. The same test now
+prefers already-built `iroha` binaries from the current target roots so it
+does not pay for a nested `cargo build -p iroha_cli` on warm reruns.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/multisig.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHA=target/iroha-test-network/debug/iroha cargo test -p integration_tests --test core_api multisig::multisig_cli_list_all_resolves_hashed_role_suffixes -- --exact --nocapture`
+  - `cargo test -p integration_tests --test core_api multisig::multisig_cli_list_all_resolves_hashed_role_suffixes -- --exact --nocapture`
+- open work after this slice:
+  - investigate why the reused localnet at
+    `/tmp/iroha-localnet-training-fresh6/run-1` restarts with peers connected
+    but then stalls at `blocks=16` / `queue_size=1`, which still blocks fresh
+    pending-proposal verification on that saved environment;
+  - keep `/v1/multisig/approvals/list` out of the normal CLI path unless Torii
+    gains a standard-auth mode for it or the CLI grows an explicit tx-history
+    auth surface.
+
+Latest sync (2026-04-06 multisig pending-list root discovery now handles hashed role suffixes):
+the `ledger multisig list all` regression was not in Torii's
+`/v1/multisig/proposals/list` endpoint. The real breakage was the CLI assuming
+that every `MULTISIG_SIGNATORY/...` role suffix could be parsed back into a
+canonical `AccountId`, while `iroha_core` intentionally falls back to
+`HashOf(account)` for overlong multisig account literals. The CLI now keeps the
+working role-query + proposals-list flow, resolves canonical suffixes directly,
+and resolves hashed suffixes by matching them against accounts carrying
+`multisig/spec` metadata. The temporary approvals-list client path was removed
+again because `/v1/multisig/approvals/list` is tx-history-auth/JWT gated and is
+not a valid default CLI backend.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha/src/client.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/main_shared.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha post_multisig_proposals_list_builds_request -- --nocapture`
+  - `cargo test -p iroha_cli multisig_role_suffix_extracts_domainless_suffix -- --nocapture`
+  - `cargo test -p iroha_cli resolve_multisig_accounts_from_roles_resolves_hashed_suffixes -- --nocapture`
+  - `cargo test -p iroha_cli multisig_register_run_defaults_to_domainless_home_domain -- --nocapture`
+- open work after this slice:
+  - investigate why the reused localnet at
+    `/tmp/iroha-localnet-training-fresh6/run-1` restarts with peers connected
+    but then stalls at `blocks=16` / `queue_size=1`, which currently blocks
+    fresh pending-proposal verification on that saved environment;
+  - keep `/v1/multisig/approvals/list` out of the normal CLI path unless Torii
+    gains a standard-auth mode for it or the CLI grows an explicit tx-history
+    auth surface.
+
+Latest sync (2026-04-06 isolated `consensus_and_da` reruns are green again across the rebuilt core/test-network path):
+the fresh-target `integration_tests` failures were not all independent runtime
+regressions. Part of the breakage came from `iroha_core` rebuild drift in the
+account-scope directory path, and part came from `iroha_test_network` caching a
+missing `irohad` path across runs. Those are now fixed, and several of the
+original exact `consensus_and_da` failures are green again on the isolated
+`target_tmp_scope_fix` path. The remaining NPoS restart failure also turned out
+to be an overloaded test setup: the test was reusing the 6 MiB large-payload
+stress case for restart recovery, which saturated the RBC queue and prevented
+QC formation. That restart case now uses a dedicated 1 MiB multi-chunk payload
+while the separate large-payload commit test continues to cover the 6 MiB
+stress path. The last remaining red in this slice was
+`zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet`,
+which was not fixed by widening waits alone. That flow now submits the first
+pressured 3-hop transfer while one peer is down and restarts the peer before
+waiting on the block, preserving timeout-pressure + downtime overlap without
+deadlocking the first post-shutdown confidential proposal slot.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/state.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/nexus/space_directory.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_test_network/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_localnet_smoke.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_npos_happy_path.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_npos_stake_activation.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/zk_confidential_localnet.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix cargo check -p iroha_core --lib`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix cargo build -p irohad`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix cargo test -p iroha_core json_roundtrip -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_scope_fix IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test consensus_and_da sumeragi_localnet_smoke::sumeragi_status_json_endpoint_decodes_to_wire_end_to_end -- --exact --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_stake_activation::npos_election_filters_stake_and_applies_after_margin -- --exact --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_stake_activation::npos_entity_correlation_limits_validator_set -- --exact --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_happy_path::npos_happy_path_enforces_da_and_metrics_bounds -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_scope_fix IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test consensus_and_da sumeragi_npos_happy_path::npos_rbc_persists_payload_across_restart -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_scope_fix IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test consensus_and_da sumeragi_npos_pacemaker_latency::npos_pacemaker_targets_one_second_under_250ms_links -- --exact --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_kagami_localnet::kagami_localnet_bootstrap_produces_blocks -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_scope_fix IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test consensus_and_da sumeragi_lock_convergence::sumeragi_view_change_lock_convergence -- --exact --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_mode_cutover::staged_cutover_recomputes_consensus_fingerprint -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_scope_fix IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_drop_recovery -- --exact --nocapture --test-threads=1`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_reorder -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_scope_fix IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_duplicate_inits -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_scope_fix IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_locked_qc_gate_rejects_conflicting_proposal -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_scope_fix IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_partial_chunk_withholding_stalls_delivery -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_scope_fix IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_validator_selective_drop -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_scope_fix IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_witness_corruption -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_scope_fix IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test consensus_and_da taira_public_localnet::taira_localnet_bootstrap_validators -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_scope_fix IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --exact --nocapture --test-threads=1`
+- open work after this slice:
+  - rerun the relevant grouped `integration_tests` subset or broader workspace
+    sweep when time allows to confirm these single-test fixes hold without the
+    isolated exact harness;
+  - keep an eye on the current-tree changes in
+    `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_npos_pacemaker_latency.rs`
+    so the derived pacemaker-target assertion is not lost in a later rebase;
+    and
+  - if grouped confidential/localnet pressure still flakes, revisit whether the
+    scenario should expose the transient restart overlap via a dedicated helper
+    instead of the current inline sequence.
+
+Latest sync (2026-04-06 test-network binary resolution now tracks the current test profile and shutdown noise is reduced):
+the remaining `iroha_test_network` quality gaps from the long workspace sweep
+are closed on the current tree. Test-network binary resolution now infers the
+active profile from the running test binary path when the env overrides are
+absent, so debug `cargo test` runs no longer fall back blindly to nested
+`--release` `iroha3d` builds. The expected fatal-shutdown/log-flush teardown
+messages are also demoted from warnings to debug output so the adversarial/DA
+integration logs stop looking red when teardown is working normally.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_test_network/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all -- crates/iroha_test_network/src/lib.rs`
+  - `CARGO_TARGET_DIR=target_tmp_gap_net cargo test -p iroha_test_network profile_hint_from_exe_path -- --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_gap_net cargo test -p iroha_test_network tests::default_build_profile_respects_env_override -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_gap_net cargo test -p iroha_test_network shutdown_tests::monitor_handles_shutdown_race_after_child_already_exited -- --exact --nocapture`
+  - `git diff --check -- crates/iroha_test_network/src/lib.rs`
+- open work after this slice:
+  - let the in-flight full `cargo test --workspace --all-targets` sweep finish
+    past the current grouped `integration_tests` harnesses and fix the next
+    failing crate/test if one appears; and
+  - if that broader sweep stays green, decide whether any remaining nested
+    `iroha3d` build reuse work is still worth doing beyond the now-correct
+    profile selection.
+
+Latest sync (2026-04-06 workspace clippy is green and the full workspace test sweep is past the earlier harness breakages):
+the repo-wide clippy boundary is clean again. The remaining issues in this
+slice were stale JSON-test helpers in `iroha_core`, stale query imports in
+`iroha_torii`, one `unused_mut` in `iroha_test_network`, and a Kagami example
+test that still expected `derive_localnet_genesis_key_pair(...)` to return a
+`Result`. The fresh workspace test rerun no longer fails on the custom
+Criterion bench argument or on that Kagami example, and it is now inside the
+long `integration_tests` sandbox path that performs a nested release
+`cargo build -p irohad --release --bin iroha3d`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/nexus/space_directory.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_test_network/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_kagami/examples/taira_kaigi_localnet.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `CARGO_TARGET_DIR=target_tmp_clippy_core cargo clippy -p iroha_core --all-targets -- -D warnings`
+  - `CARGO_TARGET_DIR=target_tmp_clippy_workspace cargo clippy -p iroha_torii -p iroha_test_network --all-targets -- -D warnings`
+  - `CARGO_TARGET_DIR=target_tmp_clippy_workspace cargo clippy --workspace --all-targets -- -D warnings`
+  - `CARGO_TARGET_DIR=target_tmp_workspace_tests cargo test -p iroha_kagami --example taira_kaigi_localnet`
+  - `CARGO_TARGET_DIR=target_tmp_workspace_tests cargo test --workspace --all-targets`
+- open work after this slice:
+  - let the in-flight full `cargo test --workspace --all-targets` sweep finish
+    past the current `integration_tests` nested release-build step and fix the
+    next failing crate/test if it surfaces;
+  - once that broader runtime signal is stable, revisit whether the old
+    `integration_tests` helpers that spawn nested release `iroha3d` builds
+    should be reworked to reuse prebuilt binaries more aggressively; and
+  - finish the remaining higher-cost repo-wide validation boundary if more
+    failures appear beyond the current in-flight sweep.
+
+Latest sync (2026-04-06 training multisig flow is green again on a fresh localnet):
+the local training wrapper and the CLI multisig register default are aligned
+with the current domainless multisig model again. `ledger multisig register`
+now emits `home_domain = null` by default, and `training_script_2.sh` now
+discovers the canonical policy-derived multisig account, skips the obsolete
+`multisig/proposals/<hash>` account-metadata wait, and measures height progress
+from the start of the traffic phase instead of the earlier idle wait window.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/main_shared.rs`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/training_script_2.sh`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `bash -n scripts/training_script_2.sh`
+  - `git diff --check -- crates/iroha_cli/src/main_shared.rs scripts/training_script_2.sh`
+  - `scripts/training_script_2.sh --runs 1 --out-dir /tmp/iroha-localnet-training-fresh6 --profile debug --target-dir target --no-build --force --ready-timeout 60 --height-timeout 60`
+    result:
+    - `successes: 1`
+    - `failures: 0`
+    - `height10=30s`
+    - `final_height=12`
+- open work after this slice:
+  - finish the isolated CLI validation for
+    `multisig_register_run_defaults_to_domainless_home_domain`;
+  - update `ledger multisig list` / proposal discovery to use the current
+    multisig proposal-state Torii API instead of account metadata scanning;
+  - rerun the full runtime `cargo test -p integration_tests` sweep;
+  - rerun `cargo test --workspace`; and
+  - rerun `cargo clippy --workspace --all-targets -- -D warnings`.
+
+Latest sync (2026-04-06 consensus test-network rebuild path is unblocked again):
+the latest grouped `consensus_and_da` rerun was not a clean functional signal:
+it cascaded into `failed to spawn \`irohad\`` once the test-network rebuild path
+tripped unrelated `iroha_core` compile errors. That rebuild path is now fixed.
+`derive_account_scope_directory_entry(...)` accepts `?Sized` callers again, the
+dataspace-directory snapshot types now use explicit base64-over-Norito JSON
+instead of invalid dataspace-keyed JSON objects, and `iroha_test_network`
+revalidates/retries stale cached `irohad` paths before giving up.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/state.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/nexus/space_directory.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_test_network/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_npos_stake_activation.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_localnet_smoke.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_npos_happy_path.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix cargo check -p iroha_core --lib`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix cargo build -p irohad`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix cargo test -p iroha_core json_roundtrip -- --nocapture`
+    passed:
+    - `nexus::space_directory::tests::bindings_json_roundtrip`
+    - `nexus::space_directory::tests::account_scope_entry_json_roundtrip`
+  - `CARGO_TARGET_DIR=target_tmp_scope_fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_scope_fix IROHA_TEST_SKIP_BUILD=1 cargo test -p integration_tests --test consensus_and_da sumeragi_localnet_smoke::sumeragi_status_json_endpoint_decodes_to_wire_end_to_end -- --exact --nocapture --test-threads=1`
+  - previously in this same runtime-fix slice:
+    - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_stake_activation::npos_election_filters_stake_and_applies_after_margin -- --exact --nocapture --test-threads=1`
+    - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_stake_activation::npos_entity_correlation_limits_validator_set -- --exact --nocapture --test-threads=1`
+    - `CARGO_TARGET_DIR=target_tmp_status_fix cargo test -p integration_tests --test consensus_and_da sumeragi_localnet_smoke::sumeragi_status_json_endpoint_decodes_to_wire_end_to_end -- --exact --nocapture --test-threads=1`
+    - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_happy_path::npos_happy_path_enforces_da_and_metrics_bounds -- --exact --nocapture --test-threads=1`
+    - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_happy_path::npos_rbc_persists_payload_across_restart -- --exact --nocapture --test-threads=1`
+    - `cargo test -p integration_tests --test consensus_and_da sumeragi_kagami_localnet::kagami_localnet_bootstrap_produces_blocks -- --exact --nocapture --test-threads=1`
+    - `cargo test -p integration_tests --test consensus_and_da sumeragi_mode_cutover::staged_cutover_recomputes_consensus_fingerprint -- --exact --nocapture --test-threads=1`
+- open work after this slice:
+  - rerun the affected `consensus_and_da` exacts on the fixed isolated target
+    dir so the suite reuses the freshly rebuilt `iroha3d` instead of paying the
+    brittle mid-suite rebuild path;
+  - complete a fresh grouped `cargo test -p integration_tests --test consensus_and_da`
+    rerun once shared cargo contention settles;
+  - rerun the full runtime `cargo test -p integration_tests` sweep;
+  - rerun `cargo test --workspace`; and
+  - rerun `cargo clippy --workspace --all-targets -- -D warnings`.
+
 Latest sync (2026-04-06 full `nexus_and_streaming` harness is green again):
 the grouped `nexus_and_streaming` suite is now green on the current tree. The
 remaining blockers in that harness were stale Norito mint/burn fixtures plus

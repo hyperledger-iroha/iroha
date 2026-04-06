@@ -3551,7 +3551,7 @@ mod multisig {
         pub quorum: u16,
         /// Account id to use for the multisig controller. If omitted, a new
         /// random domainless account id is generated locally, the private key is
-        /// discarded, and the registration uses the configured default home domain.
+        /// discarded, and the registration defaults to a domainless home-domain policy.
         #[arg(long)]
         pub account: Option<String>,
         /// Time-to-live for multisig transactions.
@@ -3601,15 +3601,11 @@ mod multisig {
                 .and_then(NonZeroU64::new)
                 .ok_or_else(|| eyre!("ttl should be between 1 ms and 584942417 years"))?;
             let spec = MultisigSpec::new(signatories_with_weights, quorum, transaction_ttl_ms);
-            let home_domain = DomainId::try_new(
-                iroha::account_address::default_domain_name().as_ref(),
-                "universal",
-            )
-            .wrap_err("failed to build default multisig home domain")?;
             if !context.output_instructions() {
                 context.println(format!("multisig account id: {account}"))?;
             }
-            let instruction = MultisigRegister::with_account(account.clone(), home_domain, spec);
+            let instruction =
+                MultisigRegister::with_account(account.clone(), None::<DomainId>, spec);
 
             context
                 .finish([iroha::data_model::isi::InstructionBox::from(instruction)])
@@ -3860,8 +3856,6 @@ mod multisig {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
             let me = client.account.clone();
-            // Query my roles with optional pagination/fetch-size
-            let mut roles_builder = client.query(FindRolesByAccountId::new(me.clone()));
             let (limit, offset, fetch_size) = match self {
                 Self::All {
                     limit,
@@ -3869,32 +3863,38 @@ mod multisig {
                     fetch_size,
                 } => (limit, offset, fetch_size),
             };
-            {
-                if limit.is_some() || offset > 0 {
-                    let pagination = iroha::data_model::query::parameters::Pagination::new(
+            let mut roles_builder = client.query(FindRolesByAccountId::new(me.clone()));
+            if limit.is_some() || offset > 0 {
+                let pagination =
+                    iroha::data_model::query::parameters::Pagination::new(
                         limit.and_then(NonZeroU64::new),
                         offset,
                     );
-                    roles_builder = roles_builder.with_pagination(pagination);
-                }
+                roles_builder = roles_builder.with_pagination(pagination);
+            }
+            if let Some(n) = fetch_size.and_then(NonZeroU64::new) {
+                let fs = iroha::data_model::query::parameters::FetchSize::new(Some(n));
+                roles_builder = roles_builder.with_fetch_size(fs);
+            }
+            let roles = roles_builder.execute_all()?;
+            let multisig_roles = roles
+                .into_iter()
+                .filter(|role_id| role_id.name().as_ref().starts_with(MULTISIG_SIGNATORY))
+                .collect::<Vec<_>>();
+            let mut fetch_accounts = || {
+                let mut builder = client.query(FindAccounts);
                 if let Some(n) = fetch_size.and_then(NonZeroU64::new) {
                     let fs = iroha::data_model::query::parameters::FetchSize::new(Some(n));
-                    roles_builder = roles_builder.with_fetch_size(fs);
+                    builder = builder.with_fetch_size(fs);
                 }
-            }
-            let Ok(my_multisig_roles) = roles_builder.execute_all().map(|roles: Vec<RoleId>| {
-                roles
-                    .into_iter()
-                    .filter(|role_id| role_id.name().as_ref().starts_with(MULTISIG_SIGNATORY))
-                    .collect::<Vec<_>>()
-            }) else {
-                return Ok(());
+                builder.execute_all().map_err(Into::into)
             };
-            let mut stack = my_multisig_roles
-                .iter()
-                .filter_map(multisig_account_from)
+            let roots =
+                resolve_multisig_accounts_from_roles(multisig_roles, &mut fetch_accounts)?;
+            let mut stack = roots
+                .into_iter()
                 .map(|account_id| Context::new(me.clone(), account_id, None))
-                .collect();
+                .collect::<Vec<_>>();
             let mut proposals = BTreeMap::new();
 
             fold_proposals(&mut proposals, &mut stack, &client)?;
@@ -3996,17 +3996,66 @@ mod multisig {
         format!("{MULTISIG}{DELIMITER}spec").parse().unwrap()
     }
 
-    fn proposal_key_prefix() -> String {
-        format!("{MULTISIG}{DELIMITER}proposals{DELIMITER}")
+    fn account_role_suffix(account: &AccountId) -> String {
+        const MAX_CANONICAL_SUFFIX_LEN: usize = 128;
+        if let Ok(canonical_suffix) = account.canonical_i105()
+            && canonical_suffix.len() <= MAX_CANONICAL_SUFFIX_LEN
+        {
+            return canonical_suffix;
+        }
+        HashOf::new(account).to_string()
     }
 
-    fn multisig_account_from(role: &RoleId) -> Option<AccountId> {
+    fn multisig_role_suffix(role: &RoleId) -> Option<&str> {
         role.name()
             .as_ref()
             .strip_prefix(MULTISIG_SIGNATORY)?
             .rsplit_once(DELIMITER)
-            .and_then(|(_, last)| AccountId::parse_encoded(last).ok())
-            .map(|parsed| parsed.into_account_id())
+            .map(|(_, suffix)| suffix)
+    }
+
+    fn resolve_multisig_accounts_from_roles<F>(
+        roles: Vec<RoleId>,
+        fetch_accounts: &mut F,
+    ) -> Result<Vec<AccountId>>
+    where
+        F: FnMut() -> Result<Vec<Account>>,
+    {
+        let mut resolved = BTreeSet::new();
+        let mut unresolved_suffixes = BTreeSet::new();
+
+        for role in roles {
+            let Some(suffix) = multisig_role_suffix(&role) else {
+                continue;
+            };
+            match AccountId::parse_encoded(suffix)
+                .map(iroha::data_model::account::ParsedAccountId::into_account_id)
+            {
+                Ok(account_id) => {
+                    let _ = resolved.insert(account_id);
+                }
+                Err(_) => {
+                    let _ = unresolved_suffixes.insert(suffix.to_owned());
+                }
+            }
+        }
+
+        if !unresolved_suffixes.is_empty() {
+            for account in fetch_accounts()? {
+                if account.metadata().get(&spec_key()).is_none() {
+                    continue;
+                }
+                let suffix = account_role_suffix(account.id());
+                if unresolved_suffixes.remove(&suffix) {
+                    let _ = resolved.insert(account.id().clone());
+                    if unresolved_suffixes.is_empty() {
+                        break;
+                    }
+                }
+            }
+        }
+
+        Ok(resolved.into_iter().collect())
     }
 
     type PendingProposals = BTreeMap<ProposalKey, ProposalView>;
@@ -4049,41 +4098,53 @@ mod multisig {
         stack: &mut Vec<Context>,
         client: &Client,
     ) -> Result<()> {
-        let mut fetch = |account_id: &AccountId| {
+        let mut fetch_account = |account_id: &AccountId| {
             client
                 .query_single(FindAccountById::new(account_id.clone()))
                 .map_err(Into::into)
         };
-        fold_proposals_with(proposals, stack, &mut fetch)
+        let mut fetch_proposals = |account_id: &AccountId| {
+            let response =
+                client.post_multisig_proposals_list(account_id, &["COLLECTING_SIGNATURES"])?;
+            response
+                .proposals
+                .into_iter()
+                .map(|entry| {
+                    let proposal_key = entry.instructions_hash.parse::<ProposalKey>().map_err(
+                        |err| {
+                            eyre!(
+                                "invalid multisig proposal hash `{}` for `{account_id}`: {err}",
+                                entry.instructions_hash
+                            )
+                        },
+                    )?;
+                    Ok((proposal_key, entry.proposal))
+                })
+                .collect::<Result<Vec<_>>>()
+        };
+        fold_proposals_with(proposals, stack, &mut fetch_account, &mut fetch_proposals)
     }
 
-    fn fold_proposals_with<F>(
+    fn fold_proposals_with<F, G>(
         proposals: &mut PendingProposals,
         stack: &mut Vec<Context>,
-        fetch: &mut F,
+        fetch_account: &mut F,
+        fetch_proposals: &mut G,
     ) -> Result<()>
     where
         F: FnMut(&AccountId) -> Result<Account>,
+        G: FnMut(&AccountId) -> Result<Vec<(ProposalKey, MultisigProposalValue)>>,
     {
         let Some(context) = stack.pop() else {
             return Ok(());
         };
-        let account = fetch(&context.this)?;
+        let account = fetch_account(&context.this)?;
         let Some(spec_value) = account.metadata().get(&spec_key()) else {
-            return fold_proposals_with(proposals, stack, fetch);
+            return fold_proposals_with(proposals, stack, fetch_account, fetch_proposals);
         };
         let spec: MultisigSpec = spec_value.clone().try_into_any_norito()?;
-        for (proposal_key, proposal_value) in account
-            .metadata()
-            .iter()
-            .filter_map(|(k, v)| {
-                k.as_ref().strip_prefix(&proposal_key_prefix()).map(|k| {
-                    (
-                        k.parse::<ProposalKey>().unwrap(),
-                        v.try_into_any_norito::<MultisigProposalValue>().unwrap(),
-                    )
-                })
-            })
+        for (proposal_key, proposal_value) in fetch_proposals(&context.this)?
+            .into_iter()
             .filter(|(k, _v)| context.key_span.is_none_or(|(_, top)| *k == top))
         {
             process_proposal(
@@ -4095,7 +4156,7 @@ mod multisig {
                 &spec,
             );
         }
-        fold_proposals_with(proposals, stack, fetch)
+        fold_proposals_with(proposals, stack, fetch_account, fetch_proposals)
     }
 
     fn process_proposal(
@@ -4198,7 +4259,14 @@ mod multisig {
     mod tests {
         use super::*;
         use iroha::crypto::{Algorithm, KeyPair};
-        use iroha::data_model::{Level, account::Account, domain::DomainId, isi::Log};
+        use iroha::data_model::{
+            Level,
+            account::{Account, MultisigMember, MultisigPolicy},
+            domain::DomainId,
+            isi::Log,
+            prelude::Json,
+            role::RoleId,
+        };
         use iroha_crypto::HashOf;
         use std::{
             collections::{BTreeMap, BTreeSet},
@@ -4245,15 +4313,103 @@ mod multisig {
 
             let mut proposals = BTreeMap::new();
             let mut stack = vec![Context::new(account_id.clone(), account_id.clone(), None)];
-            let mut fetch = |id: &AccountId| {
+            let mut fetch_account = |id: &AccountId| {
                 accounts
                     .get(id)
                     .cloned()
                     .ok_or_else(|| eyre!("Account not found in test map"))
             };
+            let mut fetch_proposals =
+                |_id: &AccountId| -> Result<Vec<(ProposalKey, MultisigProposalValue)>> {
+                    Ok(Vec::new())
+                };
 
-            fold_proposals_with(&mut proposals, &mut stack, &mut fetch).expect("fold proposals");
+            fold_proposals_with(
+                &mut proposals,
+                &mut stack,
+                &mut fetch_account,
+                &mut fetch_proposals,
+            )
+            .expect("fold proposals");
             assert!(proposals.is_empty());
+        }
+
+        #[test]
+        fn multisig_role_suffix_extracts_domainless_suffix() {
+            let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+            let account_id = account_from_seed(10, &domain);
+            let suffix = account_role_suffix(&account_id);
+            let role: RoleId = format!(
+                "{MULTISIG_SIGNATORY}{DELIMITER}domainless{DELIMITER}{suffix}"
+            )
+            .parse()
+            .expect("valid role id");
+
+            assert_eq!(multisig_role_suffix(&role), Some(suffix.as_str()));
+        }
+
+        #[test]
+        fn resolve_multisig_accounts_from_roles_resolves_hashed_suffixes() {
+            let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+            let signatory = account_from_seed(11, &domain);
+            let cosignatory = account_from_seed(12, &domain);
+            let mut members = Vec::with_capacity((u8::MAX as usize) + 1);
+            let mut signatories = BTreeMap::new();
+            for seed in 0..=(u8::MAX as usize) {
+                let mut material = [0_u8; 32];
+                material[..8].copy_from_slice(&(seed as u64).to_le_bytes());
+                let key_pair = KeyPair::from_seed(material.to_vec(), Algorithm::Ed25519);
+                let member = MultisigMember::new(key_pair.public_key().clone(), 1)
+                    .expect("multisig member");
+                members.push(member);
+                let account_id = AccountId::new(key_pair.public_key().clone());
+                let _ = signatories.insert(account_id, 1);
+            }
+            let policy = MultisigPolicy::new(1, members).expect("multisig policy");
+            let multisig_account = AccountId::new_multisig(policy);
+            let hashed_suffix = account_role_suffix(&multisig_account);
+            assert!(
+                AccountId::parse_encoded(&hashed_suffix).is_err(),
+                "large multisig account should use hashed role suffixes"
+            );
+
+            let canonical_suffix = account_role_suffix(&signatory);
+            let roles = vec![
+                format!("{MULTISIG_SIGNATORY}{DELIMITER}domainless{DELIMITER}{hashed_suffix}")
+                    .parse()
+                    .expect("hashed multisig role"),
+                format!(
+                    "{MULTISIG_SIGNATORY}{DELIMITER}domainless{DELIMITER}{canonical_suffix}"
+                )
+                .parse()
+                .expect("canonical signatory role"),
+            ];
+
+            let spec = MultisigSpec::new(
+                signatories,
+                NonZeroU16::new(1).unwrap(),
+                NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+            );
+            let plain_account = Account::new(signatory.clone()).build(&signatory);
+            let mut metadata = iroha::data_model::metadata::Metadata::default();
+            metadata.insert(spec_key(), Json::new(spec));
+            let multisig_account_record = Account::new(multisig_account.clone())
+                .with_metadata(metadata)
+                .build(&cosignatory);
+            let mut fetch_accounts = || {
+                Ok(vec![
+                    plain_account.clone(),
+                    multisig_account_record.clone(),
+                ])
+            };
+
+            let resolved =
+                resolve_multisig_accounts_from_roles(roles, &mut fetch_accounts)
+                    .expect("resolve multisig roots from roles");
+            let expected = BTreeSet::from([multisig_account, signatory])
+                .into_iter()
+                .collect::<Vec<_>>();
+            assert_eq!(resolved, expected);
         }
 
         #[test]
@@ -8208,6 +8364,53 @@ transaction_status_timeout = "77s"
     }
 
     #[test]
+    fn multisig_register_run_defaults_to_domainless_home_domain() {
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![0xD6; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let mut ctx = CaptureContext::new(account.clone());
+        let register = multisig::Register {
+            signatories: vec![account.to_string()],
+            weights: vec![1],
+            quorum: 1,
+            account: Some(account.to_string()),
+            transaction_ttl: std::time::Duration::from_millis(
+                iroha::executor_data_model::isi::multisig::DEFAULT_MULTISIG_TTL_MS,
+            )
+            .into(),
+        };
+
+        register.run(&mut ctx).expect("register should build");
+
+        let exec = ctx.captured.expect("captured executable");
+        let Executable::Instructions(instructions) = exec else {
+            panic!("expected instructions executable");
+        };
+        assert_eq!(instructions.len(), 1);
+        let payload = instructions[0]
+            .as_any()
+            .downcast_ref::<iroha::data_model::isi::CustomInstruction>()
+            .expect("custom multisig instruction")
+            .payload()
+            .as_ref()
+            .to_owned();
+        let instruction: iroha::executor_data_model::isi::multisig::MultisigInstructionBox =
+            norito::json::from_str(&payload).expect("multisig instruction payload should parse");
+        let iroha::executor_data_model::isi::multisig::MultisigInstructionBox::Register(
+            register,
+        ) = instruction
+        else {
+            panic!("expected multisig register instruction");
+        };
+        assert_eq!(
+            register.home_domain, None,
+            "CLI default multisig registration should not invent a home domain"
+        );
+    }
+
+    #[test]
     fn admission_hint_reports_disabled_domain() {
         use iroha::data_model::isi::error::AccountAdmissionError;
 
@@ -8516,7 +8719,6 @@ mod multisig_json_tests {
     #[test]
     fn multisig_register_payload_contains_account() {
         let account = multisig_account();
-        let home_domain: DomainId = DomainId::try_new("acme", "universal").expect("domain");
         let mut signatories = BTreeMap::new();
         signatories.insert(account.clone(), 1);
         let spec = MultisigSpec::new(
@@ -8524,7 +8726,7 @@ mod multisig_json_tests {
             NonZeroU16::new(1).expect("nonzero quorum"),
             NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("nonzero ttl"),
         );
-        let register = MultisigRegister::with_account(account.clone(), Some(home_domain), spec);
+        let register = MultisigRegister::with_account(account.clone(), None::<DomainId>, spec);
         let instruction: InstructionBox = register.into();
         let payload = instruction
             .as_any()
@@ -8538,6 +8740,7 @@ mod multisig_json_tests {
             "serialized payload missing account field: {payload}"
         );
     }
+
 }
 
 #[cfg(test)]

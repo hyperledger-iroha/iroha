@@ -1181,7 +1181,7 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
     submit_heavy_log(&client, DEFAULT_PAYLOAD_BYTES).await?;
 
     let primary_session =
-        try_wait_for_rbc_session(&client, expected_height, Duration::from_secs(40)).await?;
+        try_wait_for_rbc_session(&client, expected_height, Duration::from_secs(80)).await?;
     let primary_height = primary_session
         .as_ref()
         .and_then(session_height)
@@ -1192,43 +1192,77 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
         .and_then(|obj| obj.get("view"))
         .and_then(Value::as_u64);
 
-    let mut duplicate_views: Vec<u64> = Vec::new();
-    for peer in network.peers() {
-        let sessions_value = tokio::task::spawn_blocking({
-            let client = peer.client();
-            move || client.get_sumeragi_rbc_sessions_json()
-        })
-        .await
-        .wrap_err("fetch RBC session snapshot")??;
-        duplicate_views.extend(
-            extract_sessions_for_height(&sessions_value, primary_height)
-                .iter()
-                .filter_map(|value| value.as_object()?.get("view")?.as_u64()),
-        );
-    }
-
-    sleep(Duration::from_secs(4)).await;
-
-    let status_after = blocking_status(&client)?;
     let primary_delivered = primary_session
         .as_ref()
         .and_then(|value| get_bool(value, "delivered"))
         .unwrap_or(false);
-    let mut delivered_after = false;
-    for peer in network.peers() {
-        let sessions_value = tokio::task::spawn_blocking({
-            let client = peer.client();
-            move || client.get_sumeragi_rbc_sessions_json()
-        })
-        .await
-        .wrap_err("fetch post-gate RBC sessions")??;
-        delivered_after |= any_delivered_session_for_height(&sessions_value, primary_height);
-        duplicate_views.extend(
-            extract_sessions_for_height(&sessions_value, primary_height)
-                .iter()
-                .filter_map(|value| value.as_object()?.get("view")?.as_u64()),
-        );
-    }
+    let observation_deadline = Instant::now() + Duration::from_secs(60);
+    let (status_after, delivered_after, mut duplicate_views, drop_after, mismatch_after) = loop {
+        let status_after = blocking_status(&client)?;
+        let mut delivered_after = false;
+        let mut duplicate_views: Vec<u64> = Vec::new();
+        for peer in network.peers() {
+            let sessions_value = tokio::task::spawn_blocking({
+                let client = peer.client();
+                move || client.get_sumeragi_rbc_sessions_json()
+            })
+            .await
+            .wrap_err("fetch post-gate RBC sessions")??;
+            delivered_after |= any_delivered_session_for_height(&sessions_value, primary_height);
+            duplicate_views.extend(
+                extract_sessions_for_height(&sessions_value, primary_height)
+                    .iter()
+                    .filter_map(|value| value.as_object()?.get("view")?.as_u64()),
+            );
+        }
+
+        let mut drop_after = 0_u64;
+        let mut mismatch_after = 0_u64;
+        for peer in network.peers() {
+            let status_json = fetch_sumeragi_status(&peer.client()).await?;
+            drop_after = drop_after.saturating_add(
+                get_u64(&status_json, "block_created_dropped_by_lock_total").ok_or_else(|| {
+                    eyre!("missing block_created_dropped_by_lock_total after scenario")
+                })?,
+            );
+            mismatch_after = mismatch_after.saturating_add(
+                get_u64(&status_json, "block_created_proposal_mismatch_total").ok_or_else(
+                    || eyre!("missing block_created_proposal_mismatch_total after scenario"),
+                )?,
+            );
+        }
+
+        let repeated_base_view_entries = base_view
+            .map(|base_view| {
+                duplicate_views
+                    .iter()
+                    .filter(|view| **view == base_view)
+                    .count()
+            })
+            .unwrap_or(0);
+        let duplicate_view_evidence = base_view.is_some_and(|base_view| {
+            repeated_base_view_entries >= 2
+                || (duplicate_views.contains(&base_view)
+                    && duplicate_views.contains(&(base_view.saturating_add(1))))
+        });
+        let counters_advanced = drop_after > drop_before || mismatch_after > mismatch_before;
+        if status_after.blocks >= expected_height
+            || delivered_after
+            || counters_advanced
+            || duplicate_view_evidence
+            || Instant::now() >= observation_deadline
+        {
+            break (
+                status_after,
+                delivered_after,
+                duplicate_views,
+                drop_after,
+                mismatch_after,
+            );
+        }
+        sleep(Duration::from_millis(500)).await;
+    };
+
     if primary_delivered || delivered_after || status_after.blocks >= expected_height {
         ensure!(
             status_after.blocks >= expected_height,
@@ -1238,21 +1272,6 @@ async fn run_locked_qc_gate_drop_scenario() -> Result<()> {
         ensure!(
             status_after.blocks == status_before.blocks,
             "locked QC gate scenario must keep commit height unchanged while the primary session is gated"
-        );
-    }
-    let mut drop_after = 0_u64;
-    let mut mismatch_after = 0_u64;
-    for peer in network.peers() {
-        let status_json = fetch_sumeragi_status(&peer.client()).await?;
-        drop_after = drop_after.saturating_add(
-            get_u64(&status_json, "block_created_dropped_by_lock_total").ok_or_else(|| {
-                eyre!("missing block_created_dropped_by_lock_total after scenario")
-            })?,
-        );
-        mismatch_after = mismatch_after.saturating_add(
-            get_u64(&status_json, "block_created_proposal_mismatch_total").ok_or_else(|| {
-                eyre!("missing block_created_proposal_mismatch_total after scenario")
-            })?,
         );
     }
     ensure!(

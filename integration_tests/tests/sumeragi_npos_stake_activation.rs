@@ -40,9 +40,11 @@ const ELIGIBLE_STAKE: u64 = 2_000;
 const INELIGIBLE_STAKE: u64 = 100;
 const NEXUS_FEE_SEED_AMOUNT: u32 = 1_000_000;
 const STAKE_DOMAIN_ID: &str = "ivm.universal";
-const WAIT_HEIGHT: u64 = 16;
+const WAIT_HEIGHT: u64 = EPOCH_LEN + FINALITY_MARGIN;
 const COLLECTOR_RETRY: Duration = Duration::from_secs(60);
 const COLLECTOR_POLL: Duration = Duration::from_millis(100);
+const HEIGHT_ADVANCE_RETRY: Duration = Duration::from_secs(120);
+const HEIGHT_ADVANCE_POLL: Duration = Duration::from_millis(200);
 const STAKE_ASSET_NAME: &str = "NPOS Stake";
 const NEXUS_FEE_ASSET_NAME: &str = "Nexus Fee";
 
@@ -197,22 +199,33 @@ fn stake_genesis_post_topology_transactions(
 }
 
 async fn advance_to_height(
-    network: &sandbox::SerializedNetwork,
+    _network: &sandbox::SerializedNetwork,
     client: &Client,
     target_height: u64,
     log_prefix: &str,
 ) -> eyre::Result<()> {
-    loop {
+    let deadline = Instant::now() + HEIGHT_ADVANCE_RETRY;
+    let mut tick = 0_u64;
+    let mut next_submit = Instant::now();
+    let mut last_height = 0;
+
+    while Instant::now() <= deadline {
         let status = client.get_status()?;
+        last_height = last_height.max(status.blocks);
         if status.blocks >= target_height {
             return Ok(());
         }
-        let next = status.blocks.saturating_add(1);
-        client.submit(Log::new(Level::INFO, format!("{log_prefix} {next}")))?;
-        network
-            .ensure_blocks_with(move |height| height.total >= next)
-            .await?;
+        if Instant::now() >= next_submit {
+            client.submit(Log::new(Level::INFO, format!("{log_prefix} {tick}")))?;
+            tick = tick.saturating_add(1);
+            next_submit = Instant::now() + HEIGHT_ADVANCE_POLL;
+        }
+        sleep(HEIGHT_ADVANCE_POLL).await;
     }
+
+    eyre::bail!(
+        "client height did not reach {target_height} for {log_prefix}; last observed height={last_height}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]

@@ -25,7 +25,13 @@ use iroha::{
         transaction::SignedTransaction,
     },
 };
-use iroha_core::zk::test_utils::halo2_ivm_execution_envelope;
+use iroha_core::{
+    sumeragi::{
+        consensus::{NPOS_TAG, PERMISSIONED_TAG},
+        network_topology::Topology,
+    },
+    zk::test_utils::halo2_ivm_execution_envelope,
+};
 use iroha_data_model::proof::ProofAttachment;
 use iroha_test_network::{NetworkBuilder, NetworkPeer};
 use iroha_test_samples::{BOB_ID, BOB_KEYPAIR};
@@ -39,6 +45,8 @@ const RESTART_PROGRESS_TIMEOUT: Duration = Duration::from_secs(45);
 const RESTART_PROGRESS_POLL_INTERVAL: Duration = Duration::from_millis(500);
 const PRESSURE_TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const PRESSURE_TRANSACTION_STATUS_TIMEOUT: Duration = Duration::from_secs(2);
+const COMBINED_PRESSURE_ALL_PEER_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
+const COMBINED_PRESSURE_QUORUM_ATTEMPTS: usize = 600;
 
 fn marker(byte: u8) -> [u8; 32] {
     [byte; 32]
@@ -102,6 +110,118 @@ fn select_dual_restart_indices(total_peers: usize) -> (usize, usize) {
     (first, second)
 }
 
+fn sumeragi_mode_tag_and_prf_seed(client: &Client) -> Result<(String, [u8; 32])> {
+    for _ in 0..20 {
+        let status = client.get_sumeragi_status()?;
+        if status.mode_tag.is_empty() {
+            std::thread::sleep(Duration::from_millis(100));
+            continue;
+        }
+        if let Some(seed) = status.prf_epoch_seed {
+            return Ok((status.mode_tag, seed));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+
+    Err(eyre!("sumeragi status did not report prf_epoch_seed"))
+}
+
+fn best_downtime_peer_from_leaders(
+    total_peers: usize,
+    leaders: &[usize],
+) -> Option<(usize, usize)> {
+    if total_peers == 0 || leaders.is_empty() {
+        return None;
+    }
+
+    let mut best = None;
+    for candidate in 0..total_peers {
+        let safe_prefix = leaders
+            .iter()
+            .take_while(|&&leader| leader != candidate)
+            .count();
+        match best {
+            Some((best_idx, best_prefix))
+                if safe_prefix < best_prefix
+                    || (safe_prefix == best_prefix && candidate > best_idx) => {}
+            _ => best = Some((candidate, safe_prefix)),
+        }
+    }
+
+    best
+}
+
+fn select_downtime_peer_and_window(
+    network: &sandbox::SerializedNetwork,
+    client: &Client,
+    start_height: u64,
+    operation_count: usize,
+) -> Result<(usize, usize)> {
+    if operation_count == 0 {
+        return Err(eyre!(
+            "downtime peer selection requires at least one operation"
+        ));
+    }
+
+    let (mode_tag, prf_seed) = sumeragi_mode_tag_and_prf_seed(client)?;
+    let mut roster: Vec<_> = network
+        .topology_entries()
+        .iter()
+        .map(|entry| entry.peer.clone())
+        .collect();
+    roster.sort();
+    roster.dedup();
+    if roster.is_empty() {
+        return Err(eyre!("network should expose at least one BLS peer id"));
+    }
+
+    let mut leaders = Vec::with_capacity(operation_count);
+    for offset in 0..operation_count {
+        let height = start_height.saturating_add(offset as u64);
+        let mut topology = Topology::new(roster.clone());
+        match mode_tag.as_str() {
+            PERMISSIONED_TAG => topology.shuffle_prf(prf_seed, height),
+            NPOS_TAG => {
+                let leader = topology.leader_index_prf(prf_seed, height, 0);
+                topology.rotate_preserve_view_to_front(leader);
+            }
+            other => {
+                return Err(eyre!(
+                    "unsupported consensus mode tag for downtime selection: {other}"
+                ));
+            }
+        }
+
+        let leader = topology
+            .as_ref()
+            .first()
+            .ok_or_else(|| eyre!("rotated topology unexpectedly empty"))?;
+        let Some(peer_index) = network
+            .peers()
+            .iter()
+            .position(|peer| peer.bls_public_key() == Some(leader.public_key()))
+        else {
+            return Err(eyre!(
+                "unable to resolve runtime peer index for rotated leader `{leader}`"
+            ));
+        };
+        leaders.push(peer_index);
+    }
+
+    let Some((peer_index, safe_prefix)) =
+        best_downtime_peer_from_leaders(network.peers().len(), &leaders)
+    else {
+        return Err(eyre!("failed to select downtime peer from leader schedule"));
+    };
+    if safe_prefix == 0 {
+        return Err(eyre!(
+            "no safe downtime window found for upcoming leaders {leaders:?}"
+        ));
+    }
+
+    Ok((peer_index, safe_prefix.min(operation_count)))
+}
+
 fn pressure_submitter_clients(submitters: &[Client]) -> Vec<Client> {
     submitters
         .iter()
@@ -133,13 +253,33 @@ async fn restart_peer_and_wait_non_empty(
         .await
         .wrap_err_with(|| format!("{context}: restart peer {peer_index}"))?;
 
+    wait_for_peer_non_empty(network, peer_index, target_non_empty, context).await
+}
+
+async fn restart_peer_and_wait_reachable(
+    network: &sandbox::SerializedNetwork,
+    peer_index: usize,
+    context: &str,
+) -> Result<()> {
+    let peer = network.peers().get(peer_index).ok_or_else(|| {
+        eyre!(
+            "{context}: restart peer index {peer_index} out of range for {} peers",
+            network.peers().len()
+        )
+    })?;
+
+    let _ = peer.shutdown_if_started().await;
+    let config_layers = network.config_layers().collect::<Vec<_>>();
+    peer.start_checked(config_layers.iter().cloned(), None)
+        .await
+        .wrap_err_with(|| format!("{context}: restart peer {peer_index}"))?;
+
     let restart_client = peer.client();
     let deadline = tokio::time::Instant::now() + RESTART_PROGRESS_TIMEOUT;
 
     loop {
         match restart_client.get_status() {
-            Ok(status) if status.blocks_non_empty >= target_non_empty => return Ok(()),
-            Ok(_) => {}
+            Ok(_) => return Ok(()),
             Err(err) if is_transient_client_error(&err) => {}
             Err(err) => {
                 return Err(err)
@@ -149,7 +289,43 @@ async fn restart_peer_and_wait_non_empty(
 
         if tokio::time::Instant::now() >= deadline {
             return Err(eyre!(
-                "{context}: restarted peer {peer_index} did not reach non-empty height {target_non_empty} within {:?}",
+                "{context}: restarted peer {peer_index} did not become reachable within {:?}",
+                RESTART_PROGRESS_TIMEOUT
+            ));
+        }
+
+        tokio::time::sleep(RESTART_PROGRESS_POLL_INTERVAL).await;
+    }
+}
+
+async fn wait_for_peer_non_empty(
+    network: &sandbox::SerializedNetwork,
+    peer_index: usize,
+    target_non_empty: u64,
+    context: &str,
+) -> Result<()> {
+    let peer = network.peers().get(peer_index).ok_or_else(|| {
+        eyre!(
+            "{context}: peer index {peer_index} out of range for {} peers",
+            network.peers().len()
+        )
+    })?;
+    let restart_client = peer.client();
+    let deadline = tokio::time::Instant::now() + RESTART_PROGRESS_TIMEOUT;
+
+    loop {
+        match restart_client.get_status() {
+            Ok(status) if status.blocks_non_empty >= target_non_empty => return Ok(()),
+            Ok(_) => {}
+            Err(err) if is_transient_client_error(&err) => {}
+            Err(err) => {
+                return Err(err).wrap_err_with(|| format!("{context}: query peer {peer_index}"));
+            }
+        }
+
+        if tokio::time::Instant::now() >= deadline {
+            return Err(eyre!(
+                "{context}: peer {peer_index} did not reach non-empty height {target_non_empty} within {:?}",
                 RESTART_PROGRESS_TIMEOUT
             ));
         }
@@ -335,7 +511,7 @@ async fn submit_and_wait_non_empty_block(
         iroha_data_model::metadata::Metadata::default(),
     );
     let all_peer_wait_timeout = if context.contains("combined downtime+timeout") {
-        Duration::from_secs(30)
+        COMBINED_PRESSURE_ALL_PEER_WAIT_TIMEOUT
     } else {
         ALL_PEER_WAIT_TIMEOUT
     };
@@ -379,7 +555,7 @@ async fn wait_for_non_empty_quorum(
     context: &str,
 ) -> Result<()> {
     let attempts = if context.contains("combined downtime+timeout") {
-        300
+        COMBINED_PRESSURE_QUORUM_ATTEMPTS
     } else {
         200
     };
@@ -1425,8 +1601,6 @@ async fn confidential_combined_peer_downtime_and_timeout_pressure_localnet() -> 
     .await?;
 
     let pressure_submitters = pressure_submitter_clients(&peer_clients);
-    let (restart_idx, _) = select_dual_restart_indices(network.peers().len());
-    let _ = network.peers()[restart_idx].shutdown_if_started().await;
 
     submit_and_wait_non_empty_block(
         &network,
@@ -1447,32 +1621,41 @@ async fn confidential_combined_peer_downtime_and_timeout_pressure_localnet() -> 
     )
     .await?;
 
-    for output_commitment in [152_u8, 153_u8, 154_u8] {
-        submit_and_wait_non_empty_block(
-            &network,
-            &tx_builder_client,
-            &pressure_submitters,
-            vec![
-                iroha_data_model::isi::zk::ZkTransfer::new(
-                    asset_def.clone(),
-                    Vec::new(),
-                    vec![marker(output_commitment)],
-                    live_halo2_attachment(marker(output_commitment)),
-                    None,
-                )
-                .into(),
-            ],
-            &mut non_empty_target,
+    let downtime_operations: Vec<(InstructionBox, &'static str)> = vec![
+        (
+            iroha_data_model::isi::zk::ZkTransfer::new(
+                asset_def.clone(),
+                Vec::new(),
+                vec![marker(152)],
+                live_halo2_attachment(marker(152)),
+                None,
+            )
+            .into(),
             "combined downtime+timeout 3-hop transfer failed",
-        )
-        .await?;
-    }
-
-    submit_and_wait_non_empty_block(
-        &network,
-        &tx_builder_client,
-        &pressure_submitters,
-        vec![
+        ),
+        (
+            iroha_data_model::isi::zk::ZkTransfer::new(
+                asset_def.clone(),
+                Vec::new(),
+                vec![marker(153)],
+                live_halo2_attachment(marker(153)),
+                None,
+            )
+            .into(),
+            "combined downtime+timeout 3-hop transfer failed",
+        ),
+        (
+            iroha_data_model::isi::zk::ZkTransfer::new(
+                asset_def.clone(),
+                Vec::new(),
+                vec![marker(154)],
+                live_halo2_attachment(marker(154)),
+                None,
+            )
+            .into(),
+            "combined downtime+timeout 3-hop transfer failed",
+        ),
+        (
             iroha_data_model::isi::zk::Unshield::new(
                 asset_def.clone(),
                 source.clone(),
@@ -1482,19 +1665,49 @@ async fn confidential_combined_peer_downtime_and_timeout_pressure_localnet() -> 
                 None,
             )
             .into(),
-        ],
-        &mut non_empty_target,
-        "combined downtime+timeout unshield failed",
-    )
-    .await?;
+            "combined downtime+timeout unshield failed",
+        ),
+    ];
+    let next_height = tx_builder_client.get_status()?.blocks.saturating_add(1);
+    let (restart_idx, downtime_window) = select_downtime_peer_and_window(
+        &network,
+        &tx_builder_client,
+        next_height,
+        downtime_operations.len(),
+    )?;
 
-    restart_peer_and_wait_non_empty(
+    let _ = network.peers()[restart_idx].shutdown_if_started().await;
+
+    for (instruction, context) in downtime_operations.iter().take(downtime_window) {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &pressure_submitters,
+            vec![instruction.clone()],
+            &mut non_empty_target,
+            context,
+        )
+        .await?;
+    }
+
+    restart_peer_and_wait_reachable(
         &network,
         restart_idx,
-        non_empty_target,
         "combined downtime+timeout restart peer",
     )
     .await?;
+
+    for (instruction, context) in downtime_operations.iter().skip(downtime_window) {
+        submit_and_wait_non_empty_block(
+            &network,
+            &tx_builder_client,
+            &pressure_submitters,
+            vec![instruction.clone()],
+            &mut non_empty_target,
+            context,
+        )
+        .await?;
+    }
 
     submit_and_wait_non_empty_block(
         &network,
@@ -1510,6 +1723,14 @@ async fn confidential_combined_peer_downtime_and_timeout_pressure_localnet() -> 
         ],
         &mut non_empty_target,
         "combined downtime+timeout transfer failed",
+    )
+    .await?;
+
+    wait_for_peer_non_empty(
+        &network,
+        restart_idx,
+        non_empty_target,
+        "combined downtime+timeout restarted peer catch-up",
     )
     .await?;
 
@@ -3258,6 +3479,18 @@ fn select_dual_restart_indices_is_deterministic_and_distinct() {
     assert_eq!(first, 1);
     assert_eq!(second, 2);
     assert_ne!(first, second);
+}
+
+#[test]
+fn best_downtime_peer_from_leaders_prefers_longest_safe_prefix() {
+    assert_eq!(
+        best_downtime_peer_from_leaders(4, &[1, 2, 1, 0]),
+        Some((3, 4))
+    );
+    assert_eq!(
+        best_downtime_peer_from_leaders(4, &[2, 0, 1, 3]),
+        Some((1, 2))
+    );
 }
 
 #[test]

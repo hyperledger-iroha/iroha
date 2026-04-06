@@ -229,6 +229,50 @@ pub struct SccpProofManifestSet {
     /// Chain-specific proof manifests keyed by counterparty domain.
     pub manifests: Vec<iroha_sccp::SccpProofManifestV1>,
 }
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Multisig proposal entry returned by the Torii multisig proposals API.
+pub struct MultisigProposalEntry {
+    /// Stable proposal identifier.
+    pub proposal_id: String,
+    /// Deterministic hash of the proposal instructions.
+    pub instructions_hash: String,
+    /// Proposal payload and approval state.
+    pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    /// Proposal lifecycle status.
+    pub status: String,
+    /// Terminal timestamp for finalized, canceled, or expired proposals.
+    #[norito(default)]
+    pub terminal_at_ms: Option<u64>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Response payload returned by the Torii multisig proposals listing API.
+pub struct MultisigProposalsListResponse {
+    /// Canonical multisig account id resolved by the server.
+    pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
+    /// Matching proposal entries.
+    pub proposals: Vec<MultisigProposalEntry>,
+}
+
 const DEFAULT_MAX_QUEUED_DURATION: Duration = Duration::from_secs(60);
 const HEADER_SORA_PROOF: &str = "sora-proof";
 const HEADER_SORA_NAME: &str = "sora-name";
@@ -3782,6 +3826,45 @@ mod evidence_http_tests {
         );
         let body = String::from_utf8(snapshot.body.clone()).expect("utf8 body");
         assert_eq!(body, format!("{{\"literal\":\"{literal}\"}}"));
+        let has_content_type = snapshot.headers.iter().any(|(name, value)| {
+            name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
+        });
+        assert!(has_content_type, "Content-Type header missing");
+    }
+
+    #[test]
+    fn post_multisig_proposals_list_builds_request() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id_literal = account_id.to_string();
+        let response = json_response(
+            StatusCode::OK,
+            &format!("{{\"resolved_multisig_account_id\":\"{account_id}\",\"proposals\":[]}}"),
+        );
+
+        with_mock_http(respond_with(&snapshots, response), || {
+            let resp = client
+                .post_multisig_proposals_list(&account_id, &["COLLECTING_SIGNATURES"])
+                .expect("post multisig proposals list");
+            assert_eq!(resp.resolved_multisig_account_id, account_id);
+            assert!(resp.proposals.is_empty());
+        });
+
+        let store = snapshots.lock().expect("lock snapshot store");
+        assert_eq!(store.len(), 1);
+        let snapshot = &store[0];
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.as_str(),
+            "http://mock.local/v1/multisig/proposals/list"
+        );
+        let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(
+            body["multisig_account_id"].as_str(),
+            Some(account_id_literal.as_str())
+        );
+        assert_eq!(body["status"][0].as_str(), Some("COLLECTING_SIGNATURES"));
         let has_content_type = snapshot.headers.iter().any(|(name, value)| {
             name.eq_ignore_ascii_case("content-type") && value == APPLICATION_JSON
         });
@@ -7421,6 +7504,42 @@ impl Client {
             .body(body)
             .build()?
             .send()
+    }
+
+    /// Convenience: POST `/v1/multisig/proposals/list` for a multisig account id.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, JSON serialization, the HTTP call,
+    /// or response decoding fails.
+    pub fn post_multisig_proposals_list(
+        &self,
+        multisig_account_id: &iroha_data_model::account::AccountId,
+        statuses: &[&str],
+    ) -> Result<MultisigProposalsListResponse> {
+        let url = join_torii_url(&self.torii_url, "v1/multisig/proposals/list");
+        let status = statuses
+            .iter()
+            .map(|value| (*value).to_owned())
+            .collect::<Vec<_>>();
+        let body = norito::json::to_vec(&norito::json!({
+            "multisig_account_id": multisig_account_id,
+            "status": status,
+        }))?;
+        let resp = self
+            .default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to list multisig proposals with HTTP status: {}. {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        norito::json::from_slice(resp.body())
+            .map_err(|err| eyre!("failed to decode multisig proposals list response: {err}"))
     }
 
     /// Convenience: GET `/v1/sorafs/pin` to list manifests in the pin registry.

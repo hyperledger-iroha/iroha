@@ -11,6 +11,7 @@ use iroha::data_model::{
     isi::{InstructionBox, Log, SetParameter},
     parameter::{BlockParameter, Parameter, SumeragiParameter, system::SumeragiNposParameters},
 };
+use iroha_config::parameters::{actual::SumeragiNposTimeoutOverrides, defaults};
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use nonzero_ext::nonzero;
 use tokio::time::sleep;
@@ -57,10 +58,12 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
                 );
         })
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
-            SumeragiParameter::BlockTimeMs(BLOCK_TIME_MS),
-        )))
-        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::CommitTimeMs(COMMIT_TIME_MS),
+        )))
+        // The localnet builder injects a short default pipeline first, so commit_time must be
+        // raised before block_time to keep the intermediate state valid.
+        .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
+            SumeragiParameter::BlockTimeMs(BLOCK_TIME_MS),
         )))
         .with_genesis_instruction(SetParameter::new(Parameter::Sumeragi(
             SumeragiParameter::CollectorsK(COLLECTORS_K),
@@ -115,9 +118,17 @@ async fn npos_pacemaker_targets_one_second_under_250ms_links() -> Result<()> {
         .get_optional("sumeragi_pacemaker_view_timeout_target_ms")
         .or_else(|| metrics.max_with_prefix("sumeragi_pacemaker_view_timeout_target_ms"))
         .ok_or_else(|| eyre!("missing pacemaker view timeout target metric"))?;
+    let expected_view_target = {
+        let propose_timeout = SumeragiNposTimeoutOverrides::default()
+            .resolve(Duration::from_millis(BLOCK_TIME_MS))
+            .propose;
+        let propose_timeout_ms = propose_timeout.as_millis() as f64;
+        let rtt_floor_multiplier = f64::from(defaults::sumeragi::PACEMAKER_RTT_FLOOR_MULTIPLIER);
+        propose_timeout_ms * rtt_floor_multiplier
+    };
     ensure!(
-        (view_target - BLOCK_TIME_MS as f64).abs() <= 1.0,
-        "pacemaker view timeout target {view_target} ms did not match block_time_ms {BLOCK_TIME_MS}"
+        (view_target - expected_view_target).abs() <= 1.0,
+        "pacemaker view timeout target {view_target} ms did not match derived target {expected_view_target} ms"
     );
 
     let mut phase_metrics_seen = 0_u32;

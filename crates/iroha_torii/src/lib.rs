@@ -3174,13 +3174,14 @@ async fn handler_account_get(
     AxPath(account_id): AxPath<String>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     let key_hint = account_id.clone();
     let telemetry = app.telemetry_handle();
     let format = match crate::utils::negotiate_response_format(accept.as_ref().map(|v| &v.0)) {
         Ok(format) => format,
         Err(response) => return Ok(response),
     };
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !trusted_internal {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), &key_hint, enforce).await?;
@@ -3191,14 +3192,24 @@ async fn handler_account_get(
         &telemetry,
         routing::ENDPOINT_ACCOUNTS_GET,
     )?;
-    let _ = (&method, &uri, parsed_account_id);
-    Ok(execute_torii_account_read_for_routes(
+    let visibility = torii_visibility_account_from_headers(
         &app,
-        torii_all_dataspace_routes(app.as_ref()),
-        canonical_account_id,
-        format,
-    )
-    .await)
+        &headers,
+        &method,
+        &uri,
+        &[],
+        routing::ENDPOINT_ACCOUNTS_GET,
+    )?;
+    let routes = match torii_account_read_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        visibility.caller(),
+        trusted_internal || visibility.is_signed(),
+    ) {
+        Ok(routes) => routes,
+        Err(response) => return Ok(response),
+    };
+    Ok(execute_torii_account_read_for_routes(&app, routes, canonical_account_id, format).await)
 }
 
 #[cfg(feature = "app_api")]
@@ -3214,6 +3225,7 @@ async fn handler_account_transactions_query(
     >,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     let tel = app.telemetry.clone();
     let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
@@ -3223,7 +3235,7 @@ async fn handler_account_transactions_query(
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
     let payload = crate::utils::extractors::NoritoJson(env);
     let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !trusted_internal {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -3243,7 +3255,6 @@ async fn handler_account_transactions_query(
             "failed to encode routed account transactions query: {error}"
         )))
     })?;
-    let _ = parsed_account_id;
     let caller = torii_visibility_account_from_headers(
         &app,
         &headers,
@@ -3252,7 +3263,15 @@ async fn handler_account_transactions_query(
         raw.as_ref(),
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY,
     )?;
-    let routes = torii_visible_account_read_routes(app.as_ref(), caller.as_ref());
+    let routes = match torii_account_read_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        caller.caller(),
+        trusted_internal || caller.is_signed(),
+    ) {
+        Ok(routes) => routes,
+        Err(response) => return Ok(response),
+    };
     if routes.is_empty() {
         return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
     }
@@ -3278,13 +3297,14 @@ async fn handler_account_assets(
     AxQuery(p): AxQuery<crate::routing::AccountAssetsGetParams>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     let tel = app.telemetry_handle();
     let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
     let page_limit = limits.clamp_page_limit(p.limit)?;
     let mut p = p;
     p.limit = Some(page_limit);
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !trusted_internal {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -3297,7 +3317,6 @@ async fn handler_account_assets(
         &tel,
         routing::ENDPOINT_ACCOUNTS_ASSETS,
     )?;
-    let _ = parsed_account_id;
     let caller = torii_visibility_account_from_headers(
         &app,
         &headers,
@@ -3306,7 +3325,15 @@ async fn handler_account_assets(
         &[],
         routing::ENDPOINT_ACCOUNTS_ASSETS,
     )?;
-    let routes = torii_visible_account_read_routes(app.as_ref(), caller.as_ref());
+    let routes = match torii_account_read_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        caller.caller(),
+        trusted_internal || caller.is_signed(),
+    ) {
+        Ok(routes) => routes,
+        Err(response) => return Ok(response),
+    };
     if routes.is_empty() {
         return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
     }
@@ -3333,9 +3360,10 @@ async fn handler_account_permissions(
     AxQuery(p): AxQuery<crate::filter::Pagination>,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     let key_hint = account_id.clone();
     let tel = app.telemetry_handle();
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !trusted_internal {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         check_access_enforced(&app, &headers, Some(remote_ip), &key_hint, enforce).await?;
@@ -3346,7 +3374,6 @@ async fn handler_account_permissions(
         &tel,
         "/v1/accounts/{account_id}/permissions",
     )?;
-    let _ = parsed_account_id;
     let caller = torii_visibility_account_from_headers(
         &app,
         &headers,
@@ -3355,7 +3382,15 @@ async fn handler_account_permissions(
         &[],
         "/v1/accounts/{account_id}/permissions",
     )?;
-    let routes = torii_visible_account_read_routes(app.as_ref(), caller.as_ref());
+    let routes = match torii_account_read_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        caller.caller(),
+        trusted_internal || caller.is_signed(),
+    ) {
+        Ok(routes) => routes,
+        Err(response) => return Ok(response),
+    };
     if routes.is_empty() {
         return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
     }
@@ -3384,6 +3419,7 @@ async fn handler_account_assets_query(
     >,
 ) -> Result<impl IntoResponse, Error> {
     let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     let tel = app.telemetry_handle();
     let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
@@ -3392,7 +3428,7 @@ async fn handler_account_assets_query(
     env.pagination.limit = Some(page_limit);
     env.fetch_size = limits.clamp_fetch_size(env.fetch_size)?;
     let payload = crate::utils::extractors::NoritoJson(env);
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !trusted_internal {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -3405,7 +3441,6 @@ async fn handler_account_assets_query(
         &tel,
         routing::ENDPOINT_ACCOUNTS_ASSETS_QUERY,
     )?;
-    let _ = parsed_account_id;
     let caller = torii_visibility_account_from_headers(
         &app,
         &headers,
@@ -3414,7 +3449,15 @@ async fn handler_account_assets_query(
         raw.as_ref(),
         routing::ENDPOINT_ACCOUNTS_ASSETS_QUERY,
     )?;
-    let routes = torii_visible_account_read_routes(app.as_ref(), caller.as_ref());
+    let routes = match torii_account_read_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        caller.caller(),
+        trusted_internal || caller.is_signed(),
+    ) {
+        Ok(routes) => routes,
+        Err(response) => return Ok(response),
+    };
     if routes.is_empty() {
         return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
     }
@@ -3445,13 +3488,14 @@ async fn handler_account_transactions_get(
     AxQuery(params): AxQuery<crate::routing::AccountTransactionsGetParams>,
 ) -> Result<Response, Error> {
     let remote_ip = remote.ip();
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
     let key_hint = account_id.clone();
     let limits = crate::routing::app_query_limits();
     let mut params = params;
     let page_limit = limits.clamp_page_limit(params.limit)?;
     params.limit = Some(page_limit);
     let allowed_asset_definition_id = resolve_tx_history_allowed_asset_definition_id(&app)?;
-    if !limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets) {
+    if !trusted_internal {
         let enforce =
             app.fee_policy.is_enabled() || app.queue.active_len() >= app.high_load_tx_threshold;
         let cost = limits.rate_limit_cost(page_limit);
@@ -3465,7 +3509,6 @@ async fn handler_account_transactions_get(
         &telemetry,
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )?;
-    let _ = parsed_account_id;
     let caller = torii_visibility_account_from_headers(
         &app,
         &headers,
@@ -3474,7 +3517,15 @@ async fn handler_account_transactions_get(
         &[],
         routing::ENDPOINT_ACCOUNTS_TRANSACTIONS,
     )?;
-    let routes = torii_visible_account_read_routes(app.as_ref(), caller.as_ref());
+    let routes = match torii_account_read_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        caller.caller(),
+        trusted_internal || caller.is_signed(),
+    ) {
+        Ok(routes) => routes,
+        Err(response) => return Ok(response),
+    };
     if routes.is_empty() {
         return Ok(torii_empty_list_response(routed_by_for_routes(&app, &[])));
     }
@@ -10469,6 +10520,74 @@ fn resolve_signed_query_routing(
     )
 }
 
+fn resolve_torii_route_for_dataspace_id(
+    app: &AppState,
+    dataspace_id: iroha_data_model::nexus::DataSpaceId,
+) -> Result<RoutingDecision, queue::RoutingResolveError> {
+    let state_view = app.state.view();
+    let nexus = state_view.nexus();
+    let lane_id = nexus
+        .lane_catalog
+        .lanes()
+        .iter()
+        .filter(|lane| lane.dataspace_id == dataspace_id)
+        .map(|lane| lane.id)
+        .min()
+        .ok_or(queue::RoutingResolveError::NoLaneForDataspace { dataspace_id })?;
+
+    iroha_core::queue::resolve_routing_decision(
+        RoutingDecision::new(lane_id, dataspace_id),
+        &nexus.lane_catalog,
+        &nexus.dataspace_catalog,
+    )
+}
+
+fn torii_routes_for_dataspaces(
+    app: &AppState,
+    dataspaces: impl IntoIterator<Item = iroha_data_model::nexus::DataSpaceId>,
+) -> Result<Vec<RoutingDecision>, queue::RoutingResolveError> {
+    let mut routes = BTreeMap::new();
+    for dataspace_id in dataspaces {
+        let route = resolve_torii_route_for_dataspace_id(app, dataspace_id)?;
+        routes.entry(route.dataspace_id).or_insert(route);
+    }
+    Ok(routes.into_values().collect())
+}
+
+fn torii_target_account_routes(
+    app: &AppState,
+    account_id: &AccountId,
+) -> Result<Vec<RoutingDecision>, Response> {
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let dataspaces: BTreeSet<_> = world
+        .account_scope_entry(account_id)
+        .map_err(|error| {
+            torii_proxy_error_response(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "account_scope_unavailable",
+                format!("failed to resolve account scope for {account_id}: {error}"),
+            )
+        })?
+        .map_or_else(
+            || BTreeSet::from([iroha_data_model::nexus::DataSpaceId::GLOBAL]),
+            |entry| {
+                entry
+                    .iter()
+                    .map(|(dataspace_id, _)| *dataspace_id)
+                    .collect()
+            },
+        );
+
+    torii_routes_for_dataspaces(app, dataspaces).map_err(|error| {
+        torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            format!("failed to resolve target-account routes for {account_id}: {error}"),
+        )
+    })
+}
+
 fn torii_proxy_error_response(
     status: StatusCode,
     code: &'static str,
@@ -10691,27 +10810,7 @@ fn torii_route_for_dataspace_id(
     app: &AppState,
     dataspace_id: iroha_data_model::nexus::DataSpaceId,
 ) -> Result<RoutingDecision, Error> {
-    let state_view = app.state.view();
-    let nexus = state_view.nexus();
-    let Some(lane_id) = nexus
-        .lane_catalog
-        .lanes()
-        .iter()
-        .filter(|lane| lane.dataspace_id == dataspace_id)
-        .map(|lane| lane.id)
-        .min()
-    else {
-        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
-            iroha_data_model::query::error::QueryExecutionFail::NotFound,
-        )));
-    };
-
-    iroha_core::queue::resolve_routing_decision(
-        RoutingDecision::new(lane_id, dataspace_id),
-        &nexus.lane_catalog,
-        &nexus.dataspace_catalog,
-    )
-    .map_err(|error| Error::PushIntoQueue {
+    resolve_torii_route_for_dataspace_id(app, dataspace_id).map_err(|error| Error::PushIntoQueue {
         source: Box::new(queue::Error::UnresolvedRoute {
             reason: error.to_string(),
         }),
@@ -10769,6 +10868,27 @@ fn torii_preferred_private_ingress_routes(app: &AppState) -> Vec<RoutingDecision
 }
 
 #[cfg(feature = "app_api")]
+enum ToriiAccountReadVisibility {
+    Signed(AccountId),
+    Header(AccountId),
+    None,
+}
+
+#[cfg(feature = "app_api")]
+impl ToriiAccountReadVisibility {
+    fn caller(&self) -> Option<&AccountId> {
+        match self {
+            Self::Signed(account_id) | Self::Header(account_id) => Some(account_id),
+            Self::None => None,
+        }
+    }
+
+    fn is_signed(&self) -> bool {
+        matches!(self, Self::Signed(_))
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn torii_signed_visibility_headers_present(headers: &HeaderMap) -> bool {
     headers.get(HEADER_SIGNATURE).is_some()
         || headers.get(HEADER_TIMESTAMP_MS).is_some()
@@ -10784,16 +10904,20 @@ fn torii_visibility_account_from_headers(
     uri: &Uri,
     body: &[u8],
     endpoint: &'static str,
-) -> Result<Option<AccountId>, Error> {
+) -> Result<ToriiAccountReadVisibility, Error> {
     if torii_signed_visibility_headers_present(headers) {
         return crate::app_auth::verify_canonical_request(
             &app.state, headers, method, uri, body, None,
         )
-        .map(|verified| verified.map(|request| request.account));
+        .map(|verified| {
+            verified.map_or(ToriiAccountReadVisibility::None, |request| {
+                ToriiAccountReadVisibility::Signed(request.account)
+            })
+        });
     }
 
     let Some(account_header) = headers.get(HEADER_ACCOUNT) else {
-        return Ok(None);
+        return Ok(ToriiAccountReadVisibility::None);
     };
 
     let account_literal = account_header.to_str().map_err(|_| {
@@ -10810,7 +10934,7 @@ fn torii_visibility_account_from_headers(
         &app.telemetry_handle(),
         endpoint,
     )
-    .map(|(account_id, _)| Some(account_id))
+    .map(|(account_id, _)| ToriiAccountReadVisibility::Header(account_id))
 }
 
 #[cfg(feature = "app_api")]
@@ -10841,6 +10965,20 @@ fn torii_visible_account_read_routes(
         .into_iter()
         .filter(|route| visible_dataspaces.contains(&route.dataspace_id))
         .collect()
+}
+
+#[cfg(feature = "app_api")]
+fn torii_account_read_routes(
+    app: &AppState,
+    target_account: &AccountId,
+    caller: Option<&AccountId>,
+    use_target_account_routes: bool,
+) -> Result<Vec<RoutingDecision>, Response> {
+    if use_target_account_routes {
+        torii_target_account_routes(app, target_account)
+    } else {
+        Ok(torii_visible_account_read_routes(app, caller))
+    }
 }
 
 fn torii_all_dataspace_routes(app: &AppState) -> Vec<RoutingDecision> {
@@ -10999,11 +11137,12 @@ fn insert_routed_by_header(response: &mut Response, routed_by: &'static str) {
     );
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 enum SignedQueryScope {
     LocalReplicated,
     AuthorityRouted,
     CrossDataspaceFanout,
+    TargetAccount(AccountId),
 }
 
 fn payload_matches_query<Query>(payload: &[u8]) -> bool
@@ -11044,15 +11183,85 @@ fn is_trigger_inventory_query(query: &iroha_data_model::query::QueryWithParams) 
         })
 }
 
+fn decode_query_payload<Query>(payload: &[u8]) -> Option<Query>
+where
+    Query: norito::codec::Decode,
+{
+    let mut cursor = payload;
+    let query = norito::codec::Decode::decode(&mut cursor).ok()?;
+    cursor.is_empty().then_some(query)
+}
+
+fn target_account_singular_query(
+    query: &iroha_data_model::query::SingularQueryBox,
+) -> Option<AccountId> {
+    use iroha_data_model::query::SingularQueryBox;
+
+    match query {
+        SingularQueryBox::FindAccountById(query) => Some(query.account_id().clone()),
+        SingularQueryBox::FindAliasesByAccountId(query) => Some(query.account_id().clone()),
+        _ => None,
+    }
+}
+
+fn target_account_iterable_query(
+    query: &iroha_data_model::query::QueryWithParams,
+) -> Option<AccountId> {
+    use iroha_data_model::{
+        prelude::{FindPermissionsByAccountId, FindRolesByAccountId},
+        query::{QueryItemKind, iter_query_inner},
+        role::RoleId,
+    };
+
+    if let Some(query_box) = query.query_box() {
+        if let Some(erased) = iter_query_inner::<Permission>(query_box)
+            && let Some(query) =
+                decode_query_payload::<FindPermissionsByAccountId>(erased.payload())
+        {
+            return Some(query.account_id().clone());
+        }
+        if let Some(erased) = iter_query_inner::<RoleId>(query_box)
+            && let Some(query) = decode_query_payload::<FindRolesByAccountId>(erased.payload())
+        {
+            return Some(query.account_id().clone());
+        }
+        return None;
+    }
+
+    query
+        .fast_dsl_parts()
+        .and_then(|(item_kind, _, _, payload)| match item_kind {
+            QueryItemKind::Permission => {
+                decode_query_payload::<FindPermissionsByAccountId>(payload)
+                    .map(|query| query.account_id().clone())
+            }
+            QueryItemKind::Role | QueryItemKind::RoleId => {
+                decode_query_payload::<FindRolesByAccountId>(payload)
+                    .map(|query| query.account_id().clone())
+            }
+            _ => None,
+        })
+}
+
 fn signed_query_scope(request: &iroha_data_model::query::QueryRequest) -> SignedQueryScope {
     match request {
         iroha_data_model::query::QueryRequest::Continue(_) => SignedQueryScope::AuthorityRouted,
+        iroha_data_model::query::QueryRequest::Singular(query) => {
+            target_account_singular_query(query).map_or(
+                SignedQueryScope::CrossDataspaceFanout,
+                SignedQueryScope::TargetAccount,
+            )
+        }
         iroha_data_model::query::QueryRequest::Start(query)
             if is_trigger_inventory_query(query) =>
         {
             SignedQueryScope::LocalReplicated
         }
-        _ => SignedQueryScope::CrossDataspaceFanout,
+        iroha_data_model::query::QueryRequest::Start(query) => target_account_iterable_query(query)
+            .map_or(
+                SignedQueryScope::CrossDataspaceFanout,
+                SignedQueryScope::TargetAccount,
+            ),
     }
 }
 
@@ -11085,6 +11294,63 @@ fn unsupported_routed_query_response(message: impl Into<String>) -> Response {
 
 fn should_skip_iterable_routed_query_route_error(response: &Response) -> bool {
     response.status() == StatusCode::NOT_FOUND
+}
+
+fn torii_response_has_reject_code(response: &Response, code: &str) -> bool {
+    response
+        .headers()
+        .get("x-iroha-reject-code")
+        .and_then(|value| value.to_str().ok())
+        == Some(code)
+}
+
+fn should_skip_singleton_routed_query_route_error(response: &Response) -> bool {
+    response.status() == StatusCode::NOT_FOUND
+        || torii_response_has_reject_code(response, "route_unavailable")
+}
+
+#[cfg(feature = "app_api")]
+async fn collect_torii_singleton_json_payloads<F, Fut>(
+    routes: &[RoutingDecision],
+    mut fetch: F,
+) -> Result<Vec<Value>, Response>
+where
+    F: FnMut(RoutingDecision) -> Fut,
+    Fut: std::future::Future<Output = Response>,
+{
+    let mut payloads = Vec::with_capacity(routes.len());
+    let mut last_not_found = None;
+    let mut last_route_unavailable = None;
+
+    for route in routes {
+        let response = fetch(*route).await;
+        if response.status() == StatusCode::NOT_FOUND {
+            last_not_found = Some(response);
+            continue;
+        }
+        if torii_response_has_reject_code(&response, "route_unavailable") {
+            last_route_unavailable = Some(response);
+            continue;
+        }
+        match torii_json_body_value(response).await {
+            Ok(payload) => payloads.push(payload),
+            Err(response) => return Err(response),
+        }
+    }
+
+    if payloads.is_empty() {
+        return Err(last_route_unavailable.unwrap_or_else(|| {
+            last_not_found.unwrap_or_else(|| {
+                torii_proxy_error_response(
+                    StatusCode::NOT_FOUND,
+                    "not_found",
+                    "no dataspace returned a matching result",
+                )
+            })
+        }));
+    }
+
+    Ok(payloads)
 }
 
 fn merge_query_batch_boxes(
@@ -11478,12 +11744,12 @@ async fn execute_torii_verified_query_exhaustive_for_route(
 }
 
 #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-async fn execute_torii_query_via_fanout(
+async fn execute_torii_query_via_fanout_for_routes(
     app: &SharedAppState,
     verified_query: iroha_data_model::query::QueryRequestWithAuthority,
+    routes: Vec<RoutingDecision>,
     format: ResponseFormat,
 ) -> Response {
-    let routes = torii_all_dataspace_routes(app.as_ref());
     if routes.is_empty() {
         return torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -11625,6 +11891,21 @@ async fn execute_torii_query_via_fanout(
             "routed cross-dataspace query fanout does not support client-provided continuation requests",
         ),
     }
+}
+
+#[cfg(any(feature = "p2p_ws", feature = "connect"))]
+async fn execute_torii_query_via_fanout(
+    app: &SharedAppState,
+    verified_query: iroha_data_model::query::QueryRequestWithAuthority,
+    format: ResponseFormat,
+) -> Response {
+    execute_torii_query_via_fanout_for_routes(
+        app,
+        verified_query,
+        torii_all_dataspace_routes(app.as_ref()),
+        format,
+    )
+    .await
 }
 
 #[cfg(feature = "app_api")]
@@ -12503,6 +12784,87 @@ mod torii_routed_read_tests {
         assert!(!should_skip_iterable_routed_query_route_error(
             &torii_proxy_error_response(StatusCode::BAD_REQUEST, "invalid", "bad request")
         ));
+    }
+
+    #[test]
+    fn singleton_routed_query_skips_not_found_and_route_unavailable_errors() {
+        assert!(should_skip_singleton_routed_query_route_error(
+            &torii_proxy_error_response(StatusCode::NOT_FOUND, "not_found", "missing")
+        ));
+        assert!(should_skip_singleton_routed_query_route_error(
+            &torii_proxy_error_response(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "route_unavailable",
+                "offline",
+            )
+        ));
+        assert!(!should_skip_singleton_routed_query_route_error(
+            &torii_proxy_error_response(StatusCode::BAD_REQUEST, "invalid", "bad request")
+        ));
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn collect_torii_singleton_json_payloads_skips_route_unavailable_until_success() {
+        let unavailable_route = RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1));
+        let healthy_route = RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2));
+        let expected = norito::json!({"status": {"kind": "Committed"}});
+        let expected_for_closure = expected.clone();
+
+        let payloads = collect_torii_singleton_json_payloads(
+            &[unavailable_route, healthy_route],
+            move |route| {
+                let expected = expected_for_closure.clone();
+                async move {
+                    if route == unavailable_route {
+                        torii_proxy_error_response(
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            "route_unavailable",
+                            "authoritative peers offline",
+                        )
+                    } else {
+                        crate::utils::respond_value_with_format(expected, ResponseFormat::Json)
+                    }
+                }
+            },
+        )
+        .await
+        .expect("healthy singleton payload should survive route_unavailable on another route");
+
+        assert_eq!(payloads, vec![expected]);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn collect_torii_singleton_json_payloads_returns_route_unavailable_when_no_route_succeeds()
+     {
+        let routes = [
+            RoutingDecision::new(LaneId::new(1), DataSpaceId::new(1)),
+            RoutingDecision::new(LaneId::new(2), DataSpaceId::new(2)),
+        ];
+
+        let response = collect_torii_singleton_json_payloads(&routes, move |route| async move {
+            if route == routes[0] {
+                torii_proxy_error_response(StatusCode::NOT_FOUND, "not_found", "missing")
+            } else {
+                torii_proxy_error_response(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    "route_unavailable",
+                    "authoritative peers offline",
+                )
+            }
+        })
+        .await
+        .expect_err("all singleton routes failing should surface the last route_unavailable");
+
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-reject-code")
+                .and_then(|value| value.to_str().ok()),
+            Some("route_unavailable")
+        );
     }
 
     #[tokio::test]
@@ -13967,40 +14329,24 @@ async fn execute_torii_fanout_singleton_read(
         );
     }
 
-    let mut payloads = Vec::new();
-    let mut last_not_found = None;
-    for route in &routes {
-        let response = execute_torii_read_for_route(
+    let payloads = match collect_torii_singleton_json_payloads(&routes, |route| {
+        execute_torii_read_for_route(
             app,
-            *route,
+            route,
             torii_read_request(
                 endpoint,
-                *route,
+                route,
                 path_args.clone(),
                 query_string.clone(),
                 body.clone(),
             ),
         )
-        .await;
-        if response.status() == StatusCode::NOT_FOUND {
-            last_not_found = Some(response);
-            continue;
-        }
-        match torii_json_body_value(response).await {
-            Ok(payload) => payloads.push(payload),
-            Err(response) => return response,
-        }
-    }
-
-    if payloads.is_empty() {
-        return last_not_found.unwrap_or_else(|| {
-            torii_proxy_error_response(
-                StatusCode::NOT_FOUND,
-                "not_found",
-                "no dataspace returned a matching result",
-            )
-        });
-    }
+    })
+    .await
+    {
+        Ok(payloads) => payloads,
+        Err(response) => return response,
+    };
 
     merged_singleton_response(payloads, routed_by_for_routes(app, &routes))
         .unwrap_or_else(|response| response)
@@ -20933,7 +21279,7 @@ async fn handler_pipeline_transaction_status(
             Vec::new(),
         )
         .await;
-        if hinted.status() != StatusCode::NOT_FOUND {
+        if !should_skip_singleton_routed_query_route_error(&hinted) {
             return Ok(hinted);
         }
     }
@@ -21127,15 +21473,40 @@ async fn handler_signed_query(
     let query_scope = signed_query_scope(query_request.request());
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]
-    if matches!(query_scope, SignedQueryScope::CrossDataspaceFanout)
-        && torii_all_dataspace_routes(app.as_ref()).len() > 1
-    {
-        let verified_query = routing::verify_signed_query_request(&query_request)?;
-        return Ok(execute_torii_query_via_fanout(&app, verified_query, format).await);
+    match &query_scope {
+        SignedQueryScope::CrossDataspaceFanout
+            if torii_all_dataspace_routes(app.as_ref()).len() > 1 =>
+        {
+            let verified_query = routing::verify_signed_query_request(&query_request)?;
+            return Ok(execute_torii_query_via_fanout(&app, verified_query, format).await);
+        }
+        SignedQueryScope::TargetAccount(account_id) => {
+            let routes = match torii_target_account_routes(app.as_ref(), account_id) {
+                Ok(routes) => routes,
+                Err(response) => return Ok(response),
+            };
+            if routes.len() > 1 {
+                let verified_query = routing::verify_signed_query_request(&query_request)?;
+                return Ok(execute_torii_query_via_fanout_for_routes(
+                    &app,
+                    verified_query,
+                    routes,
+                    format,
+                )
+                .await);
+            }
+        }
+        _ => {}
     }
 
-    let routing_decision = match query_scope {
+    let routing_decision = match &query_scope {
         SignedQueryScope::LocalReplicated => None,
+        SignedQueryScope::TargetAccount(account_id) => {
+            match torii_target_account_routes(app.as_ref(), account_id) {
+                Ok(routes) => routes.into_iter().next(),
+                Err(response) => return Ok(response),
+            }
+        }
         SignedQueryScope::AuthorityRouted | SignedQueryScope::CrossDataspaceFanout => {
             match resolve_signed_query_routing(app.as_ref(), &query_request) {
                 Ok(decision) => Some(decision),
@@ -26780,6 +27151,20 @@ struct GatewayDenylistPolicyMeta {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Default)]
+struct GatewayDenylistSourceMeta {
+    source_pack_id: Option<String>,
+    source_pack_manifest_cid: Option<String>,
+    source_pack_merkle_root: Option<String>,
+    issued_by_proposal_id: Option<String>,
+    review_reference: Option<String>,
+    jurisdiction: Option<String>,
+    issued_at: Option<String>,
+    expires_at: Option<String>,
+    policy_tier: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
 fn populate_gateway_denylist(
     denylist: &Arc<sorafs::gateway::GatewayDenylist>,
     config: &iroha_config::parameters::actual::SorafsGatewayDenylist,
@@ -26793,7 +27178,7 @@ fn populate_gateway_denylist(
         return None;
     };
 
-    let loaded = load_gateway_denylist_entries_from_path(denylist, &policy, path);
+    let loaded = load_gateway_denylist_entries_from_path(denylist, &policy, path, None);
     iroha_logger::info!(count = loaded, path = ?path, "loaded gateway denylist entries");
     None
 }
@@ -26832,6 +27217,7 @@ fn load_gateway_denylist_entries_from_path(
     denylist: &Arc<sorafs::gateway::GatewayDenylist>,
     policy: &sorafs::gateway::DenylistPolicy,
     path: &Path,
+    source_meta: Option<&GatewayDenylistSourceMeta>,
 ) -> usize {
     let Some(entries) = read_gateway_denylist_entries(path) else {
         return 0;
@@ -26839,12 +27225,12 @@ fn load_gateway_denylist_entries_from_path(
     let mut loaded = 0usize;
     for entry in entries {
         let result = match entry.kind.as_str() {
-            "provider" => build_provider_denylist_entry(&entry, &policy),
-            "manifest_digest" => build_manifest_digest_denylist_entry(&entry, &policy),
-            "cid" => build_cid_denylist_entry(&entry, &policy),
-            "url" => build_url_denylist_entry(&entry, &policy),
-            "account_id" => build_account_id_denylist_entry(&entry, &policy),
-            "account_alias" => build_account_alias_denylist_entry(&entry, &policy),
+            "provider" => build_provider_denylist_entry(&entry, &policy, source_meta),
+            "manifest_digest" => build_manifest_digest_denylist_entry(&entry, &policy, source_meta),
+            "cid" => build_cid_denylist_entry(&entry, &policy, source_meta),
+            "url" => build_url_denylist_entry(&entry, &policy, source_meta),
+            "account_id" => build_account_id_denylist_entry(&entry, &policy, source_meta),
+            "account_alias" => build_account_alias_denylist_entry(&entry, &policy, source_meta),
             other => {
                 iroha_logger::warn!(
                     kind = other,
@@ -26941,7 +27327,23 @@ fn load_gateway_denylist_catalog(
         let active = extra.contains(&pack_id)
             || (default_enabled && jurisdiction_matches && !opt_out.contains(&pack_id));
         let entry_count = if active {
-            let loaded = load_gateway_denylist_entries_from_path(denylist, &policy, &path);
+            let source_meta = GatewayDenylistSourceMeta {
+                source_pack_id: Some(pack_id.clone()),
+                source_pack_manifest_cid: pack.manifest_cid.clone(),
+                source_pack_merkle_root: pack.merkle_root.clone(),
+                issued_by_proposal_id: pack.issued_by_proposal_id.clone(),
+                review_reference: pack.review_reference.clone(),
+                jurisdiction: pack.jurisdiction.clone(),
+                issued_at: pack.issued_at.clone(),
+                expires_at: pack.expires_at.clone(),
+                policy_tier: pack.policy_tier.clone(),
+            };
+            let loaded = load_gateway_denylist_entries_from_path(
+                denylist,
+                &policy,
+                &path,
+                Some(&source_meta),
+            );
             total_loaded += loaded;
             loaded
         } else {
@@ -26984,6 +27386,7 @@ fn load_gateway_denylist_catalog(
 #[cfg(feature = "app_api")]
 fn build_denylist_entry_metadata(
     entry: &GatewayDenylistFileEntry,
+    source_meta: Option<&GatewayDenylistSourceMeta>,
 ) -> Result<
     (
         sorafs::gateway::DenylistEntryBuilder,
@@ -26993,23 +27396,51 @@ fn build_denylist_entry_metadata(
 > {
     let mut builder = sorafs::gateway::DenylistEntryBuilder::default();
     let mut issued_set = false;
-    if let Some(jurisdiction) = &entry.jurisdiction {
-        builder = builder.jurisdiction(jurisdiction.clone());
+    if let Some(source_meta) = source_meta {
+        builder = builder
+            .source_pack_id(source_meta.source_pack_id.clone())
+            .source_pack_manifest_cid(source_meta.source_pack_manifest_cid.clone())
+            .source_pack_merkle_root(source_meta.source_pack_merkle_root.clone())
+            .issued_by_proposal_id(source_meta.issued_by_proposal_id.clone())
+            .review_reference(source_meta.review_reference.clone());
+    }
+    let jurisdiction = entry
+        .jurisdiction
+        .as_deref()
+        .or(source_meta.and_then(|meta| meta.jurisdiction.as_deref()))
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(ToOwned::to_owned);
+    if let Some(jurisdiction) = jurisdiction {
+        builder = builder.jurisdiction(jurisdiction);
     }
     if let Some(reason) = &entry.reason {
         builder = builder.reason(reason.clone());
     }
-    if let Some(issued_at) = parse_optional_timestamp(entry.issued_at.as_deref())? {
+    let issued_at_raw = entry
+        .issued_at
+        .as_deref()
+        .or(source_meta.and_then(|meta| meta.issued_at.as_deref()));
+    if let Some(issued_at) = parse_optional_timestamp(issued_at_raw)? {
         builder = builder.issued_at(issued_at);
         issued_set = true;
     }
-    if let Some(expires_at) = parse_optional_timestamp(entry.expires_at.as_deref())? {
+    let expires_at_raw = entry
+        .expires_at
+        .as_deref()
+        .or(source_meta.and_then(|meta| meta.expires_at.as_deref()));
+    if let Some(expires_at) = parse_optional_timestamp(expires_at_raw)? {
         builder = builder.expires_at(expires_at);
     }
     if !issued_set {
         builder = builder.issued_at(SystemTime::now());
     }
-    let tier = parse_policy_tier(entry.policy_tier.as_deref())?;
+    let tier = parse_policy_tier(
+        entry
+            .policy_tier
+            .as_deref()
+            .or(source_meta.and_then(|meta| meta.policy_tier.as_deref())),
+    )?;
     let canon = entry
         .emergency_canon
         .as_ref()
@@ -27036,6 +27467,7 @@ fn build_denylist_entry_metadata(
 fn build_provider_denylist_entry(
     entry: &GatewayDenylistFileEntry,
     policy: &sorafs::gateway::DenylistPolicy,
+    source_meta: Option<&GatewayDenylistSourceMeta>,
 ) -> Result<
     (
         sorafs::gateway::DenylistKind,
@@ -27052,7 +27484,7 @@ fn build_provider_denylist_entry(
     let array: [u8; 32] = bytes
         .try_into()
         .map_err(|_| "provider_id_hex must be 32 bytes".to_string())?;
-    let (builder, meta) = build_denylist_entry_metadata(entry)?;
+    let (builder, meta) = build_denylist_entry_metadata(entry, source_meta)?;
     let metadata = finalize_gateway_denylist_entry(builder, meta, policy)?;
 
     Ok((sorafs::gateway::DenylistKind::Provider(array), metadata))
@@ -27062,6 +27494,7 @@ fn build_provider_denylist_entry(
 fn build_manifest_digest_denylist_entry(
     entry: &GatewayDenylistFileEntry,
     policy: &sorafs::gateway::DenylistPolicy,
+    source_meta: Option<&GatewayDenylistSourceMeta>,
 ) -> Result<
     (
         sorafs::gateway::DenylistKind,
@@ -27077,7 +27510,7 @@ fn build_manifest_digest_denylist_entry(
     let array: [u8; 32] = bytes
         .try_into()
         .map_err(|_| "manifest_digest_hex must be 32 bytes".to_string())?;
-    let (builder, meta) = build_denylist_entry_metadata(entry)?;
+    let (builder, meta) = build_denylist_entry_metadata(entry, source_meta)?;
     let metadata = finalize_gateway_denylist_entry(builder, meta, policy)?;
 
     Ok((
@@ -27090,6 +27523,7 @@ fn build_manifest_digest_denylist_entry(
 fn build_cid_denylist_entry(
     entry: &GatewayDenylistFileEntry,
     policy: &sorafs::gateway::DenylistPolicy,
+    source_meta: Option<&GatewayDenylistSourceMeta>,
 ) -> Result<
     (
         sorafs::gateway::DenylistKind,
@@ -27119,7 +27553,7 @@ fn build_cid_denylist_entry(
         return Err("CID payload must not be empty".to_string());
     }
 
-    let (builder, meta) = build_denylist_entry_metadata(entry)?;
+    let (builder, meta) = build_denylist_entry_metadata(entry, source_meta)?;
     let metadata = finalize_gateway_denylist_entry(builder, meta, policy)?;
     Ok((sorafs::gateway::DenylistKind::Cid(cid_bytes), metadata))
 }
@@ -27128,6 +27562,7 @@ fn build_cid_denylist_entry(
 fn build_url_denylist_entry(
     entry: &GatewayDenylistFileEntry,
     policy: &sorafs::gateway::DenylistPolicy,
+    source_meta: Option<&GatewayDenylistSourceMeta>,
 ) -> Result<
     (
         sorafs::gateway::DenylistKind,
@@ -27141,7 +27576,7 @@ fn build_url_denylist_entry(
         .map(|value| value.trim())
         .filter(|value| !value.is_empty())
         .ok_or_else(|| "url is required for url denylist entries".to_string())?;
-    let (builder, meta) = build_denylist_entry_metadata(entry)?;
+    let (builder, meta) = build_denylist_entry_metadata(entry, source_meta)?;
     let metadata = finalize_gateway_denylist_entry(builder, meta, policy)?;
     Ok((sorafs::gateway::DenylistKind::Url(url.to_owned()), metadata))
 }
@@ -27150,6 +27585,7 @@ fn build_url_denylist_entry(
 fn build_account_id_denylist_entry(
     entry: &GatewayDenylistFileEntry,
     policy: &sorafs::gateway::DenylistPolicy,
+    source_meta: Option<&GatewayDenylistSourceMeta>,
 ) -> Result<
     (
         sorafs::gateway::DenylistKind,
@@ -27176,7 +27612,7 @@ fn build_account_id_denylist_entry(
         .canonical_hex()
         .map_err(|err| format!("failed to encode canonical account address: {err}"))?;
 
-    let (builder, meta) = build_denylist_entry_metadata(entry)?;
+    let (builder, meta) = build_denylist_entry_metadata(entry, source_meta)?;
     let mut builder = builder;
     if let Some(alias) = entry.account_alias.as_ref().map(|value| value.trim()) {
         if alias.is_empty() {
@@ -27197,6 +27633,7 @@ fn build_account_id_denylist_entry(
 fn build_account_alias_denylist_entry(
     entry: &GatewayDenylistFileEntry,
     policy: &sorafs::gateway::DenylistPolicy,
+    source_meta: Option<&GatewayDenylistSourceMeta>,
 ) -> Result<
     (
         sorafs::gateway::DenylistKind,
@@ -27213,7 +27650,7 @@ fn build_account_alias_denylist_entry(
             "account_alias is required for account_alias denylist entries".to_string()
         })?;
 
-    let (builder, meta) = build_denylist_entry_metadata(entry)?;
+    let (builder, meta) = build_denylist_entry_metadata(entry, source_meta)?;
     let builder = builder.alias(alias.to_owned());
     let metadata = finalize_gateway_denylist_entry(builder, meta, policy)?;
 
@@ -27293,7 +27730,8 @@ mod gateway_denylist_loader_tests {
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
 
         let policy = sample_policy();
-        let (kind, metadata) = build_account_id_denylist_entry(&entry, &policy).expect("entry");
+        let (kind, metadata) =
+            build_account_id_denylist_entry(&entry, &policy, None).expect("entry");
 
         match kind {
             sorafs::gateway::DenylistKind::AccountId(ref canonical) => {
@@ -27315,7 +27753,7 @@ mod gateway_denylist_loader_tests {
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
 
         let policy = sample_policy();
-        let err = build_account_id_denylist_entry(&entry, &policy)
+        let err = build_account_id_denylist_entry(&entry, &policy, None)
             .expect_err("canonical hex account_id must be rejected");
         assert!(err.contains("invalid account_id"));
     }
@@ -27328,7 +27766,7 @@ mod gateway_denylist_loader_tests {
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
 
         let policy = sample_policy();
-        let err = build_account_id_denylist_entry(&entry, &policy)
+        let err = build_account_id_denylist_entry(&entry, &policy, None)
             .expect_err("encoded literal with @domain suffix must be rejected");
         assert!(err.contains("invalid account_id"));
     }
@@ -27356,7 +27794,7 @@ mod gateway_denylist_loader_tests {
 
         let policy = sample_policy();
         let (kind, metadata) =
-            build_account_alias_denylist_entry(&entry, &policy).expect("alias entry");
+            build_account_alias_denylist_entry(&entry, &policy, None).expect("alias entry");
 
         match kind {
             sorafs::gateway::DenylistKind::AccountAlias(ref alias) => {
@@ -27377,7 +27815,7 @@ mod gateway_denylist_loader_tests {
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
 
         let policy = sample_policy();
-        let (kind, _) = build_account_id_denylist_entry(&entry, &policy).expect("i105 entry");
+        let (kind, _) = build_account_id_denylist_entry(&entry, &policy, None).expect("i105 entry");
 
         match kind {
             sorafs::gateway::DenylistKind::AccountId(ref value) => assert_eq!(value, &canonical),
@@ -27393,9 +27831,61 @@ mod gateway_denylist_loader_tests {
         entry.issued_at = Some("2025-01-01T00:00:00Z".to_string());
 
         let policy = sample_policy();
-        let err = build_account_id_denylist_entry(&entry, &policy)
+        let err = build_account_id_denylist_entry(&entry, &policy, None)
             .expect_err("non-canonical I105 account_id must be rejected");
         assert!(err.contains("invalid account_id"));
+    }
+
+    #[test]
+    fn pack_metadata_flows_into_loaded_entries() {
+        let dir = tempfile::tempdir().expect("catalog tempdir");
+        let pack_path = dir.path().join("global-core.json");
+
+        std::fs::write(
+            &pack_path,
+            r#"[{"kind":"cid","cid_utf8":"bafy-example","reason":"core pack"}]"#,
+        )
+        .expect("write pack");
+
+        let denylist = Arc::new(sorafs::gateway::GatewayDenylist::new());
+        let source_meta = GatewayDenylistSourceMeta {
+            source_pack_id: Some("global-core".to_owned()),
+            source_pack_manifest_cid: Some("bafy-pack".to_owned()),
+            source_pack_merkle_root: Some("merkle-root".to_owned()),
+            issued_by_proposal_id: Some("AC-2026-241".to_owned()),
+            review_reference: Some("review-42".to_owned()),
+            jurisdiction: Some("US".to_owned()),
+            issued_at: Some("2026-04-01T00:00:00Z".to_owned()),
+            expires_at: None,
+            policy_tier: Some("permanent".to_owned()),
+        };
+
+        let loaded = load_gateway_denylist_entries_from_path(
+            &denylist,
+            &sample_policy(),
+            &pack_path,
+            Some(&source_meta),
+        );
+        assert_eq!(loaded, 1);
+
+        let hit = denylist
+            .check_cid(
+                b"bafy-example",
+                SystemTime::UNIX_EPOCH + Duration::from_secs(2_000_000_000),
+            )
+            .expect("cid hit");
+        let entry = hit.entry();
+        assert_eq!(entry.source_pack_id(), Some("global-core"));
+        assert_eq!(entry.source_pack_manifest_cid(), Some("bafy-pack"));
+        assert_eq!(entry.source_pack_merkle_root(), Some("merkle-root"));
+        assert_eq!(entry.issued_by_proposal_id(), Some("AC-2026-241"));
+        assert_eq!(entry.review_reference(), Some("review-42"));
+        assert_eq!(entry.jurisdiction(), Some("US"));
+        assert_eq!(
+            entry.policy_tier(),
+            sorafs::gateway::DenylistPolicyTier::Permanent
+        );
+        assert!(entry.is_governance_backed());
     }
 
     #[test]
@@ -28104,6 +28594,38 @@ pub(crate) mod tests_runtime_handlers {
         World::with([domain], [account], [])
     }
 
+    pub(crate) fn world_with_account_bound_to_dataspace(
+        account_id: &AccountId,
+        uaid: UniversalAccountId,
+        dataspace: DataSpaceId,
+    ) -> World {
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(account_id);
+        let account = Account::new(account_id.clone())
+            .with_uaid(Some(uaid))
+            .build(account_id);
+        let mut world = World::with([domain], [account], []);
+
+        let manifest = iroha_data_model::nexus::AssetPermissionManifest {
+            version: iroha_data_model::nexus::ManifestVersion::default(),
+            uaid,
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let mut record =
+            iroha_core::nexus::space_directory::SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        let mut set = iroha_core::nexus::space_directory::SpaceDirectoryManifestSet::default();
+        set.upsert(record);
+        world
+            .space_directory_manifests_mut_for_testing()
+            .insert(uaid, set);
+        world
+    }
+
     fn configure_nexus_fee_admission_for_test(
         app: &mut SharedAppState,
         fee_asset_id: &iroha_data_model::asset::AssetDefinitionId,
@@ -28466,6 +28988,91 @@ pub(crate) mod tests_runtime_handlers {
         )
         .execute();
         executor.into_query()
+    }
+
+    fn build_find_permissions_by_account_query_for_test(
+        account_id: AccountId,
+    ) -> iroha_data_model::query::QueryWithParams {
+        use iroha_data_model::query::builder::QueryBuilderExt;
+
+        let executor = CapturingIterableQueryExecutor::default();
+        let _ = iroha_data_model::query::builder::QueryBuilder::new(
+            &executor,
+            iroha_data_model::prelude::FindPermissionsByAccountId::new(account_id),
+        )
+        .execute();
+        executor.into_query()
+    }
+
+    fn build_find_roles_by_account_query_for_test(
+        account_id: AccountId,
+    ) -> iroha_data_model::query::QueryWithParams {
+        use iroha_data_model::query::builder::QueryBuilderExt;
+
+        let executor = CapturingIterableQueryExecutor::default();
+        let _ = iroha_data_model::query::builder::QueryBuilder::new(
+            &executor,
+            iroha_data_model::prelude::FindRolesByAccountId::new(account_id),
+        )
+        .execute();
+        executor.into_query()
+    }
+
+    fn assert_permissions_query_targets_account(
+        query: &iroha_data_model::query::QueryWithParams,
+        account_id: &AccountId,
+    ) {
+        use iroha_data_model::{
+            permission::Permission,
+            prelude::FindPermissionsByAccountId,
+            query::{QueryItemKind, iter_query_inner},
+        };
+
+        if let Some(query_box) = query.query_box() {
+            let erased = iter_query_inner::<Permission>(query_box)
+                .expect("permissions query should preserve erased permission item kind");
+            let decoded =
+                super::decode_query_payload::<FindPermissionsByAccountId>(erased.payload())
+                    .expect("permissions query payload should decode");
+            assert_eq!(decoded.account_id(), account_id);
+            return;
+        }
+
+        let (item_kind, _, _, payload) = query
+            .fast_dsl_parts()
+            .expect("permissions query should expose fast-dsl payload");
+        assert_eq!(item_kind, QueryItemKind::Permission);
+        let decoded = super::decode_query_payload::<FindPermissionsByAccountId>(payload)
+            .expect("permissions query payload should decode");
+        assert_eq!(decoded.account_id(), account_id);
+    }
+
+    fn assert_roles_query_targets_account(
+        query: &iroha_data_model::query::QueryWithParams,
+        account_id: &AccountId,
+    ) {
+        use iroha_data_model::{
+            prelude::FindRolesByAccountId,
+            query::{QueryItemKind, iter_query_inner},
+            role::RoleId,
+        };
+
+        if let Some(query_box) = query.query_box() {
+            let erased = iter_query_inner::<RoleId>(query_box)
+                .expect("roles query should preserve erased role-id item kind");
+            let decoded = super::decode_query_payload::<FindRolesByAccountId>(erased.payload())
+                .expect("roles query payload should decode");
+            assert_eq!(decoded.account_id(), account_id);
+            return;
+        }
+
+        let (item_kind, _, _, payload) = query
+            .fast_dsl_parts()
+            .expect("roles query should expose fast-dsl payload");
+        assert_eq!(item_kind, QueryItemKind::RoleId);
+        let decoded = super::decode_query_payload::<FindRolesByAccountId>(payload)
+            .expect("roles query payload should decode");
+        assert_eq!(decoded.account_id(), account_id);
     }
 
     fn signed_find_triggers_query_for_test(
@@ -29572,6 +30179,126 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             super::signed_query_scope(find_active_ids.payload.request()),
             super::SignedQueryScope::LocalReplicated
+        );
+    }
+
+    #[test]
+    fn iterable_target_account_query_builders_capture_target_payload() {
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        let permissions_query =
+            build_find_permissions_by_account_query_for_test(account_id.clone());
+        assert_permissions_query_targets_account(&permissions_query, &account_id);
+
+        let roles_query = build_find_roles_by_account_query_for_test(account_id.clone());
+        assert_roles_query_targets_account(&roles_query, &account_id);
+    }
+
+    #[test]
+    fn signed_query_scope_classifies_target_account_queries() {
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        assert_eq!(
+            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Singular(
+                iroha_data_model::query::SingularQueryBox::FindAccountById(
+                    iroha_data_model::query::account::prelude::FindAccountById::new(
+                        account_id.clone(),
+                    ),
+                ),
+            )),
+            super::SignedQueryScope::TargetAccount(account_id.clone())
+        );
+        assert_eq!(
+            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Singular(
+                iroha_data_model::query::SingularQueryBox::FindAliasesByAccountId(
+                    iroha_data_model::query::account::prelude::FindAliasesByAccountId::new(
+                        account_id.clone(),
+                        None,
+                        None,
+                    ),
+                ),
+            )),
+            super::SignedQueryScope::TargetAccount(account_id.clone())
+        );
+        assert_eq!(
+            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Start(
+                build_find_permissions_by_account_query_for_test(account_id.clone()),
+            )),
+            super::SignedQueryScope::TargetAccount(account_id.clone())
+        );
+        assert_eq!(
+            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Start(
+                build_find_roles_by_account_query_for_test(account_id.clone()),
+            )),
+            super::SignedQueryScope::TargetAccount(account_id)
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn torii_account_read_routes_use_target_account_scope_for_signed_and_internal_reads() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let governance_dataspace = DataSpaceId::new(1);
+        let restricted_dataspace = DataSpaceId::new(10);
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::target-account-routes"));
+        let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
+            &authority,
+            uaid,
+            restricted_dataspace,
+        ));
+        let (_restricted_lane, configured_restricted_dataspace) =
+            configure_private_ingress_routes_for_test(&mut app);
+        assert_eq!(configured_restricted_dataspace, restricted_dataspace);
+
+        let routes = super::torii_account_read_routes(app.as_ref(), &authority, None, true)
+            .expect("target-account routes should resolve");
+        let dataspaces = routes
+            .into_iter()
+            .map(|route| route.dataspace_id)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            dataspaces,
+            std::collections::BTreeSet::from([DataSpaceId::GLOBAL, restricted_dataspace]),
+            "signed/internal account reads should only fan out across the target account scope",
+        );
+        assert!(
+            !dataspaces.contains(&governance_dataspace),
+            "unrelated public dataspaces must be excluded from target-account routing",
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn torii_account_read_routes_keep_unsigned_public_reads_on_visible_routes() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let governance_dataspace = DataSpaceId::new(1);
+        let restricted_dataspace = DataSpaceId::new(10);
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"torii::public-account-routes"));
+        let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
+            &authority,
+            uaid,
+            restricted_dataspace,
+        ));
+        let (_restricted_lane, configured_restricted_dataspace) =
+            configure_private_ingress_routes_for_test(&mut app);
+        assert_eq!(configured_restricted_dataspace, restricted_dataspace);
+
+        let routes = super::torii_account_read_routes(app.as_ref(), &authority, None, false)
+            .expect("public visibility routes should resolve");
+        let dataspaces = routes
+            .into_iter()
+            .map(|route| route.dataspace_id)
+            .collect::<std::collections::BTreeSet<_>>();
+
+        assert_eq!(
+            dataspaces,
+            std::collections::BTreeSet::from([DataSpaceId::GLOBAL, governance_dataspace]),
+            "unsigned public reads should stay on caller/public visibility routes",
+        );
+        assert!(
+            !dataspaces.contains(&restricted_dataspace),
+            "unsigned public reads must not automatically gain private dataspace visibility",
         );
     }
 

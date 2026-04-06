@@ -200,7 +200,8 @@ use crate::{
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle},
     kura::Kura,
     nexus::space_directory::{
-        SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
+        AccountScopeDirectoryEntry, SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet,
+        UaidDataspaceBindings,
     },
     query::store::LiveQueryStoreHandle,
     role::RoleIdWithOwner,
@@ -360,6 +361,7 @@ macro_rules! build_world_block {
             uaid_accounts: $state.uaid_accounts.$method(),
             account_aliases: $state.account_aliases.$method(),
             account_aliases_by_account: $state.account_aliases_by_account.$method(),
+            account_scope_directory: $state.account_scope_directory.$method(),
             opaque_uaids: $state.opaque_uaids.$method(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.$method(),
             identifier_policies: $state.identifier_policies.$method(),
@@ -545,6 +547,7 @@ macro_rules! build_world_transaction {
             uaid_accounts: $state.uaid_accounts.transaction(),
             account_aliases: $state.account_aliases.transaction(),
             account_aliases_by_account: $state.account_aliases_by_account.transaction(),
+            account_scope_directory: $state.account_scope_directory.transaction(),
             opaque_uaids: $state.opaque_uaids.transaction(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.transaction(),
             identifier_policies: $state.identifier_policies.transaction(),
@@ -1449,6 +1452,9 @@ pub struct World {
     /// Reverse index from canonical I105 account id to bound aliases.
     #[norito(skip)]
     pub(crate) account_aliases_by_account: Storage<AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    #[norito(skip)]
+    pub(crate) account_scope_directory: Storage<AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     #[norito(skip)]
     pub(crate) opaque_uaids: Storage<OpaqueAccountId, UniversalAccountId>,
@@ -1866,6 +1872,8 @@ pub struct WorldBlock<'world> {
     pub(crate) account_aliases: StorageBlock<'world, AccountAlias, AccountId>,
     /// Reverse index from canonical I105 account id to bound aliases.
     pub(crate) account_aliases_by_account: StorageBlock<'world, AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    pub(crate) account_scope_directory: StorageBlock<'world, AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageBlock<'world, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
@@ -2423,6 +2431,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Reverse index from canonical I105 account id to bound aliases.
     pub(crate) account_aliases_by_account:
         StorageTransaction<'block, 'world, AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    pub(crate) account_scope_directory:
+        StorageTransaction<'block, 'world, AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids:
         StorageTransaction<'block, 'world, OpaqueAccountId, UniversalAccountId>,
@@ -3199,6 +3210,8 @@ pub struct WorldView<'world> {
     pub(crate) account_aliases: StorageView<'world, AccountAlias, AccountId>,
     /// Reverse index from canonical I105 account id to bound aliases.
     pub(crate) account_aliases_by_account: StorageView<'world, AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    pub(crate) account_scope_directory: StorageView<'world, AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageView<'world, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
@@ -8211,7 +8224,10 @@ mod state_lock_order_tests {
 
 #[cfg(test)]
 mod storage_migration_tests {
-    use std::sync::Arc;
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        sync::Arc,
+    };
 
     use iroha_crypto::{Hash, KeyPair};
     use iroha_data_model::{
@@ -8296,6 +8312,94 @@ mod storage_migration_tests {
             "only one dataspace expected"
         );
         assert!(iter.next().is_none(), "only one UAID entry expected");
+    }
+
+    #[test]
+    fn account_scope_directory_rebuilt_from_aliases_and_uaid_bindings_on_startup() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut world = World::default();
+
+        let uaid = UniversalAccountId::from_hash(Hash::new("account-scope-migration"));
+        let dataspace = DataSpaceId::new(7);
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
+        world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(details));
+        world.uaid_accounts.insert(uaid, account_id.clone());
+
+        let global_domain = DomainId::try_new("treasury", "universal").expect("global domain id");
+        let global_alias = alias_in_domain(&global_domain, "public".parse().expect("alias label"));
+        let private_alias = AccountAlias::new(
+            "private".parse().expect("private alias label"),
+            Some(AccountAliasDomain::new(
+                "treasury".parse::<Name>().expect("private domain name"),
+            )),
+            dataspace,
+        );
+        world
+            .account_aliases
+            .insert(global_alias.clone(), account_id.clone());
+        world
+            .account_aliases
+            .insert(private_alias.clone(), account_id.clone());
+        world.account_aliases_by_account.insert(
+            account_id.clone(),
+            BTreeSet::from([global_alias.clone(), private_alias.clone()]),
+        );
+
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid,
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let mut record = crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        let mut set = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
+        set.upsert(record);
+        world.space_directory_manifests.insert(uaid, set);
+
+        assert!(
+            world.account_scope_directory.view().iter().next().is_none(),
+            "pre-migration world should not contain account scope entries",
+        );
+
+        let state = State::new_for_testing(world, Arc::clone(&kura), query);
+        let entry = state
+            .world
+            .account_scope_directory
+            .view()
+            .get(&account_id)
+            .cloned()
+            .expect("account scope entry should be rebuilt on startup");
+        let scopes = entry
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            scopes,
+            BTreeMap::from([
+                (
+                    DataSpaceId::GLOBAL,
+                    BTreeSet::from([AccountAliasDomain::new(
+                        "treasury".parse::<Name>().expect("global domain name"),
+                    )]),
+                ),
+                (
+                    dataspace,
+                    BTreeSet::from([AccountAliasDomain::new(
+                        "treasury".parse::<Name>().expect("private domain name"),
+                    )]),
+                ),
+            ]),
+            "startup rebuild should merge alias domains with UAID-derived dataspace bindings",
+        );
     }
 
     #[test]
@@ -10975,6 +11079,9 @@ impl World {
             .rebuild_account_alias_index()
             .expect("duplicate account alias in world constructor");
         world
+            .rebuild_account_scope_directory()
+            .expect("invalid account scope directory in world constructor");
+        world
             .rebuild_account_rekey_records()
             .expect("invalid account rekey state in world constructor");
         world
@@ -11126,6 +11233,28 @@ impl World {
         }
         self.account_aliases = index.into_iter().collect();
         self.account_aliases_by_account = reverse.into_iter().collect();
+        Ok(())
+    }
+
+    fn rebuild_account_scope_directory(&mut self) -> Result<(), String> {
+        let rebuilt = {
+            let view = self.view();
+            let account_ids: Vec<_> = view.accounts().iter().map(|(id, _)| id.clone()).collect();
+            let mut rebuilt = BTreeMap::new();
+            for account_id in account_ids {
+                let Some(entry) = derive_account_scope_directory_entry(&view, &account_id)
+                    .map_err(|error| {
+                        format!("failed to derive account scope for {account_id}: {error}")
+                    })?
+                else {
+                    continue;
+                };
+                rebuilt.insert(account_id, entry);
+            }
+            rebuilt
+        };
+
+        self.account_scope_directory = rebuilt.into_iter().collect();
         Ok(())
     }
 
@@ -11472,6 +11601,7 @@ impl World {
             uaid_accounts: self.uaid_accounts.view(),
             account_aliases: self.account_aliases.view(),
             account_aliases_by_account: self.account_aliases_by_account.view(),
+            account_scope_directory: self.account_scope_directory.view(),
             opaque_uaids: self.opaque_uaids.view(),
             ram_lfe_program_policies: self.ram_lfe_program_policies.view(),
             identifier_policies: self.identifier_policies.view(),
@@ -11628,6 +11758,37 @@ impl World {
     }
 }
 
+fn derive_account_scope_directory_entry(
+    world: &(impl WorldReadOnly + ?Sized),
+    account_id: &AccountId,
+) -> Result<Option<AccountScopeDirectoryEntry>, ParseError> {
+    let Some(account) = world.accounts().get(account_id) else {
+        return Ok(None);
+    };
+
+    let mut entry = AccountScopeDirectoryEntry::default();
+    entry.ensure_dataspace(DataSpaceId::GLOBAL);
+
+    if let Some(uaid) = account.as_ref().uaid().copied()
+        && let Some(bindings) = world.uaid_dataspaces().get(&uaid)
+    {
+        for (dataspace, accounts) in bindings.iter() {
+            if accounts.contains(account_id) {
+                entry.ensure_dataspace(*dataspace);
+            }
+        }
+    }
+
+    for alias in world.bound_account_aliases(account_id) {
+        entry.ensure_dataspace(alias.dataspace);
+        if let Some(domain) = alias.domain.clone() {
+            entry.bind_domain(alias.dataspace, domain);
+        }
+    }
+
+    Ok(Some(entry))
+}
+
 /// Read-only view over world-level resources.
 ///
 /// Provides accessors to parameters, peers, domains, accounts, assets,
@@ -11671,6 +11832,10 @@ pub trait WorldReadOnly {
     fn account_aliases_by_account(
         &self,
     ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountAlias>>;
+    /// Read-side account scope directory (read-only).
+    fn account_scope_directory(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, AccountScopeDirectoryEntry>;
     /// Opaque identifier to UAID index (read-only).
     fn opaque_uaids(&self) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId>;
     /// Global RAM-LFE program policy registry (read-only).
@@ -12199,31 +12364,26 @@ pub trait WorldReadOnly {
     /// Every materialized account implicitly belongs to the universal dataspace. Additional
     /// dataspaces come from UAID bindings and bound aliases. Domains remain optional within each
     /// dataspace, so a dataspace entry may contain an empty domain set.
+    fn account_scope_entry(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<Option<AccountScopeDirectoryEntry>, ParseError> {
+        if let Some(entry) = self.account_scope_directory().get(account_id) {
+            return Ok(Some(entry.clone()));
+        }
+        derive_account_scope_directory_entry(self, account_id)
+    }
+
+    /// Collect the account's dataspace -> domain hierarchy from the maintained account-scope
+    /// directory.
     fn account_scope_hierarchy(
         &self,
         account_id: &AccountId,
     ) -> Result<BTreeMap<DataSpaceId, BTreeSet<DomainId>>, ParseError> {
-        let mut hierarchy = BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())]);
-
-        if let Some(account) = self.accounts().get(account_id)
-            && let Some(uaid) = account.as_ref().uaid().copied()
-            && let Some(bindings) = self.uaid_dataspaces().get(&uaid)
-        {
-            for (dataspace, accounts) in bindings.iter() {
-                if accounts.contains(account_id) {
-                    hierarchy.entry(*dataspace).or_default();
-                }
-            }
+        match self.account_scope_entry(account_id)? {
+            Some(entry) => entry.hierarchy(self.dataspace_catalog()),
+            None => Ok(BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())])),
         }
-
-        for alias in self.bound_account_aliases(account_id) {
-            let domains = hierarchy.entry(alias.dataspace).or_default();
-            if let Some(domain_id) = alias.domain_id(self.dataspace_catalog())? {
-                domains.insert(domain_id);
-            }
-        }
-
-        Ok(hierarchy)
     }
 
     /// Collect the dataspaces linked to the account.
@@ -12732,6 +12892,11 @@ macro_rules! impl_world_ro {
                 &self,
             ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountAlias>> {
                 &self.account_aliases_by_account
+            }
+            fn account_scope_directory(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, AccountScopeDirectoryEntry> {
+                &self.account_scope_directory
             }
             fn opaque_uaids(
                 &self,
@@ -13497,6 +13662,7 @@ impl<'world> WorldBlock<'world> {
             uaid_accounts,
             account_aliases,
             account_aliases_by_account,
+            account_scope_directory,
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
@@ -13795,6 +13961,7 @@ impl<'world> WorldBlock<'world> {
         uaid_accounts.commit();
         account_aliases.commit();
         account_aliases_by_account.commit();
+        account_scope_directory.commit();
         opaque_uaids.commit();
         domains.commit();
         domain_selectors.commit();
@@ -13847,6 +14014,25 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
     }
 
+    fn refresh_account_scope_directory_entry(&mut self, account_id: &AccountId) {
+        match derive_account_scope_directory_entry(self, account_id) {
+            Ok(Some(entry)) => {
+                self.account_scope_directory
+                    .insert(account_id.clone(), entry);
+            }
+            Ok(None) => {
+                self.account_scope_directory.remove(account_id.clone());
+            }
+            Err(error) => {
+                warn!(
+                    account_id = %account_id,
+                    ?error,
+                    "failed to refresh account scope directory entry"
+                );
+            }
+        }
+    }
+
     pub(crate) fn insert_account_alias_binding(
         &mut self,
         label: AccountAlias,
@@ -13857,8 +14043,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .insert(label.clone(), account_id.clone());
         if let Some(previous_account) = previous.as_ref() {
             self.remove_account_alias_from_reverse_index(previous_account, &label);
+            self.refresh_account_scope_directory_entry(previous_account);
         }
         self.add_account_alias_to_reverse_index(&account_id, &label);
+        self.refresh_account_scope_directory_entry(&account_id);
         previous
     }
 
@@ -13869,6 +14057,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         let removed = self.account_aliases.remove(label.clone());
         if let Some(account_id) = removed.as_ref() {
             self.remove_account_alias_from_reverse_index(account_id, label);
+            self.refresh_account_scope_directory_entry(account_id);
         }
         removed
     }
@@ -13884,6 +14073,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         for label in &labels {
             self.account_aliases.remove(label.clone());
         }
+        self.refresh_account_scope_directory_entry(account_id);
         labels
     }
 
@@ -14047,6 +14237,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         } else {
             self.uaid_dataspaces.insert(uaid, bindings);
         }
+        self.refresh_account_scope_directory_entry(&account_id);
     }
 
     /// Recompute the per-dataspace AXT policy map from Space Directory manifests and bindings.
@@ -14630,6 +14821,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             uaid_accounts,
             account_aliases,
             account_aliases_by_account,
+            account_scope_directory,
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
@@ -14904,6 +15096,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         uaid_accounts.apply();
         account_aliases.apply();
         account_aliases_by_account.apply();
+        account_scope_directory.apply();
         opaque_uaids.apply();
         domains.apply();
         domain_selectors.apply();
@@ -15355,6 +15548,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                         self.rebuild_space_directory_bindings(*uaid);
                         axt_policy_dirty = true;
                     }
+                    self.refresh_account_scope_directory_entry(account.account.id());
+                }
+                DataEvent::Domain(data_pre::DomainEvent::Account(
+                    data_pre::AccountEvent::Deleted(account_id),
+                )) => {
+                    self.account_scope_directory.remove(account_id.clone());
                 }
                 _ => {}
             }
@@ -16467,6 +16666,9 @@ impl State {
                 "storage migration refreshed UAID dataspace bindings from manifest records"
             );
         }
+        self.world
+            .rebuild_account_scope_directory()
+            .expect("account scope directory should rebuild during storage migration");
         // Defer AXT policy refresh until the runtime lane catalog is applied.
     }
 
@@ -19463,6 +19665,38 @@ impl State {
                     tx.remove(uaid);
                 } else {
                     tx.insert(uaid, manifests);
+                }
+            }
+            tx.commit();
+        }
+
+        // Drop account-scope directory entries targeting removed dataspaces so routed
+        // account-read scope cannot retain stale dataspace references after catalog updates.
+        let stale_account_scope_accounts: Vec<AccountId> = self
+            .world
+            .account_scope_directory
+            .view()
+            .iter()
+            .filter_map(|(account_id, entry)| {
+                entry
+                    .iter()
+                    .any(|(dataspace_id, _)| !dataspace_ids.contains(dataspace_id))
+                    .then_some(account_id.clone())
+            })
+            .collect();
+        if !stale_account_scope_accounts.is_empty() {
+            let mut tx = self.world.account_scope_directory.block();
+            for account_id in stale_account_scope_accounts {
+                let Some(mut entry) = tx.get(&account_id).cloned() else {
+                    continue;
+                };
+                if !entry.retain_dataspaces(&dataspace_ids) {
+                    continue;
+                }
+                if entry.is_empty() {
+                    tx.remove(account_id);
+                } else {
+                    tx.insert(account_id, entry);
                 }
             }
             tx.commit();
@@ -27494,6 +27728,7 @@ pub(crate) mod deserialize {
         let account_aliases = take_optional_default(&mut map, "account_aliases")?;
         let account_aliases_by_account =
             take_optional_default(&mut map, "account_aliases_by_account")?;
+        let account_scope_directory = take_optional_default(&mut map, "account_scope_directory")?;
         let ram_lfe_program_policies = take_optional_default(&mut map, "ram_lfe_program_policies")?;
         let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
@@ -27653,6 +27888,7 @@ pub(crate) mod deserialize {
             uaid_accounts: Storage::default(),
             account_aliases,
             account_aliases_by_account,
+            account_scope_directory,
             opaque_uaids: Storage::default(),
             ram_lfe_program_policies,
             identifier_policies,
@@ -27819,6 +28055,12 @@ pub(crate) mod deserialize {
             .rebuild_account_alias_index()
             .map_err(|message| json::Error::InvalidField {
                 field: "account_aliases".into(),
+                message,
+            })?;
+        world
+            .rebuild_account_scope_directory()
+            .map_err(|message| json::Error::InvalidField {
+                field: "account_scope_directory".into(),
                 message,
             })?;
         world
@@ -29023,6 +29265,202 @@ mod tests {
                 .expect("account domains"),
             BTreeSet::from([universal_domain, retail_domain]),
             "domains should flatten across all bound dataspaces",
+        );
+    }
+
+    #[test]
+    fn account_scope_directory_tracks_alias_bind_and_unbind() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        stx.world.dataspace_catalog = dataspace_catalog;
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        Register::account(Account::new(authority.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register authority");
+        Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register account");
+
+        let retail_alias = iroha_data_model::account::rekey::AccountAlias::new(
+            "retaildesk".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                "treasury".parse::<Name>().expect("domain name"),
+            )),
+            retail_dataspace,
+        );
+
+        let initial_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("initial account scope")
+            .expect("materialized account should have an account scope entry")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            initial_scopes,
+            BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())]),
+            "materialized accounts should start in the universal dataspace only",
+        );
+
+        stx.world
+            .insert_account_alias_binding(retail_alias.clone(), account_id.clone());
+        let bound_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("bound account scope")
+            .expect("bound account scope entry")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            bound_scopes,
+            BTreeMap::from([
+                (DataSpaceId::GLOBAL, BTreeSet::new()),
+                (
+                    retail_dataspace,
+                    BTreeSet::from([iroha_data_model::account::rekey::AccountAliasDomain::new(
+                        "treasury".parse::<Name>().expect("domain name"),
+                    )]),
+                ),
+            ]),
+            "alias binds should immediately refresh the account scope directory",
+        );
+
+        stx.world.remove_account_alias_binding(&retail_alias);
+        let unbound_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("unbound account scope")
+            .expect("account scope entry should remain after unbind")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            unbound_scopes,
+            BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())]),
+            "alias unbinds should remove the extra dataspace from the account scope directory",
+        );
+    }
+
+    #[test]
+    fn account_scope_directory_tracks_manifest_driven_uaid_binding_changes() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let treasury_dataspace = DataSpaceId::new(18);
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: treasury_dataspace,
+                alias: "treasury".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        stx.world.dataspace_catalog = dataspace_catalog;
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::account-scope-refresh"));
+        Register::account(Account::new(authority.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register authority");
+        Register::account(Account::new(account_id.clone()).with_uaid(Some(uaid)))
+            .execute(&authority, &mut stx)
+            .expect("register account");
+
+        let manifest_record = |dataspace| {
+            let manifest = AssetPermissionManifest {
+                version: ManifestVersion::default(),
+                uaid,
+                dataspace,
+                issued_ms: 0,
+                activation_epoch: 1,
+                expiry_epoch: None,
+                entries: Vec::new(),
+            };
+            let mut record = SpaceDirectoryManifestRecord::new(manifest);
+            record.lifecycle.mark_activated(1);
+            record
+        };
+
+        let mut retail_set = SpaceDirectoryManifestSet::default();
+        retail_set.upsert(manifest_record(retail_dataspace));
+        stx.world.space_directory_manifests.insert(uaid, retail_set);
+        stx.world.rebuild_space_directory_bindings(uaid);
+
+        let retail_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("retail account scope")
+            .expect("account scope entry after retail manifest")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            retail_scopes,
+            BTreeMap::from([
+                (DataSpaceId::GLOBAL, BTreeSet::new()),
+                (retail_dataspace, BTreeSet::new()),
+            ]),
+            "UAID bindings should surface the manifest dataspace in the account scope directory",
+        );
+
+        let mut treasury_set = SpaceDirectoryManifestSet::default();
+        treasury_set.upsert(manifest_record(treasury_dataspace));
+        stx.world
+            .space_directory_manifests
+            .insert(uaid, treasury_set);
+        stx.world.rebuild_space_directory_bindings(uaid);
+
+        let treasury_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("treasury account scope")
+            .expect("account scope entry after manifest rotation")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            treasury_scopes,
+            BTreeMap::from([
+                (DataSpaceId::GLOBAL, BTreeSet::new()),
+                (treasury_dataspace, BTreeSet::new()),
+            ]),
+            "manifest-driven UAID binding changes should refresh the account scope directory",
         );
     }
 
@@ -30860,6 +31298,84 @@ mod tests {
         assert!(
             manifests_view.get(&uaid_stale_only).is_none(),
             "manifest set should be removed when all dataspaces are stale"
+        );
+    }
+
+    #[test]
+    fn set_nexus_prunes_account_scope_directory_for_removed_dataspaces() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let retained = DataSpaceId::GLOBAL;
+        let removed = DataSpaceId::new(7);
+        let mixed_account = AccountId::new(KeyPair::random().public_key().clone());
+        let stale_only_account = AccountId::new(KeyPair::random().public_key().clone());
+
+        let initial_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: retained,
+                    alias: "global".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: removed,
+                    alias: "historical".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(initial_nexus)
+            .expect("set initial nexus config");
+
+        let mut mixed_entry = AccountScopeDirectoryEntry::default();
+        mixed_entry.ensure_dataspace(retained);
+        mixed_entry.ensure_dataspace(removed);
+        let mut stale_only_entry = AccountScopeDirectoryEntry::default();
+        stale_only_entry.ensure_dataspace(removed);
+
+        let mut wb = state.world.block();
+        wb.account_scope_directory
+            .insert(mixed_account.clone(), mixed_entry);
+        wb.account_scope_directory
+            .insert(stale_only_account.clone(), stale_only_entry);
+        wb.commit();
+
+        let updated_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: retained,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(updated_nexus)
+            .expect("set updated nexus config");
+
+        let view = state.world.account_scope_directory.view();
+        let mixed = view
+            .get(&mixed_account)
+            .expect("mixed account scope entry should remain");
+        assert!(
+            mixed
+                .iter()
+                .all(|(dataspace_id, _)| *dataspace_id == retained),
+            "stale dataspaces should be pruned from mixed account scope entries",
+        );
+        assert!(
+            view.get(&stale_only_account).is_none(),
+            "entries should be removed when every dataspace becomes stale",
         );
     }
 

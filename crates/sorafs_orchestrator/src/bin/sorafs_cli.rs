@@ -27,7 +27,7 @@ use hex::encode as hex_encode;
 use iroha_config::parameters::defaults::streaming::soranet::PROVISION_SPOOL_DIR;
 use iroha_crypto::{Algorithm, PrivateKey, PublicKey};
 use iroha_data_model::{
-    account::AccountId,
+    account::{AccountId, address::AccountAddress},
     da::types::{BlobDigest, StorageTicketId},
     name::Name,
     prelude::ExposedPrivateKey,
@@ -127,8 +127,37 @@ fn parse_decimal_arg(flag: &str, raw: &str, context: &str) -> Result<Decimal, St
         .map_err(|err| format!("failed to parse `{flag}` for `{context}`: {err}"))
 }
 
+fn infer_i105_network_prefix(raw: &str) -> Option<u16> {
+    let trimmed = raw.trim();
+    if trimmed.starts_with("sora") {
+        return Some(753);
+    }
+    if trimmed.starts_with("test") {
+        return Some(369);
+    }
+    if trimmed.starts_with("dev") {
+        return Some(0);
+    }
+    trimmed
+        .strip_prefix('n')
+        .and_then(|digits| digits.parse::<u16>().ok())
+}
+
 fn parse_account_id_arg(flag: &str, raw: &str, context: &str) -> Result<AccountId, String> {
-    AccountId::parse_encoded(raw.trim())
+    let trimmed = raw.trim();
+    if let Some(prefix) = infer_i105_network_prefix(trimmed) {
+        if let Ok(address) = AccountAddress::from_i105_for_discriminant(trimmed, Some(prefix)) {
+            return address.to_account_id().map_err(|err| {
+                format!("failed to decode `{flag}` for `{context}` as account id: {err}")
+            });
+        }
+    }
+    if let Ok(address) = AccountAddress::from_i105(trimmed) {
+        return address.to_account_id().map_err(|err| {
+            format!("failed to decode `{flag}` for `{context}` as account id: {err}")
+        });
+    }
+    AccountId::parse_encoded(trimmed)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
         .map_err(|err| format!("failed to parse `{flag}` for `{context}` as account id: {err}"))
 }
@@ -139,16 +168,24 @@ fn parse_account_id_arg_with_prefix(
     context: &str,
     expected_prefix: Option<u16>,
 ) -> Result<AccountId, String> {
-    if let Some(prefix) = expected_prefix {
-        let _guard = iroha_data_model::account::address::ChainDiscriminantGuard::enter(prefix);
-        return AccountId::parse_encoded(raw.trim())
-            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
-            .map_err(|err| {
-                format!("failed to parse `{flag}` for `{context}` as account id: {err}")
-            });
+    let trimmed = raw.trim();
+    let address = match expected_prefix.or_else(|| infer_i105_network_prefix(trimmed)) {
+        Some(prefix) => AccountAddress::from_i105_for_discriminant(trimmed, Some(prefix)),
+        None => AccountAddress::from_i105(trimmed),
+    };
+    if let Ok(address) = address {
+        return address.to_account_id().map_err(|err| {
+            format!("failed to decode `{flag}` for `{context}` as account id: {err}")
+        });
     }
 
-    parse_account_id_arg(flag, raw, context)
+    if expected_prefix.is_none() {
+        return parse_account_id_arg(flag, trimmed, context);
+    }
+
+    AccountId::parse_encoded(trimmed)
+        .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .map_err(|err| format!("failed to parse `{flag}` for `{context}` as account id: {err}"))
 }
 
 fn authority_payload_literal(
@@ -4551,6 +4588,8 @@ fn manifest_submit(raw_args: Vec<String>) -> Result<(), String> {
     let authority_str = authority_str.ok_or_else(|| {
         "missing required `--authority=ACCOUNT_ID` for `sorafs_cli manifest submit`".to_string()
     })?;
+    authority_network_prefix =
+        authority_network_prefix.or_else(|| infer_i105_network_prefix(&authority_str));
 
     let manifest_bytes = fs::read(&manifest_path).map_err(|err| {
         format!(
@@ -7689,6 +7728,23 @@ mod tests {
             Some(369),
         )
         .expect("parse authority with explicit discriminant");
+
+        assert_eq!(parsed, account);
+    }
+
+    #[test]
+    fn parse_account_id_arg_accepts_taira_i105_without_explicit_prefix() {
+        let account = AccountId::new(
+            KeyPair::from_seed(vec![0x59; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        );
+        let encoded = account
+            .to_i105_for_discriminant(369)
+            .expect("encode i105 with taira discriminant");
+
+        let parsed = parse_account_id_arg("--authority", &encoded, "sorafs_cli manifest submit")
+            .expect("parse taira authority without explicit discriminant");
 
         assert_eq!(parsed, account);
     }

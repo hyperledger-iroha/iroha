@@ -4,6 +4,7 @@
 use std::{
     collections::BTreeMap,
     num::{NonZeroU16, NonZeroU64},
+    path::PathBuf,
     time::{Duration, Instant},
 };
 
@@ -11,7 +12,8 @@ use eyre::{Result, WrapErr, eyre};
 use integration_tests::sandbox;
 use iroha::{
     client::Client,
-    crypto::KeyPair,
+    config::DEFAULT_TRANSACTION_TIME_TO_LIVE,
+    crypto::{ExposedPrivateKey, KeyPair},
     data_model::{
         Level,
         account::{MultisigMember, MultisigPolicy},
@@ -317,6 +319,115 @@ fn wait_for_multisig_cancel_action(
     }
 }
 
+fn cli_envs_for_signatory(
+    client: &Client,
+    account_domain: &DomainId,
+    key_pair: &KeyPair,
+) -> Vec<(&'static str, String)> {
+    let ttl = client
+        .transaction_ttl
+        .unwrap_or(DEFAULT_TRANSACTION_TIME_TO_LIVE);
+    vec![
+        ("CHAIN", client.chain.to_string()),
+        ("TORII_URL", client.torii_url.to_string()),
+        ("ACCOUNT_DOMAIN", account_domain.to_string()),
+        ("ACCOUNT_PUBLIC_KEY", key_pair.public_key().to_string()),
+        (
+            "ACCOUNT_PRIVATE_KEY",
+            ExposedPrivateKey(key_pair.private_key().clone()).to_string(),
+        ),
+        (
+            "TRANSACTION_STATUS_TIMEOUT_MS",
+            client.transaction_status_timeout.as_millis().to_string(),
+        ),
+        ("TRANSACTION_TIME_TO_LIVE_MS", ttl.as_millis().to_string()),
+    ]
+}
+
+fn workspace_root() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .expect("integration_tests manifest should live under the workspace root")
+        .to_path_buf()
+}
+
+fn cli_binary_name() -> &'static str {
+    if cfg!(windows) { "iroha.exe" } else { "iroha" }
+}
+
+fn current_test_binary_dir() -> Option<PathBuf> {
+    let exe = std::env::current_exe().ok()?;
+    let mut directory = exe.parent()?.to_path_buf();
+    if directory.file_name().is_some_and(|name| name == "deps") {
+        directory = directory.parent()?.to_path_buf();
+    }
+    Some(directory)
+}
+
+fn cli_program() -> Result<PathBuf> {
+    let workspace_root = workspace_root();
+    if let Some(path) = std::env::var_os("TEST_NETWORK_BIN_IROHA").map(PathBuf::from) {
+        let candidate = if path.is_absolute() {
+            path
+        } else {
+            workspace_root.join(path)
+        };
+        return candidate
+            .canonicalize()
+            .wrap_err("resolve TEST_NETWORK_BIN_IROHA override");
+    }
+    if let Some(path) = std::env::var_os("CARGO_BIN_EXE_iroha").map(PathBuf::from)
+        && path.is_file()
+    {
+        return path
+            .canonicalize()
+            .wrap_err("resolve CARGO_BIN_EXE_iroha path");
+    }
+
+    let mut candidate_roots = Vec::new();
+    if let Some(directory) = current_test_binary_dir() {
+        candidate_roots.push(directory.clone());
+        if let Some(target_root) = directory.parent() {
+            let target_root = target_root.to_path_buf();
+            candidate_roots.push(target_root.join("iroha-test-network"));
+            candidate_roots.push(target_root);
+        }
+    }
+    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from) {
+        candidate_roots.push(target_dir.join("iroha-test-network"));
+        candidate_roots.push(target_dir);
+    }
+    candidate_roots.push(workspace_root.join("target/iroha-test-network"));
+    candidate_roots.push(workspace_root.join("target"));
+
+    for root in candidate_roots {
+        for profile in ["debug", "release"] {
+            let candidate = root.join(profile).join(cli_binary_name());
+            if candidate.is_file() {
+                return candidate.canonicalize().wrap_err_with(|| {
+                    format!("resolve existing CLI binary `{}`", candidate.display())
+                });
+            }
+        }
+    }
+
+    Program::Iroha.resolve().map_err(Into::into)
+}
+
+fn multisig_role_suffix(role: &RoleId) -> Option<&str> {
+    role.name()
+        .as_ref()
+        .strip_prefix("MULTISIG_SIGNATORY/")?
+        .rsplit_once('/')
+        .map(|(_, suffix)| suffix)
+}
+
+fn multisig_spec_key() -> Name {
+    "multisig/spec"
+        .parse()
+        .expect("multisig spec key should parse")
+}
+
 #[test]
 fn multisig_normal() -> Result<()> {
     multisig_base(TestSuite::normal(), stringify!(multisig_normal))
@@ -511,6 +622,176 @@ fn multisig_cancel_route_persists_canceled_terminal_state() -> Result<()> {
                 && proposal.get("status").and_then(JsonValue::as_str) == Some("CANCELED")
         }),
         "canceled proposal should remain visible in terminal proposal listings"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn multisig_cli_list_all_resolves_hashed_role_suffixes() -> Result<()> {
+    let context = stringify!(multisig_cli_list_all_resolves_hashed_role_suffixes);
+    let builder = NetworkBuilder::new().with_min_peers(4);
+    let Some((network, rt)) = start_network(builder, context) else {
+        return Ok(());
+    };
+    let test_client = network.client();
+    if !multisig_supported(&test_client) {
+        eprintln!("skipping {context}: executor does not support multisig");
+        return Ok(());
+    }
+
+    let domain: DomainId = DomainId::try_new("multisig-cli-hash-list", "universal").unwrap();
+    register_runtime_domain_and_transfer_to_bob(&network, &test_client, &domain)
+        .wrap_err("register multisig CLI test domain")?;
+
+    let signatories = core::iter::repeat_with(|| gen_account_in(&domain))
+        .take(8)
+        .collect::<BTreeMap<AccountId, KeyPair>>();
+    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
+        .submit_all_blocking(
+            signatories
+                .keys()
+                .cloned()
+                .map(|account_id| Account::new(account_id.clone()))
+                .map(Register::account),
+        )
+        .wrap_err("register multisig CLI signatories")?;
+
+    let spec = MultisigSpec::new(
+        signatories
+            .keys()
+            .cloned()
+            .map(|account_id| (account_id, 1))
+            .collect(),
+        NonZeroU16::new(signatories.len().try_into().unwrap()).unwrap(),
+        NonZeroU64::new(60_000).unwrap(),
+    );
+    let multisig_seed_account_id = AccountId::new(KeyPair::random().public_key().clone());
+    alt_client((BOB_ID.clone(), BOB_KEYPAIR.clone()), &test_client)
+        .submit_blocking::<InstructionBox>(
+            MultisigRegister::with_account(multisig_seed_account_id, domain.clone(), spec.clone())
+                .into(),
+        )
+        .wrap_err("register multisig account for CLI hash listing test")?;
+    let multisig_account_id = canonical_multisig_account_id(&spec);
+    let canonical_i105 = multisig_account_id
+        .canonical_i105()
+        .wrap_err("render multisig account as canonical I105")?;
+    assert!(
+        canonical_i105.len() > 128,
+        "test precondition failed: multisig account should require a hashed role suffix"
+    );
+
+    let proposer = signatories
+        .iter()
+        .next()
+        .map(|(account_id, key_pair)| (account_id.clone(), key_pair.clone()))
+        .expect("signatory set must not be empty");
+    let proposer_roles = test_client
+        .query(FindRolesByAccountId::new(proposer.0.clone()))
+        .execute_all()
+        .wrap_err("fetch proposer roles after multisig registration")?;
+    assert!(
+        proposer_roles
+            .iter()
+            .filter_map(multisig_role_suffix)
+            .any(|suffix| {
+                suffix != canonical_i105 && AccountId::parse_encoded(suffix).is_err()
+            }),
+        "proposer should receive a hashed MULTISIG_SIGNATORY role for the long multisig account"
+    );
+    let proposer_visible_multisig = alt_client(proposer.clone(), &test_client)
+        .query(FindAccounts::new())
+        .execute_all()
+        .wrap_err("fetch proposer-visible accounts for multisig CLI hash listing test")?
+        .into_iter()
+        .find(|account| account.id() == &multisig_account_id)
+        .expect("proposer should be able to query the multisig account");
+    assert!(
+        proposer_visible_multisig
+            .metadata()
+            .get(&multisig_spec_key())
+            .is_some(),
+        "proposer should see multisig/spec metadata needed for hashed role resolution"
+    );
+
+    let marker: Name = "cli_pending_marker".parse().unwrap();
+    let instructions = vec![
+        SetKeyValue::account(
+            multisig_account_id.clone(),
+            marker,
+            "pending".parse::<Json>().unwrap(),
+        )
+        .into(),
+    ];
+    let expected_proposal_key = HashOf::new(&instructions);
+    let proposal_id = expected_proposal_key.to_string();
+    alt_client(proposer.clone(), &test_client)
+        .submit_blocking::<InstructionBox>(
+            MultisigPropose::new(multisig_account_id.clone(), instructions, None).into(),
+        )
+        .wrap_err("submit multisig proposal for CLI hash listing test")?;
+
+    let torii_base = network
+        .peers()
+        .first()
+        .expect("network should expose at least one peer")
+        .torii_url()
+        .to_string();
+    wait_for_multisig_proposal_status(
+        &rt,
+        &torii_base,
+        &MultisigAccountSelectorDto {
+            multisig_account_id: Some(multisig_account_id),
+            multisig_account_alias: None,
+        },
+        &proposal_id,
+        "COLLECTING_SIGNATURES",
+    )
+    .wrap_err("wait for pending multisig proposal before invoking CLI")?;
+
+    let cli_dir = tempfile::tempdir().wrap_err("create CLI working directory")?;
+    let output = std::process::Command::new(cli_program()?)
+        .current_dir(cli_dir.path())
+        .envs(cli_envs_for_signatory(&test_client, &domain, &proposer.1))
+        .arg("ledger")
+        .arg("multisig")
+        .arg("list")
+        .arg("all")
+        .output()
+        .wrap_err("run `iroha ledger multisig list all`")?;
+    assert!(
+        output.status.success(),
+        "CLI exited with status {} and stderr: {}",
+        output.status,
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let payload: JsonValue = norito::json::from_slice(&output.stdout)
+        .wrap_err("decode CLI multisig list JSON output")?;
+    let proposals = payload
+        .as_object()
+        .expect("CLI multisig list should emit a JSON object");
+    let proposal = proposals
+        .iter()
+        .find_map(|(key, proposal)| {
+            norito::json::from_json::<HashOf<Vec<InstructionBox>>>(&format!("\"{key}\""))
+                .ok()
+                .filter(|proposal_key| *proposal_key == expected_proposal_key)
+                .map(|_| proposal)
+        })
+        .unwrap_or_else(|| {
+            let keys = proposals.keys().cloned().collect::<Vec<_>>();
+            panic!(
+                "CLI should surface the pending proposal discovered via the hashed role suffix; expected proposal id `{proposal_id}`, actual keys {keys:?}, payload {payload:?}"
+            );
+        });
+    assert!(
+        proposal
+            .get("approval_path")
+            .and_then(JsonValue::as_array)
+            .is_some_and(|edges| !edges.is_empty()),
+        "CLI proposal entry should include the approval path"
     );
 
     Ok(())
