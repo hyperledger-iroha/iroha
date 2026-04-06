@@ -206,25 +206,34 @@ fn render_sccp_manifests_summary(manifests: &SccpProofManifestSet) -> String {
 fn render_sccp_artifact_summary(
     artifact: &iroha_sccp::NexusSccpMessageTransparentProofV1,
 ) -> String {
+    let inner_summary =
+        match iroha_sccp::decode_canonical_sccp_message_transparent_inner_proof_bytes(
+            &artifact.proof_bytes,
+        ) {
+            Some(inner) => format!(
+                " inner_family={:?} inner_payload={} statement_hash={}",
+                inner.chain_family,
+                inner.payload_kind,
+                hex::encode(inner.statement_hash)
+            ),
+            None if artifact.proof_bytes.len() == 32 => " inner_family=LegacyDigest".to_owned(),
+            None => format!(
+                " inner_family=Unknown proof_bytes_len={}",
+                artifact.proof_bytes.len()
+            ),
+        };
     format!(
-        "sccp artifact: message_id={} payload={} chain={}({}) backend={} proof_family={} finality_height={} commitment_root={}",
+        "sccp artifact: message_id={} payload={} chain={}({}) backend={} proof_family={} finality_height={} commitment_root={}{}",
         hex::encode(artifact.public_inputs.message_id),
-        sccp_payload_kind_key(&artifact.bundle.payload),
+        iroha_sccp::sccp_message_payload_kind_key(&artifact.bundle.payload),
         iroha_sccp::sccp_chain_key_for_domain(artifact.counterparty_domain).unwrap_or("unknown"),
         artifact.counterparty_domain,
         artifact.message_backend,
         artifact.proof_family,
         artifact.public_inputs.finality_height,
-        hex::encode(artifact.public_inputs.commitment_root)
+        hex::encode(artifact.public_inputs.commitment_root),
+        inner_summary
     )
-}
-
-fn sccp_payload_kind_key(payload: &iroha_sccp::SccpPayloadV1) -> &'static str {
-    match payload {
-        iroha_sccp::SccpPayloadV1::AssetRegister(_) => "asset_register",
-        iroha_sccp::SccpPayloadV1::RouteActivate(_) => "route_activate",
-        iroha_sccp::SccpPayloadV1::Transfer(_) => "transfer",
-    }
 }
 
 #[cfg(test)]
@@ -736,5 +745,7 @@ mod tests {
         assert!(rendered.contains("payload=transfer"));
         assert!(rendered.contains("chain=ton(4)"));
         assert!(rendered.contains("finality_height=19"));
+        assert!(rendered.contains("inner_family=Ton"));
+        assert!(rendered.contains("inner_payload=transfer"));
     }
 }

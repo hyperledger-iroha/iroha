@@ -17,6 +17,9 @@ Torii now exposes three live SCCP bundle families:
 - ICS payloads honour the configured Merkle depth cap and verify the path using the declared hash function.
 - Transparent payloads must declare a non-empty backend label.
 - Transparent payloads under the SCCP `sccp/stark-fri-v1/*` family must now decode as a typed SCCP message proof artifact, not an opaque byte blob.
+- Typed SCCP message artifacts now also validate the inner `proof_bytes` statement:
+  - new artifacts encode a canonical inner proof envelope bound to the shared manifest, chain family, payload kind, and SCCP public inputs; and
+  - legacy 32-byte placeholder digests are still accepted during verification so already-recorded artifacts do not become unreadable.
 - Pinned proofs are exempt from retention pruning; unpinned proofs still respect the global `zk.proof_history_cap`/grace/batch settings.
 
 ## Torii API surface
@@ -55,7 +58,7 @@ Torii now exposes three live SCCP bundle families:
   - the chain-specific `message_backend` / `registry_backend`;
   - the finality model and verifier target derived from the shared manifest table;
   - the canonical public inputs (`message_id`, `payload_hash`, `target_domain`, `commitment_root`, `finality_height`, `finality_block_hash`);
-  - deterministic placeholder `proof_bytes` until the chain-specific prover backends are swapped in; and
+  - canonical inner `proof_bytes` that carry the manifest-bound placeholder statement (`chain_family`, chain key, account codec, payload kind, public inputs, statement hash, and placeholder proof hash) until the chain-specific prover backends are swapped in; and
   - the embedded Nexus SCCP message bundle so verifiers can reconstruct the exact statement being proven.
   - client helpers now exist for that route directly:
     - Rust: `iroha::client::Client::get_sccp_message_proof_artifact_json(...)` and `get_sccp_message_proof_artifact(...)`;
@@ -78,6 +81,7 @@ Torii now exposes three live SCCP bundle families:
   - `counterparty_chain` is the canonical domain key (`eth`, `bsc`, `sol`, `ton`, `tron`, `sora2`, etc.).
 - `GET /v1/zk/proof/{backend}/{hash}` and `GET /v1/zk/proofs` now mirror that metadata inside `bridge.payload` for SCCP transparent proofs when the backend matches the chain-split SCCP family.
   - when the stored payload decodes as a typed SCCP artifact, the bridge summary now also exposes `message_id`, `payload_hash`, `target_domain`, `commitment_root`, `finality_height`, `finality_block_hash`, and `proof_artifact_len_bytes`.
+  - when the artifact also carries the new canonical inner proof envelope, the bridge summary additionally exposes `inner_chain_family`, `inner_payload_kind`, and `inner_statement_hash`.
 - `POST /v1/bridge/messages` accepts an inbound `message_bundle` targeted at SORA, records the corresponding transparent-ZK bridge proof, and emits a typed `BridgeReceipt` for `transfer` payloads.
 - `POST /v1/bridge/messages` now also accepts an optional `settlement` object:
   - it resolves a deployed contract target by `contract_address` or `contract_alias`;
@@ -89,7 +93,8 @@ Torii now exposes three live SCCP bundle families:
   - `iroha ops bridge sccp capabilities`
   - `iroha ops bridge sccp manifests`
   - `iroha ops bridge sccp artifact --message-id <hex>`
-  - text mode prints compact chain/proof summaries; JSON mode emits the raw typed payload/JSON route response.
+  - text mode prints compact chain/proof summaries, and `artifact` also decodes the inner proof envelope when it is present;
+  - JSON mode emits the raw typed payload/JSON route response.
 
 - `GET /v1/zk/proofs` and `GET /v1/zk/proofs/count` accept bridge-aware filters:
   - `bridge_only=true` returns only bridge proofs.

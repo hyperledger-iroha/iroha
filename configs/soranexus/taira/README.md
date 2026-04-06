@@ -29,7 +29,8 @@ defaults.
 - `validator_secrets.example.toml`: copy-me secret template for per-validator
   private keys. Keep the populated file user-local.
 - `genesis.json`: NPoS genesis with DA enabled.
-- `dns_records.json`: DNS targets for public Torii + Explorer hostnames.
+- `dns_records.json`: DNS targets for the convenience host, explorer host, and
+  direct per-validator Torii hostnames.
 - `explorer.runtime-config.json`: runtime config example for the Explorer
   frontend; point it at the explicit public Torii base URL you want the UI to
   query.
@@ -52,7 +53,8 @@ defaults.
   then rewrites the live peer configs and restarts the detached
   `taira-localnet` session.
 - `taira-explorer.nginx.conf`: multi-domain nginx edge config for
-  `taira.sora.org` and `taira-explorer.sora.org`.
+  `taira.sora.org`, `taira-explorer.sora.org`, and the current
+  `taira-validator-{1,2,3,4}.sora.org` direct-hostname layout on a shared host.
 
 ## Render validator configs
 
@@ -382,14 +384,16 @@ From `../iroha2-block-explorer-web`:
    - `corepack enable && pnpm i && pnpm build`
 3. Install the nginx snippet from
    `../iroha/configs/soranexus/taira/taira-explorer.nginx.conf` on the edge host
-   (for both domains on one machine), e.g.:
+   (for convenience, explorer, and direct validator hostnames on one machine), e.g.:
    - `sudo cp ../iroha/configs/soranexus/taira/taira-explorer.nginx.conf /etc/nginx/conf.d/taira.conf`
    - on the shared macOS/Homebrew host, install the same template as
      `/opt/homebrew/etc/nginx/servers/taira.sora.org.conf` instead, then point
-     the upstream at the locally served Torii port (currently `127.0.0.1:29080`
-     on that machine rather than the template's `127.0.0.1:18080`)
-   - if your Torii endpoint is not `127.0.0.1:18080`, update the `upstream taira_torii_upstream`
-     target to the live validator endpoint before reload.
+     the upstreams at the locally served Torii ports (currently
+     `127.0.0.1:29080..29083` on that machine rather than the template's
+     `127.0.0.1:18080..18083`)
+   - if your Torii endpoints are not `127.0.0.1:18080..18083`, update the
+     `upstream taira_validator_{1,2,3,4}_upstream` targets to the live
+     validator endpoints before reload.
    - keep the dedicated `location = /v1/mcp` blocks intact; they make the
      Codex/Torii MCP path explicit on both public hostnames and keep future
      route changes from accidentally hiding the MCP endpoint behind the generic
@@ -419,13 +423,17 @@ From `../iroha2-block-explorer-web`:
    - do not fold `/v1/connect/ws` into the generic `location /` or
      `location ^~ /v1/` proxy rules; it must stay an exact-match websocket
      location with `proxy_http_version 1.1`.
-   - ensure both `taira.sora.org` and `taira-explorer.sora.org` resolve to the
-     shared edge host from `dns_records.json` before relying on this nginx
-     configuration.
-4. Issue/refresh TLS certificates for both hostnames:
-   - `sudo certbot certonly --nginx -d taira.sora.org -d taira-explorer.sora.org`
+   - ensure `taira.sora.org`, `taira-explorer.sora.org`, and every published
+     `taira-validator-{1,2,3,4}.sora.org` hostname resolve to the shared edge
+     host from `dns_records.json` before relying on this nginx configuration.
+4. Issue/refresh TLS certificates for every hostname served from that edge:
+   - `sudo certbot certonly --nginx -d taira.sora.org -d taira-explorer.sora.org -d taira-validator-1.sora.org -d taira-validator-2.sora.org -d taira-validator-3.sora.org -d taira-validator-4.sora.org`
    - certbot stores this SAN cert under `.../live/taira.sora.org/` and nginx can
-     reuse it for both server blocks.
+     reuse it for the convenience, explorer, and per-validator server blocks.
+   - before DNS propagates or before the SAN cert is refreshed, you can still
+     validate local SNI routing on the edge host with `curl --resolve` plus
+     `-k`, for example:
+     `curl -sk --resolve taira-validator-1.sora.org:443:127.0.0.1 https://taira-validator-1.sora.org/status | jq '.blocks, .sumeragi.commit_qc_height'`
 5. Validate and reload nginx:
    - `sudo nginx -t && sudo systemctl reload nginx`
    - on the shared macOS/Homebrew host, use `nginx -t && nginx -s reload`
@@ -438,6 +446,7 @@ From `../iroha2-block-explorer-web`:
    and Connect still work through the public edge:
    - `curl -vI https://taira.sora.org`
    - `curl -vI https://taira-explorer.sora.org`
+   - `curl -vI "${PUBLIC_TORII_ROOT}/status"`
    - `echo | openssl s_client -connect taira-explorer.sora.org:443 -servername taira-explorer.sora.org 2>/dev/null | openssl x509 -noout -subject -issuer -ext subjectAltName`
    - verify MCP over the direct node host:
      `curl -sS "${PUBLIC_TORII_ROOT}/v1/mcp" | jq .`

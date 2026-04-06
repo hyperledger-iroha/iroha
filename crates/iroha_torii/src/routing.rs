@@ -2943,6 +2943,17 @@ fn parse_status_opt(s: Option<&str>) -> Option<iroha_data_model::proof::ProofSta
 }
 
 #[cfg(feature = "app_api")]
+fn sccp_chain_family_key(family: iroha_sccp::SccpTransparentChainFamilyV1) -> &'static str {
+    match family {
+        iroha_sccp::SccpTransparentChainFamilyV1::Evm => "evm",
+        iroha_sccp::SccpTransparentChainFamilyV1::Solana => "solana",
+        iroha_sccp::SccpTransparentChainFamilyV1::Ton => "ton",
+        iroha_sccp::SccpTransparentChainFamilyV1::Tron => "tron",
+        iroha_sccp::SccpTransparentChainFamilyV1::Substrate => "substrate",
+    }
+}
+
+#[cfg(feature = "app_api")]
 fn bridge_record_to_json(
     record: &iroha_data_model::bridge::BridgeProofRecord,
 ) -> norito::json::Value {
@@ -3053,6 +3064,24 @@ fn bridge_record_to_json(
                     "proof_artifact_len_bytes".into(),
                     norito::json::Value::from(proof.proof_bytes.len()),
                 );
+                if let Some(inner) =
+                    iroha_sccp::decode_canonical_sccp_message_transparent_inner_proof_bytes(
+                        &proof.proof_bytes,
+                    )
+                {
+                    payload.insert(
+                        "inner_chain_family".into(),
+                        norito::json::Value::from(sccp_chain_family_key(inner.chain_family)),
+                    );
+                    payload.insert(
+                        "inner_payload_kind".into(),
+                        norito::json::Value::from(inner.payload_kind),
+                    );
+                    payload.insert(
+                        "inner_statement_hash".into(),
+                        norito::json::Value::from(hex::encode(inner.statement_hash)),
+                    );
+                }
             } else if let Some((counterparty_domain, counterparty_chain)) =
                 sccp_counterparty_from_backend(tp.proof.backend.as_str())
             {
@@ -5090,6 +5119,129 @@ mod sccp_message_backend_tests {
                 .get("counterparty_chain")
                 .and_then(norito::json::Value::as_str),
             Some("tron")
+        );
+    }
+
+    #[test]
+    fn bridge_record_to_json_includes_sccp_inner_proof_metadata() {
+        let payload = SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
+            version: 1,
+            source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            dest_domain: iroha_sccp::SCCP_DOMAIN_TON,
+            nonce: 21,
+            asset_home_domain: iroha_sccp::SCCP_DOMAIN_SORA,
+            asset_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#universal".to_vec(),
+            amount: 77,
+            sender_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:soraswap".to_vec(),
+            recipient_codec: iroha_sccp::SCCP_CODEC_TON_RAW,
+            recipient: b"0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+                .to_vec(),
+            route_id_codec: iroha_sccp::SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:ton:xor".to_vec(),
+        });
+        let commitment = SccpHubCommitmentV1 {
+            version: 1,
+            kind: SccpHubMessageKind::Transfer,
+            target_domain: iroha_sccp::SCCP_DOMAIN_TON,
+            message_id: iroha_sccp::sccp_message_id(&payload),
+            payload_hash: iroha_sccp::payload_hash(&iroha_sccp::canonical_sccp_payload_bytes(
+                &payload,
+            )),
+            parliament_certificate_hash: None,
+        };
+        let merkle_proof = SccpMerkleProofV1 { steps: Vec::new() };
+        let commitment_root = iroha_sccp::merkle_root_from_commitment(&commitment, &merkle_proof);
+        let finality_proof = NexusBridgeFinalityProofV1 {
+            version: 1,
+            chain_id: "taira".to_owned(),
+            height: 19,
+            block_hash: [0x44; 32],
+            commitment_root,
+            block_header_bytes: vec![0x01, 0x02, 0x03],
+            commit_qc: NexusCommitQcV1 {
+                version: 1,
+                phase: NexusConsensusPhaseV1::Commit,
+                height: 19,
+                view: 1,
+                epoch: 1,
+                mode_tag: "normal".to_owned(),
+                subject_block_hash: [0x44; 32],
+                validator_set_hash_version: 1,
+                validator_public_keys: vec!["validator-1".to_owned()],
+                validator_set_pops: vec![vec![0xAA]],
+                signers_bitmap: vec![0x01],
+                bls_aggregate_signature: vec![0xBB],
+            },
+        };
+        let bundle = NexusSccpMessageProofV1 {
+            version: 1,
+            commitment_root,
+            commitment,
+            merkle_proof,
+            payload,
+            finality_proof: norito::to_bytes(&finality_proof).expect("encode finality proof"),
+        };
+        let artifact =
+            build_nexus_sccp_message_transparent_proof(&bundle).expect("build SCCP artifact");
+        let inner = iroha_sccp::decode_canonical_sccp_message_transparent_inner_proof_bytes(
+            &artifact.proof_bytes,
+        )
+        .expect("decode inner proof");
+        let proof_bytes = norito::to_bytes(&artifact).expect("encode artifact");
+        let record = iroha_data_model::bridge::BridgeProofRecord {
+            proof: iroha_data_model::bridge::BridgeProof {
+                range: iroha_data_model::bridge::BridgeProofRange {
+                    start_height: 19,
+                    end_height: 19,
+                },
+                manifest_hash: [0x11; 32],
+                payload: iroha_data_model::bridge::BridgeProofPayload::TransparentZk(
+                    iroha_data_model::bridge::BridgeTransparentProof {
+                        proof: iroha_data_model::proof::ProofBox::new(
+                            artifact.message_backend.clone(),
+                            proof_bytes,
+                        ),
+                        recursion_depth: None,
+                    },
+                ),
+                pinned: false,
+            },
+            commitment: [0x22; 32],
+            size_bytes: 2,
+        };
+
+        let json = bridge_record_to_json(&record);
+        let object = json.as_object().expect("bridge record object");
+        let payload = object
+            .get("payload")
+            .and_then(norito::json::Value::as_object)
+            .expect("payload object");
+
+        assert_eq!(
+            payload
+                .get("counterparty_chain")
+                .and_then(norito::json::Value::as_str),
+            Some("ton")
+        );
+        assert_eq!(
+            payload
+                .get("inner_chain_family")
+                .and_then(norito::json::Value::as_str),
+            Some("ton")
+        );
+        assert_eq!(
+            payload
+                .get("inner_payload_kind")
+                .and_then(norito::json::Value::as_str),
+            Some("transfer")
+        );
+        assert_eq!(
+            payload
+                .get("inner_statement_hash")
+                .and_then(norito::json::Value::as_str),
+            Some(hex::encode(inner.statement_hash).as_str())
         );
     }
 

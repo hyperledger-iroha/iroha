@@ -133,7 +133,11 @@ def main(argv: list[str] | None = None) -> int:
 
     parser = argparse.ArgumentParser(description="Claim the Taira faucet for a canary account.")
     parser.add_argument("--account-id", required=True, help="canonical I105 account id")
-    parser.add_argument("--torii-root", required=True, help="Torii root URL, for example https://taira.sora.org")
+    parser.add_argument(
+        "--torii-root",
+        required=True,
+        help="Torii root URL, for example https://taira-validator-1.sora.org",
+    )
     args = parser.parse_args(argv)
 
     result = claim_faucet(args.account_id, args.torii_root)
