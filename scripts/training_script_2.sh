@@ -227,6 +227,8 @@ fi
 
 IROHAD_BIN="${IROHAD_BIN:-"$TARGET_DIR/$PROFILE/irohad"}"
 IROHA_BIN="${IROHA_BIN:-"$TARGET_DIR/$PROFILE/iroha"}"
+PEER_STATUS_NAMES=()
+PEER_STATUS_URLS=()
 
 for bin in "$IROHAD_BIN" "$IROHA_BIN"; do
   if [[ ! -x "$bin" ]]; then
@@ -235,14 +237,166 @@ for bin in "$IROHAD_BIN" "$IROHA_BIN"; do
   fi
 done
 
-status_url() {
-  printf 'http://%s:%s/status' "$BIND_HOST" "$BASE_API_PORT"
+read_toml_section_string() {
+  local section="$1"
+  local key="$2"
+  local path="$3"
+  python3 - "$section" "$key" "$path" <<'PY'
+import re
+import sys
+
+section = sys.argv[1]
+key = sys.argv[2]
+path = sys.argv[3]
+text = open(path, encoding="utf-8").read()
+section_pattern = rf'(?ms)^\[{re.escape(section)}\]\s*(.*?)(?=^\[|\Z)'
+section_match = re.search(section_pattern, text)
+if not section_match:
+    raise SystemExit(1)
+body = section_match.group(1)
+key_pattern = rf'(?m)^\s*{re.escape(key)}\s*=\s*"([^"]*)"'
+key_match = re.search(key_pattern, body)
+if not key_match:
+    raise SystemExit(1)
+print(key_match.group(1))
+PY
+}
+
+load_peer_status_endpoints() {
+  local run_dir="$1"
+  PEER_STATUS_NAMES=()
+  PEER_STATUS_URLS=()
+
+  local cfg
+  for cfg in "$run_dir"/peer*.toml; do
+    [[ -f "$cfg" ]] || continue
+    local peer_name
+    local torii_address
+    peer_name="$(basename "$cfg" .toml)"
+    if ! torii_address="$(read_toml_section_string "torii" "address" "$cfg")"; then
+      echo "[run $run] failed to resolve [torii].address from $cfg" >&2
+      return 1
+    fi
+    torii_address="${torii_address#addr:}"
+    torii_address="${torii_address%%#*}"
+    PEER_STATUS_NAMES+=("$peer_name")
+    PEER_STATUS_URLS+=("http://${torii_address}/status")
+  done
+
+  if ((${#PEER_STATUS_URLS[@]} == 0)); then
+    echo "[run $run] no peer status endpoints discovered under $run_dir" >&2
+    return 1
+  fi
+}
+
+fetch_status_fields() {
+  local url="$1"
+  local payload
+  payload="$(curl -sf "$url" 2>/dev/null || true)"
+  STATUS_PAYLOAD="$payload" python3 - <<'PY'
+import json
+import os
+import sys
+
+raw = os.environ.get("STATUS_PAYLOAD", "").strip()
+if not raw:
+    raise SystemExit(1)
+try:
+    data = json.loads(raw)
+except json.JSONDecodeError:
+    raise SystemExit(1)
+
+def as_int(value):
+    try:
+        return int(value or 0)
+    except (TypeError, ValueError):
+        return 0
+
+print(
+    as_int(data.get("blocks", data.get("height", 0))),
+    as_int(data.get("queue_size", 0)),
+    as_int(data.get("view_changes", 0)),
+    as_int(data.get("commit_time_ms", 0)),
+)
+PY
+}
+
+peer_status_snapshot() {
+  local all_reachable=true
+  local idx
+  for idx in "${!PEER_STATUS_URLS[@]}"; do
+    local name="${PEER_STATUS_NAMES[$idx]}"
+    local url="${PEER_STATUS_URLS[$idx]}"
+    local fields=""
+    if fields="$(fetch_status_fields "$url")"; then
+      local blocks queue_size view_changes commit_time_ms
+      read -r blocks queue_size view_changes commit_time_ms <<<"$fields"
+      printf '%s|%s|%s|%s|%s|%s\n' \
+        "$name" "$url" "$blocks" "$queue_size" "$view_changes" "$commit_time_ms"
+    else
+      printf '%s|%s|UNREACHABLE|UNREACHABLE|UNREACHABLE|UNREACHABLE\n' "$name" "$url"
+      all_reachable=false
+    fi
+  done
+  [[ "$all_reachable" == true ]]
+}
+
+array_contains() {
+  local needle="$1"
+  shift
+  local candidate
+  for candidate in "$@"; do
+    if [[ "$candidate" == "$needle" ]]; then
+      return 0
+    fi
+  done
+  return 1
+}
+
+dump_peer_status_snapshot() {
+  local label="$1"
+  local snapshot
+  snapshot="$(peer_status_snapshot || true)"
+  echo "[run $run] ${label}" >&2
+  while IFS='|' read -r name url blocks queue_size view_changes commit_time_ms; do
+    [[ -n "$name" ]] || continue
+    echo "[run $run] ${name} status url=${url} blocks=${blocks} queue_size=${queue_size} view_changes=${view_changes} commit_time_ms=${commit_time_ms}" >&2
+  done <<<"$snapshot"
 }
 
 wait_for_ready() {
   local deadline=$((SECONDS + READY_TIMEOUT))
+  local seen_names=()
   while ((SECONDS < deadline)); do
-    if curl -sf "$(status_url)" >/dev/null 2>&1; then
+    local snapshot
+    snapshot="$(peer_status_snapshot || true)"
+    local min_height=""
+    local max_height=0
+    local all_reachable=true
+    local ready=false
+    while IFS='|' read -r name _url blocks _queue_size _view_changes _commit_time_ms; do
+      [[ -n "$name" ]] || continue
+      if [[ "$blocks" == "UNREACHABLE" ]]; then
+        all_reachable=false
+        continue
+      fi
+      if ! array_contains "$name" "${seen_names[@]-}"; then
+        seen_names+=("$name")
+      fi
+      if [[ -z "$min_height" || "$blocks" -lt "$min_height" ]]; then
+        min_height="$blocks"
+      fi
+      if [[ "$blocks" -gt "$max_height" ]]; then
+        max_height="$blocks"
+      fi
+    done <<<"$snapshot"
+    if [[ "$all_reachable" == true && ${#seen_names[@]} -eq ${#PEER_STATUS_URLS[@]} && -n "$min_height" ]]; then
+      local spread=$((max_height - min_height))
+      if ((spread <= 1)); then
+        ready=true
+      fi
+    fi
+    if [[ "$ready" == true ]]; then
       return 0
     fi
     sleep 1
@@ -251,67 +405,145 @@ wait_for_ready() {
 }
 
 fetch_height() {
-  local payload
-  payload="$(curl -sf "$(status_url)" 2>/dev/null || true)"
-  STATUS_PAYLOAD="$payload" python3 - <<'PY'
-import json
-import os
-
-raw = os.environ.get("STATUS_PAYLOAD", "").strip()
-if not raw:
-    print(0)
-    raise SystemExit(0)
-try:
-    data = json.loads(raw)
-except json.JSONDecodeError:
-    print(0)
-    raise SystemExit(0)
-height = data.get("blocks", data.get("height", 0))
-print(int(height or 0))
-PY
+  local snapshot
+  snapshot="$(peer_status_snapshot || true)"
+  local max_height=0
+  while IFS='|' read -r _name _url blocks _queue_size _view_changes _commit_time_ms; do
+    [[ "$blocks" =~ ^[0-9]+$ ]] || continue
+    if [[ "$blocks" -gt "$max_height" ]]; then
+      max_height="$blocks"
+    fi
+  done <<<"$snapshot"
+  printf '%s\n' "$max_height"
 }
 
 fetch_commit_time_ms() {
-  local payload
-  payload="$(curl -sf "$(status_url)" 2>/dev/null || true)"
-  STATUS_PAYLOAD="$payload" python3 - <<'PY'
-import json
-import os
-
-raw = os.environ.get("STATUS_PAYLOAD", "").strip()
-if not raw:
-    print(0)
-    raise SystemExit(0)
-try:
-    data = json.loads(raw)
-except json.JSONDecodeError:
-    print(0)
-    raise SystemExit(0)
-value = data.get("commit_time_ms", 0)
-try:
-    print(int(value or 0))
-except (TypeError, ValueError):
-    print(0)
-PY
+  local snapshot
+  snapshot="$(peer_status_snapshot || true)"
+  local max_commit_time_ms=0
+  while IFS='|' read -r _name _url _blocks _queue_size _view_changes commit_time_ms; do
+    [[ "$commit_time_ms" =~ ^[0-9]+$ ]] || continue
+    if [[ "$commit_time_ms" -gt "$max_commit_time_ms" ]]; then
+      max_commit_time_ms="$commit_time_ms"
+    fi
+  done <<<"$snapshot"
+  printf '%s\n' "$max_commit_time_ms"
 }
 
 wait_for_height() {
   local target="$1"
   local start=$SECONDS
   local deadline=$((start + HEIGHT_TIMEOUT))
-  local height=0
   while ((SECONDS < deadline)); do
-    height="$(fetch_height)"
-    if [[ ! "$height" =~ ^[0-9]+$ ]]; then
-      height=0
-    fi
-    if [[ "$height" -ge "$target" ]]; then
+    local snapshot
+    snapshot="$(peer_status_snapshot || true)"
+    local min_height=""
+    local max_height=0
+    local all_reachable=true
+    while IFS='|' read -r _name _url blocks _queue_size _view_changes _commit_time_ms; do
+      [[ -n "$blocks" ]] || continue
+      if [[ "$blocks" == "UNREACHABLE" ]]; then
+        all_reachable=false
+        continue
+      fi
+      if [[ -z "$min_height" || "$blocks" -lt "$min_height" ]]; then
+        min_height="$blocks"
+      fi
+      if [[ "$blocks" -gt "$max_height" ]]; then
+        max_height="$blocks"
+      fi
+    done <<<"$snapshot"
+    if [[ "$all_reachable" == true && -n "$min_height" && "$min_height" -ge "$target" && $((max_height - min_height)) -le 1 ]]; then
       echo "$((SECONDS - start))"
       return 0
     fi
     sleep 1
   done
   return 1
+}
+
+wait_for_reuse_stabilization() {
+  local baseline_height="$1"
+  local deadline=$((SECONDS + HEIGHT_TIMEOUT))
+  local zero_queue_since=0
+  local converged_since=0
+  while ((SECONDS < deadline)); do
+    local snapshot
+    snapshot="$(peer_status_snapshot || true)"
+    local all_reachable=true
+    local all_zero_queue=true
+    local min_height=""
+    local max_height=0
+    while IFS='|' read -r _name _url blocks queue_size _view_changes _commit_time_ms; do
+      [[ -n "$blocks" ]] || continue
+      if [[ "$blocks" == "UNREACHABLE" ]]; then
+        all_reachable=false
+        all_zero_queue=false
+        continue
+      fi
+      if [[ -z "$min_height" || "$blocks" -lt "$min_height" ]]; then
+        min_height="$blocks"
+      fi
+      if [[ "$blocks" -gt "$max_height" ]]; then
+        max_height="$blocks"
+      fi
+      if [[ "$queue_size" != "0" ]]; then
+        all_zero_queue=false
+      fi
+    done <<<"$snapshot"
+    if [[ "$all_reachable" == true && "$max_height" -gt "$baseline_height" ]]; then
+      echo "[run $run] reused network advanced from restart baseline ${baseline_height} to ${max_height}" >&2
+      return 0
+    fi
+    if [[ "$all_reachable" == true && -n "$min_height" && "$min_height" -ge "$baseline_height" && "$min_height" -eq "$max_height" ]]; then
+      if ((converged_since == 0)); then
+        converged_since=$SECONDS
+      elif ((SECONDS - converged_since >= 5)); then
+        echo "[run $run] reused network converged at common height ${max_height}" >&2
+        return 0
+      fi
+    else
+      converged_since=0
+    fi
+    if [[ "$all_reachable" == true && "$all_zero_queue" == true ]]; then
+      if ((zero_queue_since == 0)); then
+        zero_queue_since=$SECONDS
+      elif ((SECONDS - zero_queue_since >= 5)); then
+        echo "[run $run] reused network held queue_size=0 across all peers for 5s at height ${max_height}" >&2
+        return 0
+      fi
+    else
+      zero_queue_since=0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+dump_reuse_stall_diagnostics() {
+  local run_dir="$1"
+  local label="$2"
+  dump_peer_status_snapshot "$label"
+  local pidfile
+  for pidfile in "$run_dir"/peer*.pid; do
+    [[ -f "$pidfile" ]] || continue
+    local pid
+    pid="$(cat "$pidfile" 2>/dev/null || true)"
+    [[ -n "$pid" ]] || continue
+    if kill -0 "$pid" 2>/dev/null; then
+      echo "[run $run] $(basename "$pidfile") pid=${pid} state=alive" >&2
+    else
+      echo "[run $run] $(basename "$pidfile") pid=${pid} state=stale" >&2
+    fi
+  done
+  local log
+  for log in "$run_dir"/peer*.log; do
+    [[ -f "$log" ]] || continue
+    echo "[run $run] $(basename "$log") recent relevant lines:" >&2
+    if ! rg -n "queue_size|view change|view_changes|timeout|stall|panic|error|warn|availability|RBC|consensus" "$log" | tail -n 20 >&2; then
+      tail -n 20 "$log" >&2 || true
+    fi
+  done
 }
 
 retry_cmd() {
@@ -322,6 +554,44 @@ retry_cmd() {
   local attempt=1
   while true; do
     if "$@"; then
+      return 0
+    fi
+    if [[ "$attempt" -ge "$attempts" ]]; then
+      echo "[run $run] ${label} failed after ${attempts} attempts"
+      return 1
+    fi
+    echo "[run $run] ${label} attempt ${attempt}/${attempts} failed; retrying..."
+    sleep "$delay"
+    attempt=$((attempt + 1))
+  done
+}
+
+already_exists_output() {
+  local output="$1"
+  [[ "$output" == *"Repeated instruction: Repetition of \`Register\`"* ]] || [[ "$output" == *" already exists"* ]]
+}
+
+retry_cmd_allow_existing() {
+  local allow_existing="$1"
+  local label="$2"
+  local attempts="$3"
+  local delay="$4"
+  shift 4
+  local attempt=1
+  local output=""
+  while true; do
+    output=""
+    if output="$("$@" 2>&1)"; then
+      if [[ -n "$output" ]]; then
+        printf '%s\n' "$output"
+      fi
+      return 0
+    fi
+    if [[ -n "$output" ]]; then
+      printf '%s\n' "$output" >&2
+    fi
+    if [[ "$allow_existing" == true ]] && already_exists_output "$output"; then
+      echo "[run $run] ${label} already exists on reused run; continuing" >&2
       return 0
     fi
     if [[ "$attempt" -ge "$attempts" ]]; then
@@ -557,7 +827,10 @@ stop_localnet() {
   for pidfile in "$run_dir"/peer*.pid; do
     [[ -f "$pidfile" ]] || continue
     pid="$(cat "$pidfile" 2>/dev/null || true)"
-    [[ -n "$pid" ]] || continue
+    if [[ -z "$pid" ]]; then
+      rm -f "$pidfile"
+      continue
+    fi
     for _ in {1..40}; do
       if kill -0 "$pid" 2>/dev/null; then
         sleep 0.25
@@ -568,6 +841,7 @@ stop_localnet() {
     if kill -0 "$pid" 2>/dev/null; then
       kill -9 "$pid" 2>/dev/null || true
     fi
+    rm -f "$pidfile"
   done
 }
 
@@ -742,13 +1016,35 @@ for run in $(seq 1 "$RUNS"); do
     failures=$((failures + 1))
     continue
   fi
-
-  if ! wait_for_ready; then
-    echo "[run $run] readiness timeout after ${READY_TIMEOUT}s" >&2
+  if ! load_peer_status_endpoints "$run_dir"; then
     stop_localnet "$run_dir"
     cleanup_run_dir=""
     failures=$((failures + 1))
     continue
+  fi
+
+  if ! wait_for_ready; then
+    echo "[run $run] readiness timeout after ${READY_TIMEOUT}s" >&2
+    dump_peer_status_snapshot "peer readiness timeout snapshot"
+    stop_localnet "$run_dir"
+    cleanup_run_dir=""
+    failures=$((failures + 1))
+    continue
+  fi
+
+  if [[ "$reuse_existing_run" == true ]]; then
+    restart_baseline_height="$(fetch_height)"
+    if [[ ! "$restart_baseline_height" =~ ^[0-9]+$ ]]; then
+      restart_baseline_height=0
+    fi
+    if ! wait_for_reuse_stabilization "$restart_baseline_height"; then
+      echo "[run $run] reused-run stabilization timeout after ${HEIGHT_TIMEOUT}s" >&2
+      dump_reuse_stall_diagnostics "$run_dir" "reused-run stabilization timed out"
+      stop_localnet "$run_dir"
+      cleanup_run_dir=""
+      failures=$((failures + 1))
+      continue
+    fi
   fi
 
   echo "[run $run] waiting for block heights..."
@@ -799,7 +1095,7 @@ for run in $(seq 1 "$RUNS"); do
   height_traffic_start=$SECONDS
   echo "[run $run] asset flow..."
   asset_ok=true
-  if ! retry_cmd "asset definition register" 3 2 \
+  if ! retry_cmd_allow_existing "$reuse_existing_run" "asset definition register" 3 2 \
       "$IROHA_BIN" --config "$client_cfg" ledger asset definition register \
       --id "$asset_def" \
       --name "$asset_name" \
@@ -820,7 +1116,7 @@ for run in $(seq 1 "$RUNS"); do
     asset_ok=false
   fi
   recipient_account="$(public_key_to_i105 "$recipient_pub")"
-  if ! retry_cmd "recipient account register" 3 2 \
+  if ! retry_cmd_allow_existing "$reuse_existing_run" "recipient account register" 3 2 \
       "$IROHA_BIN" --config "$client_cfg" ledger account register --id "$recipient_account"; then
     asset_ok=false
   elif ! wait_for_account "$client_cfg" "$recipient_account"; then
@@ -862,7 +1158,7 @@ for run in $(seq 1 "$RUNS"); do
   sig3_account="$(public_key_to_i105 "$sig3_pub")"
 
   for acct in "$sig1_account" "$sig2_account" "$sig3_account"; do
-    if ! retry_cmd "signatory account register" 3 2 \
+    if ! retry_cmd_allow_existing "$reuse_existing_run" "signatory account register" 3 2 \
         "$IROHA_BIN" --config "$client_cfg" ledger account register --id "$acct"; then
       multisig_ok=false
     elif ! wait_for_account "$client_cfg" "$acct"; then
@@ -873,7 +1169,7 @@ for run in $(seq 1 "$RUNS"); do
   multisig_seed_account="$(public_key_to_i105 "$multisig_pub")"
   multisig_spec_json="$(build_multisig_spec_json 3 120000 "$sig1_account" "$sig2_account" "$sig3_account")"
 
-  if ! retry_cmd "multisig register" 3 2 \
+  if ! retry_cmd_allow_existing "$reuse_existing_run" "multisig register" 3 2 \
       "$IROHA_BIN" --config "$client_cfg" ledger multisig register \
       --account "$multisig_seed_account" \
       --signatories "$sig1_account" "$sig2_account" "$sig3_account" \
@@ -956,6 +1252,10 @@ for run in $(seq 1 "$RUNS"); do
   if rg -n "DAG fingerprint mismatch" "$run_dir"/peer*.log >/dev/null 2>&1; then
     warn_dag=$((warn_dag + 1))
     echo "[run $run] warning: DAG fingerprint mismatch detected"
+  fi
+
+  if [[ "$reuse_existing_run" == true && ( "$asset_ok" != true || "$multisig_ok" != true || -z "$height10_s" ) ]]; then
+    dump_reuse_stall_diagnostics "$run_dir" "reused run stalled after submission"
   fi
 
   stop_localnet "$run_dir"

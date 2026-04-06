@@ -10714,7 +10714,13 @@ fn normalize_contract_value(
             ))
         }),
         ContractSchemaType::AccountId => match value {
-            Value::String(raw) => iroha_data_model::account::AccountId::parse_encoded(raw).is_ok(),
+            Value::String(raw) => iroha_data_model::account::AccountId::parse_encoded(raw)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .or_else(|_| {
+                    raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
+                        .map(|address| address.subject_id())
+                })
+                .is_ok(),
             _ => false,
         }
         .then(|| value.clone())
@@ -13015,7 +13021,10 @@ mod contract_payload_normalization_tests {
     use iroha_data_model::smart_contract::manifest::{
         EntryPointKind, EntrypointDescriptor, EntrypointParamDescriptor,
     };
-    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
+    use iroha_data_model::{
+        ValidationFail, nexus::DataSpaceId, query::error::QueryExecutionFail,
+        smart_contract::ContractAddress,
+    };
 
     use super::*;
 
@@ -13044,6 +13053,24 @@ mod contract_payload_normalization_tests {
             params: vec![EntrypointParamDescriptor {
                 name: "alias_literal".to_owned(),
                 type_name: "Blob".to_owned(),
+            }],
+            return_type: None,
+            permission: None,
+            read_keys: Vec::new(),
+            write_keys: Vec::new(),
+            access_hints_complete: Some(true),
+            access_hints_skipped: Vec::new(),
+            triggers: Vec::new(),
+        }
+    }
+
+    fn account_id_descriptor() -> EntrypointDescriptor {
+        EntrypointDescriptor {
+            name: "bind".to_owned(),
+            kind: EntryPointKind::Public,
+            params: vec![EntrypointParamDescriptor {
+                name: "controller".to_owned(),
+                type_name: "AccountId".to_owned(),
             }],
             return_type: None,
             permission: None,
@@ -13114,6 +13141,31 @@ mod contract_payload_normalization_tests {
             "alias_literal".into(),
             Value::from(hex::encode("banking@centralbank".as_bytes())),
         );
+        assert_eq!(value, Value::Object(expected));
+    }
+
+    #[test]
+    fn normalize_contract_payload_accepts_contract_address_for_account_id_fields() {
+        let descriptor = account_id_descriptor();
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            7,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("derive contract address");
+        let mut expected = std::collections::BTreeMap::new();
+        expected.insert(
+            "controller".to_owned(),
+            Value::from(contract_address.to_string()),
+        );
+        let payload = IrohaJson::new(Value::Object(expected.clone()));
+
+        let normalized = normalize_contract_payload(&descriptor, Some(&payload))
+            .expect("contract address payload should normalize")
+            .expect("payload");
+        let value = json::parse_value(normalized.get()).expect("normalized payload json");
         assert_eq!(value, Value::Object(expected));
     }
 }
@@ -13353,6 +13405,99 @@ mod multisig_selector_tests {
             signer_one_id.into(),
             signer_two_id.into(),
             alias_literal,
+            active_hash.to_string(),
+        )
+    }
+
+    fn overlong_multisig_test_world() -> (World, dm::AccountId, dm::AccountId, String) {
+        let authority = dm::AccountId::new(KeyPair::random().public_key().clone());
+        let domain_id: DomainId = DomainId::try_new("banka", "universal").expect("domain");
+        let domain = Domain::new(domain_id).build(&authority);
+
+        let viewer_key = KeyPair::random();
+        let viewer_id = dm::AccountId::new(viewer_key.public_key().clone());
+        let filler_members = (0..160_u16)
+            .map(|seed| {
+                let mut material = [0_u8; 32];
+                material[..2].copy_from_slice(&seed.to_le_bytes());
+                let key_pair =
+                    KeyPair::from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519);
+                MultisigMember::new(key_pair.public_key().clone(), 1).expect("member")
+            })
+            .collect::<Vec<_>>();
+        let policy = MultisigPolicy::new(
+            2,
+            std::iter::once(
+                MultisigMember::new(viewer_key.public_key().clone(), 1).expect("viewer member"),
+            )
+            .chain(filler_members.into_iter())
+            .collect(),
+        )
+        .expect("policy");
+        let multisig_id = dm::AccountId::new_multisig(policy);
+        let multisig_account_id: dm::AccountId = multisig_id.clone().into();
+
+        assert!(
+            multisig_account_id
+                .canonical_i105()
+                .expect("canonical multisig literal")
+                .len()
+                > 128,
+            "fixture must exercise an overlong canonical multisig literal",
+        );
+
+        let mut signatories = BTreeMap::from([(viewer_id.clone(), 1_u8)]);
+        for seed in 0..160_u16 {
+            let mut material = [0_u8; 32];
+            material[..2].copy_from_slice(&seed.to_le_bytes());
+            let key_pair = KeyPair::from_seed(material.to_vec(), iroha_crypto::Algorithm::Ed25519);
+            let _ = signatories.insert(dm::AccountId::new(key_pair.public_key().clone()), 1_u8);
+        }
+        let spec = MultisigSpec {
+            signatories,
+            quorum: NonZeroU16::new(2).expect("quorum"),
+            transaction_ttl_ms: NonZeroU64::new(60_000).expect("ttl"),
+        };
+
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            Name::from_str(MULTISIG_SPEC_METADATA_KEY).expect("spec key"),
+            IrohaJson::new(spec),
+        );
+
+        let active_instructions = vec![dm::Log::new(dm::Level::INFO, "overlong".to_owned()).into()];
+        let active_hash = HashOf::new(&active_instructions);
+
+        let multisig_account = Account::new(multisig_id.account().clone())
+            .with_metadata(metadata)
+            .build(&authority);
+        let viewer_account = Account::new(viewer_id.clone()).build(&authority);
+        let mut world = World::with([domain], [multisig_account, viewer_account], []);
+        world.smart_contract_state_mut_for_testing().insert(
+            multisig_proposal_state_contract_key(&multisig_account_id, &active_hash),
+            norito::to_bytes(
+                &iroha_executor_data_model::isi::multisig::MultisigProposalState::new(
+                    multisig_account_id.clone(),
+                    active_hash,
+                    active_instructions,
+                    1_700_000_001_000,
+                    4_000_000_000_000,
+                    BTreeSet::new(),
+                    None,
+                ),
+            )
+            .expect("encode active proposal state"),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            multisig_signatory_index_contract_key(&viewer_id),
+            norito::to_bytes(&BTreeSet::from([multisig_account_id.clone()]))
+                .expect("encode signatory index state"),
+        );
+
+        (
+            world,
+            multisig_account_id,
+            viewer_id,
             active_hash.to_string(),
         )
     }
@@ -14106,6 +14251,90 @@ mod multisig_selector_tests {
         assert_eq!(second_page.items.len(), 1);
         assert_eq!(second_page.items[0].status, "EXPIRED");
         assert!(second_page.next_cursor.is_none());
+    }
+
+    #[tokio::test]
+    async fn multisig_approvals_list_for_authority_supports_overlong_multisig_membership() {
+        let (world, multisig_account_id, viewer_id, active_hash) = overlong_multisig_test_world();
+        let state = build_state(world);
+
+        let JsonBody(response) = handle_post_multisig_approvals_list_for_authority(
+            state,
+            MultisigApprovalsListRequestDto {
+                status: vec!["COLLECTING_SIGNATURES".to_owned()],
+                operation_type: vec![],
+                requires_my_signature: false,
+                cursor: None,
+                limit: Some(10),
+            },
+            viewer_id,
+        )
+        .await
+        .expect("list approvals for authority");
+
+        assert_eq!(response.items.len(), 1);
+        assert_eq!(response.items[0].multisig_account_id, multisig_account_id);
+        assert_eq!(response.items[0].instructions_hash, active_hash);
+    }
+
+    #[tokio::test]
+    async fn multisig_approvals_list_for_authority_continues_pagination_cursor() {
+        let (
+            world,
+            _multisig_account_id,
+            _signer_one_id,
+            signer_two_id,
+            _alias_literal,
+            active_hash,
+        ) = multisig_test_world();
+        let state = build_state(world);
+
+        let JsonBody(first_page) = handle_post_multisig_approvals_list_for_authority(
+            state.clone(),
+            MultisigApprovalsListRequestDto {
+                status: vec!["COLLECTING_SIGNATURES".to_owned(), "EXPIRED".to_owned()],
+                operation_type: vec![],
+                requires_my_signature: false,
+                cursor: None,
+                limit: Some(1),
+            },
+            signer_two_id.clone(),
+        )
+        .await
+        .expect("first approvals page for authority");
+        assert_eq!(first_page.items.len(), 1);
+        assert_eq!(first_page.items[0].instructions_hash, active_hash);
+        let next_cursor = first_page.next_cursor.clone().expect("next cursor");
+
+        let JsonBody(second_page) = handle_post_multisig_approvals_list_for_authority(
+            state.clone(),
+            MultisigApprovalsListRequestDto {
+                status: vec!["COLLECTING_SIGNATURES".to_owned(), "EXPIRED".to_owned()],
+                operation_type: vec![],
+                requires_my_signature: false,
+                cursor: Some(next_cursor),
+                limit: Some(1),
+            },
+            signer_two_id.clone(),
+        )
+        .await
+        .expect("second approvals page for authority");
+        assert_eq!(second_page.items.len(), 1);
+        assert_eq!(second_page.items[0].status, "EXPIRED");
+        assert!(second_page.next_cursor.is_none());
+
+        let JsonBody(get_response) = handle_post_multisig_approvals_get_for_authority(
+            state,
+            MultisigApprovalsGetRequestDto {
+                proposal_id: Some(active_hash.clone()),
+                instructions_hash: None,
+            },
+            signer_two_id,
+        )
+        .await
+        .expect("get approvals entry for authority");
+        assert_eq!(get_response.item.instructions_hash, active_hash);
+        assert_eq!(get_response.item.status, "COLLECTING_SIGNATURES");
     }
 
     #[tokio::test]
@@ -16335,6 +16564,34 @@ pub async fn handle_post_multisig_approvals_list(
     viewer_scope: MultisigApprovalsViewerScope,
     NoritoJson(req): NoritoJson<MultisigApprovalsListRequestDto>,
 ) -> Result<JsonBody<MultisigApprovalsListResponseDto>> {
+    Ok(JsonBody(multisig_approvals_list_response(
+        &state,
+        &viewer_scope,
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_multisig_approvals_list_for_authority(
+    state: Arc<CoreState>,
+    req: MultisigApprovalsListRequestDto,
+    resolve_authority: AccountId,
+) -> Result<JsonBody<MultisigApprovalsListResponseDto>> {
+    Ok(JsonBody(multisig_approvals_list_response(
+        &state,
+        &MultisigApprovalsViewerScope {
+            viewer_account_ids: vec![resolve_authority],
+        },
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approvals_list_response(
+    state: &Arc<CoreState>,
+    viewer_scope: &MultisigApprovalsViewerScope,
+    req: &MultisigApprovalsListRequestDto,
+) -> Result<MultisigApprovalsListResponseDto> {
     let requested_statuses = requested_multisig_statuses(&req.status);
     let requested_operation_types = requested_multisig_operation_types(&req.operation_type);
     let page_limit = app_query_limits().clamp_page_limit(req.limit)?;
@@ -16401,10 +16658,7 @@ pub async fn handle_post_multisig_approvals_list(
         items.truncate(page_limit);
     }
 
-    Ok(JsonBody(MultisigApprovalsListResponseDto {
-        items,
-        next_cursor,
-    }))
+    Ok(MultisigApprovalsListResponseDto { items, next_cursor })
 }
 
 /// POST /v1/multisig/approvals/get — fetch a signer-visible multisig approval by id/hash.
@@ -16415,16 +16669,44 @@ pub async fn handle_post_multisig_approvals_get(
     viewer_scope: MultisigApprovalsViewerScope,
     NoritoJson(req): NoritoJson<MultisigApprovalsGetRequestDto>,
 ) -> Result<JsonBody<MultisigApprovalsGetResponseDto>> {
+    Ok(JsonBody(multisig_approvals_get_response(
+        &state,
+        &viewer_scope,
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+pub(crate) async fn handle_post_multisig_approvals_get_for_authority(
+    state: Arc<CoreState>,
+    req: MultisigApprovalsGetRequestDto,
+    resolve_authority: AccountId,
+) -> Result<JsonBody<MultisigApprovalsGetResponseDto>> {
+    Ok(JsonBody(multisig_approvals_get_response(
+        &state,
+        &MultisigApprovalsViewerScope {
+            viewer_account_ids: vec![resolve_authority],
+        },
+        &req,
+    )?))
+}
+
+#[cfg(feature = "app_api")]
+fn multisig_approvals_get_response(
+    state: &Arc<CoreState>,
+    viewer_scope: &MultisigApprovalsViewerScope,
+    req: &MultisigApprovalsGetRequestDto,
+) -> Result<MultisigApprovalsGetResponseDto> {
     let (hash_literal, instructions_hash) =
         resolve_multisig_proposal_hash(req.proposal_id.clone(), req.instructions_hash.clone())?;
     let mut matches = Vec::new();
 
-    for (multisig_account_id, spec) in viewer_multisig_accounts(&state, &viewer_scope)? {
-        if !multisig_approval_is_viewer_relevant(&spec, &viewer_scope) {
+    for (multisig_account_id, spec) in viewer_multisig_accounts(state, viewer_scope)? {
+        if !multisig_approval_is_viewer_relevant(&spec, viewer_scope) {
             continue;
         }
         let Some(proposal_record) =
-            load_multisig_proposal_record(&state, &multisig_account_id, &spec, &instructions_hash)?
+            load_multisig_proposal_record(state, &multisig_account_id, &spec, &instructions_hash)?
         else {
             continue;
         };
@@ -16459,7 +16741,7 @@ pub async fn handle_post_multisig_approvals_get(
         .next()
         .ok_or_else(multisig_not_found_error)?;
 
-    Ok(JsonBody(MultisigApprovalsGetResponseDto { item }))
+    Ok(MultisigApprovalsGetResponseDto { item })
 }
 
 #[cfg(feature = "app_api")]

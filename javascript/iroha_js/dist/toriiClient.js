@@ -5158,6 +5158,67 @@ export class ToriiClient {
   }
 
   /**
+   * Draft a Ministry agenda proposal submission transaction (`POST /v1/ministry/agenda/proposals/draft`).
+   * @param {{ proposal: Record<string, unknown>, authority: string }} payload
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async draftMinistryAgendaProposal(payload, options = {}) {
+    const body = JSON.stringify(normalizeMinistryAgendaProposalDraftRequest(payload));
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "draftMinistryAgendaProposal",
+    );
+    const response = await this._request(
+      "POST",
+      "/v1/ministry/agenda/proposals/draft",
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body,
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const draft = await this._maybeJson(response);
+    return normalizeMinistryAgendaProposalDraftResponse(draft);
+  }
+
+  /**
+   * Fetch a submitted Ministry agenda proposal record (`GET /v1/ministry/agenda/proposals/{proposal_id}`).
+   * @param {string} proposalId
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async getMinistryAgendaProposal(proposalId, options = {}) {
+    const normalizedProposalId = requireNonEmptyString(
+      proposalId,
+      "getMinistryAgendaProposal.proposalId",
+    );
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "getMinistryAgendaProposal",
+    );
+    const response = await this._request(
+      "GET",
+      `/v1/ministry/agenda/proposals/${encodeURIComponent(normalizedProposalId)}`,
+      {
+        headers: { Accept: "application/json" },
+        signal,
+      },
+    );
+    if (response.status === 404) {
+      return normalizeMinistryAgendaProposalGetResponse(
+        { found: false, record: null },
+        "ministry agenda proposal lookup response",
+      );
+    }
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    return normalizeMinistryAgendaProposalGetResponse(payload);
+  }
+
+  /**
    * Finalise a referendum (`POST /v1/gov/finalize`).
    * @param {Record<string, unknown>} payload
    * @returns {Promise<Record<string, unknown> | null>}
@@ -13233,6 +13294,132 @@ function normalizeSccpCounterpartySubmissionTemplate(value, context) {
   };
 }
 
+function normalizeSccpSubmissionArgumentValue(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    key: requireNonEmptyString(record.key, `${context}.key`),
+    encoding: requireNonEmptyString(record.encoding, `${context}.encoding`),
+    bytes: normalizeArbitraryHex(record.bytes, `${context}.bytes`),
+  };
+}
+
+function normalizeSccpEvmWordPublicInputs(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    messageId: normalizeHex32String(record.message_id, `${context}.message_id`),
+    payloadHash: normalizeHex32String(record.payload_hash, `${context}.payload_hash`),
+    targetDomainWord: normalizeHex32String(
+      record.target_domain_word,
+      `${context}.target_domain_word`,
+    ),
+    commitmentRoot: normalizeHex32String(record.commitment_root, `${context}.commitment_root`),
+    finalityHeightWord: normalizeHex32String(
+      record.finality_height_word,
+      `${context}.finality_height_word`,
+    ),
+    finalityBlockHash: normalizeHex32String(
+      record.finality_block_hash,
+      `${context}.finality_block_hash`,
+    ),
+  };
+}
+
+function normalizeSccpPlatformSubmissionPayload(value, context) {
+  const record = ensureRecord(value, context);
+  const platform = requireNonEmptyString(record.platform, `${context}.platform`);
+  const payload = ensureRecord(record.payload, `${context}.payload`);
+  switch (platform) {
+    case "evm_contract_call":
+    case "tron_contract_call":
+      return {
+        kind: platform,
+        value: {
+          proofBytes: normalizeArbitraryHex(payload.proof_bytes, `${context}.payload.proof_bytes`),
+          publicInputs: normalizeSccpEvmWordPublicInputs(
+            payload.public_inputs,
+            `${context}.payload.public_inputs`,
+          ),
+          statementHash: normalizeHex32String(
+            payload.statement_hash,
+            `${context}.payload.statement_hash`,
+          ),
+        },
+      };
+    case "solana_program_instruction":
+    case "substrate_runtime_call":
+      return {
+        kind: platform,
+        value: {
+          proofBytes: normalizeArbitraryHex(payload.proof_bytes, `${context}.payload.proof_bytes`),
+          publicInputsBytes: normalizeArbitraryHex(
+            payload.public_inputs_bytes,
+            `${context}.payload.public_inputs_bytes`,
+          ),
+          bundleBytes: normalizeArbitraryHex(
+            payload.bundle_bytes,
+            `${context}.payload.bundle_bytes`,
+          ),
+        },
+      };
+    case "ton_internal_message":
+      return {
+        kind: platform,
+        value: {
+          proofCell: normalizeArbitraryHex(payload.proof_cell, `${context}.payload.proof_cell`),
+          publicInputsCell: normalizeArbitraryHex(
+            payload.public_inputs_cell,
+            `${context}.payload.public_inputs_cell`,
+          ),
+          bundleCell: normalizeArbitraryHex(
+            payload.bundle_cell,
+            `${context}.payload.bundle_cell`,
+          ),
+        },
+      };
+    default:
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.platform must be a supported SCCP platform payload`,
+        `${context}.platform`,
+      );
+  }
+}
+
+function normalizeSccpCounterpartySubmissionPackage(value, context) {
+  const record = ensureRecord(value, context);
+  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    proofFamily: requireNonEmptyString(record.proof_family, `${context}.proof_family`),
+    verifierBackendKey: requireNonEmptyString(
+      verifierBackend.key,
+      `${context}.verifier_backend.key`,
+    ),
+    envelopeEncoding: requireNonEmptyString(
+      record.envelope_encoding,
+      `${context}.envelope_encoding`,
+    ),
+    submissionKind: requireNonEmptyString(
+      record.submission_kind,
+      `${context}.submission_kind`,
+    ),
+    verifierEntrypoint: requireNonEmptyString(
+      record.verifier_entrypoint,
+      `${context}.verifier_entrypoint`,
+    ),
+    platformPayload: normalizeSccpPlatformSubmissionPayload(
+      record.platform_payload,
+      `${context}.platform_payload`,
+    ),
+    arguments: parseRecordArray(record.arguments, `${context}.arguments`).map((entry, index) =>
+      normalizeSccpSubmissionArgumentValue(entry, `${context}.arguments[${index}]`),
+    ),
+    envelopeBytes: normalizeArbitraryHex(record.envelope_bytes, `${context}.envelope_bytes`),
+  };
+}
+
 function normalizeSccpProofManifestSetResponse(payload) {
   const record = ensureRecord(payload, "sccp proof manifests response");
   return {
@@ -13372,6 +13559,10 @@ function normalizeSccpMessageTransparentProofArtifact(payload) {
       `${context}.public_inputs`,
     ),
     proofBytes: normalizeArbitraryHex(record.proof_bytes, `${context}.proof_bytes`),
+    submissionPackage: normalizeSccpCounterpartySubmissionPackage(
+      record.submission_package,
+      `${context}.submission_package`,
+    ),
     bundle: normalizeSccpMessageProofBundle(record.bundle, `${context}.bundle`),
   };
   if (artifact.bundle.commitment.messageId !== artifact.publicInputs.messageId) {
@@ -13460,6 +13651,10 @@ function normalizeSccpCounterpartyProofJob(payload) {
     submissionTemplate: normalizeSccpCounterpartySubmissionTemplate(
       record.submission_template,
       `${context}.submission_template`,
+    ),
+    submissionPackage: normalizeSccpCounterpartySubmissionPackage(
+      record.submission_package,
+      `${context}.submission_package`,
     ),
     bundle: normalizeSccpMessageProofBundle(record.bundle, `${context}.bundle`),
   };
@@ -18183,6 +18378,83 @@ function normalizeGovernanceEnactPayload(input) {
     );
   }
   return payload;
+}
+
+function normalizeMinistryAgendaProposalDraftRequest(input) {
+  const record = ensureRecord(input, "draftMinistryAgendaProposal payload");
+  return {
+    proposal: ensureRecord(
+      record.proposal,
+      "draftMinistryAgendaProposal.proposal",
+    ),
+    authority: requireNonEmptyString(
+      record.authority,
+      "draftMinistryAgendaProposal.authority",
+    ),
+  };
+}
+
+function normalizeMinistryAgendaProposalRecord(
+  payload,
+  context = "ministry agenda proposal record",
+) {
+  const record = ensureRecord(payload, context);
+  return {
+    proposal: ensureRecord(record.proposal, `${context}.proposal`),
+    authority: requireNonEmptyString(record.authority, `${context}.authority`),
+    submitted_tx_hash_hex: normalizeHex32String(
+      record.submitted_tx_hash_hex,
+      `${context}.submitted_tx_hash_hex`,
+    ),
+    submitted_height: ToriiClient._normalizeUnsignedInteger(
+      record.submitted_height,
+      `${context}.submitted_height`,
+      { allowZero: true },
+    ),
+  };
+}
+
+function normalizeMinistryAgendaProposalDraftResponse(
+  payload,
+  context = "ministry agenda proposal draft response",
+) {
+  const record = ensureRecord(payload, context);
+  const base = normalizeGovernanceDraftResponse(
+    {
+      ok: record.ok,
+      tx_instructions: record.tx_instructions ?? [],
+    },
+    context,
+  );
+  return {
+    ok: base.ok,
+    agenda_proposal_id: requireNonEmptyString(
+      record.agenda_proposal_id,
+      `${context}.agenda_proposal_id`,
+    ),
+    authority: requireNonEmptyString(record.authority, `${context}.authority`),
+    tx_instructions: base.tx_instructions,
+    signable_transaction_b64: requireNonEmptyString(
+      record.signable_transaction_b64,
+      `${context}.signable_transaction_b64`,
+    ),
+  };
+}
+
+function normalizeMinistryAgendaProposalGetResponse(
+  payload,
+  context = "ministry agenda proposal lookup response",
+) {
+  const record = ensureRecord(payload, context);
+  const found = Boolean(record.found);
+  const proposalRecord =
+    record.record === undefined || record.record === null
+      ? null
+      : normalizeMinistryAgendaProposalRecord(record.record, `${context}.record`);
+  return {
+    found,
+    record: proposalRecord,
+  };
 }
 
 function normalizeGovernanceWindow(value, name) {

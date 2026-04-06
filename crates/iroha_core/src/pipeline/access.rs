@@ -845,6 +845,9 @@ fn is_entrypoint_hint_safe_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_NAME_DECODE
             | ivm::syscalls::SYSCALL_JSON_ENCODE
             | ivm::syscalls::SYSCALL_JSON_DECODE
+            | ivm::syscalls::SYSCALL_JSON_OBJECT
+            | ivm::syscalls::SYSCALL_JSON_SET_I64
+            | ivm::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
             | ivm::syscalls::SYSCALL_SCHEMA_ENCODE
             | ivm::syscalls::SYSCALL_SCHEMA_DECODE
             | ivm::syscalls::SYSCALL_SCHEMA_INFO
@@ -856,6 +859,7 @@ fn is_entrypoint_hint_safe_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_STATE_SET
             | ivm::syscalls::SYSCALL_STATE_DEL
             | ivm::syscalls::SYSCALL_GET_AUTHORITY
+            | ivm::syscalls::SYSCALL_CALL_CONTRACT
             | ivm::syscalls::SYSCALL_CURRENT_TIME_MS
             | ivm::syscalls::SYSCALL_SM3_HASH
             | ivm::syscalls::SYSCALL_SM2_VERIFY
@@ -899,6 +903,9 @@ fn is_state_only_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_NAME_DECODE
             | ivm::syscalls::SYSCALL_JSON_ENCODE
             | ivm::syscalls::SYSCALL_JSON_DECODE
+            | ivm::syscalls::SYSCALL_JSON_OBJECT
+            | ivm::syscalls::SYSCALL_JSON_SET_I64
+            | ivm::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
             | ivm::syscalls::SYSCALL_SCHEMA_ENCODE
             | ivm::syscalls::SYSCALL_SCHEMA_DECODE
             | ivm::syscalls::SYSCALL_SCHEMA_INFO
@@ -910,6 +917,7 @@ fn is_state_only_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_STATE_SET
             | ivm::syscalls::SYSCALL_STATE_DEL
             | ivm::syscalls::SYSCALL_GET_AUTHORITY
+            | ivm::syscalls::SYSCALL_CALL_CONTRACT
             | ivm::syscalls::SYSCALL_CURRENT_TIME_MS
             | ivm::syscalls::SYSCALL_SM3_HASH
             | ivm::syscalls::SYSCALL_SM2_VERIFY

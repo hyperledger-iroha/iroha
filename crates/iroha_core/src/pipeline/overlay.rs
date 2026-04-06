@@ -866,6 +866,15 @@ where
                 .map_err(OverlayBuildError::IvmLoad)?;
             let contract_call_context =
                 parse_contract_invocation_execution_context(call, record.code_bytes.as_ref())?;
+            let contract_runtime_context = Some(crate::executor::ContractRuntimeExecutionContext {
+                contract_subject: record.contract_address.subject_id(),
+                contract_address: record.contract_address.clone(),
+                contract_alias: record.contract_alias.clone(),
+                entrypoint: contract_call_context
+                    .entrypoint
+                    .clone()
+                    .expect("contract invocation parser must set entrypoint"),
+            });
 
             let accounts = Arc::new(
                 state_ro
@@ -899,6 +908,7 @@ where
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
+            host.set_contract_runtime_context(contract_runtime_context.clone());
             let snapshot = state_ro.axt_policy_snapshot();
             host = host.with_axt_policy_snapshot(&snapshot);
             apply_streaming_metadata(&mut host, streaming_meta);
@@ -1282,7 +1292,20 @@ where
             let mut vm = ivm::IVM::new(tx_gas_limit);
             let contract_call_context =
                 parse_contract_invocation_execution_context(call, record.code_bytes.as_ref())?;
-            let mut host = crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+            let contract_runtime_context = Some(crate::executor::ContractRuntimeExecutionContext {
+                contract_subject: record.contract_address.subject_id(),
+                contract_address: record.contract_address.clone(),
+                contract_alias: record.contract_alias.clone(),
+                entrypoint: contract_call_context
+                    .entrypoint
+                    .clone()
+                    .expect("contract invocation parser must set entrypoint"),
+            });
+            let mut host: crate::smartcontracts::ivm::host::CoreHostImpl<
+                crate::smartcontracts::ivm::host::QueryStateSlot<_>,
+            > = crate::smartcontracts::ivm::host::CoreHostImpl::<
+                crate::smartcontracts::ivm::host::QueryStateSlot<_>,
+            >::with_accounts_and_args(
                 tx.authority().clone(),
                 Arc::new(accounts.to_vec()),
                 contract_call_context.args.clone(),
@@ -1306,6 +1329,7 @@ where
             host.set_public_inputs_from_parameters(state_ro.world().parameters());
             host.set_vrf_epoch_seeds_from_world(state_ro.world());
             host.set_query_state(state_ro);
+            host.set_contract_runtime_context(contract_runtime_context.clone());
             let snapshot = state_ro.axt_policy_snapshot();
             host = host.with_axt_policy_snapshot(&snapshot);
             apply_streaming_metadata(&mut host, streaming_meta);
@@ -1580,13 +1604,57 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             let mut vm = ivm::IVM::new(tx_gas_limit);
             let contract_call_context =
                 parse_contract_invocation_execution_context(call, record.code_bytes.as_ref())?;
-            let mut host = crate::smartcontracts::ivm::host::CoreHost::with_accounts_and_args(
+            let contract_runtime_context = Some(crate::executor::ContractRuntimeExecutionContext {
+                contract_subject: record.contract_address.subject_id(),
+                contract_address: record.contract_address.clone(),
+                contract_alias: record.contract_alias.clone(),
+                entrypoint: contract_call_context
+                    .entrypoint
+                    .clone()
+                    .expect("contract invocation parser must set entrypoint"),
+            });
+            let mut host: crate::smartcontracts::ivm::host::CoreHostImpl<
+                crate::smartcontracts::ivm::host::QueryStateSlot<_>,
+            > = crate::smartcontracts::ivm::host::CoreHostImpl::<
+                crate::smartcontracts::ivm::host::QueryStateSlot<_>,
+            >::with_accounts_and_args(
                 tx.authority().clone(),
                 Arc::new(accounts.to_vec()),
                 contract_call_context.args.clone(),
             );
+            let amx_analysis = ivm::analysis::analyze_program(record.code_bytes.as_ref()).map_err(
+                |err| match err {
+                    ProgramAnalysisError::Metadata(_) => OverlayBuildError::IvmHeaderParse,
+                    ProgramAnalysisError::Decode(decode_err) => {
+                        OverlayBuildError::IvmLoad(decode_err)
+                    }
+                },
+            )?;
+            host.set_amx_analysis(amx_analysis);
+            let amx_limits = crate::smartcontracts::ivm::host::CoreHost::amx_limits_from_config(
+                state_ro.pipeline(),
+            );
+            host.set_amx_limits(amx_limits);
+            host.set_axt_timing(state_ro.nexus().axt);
+            host.hydrate_axt_replay_ledger(state_ro);
+            host.set_durable_state_snapshot_from_world(state_ro.world());
+            host.set_public_inputs_from_parameters(state_ro.world().parameters());
+            host.set_vrf_epoch_seeds_from_world(state_ro.world());
+            host.set_bound_contract_records_by_subject_snapshot(
+                code::snapshot_bound_contract_records_by_subject(state_ro),
+            );
+            host.set_query_state(state_ro);
+            host.set_contract_runtime_context(contract_runtime_context.clone());
+            let snapshot = state_ro.axt_policy_snapshot();
+            host = host.with_axt_policy_snapshot(&snapshot);
             apply_streaming_metadata(&mut host, streaming_meta);
-            vm.set_host(host);
+            #[cfg(feature = "telemetry")]
+            host.set_telemetry(state_ro.metrics().clone());
+            host.set_crypto_config(state_ro.crypto());
+            host.set_halo2_config(&state_ro.zk().halo2);
+            host.set_chain_id(state_ro.chain_id());
+            host.set_zk_snapshots_from_world(state_ro.world(), state_ro.zk())
+                .map_err(OverlayBuildError::IvmRun)?;
             vm.load_program(record.code_bytes.as_ref())
                 .map_err(OverlayBuildError::IvmLoad)?;
             if eff > 0 {
@@ -1596,7 +1664,7 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             apply_contract_call_execution_context(&mut vm, Some(&contract_call_context))?;
             #[cfg(feature = "telemetry")]
             let t_start = std::time::Instant::now();
-            let res = run_vm(&mut vm);
+            let res = run_vm_with_host(&mut vm, &mut host);
             if max_millis_cap > 0 {
                 let elapsed_ms = {
                     #[cfg(feature = "telemetry")]
@@ -1614,16 +1682,8 @@ pub(crate) fn build_overlay_for_transaction_quarantine(
             }
             res?;
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
-            let (queued, durable_state_overlay) = if let Some(h) = vm.host_mut_any()
-                && let Some(host) = h.downcast_mut::<crate::smartcontracts::ivm::host::CoreHost>()
-            {
-                (
-                    host.drain_instructions(),
-                    host.drain_durable_state_overlay(),
-                )
-            } else {
-                (Vec::new(), BTreeMap::new())
-            };
+            let queued = host.drain_instructions();
+            let durable_state_overlay = host.drain_durable_state_overlay();
             Ok(TxOverlay::from_ivm_execution(
                 queued,
                 ivm_gas_used,

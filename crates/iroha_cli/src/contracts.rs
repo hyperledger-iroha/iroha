@@ -712,26 +712,23 @@ struct ResolvedContractTarget {
     contract_alias: Option<iroha::data_model::smart_contract::ContractAlias>,
 }
 
-fn resolve_contract_target(
-    args: ContractTargetArgs,
-) -> Result<ResolvedContractTarget> {
-    match (args.contract_address.as_deref(), args.contract_alias.as_deref()) {
-        (Some(address), None) => Ok(
-            ResolvedContractTarget {
-                contract_address: Some(
-                    address
-                        .parse()
-                        .wrap_err("invalid --contract-address canonical literal")?,
-                ),
-                contract_alias: None,
-            },
-        ),
-        (None, Some(alias)) => Ok(
-            ResolvedContractTarget {
-                contract_address: None,
-                contract_alias: Some(alias.parse().wrap_err("invalid --contract-alias")?),
-            },
-        ),
+fn resolve_contract_target(args: ContractTargetArgs) -> Result<ResolvedContractTarget> {
+    match (
+        args.contract_address.as_deref(),
+        args.contract_alias.as_deref(),
+    ) {
+        (Some(address), None) => Ok(ResolvedContractTarget {
+            contract_address: Some(
+                address
+                    .parse()
+                    .wrap_err("invalid --contract-address canonical literal")?,
+            ),
+            contract_alias: None,
+        }),
+        (None, Some(alias)) => Ok(ResolvedContractTarget {
+            contract_address: None,
+            contract_alias: Some(alias.parse().wrap_err("invalid --contract-alias")?),
+        }),
         (None, None) => Err(eyre!(
             "provide exactly one contract target via --contract-address or --contract-alias"
         )),
@@ -745,20 +742,24 @@ fn resolve_optional_contract_address<C: RunContext>(
     context: &C,
     args: &ContractTargetArgs,
 ) -> Result<Option<iroha::data_model::smart_contract::ContractAddress>> {
-    match (args.contract_address.as_deref(), args.contract_alias.as_deref()) {
+    match (
+        args.contract_address.as_deref(),
+        args.contract_alias.as_deref(),
+    ) {
         (None, None) => Ok(None),
         (Some(_), Some(_)) => Err(eyre!(
             "provide exactly one contract target via --contract-address or --contract-alias"
         )),
-        (Some(contract_address), None) => Ok(Some(
-            contract_address
-                .parse()
-                .wrap_err("invalid --contract-address canonical literal")?,
-        )),
+        (Some(contract_address), None) => {
+            Ok(Some(contract_address.parse().wrap_err(
+                "invalid --contract-address canonical literal",
+            )?))
+        }
         (None, Some(contract_alias_raw)) => {
-            let contract_alias: iroha::data_model::smart_contract::ContractAlias = contract_alias_raw
-                .parse()
-                .wrap_err("invalid --contract-alias")?;
+            let contract_alias: iroha::data_model::smart_contract::ContractAlias =
+                contract_alias_raw
+                    .parse()
+                    .wrap_err("invalid --contract-alias")?;
             let client: Client = context.client_from_config();
             let response = client
                 .post_contract_alias_resolve(&contract_alias)
@@ -768,12 +769,14 @@ fn resolve_optional_contract_address<C: RunContext>(
 
             match status {
                 StatusCode::OK => {
-                    let value: norito::json::Value =
-                        norito::json::from_slice(&body).wrap_err("decode contract alias response")?;
+                    let value: norito::json::Value = norito::json::from_slice(&body)
+                        .wrap_err("decode contract alias response")?;
                     let resolved = value
                         .get("contract_address")
                         .and_then(norito::json::Value::as_str)
-                        .ok_or_else(|| eyre!("contract alias response missing `contract_address`"))?;
+                        .ok_or_else(|| {
+                            eyre!("contract alias response missing `contract_address`")
+                        })?;
                     Ok(Some(
                         resolved
                             .parse()
@@ -1701,7 +1704,13 @@ fn validate_local_contract_value(
             _ => false,
         },
         LocalContractSchemaType::AccountId => match value {
-            norito::json::Value::String(raw) => AccountId::parse_encoded(raw).is_ok(),
+            norito::json::Value::String(raw) => AccountId::parse_encoded(raw)
+                .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                .or_else(|_| {
+                    raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
+                        .map(|address| address.subject_id())
+                })
+                .is_ok(),
             _ => false,
         },
         LocalContractSchemaType::AssetDefinitionId => match value {
@@ -2487,10 +2496,9 @@ mod tests {
             contract_alias: None,
         })
         .expect_err("missing target should fail");
-        assert!(
-            err.to_string()
-                .contains("provide exactly one contract target via --contract-address or --contract-alias")
-        );
+        assert!(err.to_string().contains(
+            "provide exactly one contract target via --contract-address or --contract-alias"
+        ));
     }
 
     #[test]

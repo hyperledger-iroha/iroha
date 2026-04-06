@@ -7,6 +7,8 @@
 //! process-global map and ensures every node observes the same registry
 //! contents.
 
+use std::collections::BTreeMap;
+
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -225,6 +227,39 @@ pub fn fetch_bound_contract_record(
         manifest,
         code_bytes,
     })
+}
+
+/// Resolve the fully bound contract instance record for a deterministic contract subject.
+#[must_use]
+pub fn fetch_bound_contract_record_by_subject(
+    state: &impl StateReadOnly,
+    contract_subject: &AccountId,
+) -> Option<BoundContractRecord> {
+    let contract_address =
+        state
+            .world()
+            .contract_instances()
+            .iter()
+            .find_map(|(candidate, _)| {
+                (candidate.subject_id() == *contract_subject).then(|| candidate.clone())
+            })?;
+    fetch_bound_contract_record(state, &contract_address)
+}
+
+/// Snapshot all deployed contract instance records keyed by deterministic contract subject.
+#[must_use]
+pub fn snapshot_bound_contract_records_by_subject(
+    state: &impl StateReadOnly,
+) -> BTreeMap<AccountId, BoundContractRecord> {
+    state
+        .world()
+        .contract_instances()
+        .iter()
+        .filter_map(|(contract_address, _)| {
+            fetch_bound_contract_record(state, contract_address)
+                .map(|record| (contract_address.subject_id(), record))
+        })
+        .collect()
 }
 
 #[cfg(test)]

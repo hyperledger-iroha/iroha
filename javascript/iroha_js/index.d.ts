@@ -3498,6 +3498,31 @@ export interface ToriiGovernanceDraftResponse {
   reason?: string | null;
 }
 
+export interface MinistryAgendaProposalDraftRequest {
+  proposal: Record<string, unknown>;
+  authority: string;
+}
+
+export interface MinistryAgendaProposalDraftResponse {
+  ok: boolean;
+  agenda_proposal_id: string;
+  authority: string;
+  tx_instructions: ReadonlyArray<ToriiGovernanceDraftInstruction>;
+  signable_transaction_b64: string;
+}
+
+export interface MinistryAgendaProposalRecord {
+  proposal: Record<string, unknown>;
+  authority: string;
+  submitted_tx_hash_hex: string;
+  submitted_height: number;
+}
+
+export interface MinistryAgendaProposalGetResponse {
+  found: boolean;
+  record: MinistryAgendaProposalRecord | null;
+}
+
 export type ToriiGovernanceBallotDirection = "Aye" | "Nay" | "Abstain";
 
 export interface ToriiGovernanceDeployContractProposalRequest {
@@ -7656,6 +7681,14 @@ export declare class ToriiClient {
   getGovernanceCouncilAudit(
     options?: ToriiGovernanceCouncilAuditOptions,
   ): Promise<ToriiGovernanceCouncilAuditResponse>;
+  draftMinistryAgendaProposal(
+    payload: MinistryAgendaProposalDraftRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<MinistryAgendaProposalDraftResponse>;
+  getMinistryAgendaProposal(
+    proposalId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<MinistryAgendaProposalGetResponse>;
   governanceFinalizeReferendum(
     payload: ToriiGovernanceFinalizeRequest,
     options?: { signal?: AbortSignal },
@@ -8309,6 +8342,11 @@ export function resignSignedTransaction(
 
 export function encodeSignedTransactionNorito(
   signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+): Buffer;
+
+export function finalizeSignedTransaction(
+  unsignedTxBytes: ArrayBufferView | ArrayBuffer | Buffer,
+  detachedSignature: ArrayBufferView | ArrayBuffer | Buffer,
 ): Buffer;
 
 export interface OfflineEnvelope {
@@ -9256,6 +9294,10 @@ export function buildFinalizeReferendumInstruction(
 
 export function buildPersistCouncilForEpochInstruction(
   input: PersistCouncilForEpochInstructionInput,
+): object;
+
+export function buildSubmitAgendaProposalInstruction(
+  input: { proposal: Record<string, unknown> },
 ): object;
 
 export interface ClaimTwitterFollowRewardInstructionInput {

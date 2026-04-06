@@ -2189,6 +2189,26 @@ fn multisig_paths() -> Map {
             "Multisig alias or approval not found.",
         )),
     );
+    paths.insert(
+        "/v1/multisig/approvals/list_for_authority".to_owned(),
+        Value::Object(multisig_post_operation(
+            "List caller-authority multisig approvals.",
+            "List multisig approvals visible to the authenticated caller authority using the signatory index.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            "Caller authority is not allowed to view the requested approvals.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/get_for_authority".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Fetch a caller-authority multisig approval.",
+            "Fetch a multisig approval visible to the authenticated caller authority by proposal selector.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            "Caller authority is not allowed to view the requested approval.",
+        )),
+    );
     paths
 }
 
@@ -2437,6 +2457,30 @@ fn zk_paths() -> Map {
 
 fn governance_paths() -> Map {
     let mut paths = Map::new();
+    paths.insert(
+        "/v1/ministry/agenda/proposals/draft".to_owned(),
+        Value::Object(json_post_operation(
+            "Ministry",
+            "Draft a Ministry agenda proposal submission.",
+            "Build a detached-signature-ready Ministry agenda proposal transaction and return the canonical payload bytes for Connect signing.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/ministry/agenda/proposals/{proposal_id}".to_owned(),
+        Value::Object(json_get_operation(
+            "Ministry",
+            "Fetch a submitted Ministry agenda proposal.",
+            "Fetch a persisted Ministry agenda proposal submission record by proposal id.",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "proposal_id",
+                "Agenda proposal identifier.",
+            )],
+        )),
+    );
     paths.insert(
         "/v1/gov/proposals/deploy-contract".to_owned(),
         Value::Object(json_post_operation(
@@ -10382,7 +10426,11 @@ mod tests {
         assert!(paths.contains_key("/v1/multisig/proposals/get"));
         assert!(paths.contains_key("/v1/multisig/approvals/list"));
         assert!(paths.contains_key("/v1/multisig/approvals/get"));
+        assert!(paths.contains_key("/v1/multisig/approvals/list_for_authority"));
+        assert!(paths.contains_key("/v1/multisig/approvals/get_for_authority"));
         assert!(paths.contains_key("/v1/controls/asset-transfer/get"));
+        assert!(paths.contains_key("/v1/ministry/agenda/proposals/draft"));
+        assert!(paths.contains_key("/v1/ministry/agenda/proposals/{proposal_id}"));
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
         assert!(paths.contains_key("/v1/gov/stream"));
         assert!(paths.contains_key("/v1/telemetry/live"));

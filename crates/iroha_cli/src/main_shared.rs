@@ -3497,16 +3497,16 @@ mod peer {
 mod multisig {
     use core::convert::TryFrom;
     use std::{
-        collections::{BTreeMap, BTreeSet},
+        collections::BTreeMap,
         num::{NonZeroU16, NonZeroU64},
         time::{Duration, SystemTime},
     };
 
-    use derive_more::{Constructor, Display};
-    use iroha::data_model::isi::CustomInstruction;
     use iroha::executor_data_model::isi::multisig::*;
 
     use super::*;
+
+    type ProposalKey = HashOf<Vec<InstructionBox>>;
 
     #[derive(clap::Subcommand, Debug)]
     pub enum Command {
@@ -3840,13 +3840,13 @@ mod multisig {
     pub enum List {
         /// List all pending multisig transactions relevant to you
         All {
-            /// Maximum number of role IDs to scan for multisig (server-side limit)
+            /// Maximum number of proposals to emit after server ordering (client-side cap)
             #[arg(long)]
             limit: Option<u64>,
-            /// Offset into the role ID set (server-side offset)
+            /// Number of ordered proposals to skip after fetching cursor pages
             #[arg(long, default_value_t = 0)]
             offset: u64,
-            /// Batch fetch size for roles query
+            /// Cursor page size for the remote approvals list endpoint
             #[arg(long)]
             fetch_size: Option<u64>,
         },
@@ -3855,7 +3855,6 @@ mod multisig {
     impl Run for List {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
             let client = context.client_from_config();
-            let me = client.account.clone();
             let (limit, offset, fetch_size) = match self {
                 Self::All {
                     limit,
@@ -3863,48 +3862,25 @@ mod multisig {
                     fetch_size,
                 } => (limit, offset, fetch_size),
             };
-            let mut roles_builder = client.query(FindRolesByAccountId::new(me.clone()));
-            if limit.is_some() || offset > 0 {
-                let pagination =
-                    iroha::data_model::query::parameters::Pagination::new(
-                        limit.and_then(NonZeroU64::new),
-                        offset,
-                    );
-                roles_builder = roles_builder.with_pagination(pagination);
-            }
-            if let Some(n) = fetch_size.and_then(NonZeroU64::new) {
-                let fs = iroha::data_model::query::parameters::FetchSize::new(Some(n));
-                roles_builder = roles_builder.with_fetch_size(fs);
-            }
-            let roles = roles_builder.execute_all()?;
-            let multisig_roles = roles
-                .into_iter()
-                .filter(|role_id| role_id.name().as_ref().starts_with(MULTISIG_SIGNATORY))
-                .collect::<Vec<_>>();
-            let mut fetch_accounts = || {
-                let mut builder = client.query(FindAccounts);
-                if let Some(n) = fetch_size.and_then(NonZeroU64::new) {
-                    let fs = iroha::data_model::query::parameters::FetchSize::new(Some(n));
-                    builder = builder.with_fetch_size(fs);
+            let entries = load_multisig_list_all_entries(&client, fetch_size, offset, limit)?;
+            match context.output_format() {
+                CliOutputFormat::Json => context.print_data(&entries),
+                CliOutputFormat::Text => {
+                    let rendered = render_multisig_list_all_text(&entries)?;
+                    if rendered.is_empty() {
+                        return Ok(());
+                    }
+                    context.println(rendered)
                 }
-                builder.execute_all().map_err(Into::into)
-            };
-            let roots =
-                resolve_multisig_accounts_from_roles(multisig_roles, &mut fetch_accounts)?;
-            let mut stack = roots
-                .into_iter()
-                .map(|account_id| Context::new(me.clone(), account_id, None))
-                .collect::<Vec<_>>();
-            let mut proposals = BTreeMap::new();
-
-            fold_proposals(&mut proposals, &mut stack, &client)?;
-            context.print_data(&proposals)
+            }
         }
     }
 
-    const DELIMITER: char = '/';
-    const MULTISIG: &str = "multisig";
-    const MULTISIG_SIGNATORY: &str = "MULTISIG_SIGNATORY";
+    fn spec_key() -> Name {
+        "multisig/spec".parse().expect("valid multisig spec key")
+    }
+
+    const COLLECTING_SIGNATURES_STATUS: &str = "COLLECTING_SIGNATURES";
 
     fn surface_policy_ttl<C: RunContext>(
         context: &mut C,
@@ -3992,424 +3968,189 @@ mod multisig {
         ))
     }
 
-    fn spec_key() -> Name {
-        format!("{MULTISIG}{DELIMITER}spec").parse().unwrap()
+    #[derive(Debug, Clone, PartialEq, Eq, crate::json_macros::JsonSerialize)]
+    struct MultisigListAllEntry {
+        multisig_account_id: AccountId,
+        proposal_id: String,
+        instructions_hash: String,
+        status: String,
+        operation_type: String,
+        intent: Option<Json>,
+        proposed_at_ms: u64,
+        terminal_at_ms: Option<u64>,
+        proposal: MultisigProposalValue,
     }
 
-    fn account_role_suffix(account: &AccountId) -> String {
-        const MAX_CANONICAL_SUFFIX_LEN: usize = 128;
-        if let Ok(canonical_suffix) = account.canonical_i105()
-            && canonical_suffix.len() <= MAX_CANONICAL_SUFFIX_LEN
-        {
-            return canonical_suffix;
-        }
-        HashOf::new(account).to_string()
+    fn multisig_approvals_remote_page_size(
+        fetch_size: Option<u64>,
+        limit: Option<u64>,
+    ) -> Option<u64> {
+        fetch_size.or(limit)
     }
 
-    fn multisig_role_suffix(role: &RoleId) -> Option<&str> {
-        role.name()
-            .as_ref()
-            .strip_prefix(MULTISIG_SIGNATORY)?
-            .rsplit_once(DELIMITER)
-            .map(|(_, suffix)| suffix)
-    }
-
-    fn resolve_multisig_accounts_from_roles<F>(
-        roles: Vec<RoleId>,
-        fetch_accounts: &mut F,
-    ) -> Result<Vec<AccountId>>
+    fn collect_multisig_approvals_with<F>(
+        fetch_size: Option<u64>,
+        offset: u64,
+        limit: Option<u64>,
+        fetch_page: &mut F,
+    ) -> Result<Vec<iroha::client::MultisigApprovalEntry>>
     where
-        F: FnMut() -> Result<Vec<Account>>,
+        F: FnMut(
+            iroha::client::MultisigApprovalsListRequest,
+        ) -> Result<iroha::client::MultisigApprovalsListResponse>,
     {
-        let mut resolved = BTreeSet::new();
-        let mut unresolved_suffixes = BTreeSet::new();
+        let mut cursor = None;
+        let mut skip_remaining = usize::try_from(offset).wrap_err("multisig offset exceeds usize")?;
+        let mut remaining_limit = limit
+            .map(|value| usize::try_from(value).wrap_err("multisig limit exceeds usize"))
+            .transpose()?;
+        let mut approvals = Vec::new();
+        let remote_limit = multisig_approvals_remote_page_size(fetch_size, limit);
 
-        for role in roles {
-            let Some(suffix) = multisig_role_suffix(&role) else {
-                continue;
-            };
-            match AccountId::parse_encoded(suffix)
-                .map(iroha::data_model::account::ParsedAccountId::into_account_id)
-            {
-                Ok(account_id) => {
-                    let _ = resolved.insert(account_id);
-                }
-                Err(_) => {
-                    let _ = unresolved_suffixes.insert(suffix.to_owned());
-                }
+        loop {
+            if remaining_limit == Some(0) {
+                break;
             }
-        }
 
-        if !unresolved_suffixes.is_empty() {
-            for account in fetch_accounts()? {
-                if account.metadata().get(&spec_key()).is_none() {
+            let response = fetch_page(iroha::client::MultisigApprovalsListRequest {
+                status: vec![COLLECTING_SIGNATURES_STATUS.to_owned()],
+                operation_type: Vec::new(),
+                requires_my_signature: false,
+                cursor: cursor.clone(),
+                limit: remote_limit,
+            })?;
+
+            for entry in response.items {
+                if skip_remaining > 0 {
+                    skip_remaining -= 1;
                     continue;
                 }
-                let suffix = account_role_suffix(account.id());
-                if unresolved_suffixes.remove(&suffix) {
-                    let _ = resolved.insert(account.id().clone());
-                    if unresolved_suffixes.is_empty() {
-                        break;
-                    }
+                if remaining_limit == Some(0) {
+                    break;
+                }
+                approvals.push(entry);
+                if let Some(remaining) = remaining_limit.as_mut() {
+                    *remaining -= 1;
                 }
             }
+
+            if response.next_cursor.is_none() {
+                break;
+            }
+            cursor = response.next_cursor;
         }
 
-        Ok(resolved.into_iter().collect())
+        Ok(approvals)
     }
 
-    type PendingProposals = BTreeMap<ProposalKey, ProposalView>;
-
-    type ProposalKey = HashOf<Vec<InstructionBox>>;
-
-    #[derive(Debug, Clone, Default, crate::json_macros::FastJsonWrite)]
-    struct ProposalView {
-        instructions: Vec<InstructionBox>,
-        proposed_at: String,
-        expires_in: String,
-        approval_path: Vec<String>,
-    }
-
-    #[derive(Debug, Display, Constructor)]
-    #[display("{weight} {} [{got}/{quorum}] {target}", self.relation())]
-    struct ApprovalEdge {
-        weight: u8,
-        has_approved: bool,
-        got: u16,
-        quorum: u16,
-        target: AccountId,
-    }
-
-    impl ApprovalEdge {
-        fn relation(&self) -> &str {
-            if self.has_approved { "joined" } else { "->" }
-        }
-    }
-
-    #[derive(Debug, Constructor, Clone, PartialEq, Eq)]
-    struct Context {
-        child: AccountId,
-        this: AccountId,
-        key_span: Option<(ProposalKey, ProposalKey)>,
-    }
-
-    fn fold_proposals(
-        proposals: &mut PendingProposals,
-        stack: &mut Vec<Context>,
+    fn collect_multisig_approvals(
         client: &Client,
-    ) -> Result<()> {
-        let mut fetch_account = |account_id: &AccountId| {
-            client
-                .query_single(FindAccountById::new(account_id.clone()))
-                .map_err(Into::into)
-        };
-        let mut fetch_proposals = |account_id: &AccountId| {
-            let response =
-                client.post_multisig_proposals_list(account_id, &["COLLECTING_SIGNATURES"])?;
-            response
-                .proposals
+        fetch_size: Option<u64>,
+        offset: u64,
+        limit: Option<u64>,
+    ) -> Result<Vec<iroha::client::MultisigApprovalEntry>> {
+        let mut fetch_page = |request| client.post_multisig_approvals_list_for_authority(&request);
+        collect_multisig_approvals_with(fetch_size, offset, limit, &mut fetch_page)
+    }
+
+    fn multisig_list_all_entry_from_approval(
+        approval: iroha::client::MultisigApprovalEntry,
+    ) -> MultisigListAllEntry {
+        let iroha::client::MultisigApprovalEntry {
+            multisig_account_id,
+            proposal_id,
+            instructions_hash,
+            proposal,
+            operation_type,
+            intent,
+            status,
+            terminal_at_ms,
+            ..
+        } = approval;
+        MultisigListAllEntry {
+            multisig_account_id,
+            proposal_id,
+            instructions_hash,
+            status,
+            operation_type,
+            intent,
+            proposed_at_ms: proposal.proposed_at_ms,
+            terminal_at_ms,
+            proposal,
+        }
+    }
+
+    fn load_multisig_list_all_entries(
+        client: &Client,
+        fetch_size: Option<u64>,
+        offset: u64,
+        limit: Option<u64>,
+    ) -> Result<Vec<MultisigListAllEntry>> {
+        collect_multisig_approvals(client, fetch_size, offset, limit).map(|approvals| {
+            approvals
                 .into_iter()
-                .map(|entry| {
-                    let proposal_key = entry.instructions_hash.parse::<ProposalKey>().map_err(
-                        |err| {
-                            eyre!(
-                                "invalid multisig proposal hash `{}` for `{account_id}`: {err}",
-                                entry.instructions_hash
-                            )
-                        },
-                    )?;
-                    Ok((proposal_key, entry.proposal))
-                })
-                .collect::<Result<Vec<_>>>()
-        };
-        fold_proposals_with(proposals, stack, &mut fetch_account, &mut fetch_proposals)
+                .map(multisig_list_all_entry_from_approval)
+                .collect()
+        })
     }
 
-    fn fold_proposals_with<F, G>(
-        proposals: &mut PendingProposals,
-        stack: &mut Vec<Context>,
-        fetch_account: &mut F,
-        fetch_proposals: &mut G,
-    ) -> Result<()>
-    where
-        F: FnMut(&AccountId) -> Result<Account>,
-        G: FnMut(&AccountId) -> Result<Vec<(ProposalKey, MultisigProposalValue)>>,
-    {
-        let Some(context) = stack.pop() else {
-            return Ok(());
-        };
-        let account = fetch_account(&context.this)?;
-        let Some(spec_value) = account.metadata().get(&spec_key()) else {
-            return fold_proposals_with(proposals, stack, fetch_account, fetch_proposals);
-        };
-        let spec: MultisigSpec = spec_value.clone().try_into_any_norito()?;
-        for (proposal_key, proposal_value) in fetch_proposals(&context.this)?
-            .into_iter()
-            .filter(|(k, _v)| context.key_span.is_none_or(|(_, top)| *k == top))
-        {
-            process_proposal(
-                proposals,
-                stack,
-                &context,
-                &proposal_key,
-                &proposal_value,
-                &spec,
-            );
-        }
-        fold_proposals_with(proposals, stack, fetch_account, fetch_proposals)
-    }
-
-    fn process_proposal(
-        proposals: &mut PendingProposals,
-        stack: &mut Vec<Context>,
-        context: &Context,
-        proposal_key: &ProposalKey,
-        proposal_value: &MultisigProposalValue,
-        spec: &MultisigSpec,
-    ) {
-        let root_key = context
-            .key_span
-            .as_ref()
-            .map_or(*proposal_key, |(leaf, _)| *leaf);
-
-        let mut is_root_proposal = context.key_span.is_none();
-
-        for instruction in &proposal_value.instructions {
-            if let Some(MultisigInstructionBox::Approve(approve)) =
-                decode_multisig_instruction(instruction)
-            {
-                let next_context = Context::new(
-                    context.this.clone(),
-                    approve.account.clone(),
-                    Some((root_key, approve.instructions_hash)),
-                );
-                if !stack.contains(&next_context) {
-                    stack.push(next_context);
-                }
-                is_root_proposal = false;
-            }
-        }
-
-        let proposal_status = proposals.entry(root_key).or_default();
-        let child_weight = signatory_weight_by_subject(spec, &context.child)
-            .expect("context child must be a signatory subject");
-
-        let edge = ApprovalEdge::new(
-            child_weight,
-            approval_contains_subject(&proposal_value.approvals, &context.child),
-            approval_weight_by_subject(spec, &proposal_value.approvals),
-            spec.quorum.into(),
-            context.this.clone(),
-        );
-        proposal_status.approval_path.push(format!("{edge}"));
-
-        if is_root_proposal {
-            proposal_status
-                .instructions
-                .clone_from(&proposal_value.instructions);
-            proposal_status.proposed_at = {
-                let proposed_at = Duration::from_secs(
-                    Duration::from_millis(proposal_value.proposed_at_ms).as_secs(),
-                );
-                let timestamp = SystemTime::UNIX_EPOCH.checked_add(proposed_at).unwrap();
-                humantime::Timestamp::from(timestamp).to_string()
-            };
-            proposal_status.expires_in = {
-                let now = SystemTime::now()
-                    .duration_since(SystemTime::UNIX_EPOCH)
-                    .unwrap();
-                let expires_at = Duration::from_millis(proposal_value.expires_at_ms);
-                humantime::Duration::from(Duration::from_secs(
-                    expires_at.saturating_sub(now).as_secs(),
-                ))
-                .to_string()
-            };
+    fn format_multisig_intent(intent: &Option<Json>) -> Result<String> {
+        match intent {
+            Some(value) => norito::json::to_json(value)
+                .map_err(|err| eyre!("failed to render multisig intent: {err}")),
+            None => Ok("null".to_owned()),
         }
     }
 
-    fn decode_multisig_instruction(instruction: &InstructionBox) -> Option<MultisigInstructionBox> {
-        let custom = instruction.as_any().downcast_ref::<CustomInstruction>()?;
-        MultisigInstructionBox::try_from(&custom.payload).ok()
-    }
-
-    fn signatory_weight_by_subject(spec: &MultisigSpec, account: &AccountId) -> Option<u8> {
-        let subject = account.subject_id();
-        spec.signatories
-            .iter()
-            .find_map(|(signatory, weight)| (signatory.subject_id() == subject).then_some(*weight))
-    }
-
-    fn approval_contains_subject(approvals: &BTreeSet<AccountId>, account: &AccountId) -> bool {
-        let subject = account.subject_id();
-        approvals
-            .iter()
-            .any(|approved| approved.subject_id() == subject)
-    }
-
-    fn approval_weight_by_subject(spec: &MultisigSpec, approvals: &BTreeSet<AccountId>) -> u16 {
-        let approved_subjects: BTreeSet<_> = approvals.iter().map(AccountId::subject_id).collect();
-        spec.signatories
-            .iter()
-            .filter(|(signatory, _)| approved_subjects.contains(&signatory.subject_id()))
-            .map(|(_, weight)| u16::from(*weight))
-            .sum()
+    fn render_multisig_list_all_text(entries: &[MultisigListAllEntry]) -> Result<String> {
+        let mut blocks = Vec::with_capacity(entries.len());
+        for entry in entries {
+            blocks.push(format!(
+                "multisig_account_id: {}\nproposal_id: {}\nstatus: {}\noperation_type: {}\nintent: {}\nproposed_at_ms: {}",
+                entry.multisig_account_id,
+                entry.proposal_id,
+                entry.status,
+                entry.operation_type,
+                format_multisig_intent(&entry.intent)?,
+                entry.proposed_at_ms,
+            ));
+        }
+        Ok(blocks.join("\n\n"))
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
-        use iroha::crypto::{Algorithm, KeyPair};
-        use iroha::data_model::{
-            Level,
-            account::{Account, MultisigMember, MultisigPolicy},
-            domain::DomainId,
-            isi::Log,
-            prelude::Json,
-            role::RoleId,
-        };
-        use iroha_crypto::HashOf;
-        use std::{
-            collections::{BTreeMap, BTreeSet},
-            num::{NonZeroU16, NonZeroU64},
-        };
+        use iroha::crypto::KeyPair;
+        use std::collections::BTreeSet;
 
-        fn account_from_seed(seed: u8, domain: &DomainId) -> AccountId {
-            let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
-            let _ = domain;
-            AccountId::new(key_pair.public_key().clone())
-        }
-
-        #[test]
-        fn approval_weight_by_subject_deduplicates_cross_domain_subjects() {
-            let home: DomainId = DomainId::try_new("home", "universal").unwrap();
-            let shared = account_from_seed(1, &home);
-            let shared_alt = shared.clone();
-            let peer = account_from_seed(2, &home);
-            let spec = MultisigSpec::new(
-                BTreeMap::from([(shared.clone(), 1), (peer.clone(), 1)]),
-                NonZeroU16::new(2).unwrap(),
-                NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+        fn sample_approval_entry(
+            suffix: &str,
+            proposed_at_ms: u64,
+        ) -> iroha::client::MultisigApprovalEntry {
+            let multisig_account_id = AccountId::new(KeyPair::random().public_key().clone());
+            let proposal = MultisigProposalValue::new(
+                Vec::new(),
+                proposed_at_ms,
+                proposed_at_ms + 60_000,
+                BTreeSet::new(),
+                None,
             );
-            let approvals = BTreeSet::from([shared.clone(), shared_alt, peer.clone()]);
-            assert_eq!(
-                approval_weight_by_subject(&spec, &approvals),
-                2,
-                "the same subject approving from two domains must be counted once"
-            );
-            assert!(
-                approval_contains_subject(&approvals, &shared),
-                "subject approval lookup should ignore domain scope"
-            );
-        }
-
-        #[test]
-        fn fold_proposals_skips_accounts_without_spec_metadata() {
-            let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-            let account_id = account_from_seed(9, &domain);
-            let account = Account::new(account_id.clone()).build(&account_id);
-
-            let mut accounts = BTreeMap::new();
-            accounts.insert(account_id.clone(), account);
-
-            let mut proposals = BTreeMap::new();
-            let mut stack = vec![Context::new(account_id.clone(), account_id.clone(), None)];
-            let mut fetch_account = |id: &AccountId| {
-                accounts
-                    .get(id)
-                    .cloned()
-                    .ok_or_else(|| eyre!("Account not found in test map"))
-            };
-            let mut fetch_proposals =
-                |_id: &AccountId| -> Result<Vec<(ProposalKey, MultisigProposalValue)>> {
-                    Ok(Vec::new())
-                };
-
-            fold_proposals_with(
-                &mut proposals,
-                &mut stack,
-                &mut fetch_account,
-                &mut fetch_proposals,
-            )
-            .expect("fold proposals");
-            assert!(proposals.is_empty());
-        }
-
-        #[test]
-        fn multisig_role_suffix_extracts_domainless_suffix() {
-            let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-            let account_id = account_from_seed(10, &domain);
-            let suffix = account_role_suffix(&account_id);
-            let role: RoleId = format!(
-                "{MULTISIG_SIGNATORY}{DELIMITER}domainless{DELIMITER}{suffix}"
-            )
-            .parse()
-            .expect("valid role id");
-
-            assert_eq!(multisig_role_suffix(&role), Some(suffix.as_str()));
-        }
-
-        #[test]
-        fn resolve_multisig_accounts_from_roles_resolves_hashed_suffixes() {
-            let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-            let signatory = account_from_seed(11, &domain);
-            let cosignatory = account_from_seed(12, &domain);
-            let mut members = Vec::with_capacity((u8::MAX as usize) + 1);
-            let mut signatories = BTreeMap::new();
-            for seed in 0..=(u8::MAX as usize) {
-                let mut material = [0_u8; 32];
-                material[..8].copy_from_slice(&(seed as u64).to_le_bytes());
-                let key_pair = KeyPair::from_seed(material.to_vec(), Algorithm::Ed25519);
-                let member = MultisigMember::new(key_pair.public_key().clone(), 1)
-                    .expect("multisig member");
-                members.push(member);
-                let account_id = AccountId::new(key_pair.public_key().clone());
-                let _ = signatories.insert(account_id, 1);
+            iroha::client::MultisigApprovalEntry {
+                multisig_account_id,
+                spec: MultisigSpec::new(
+                    BTreeMap::new(),
+                    NonZeroU16::new(1).expect("quorum"),
+                    NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).expect("ttl"),
+                ),
+                proposal_id: format!("proposal-{suffix}"),
+                instructions_hash: format!("hash-{suffix}"),
+                proposal,
+                operation_type: "TRANSFER".to_owned(),
+                intent: Some(Json::new(norito::json!({ "sequence": suffix }))),
+                status: COLLECTING_SIGNATURES_STATUS.to_owned(),
+                terminal_at_ms: None,
             }
-            let policy = MultisigPolicy::new(1, members).expect("multisig policy");
-            let multisig_account = AccountId::new_multisig(policy);
-            let hashed_suffix = account_role_suffix(&multisig_account);
-            assert!(
-                AccountId::parse_encoded(&hashed_suffix).is_err(),
-                "large multisig account should use hashed role suffixes"
-            );
-
-            let canonical_suffix = account_role_suffix(&signatory);
-            let roles = vec![
-                format!("{MULTISIG_SIGNATORY}{DELIMITER}domainless{DELIMITER}{hashed_suffix}")
-                    .parse()
-                    .expect("hashed multisig role"),
-                format!(
-                    "{MULTISIG_SIGNATORY}{DELIMITER}domainless{DELIMITER}{canonical_suffix}"
-                )
-                .parse()
-                .expect("canonical signatory role"),
-            ];
-
-            let spec = MultisigSpec::new(
-                signatories,
-                NonZeroU16::new(1).unwrap(),
-                NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
-            );
-            let plain_account = Account::new(signatory.clone()).build(&signatory);
-            let mut metadata = iroha::data_model::metadata::Metadata::default();
-            metadata.insert(spec_key(), Json::new(spec));
-            let multisig_account_record = Account::new(multisig_account.clone())
-                .with_metadata(metadata)
-                .build(&cosignatory);
-            let mut fetch_accounts = || {
-                Ok(vec![
-                    plain_account.clone(),
-                    multisig_account_record.clone(),
-                ])
-            };
-
-            let resolved =
-                resolve_multisig_accounts_from_roles(roles, &mut fetch_accounts)
-                    .expect("resolve multisig roots from roles");
-            let expected = BTreeSet::from([multisig_account, signatory])
-                .into_iter()
-                .collect::<Vec<_>>();
-            assert_eq!(resolved, expected);
         }
 
         #[test]
@@ -4431,127 +4172,77 @@ mod multisig {
         }
 
         #[test]
-        fn process_proposal_enqueues_relay_context() {
-            let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-            let parent_account = account_from_seed(1, &domain);
-            let current_account = account_from_seed(2, &domain);
-            let child_account = account_from_seed(3, &domain);
+        fn collect_multisig_approvals_applies_fetch_size_offset_and_limit_across_pages() {
+            let entries = vec![
+                sample_approval_entry("0", 5),
+                sample_approval_entry("1", 4),
+                sample_approval_entry("2", 3),
+                sample_approval_entry("3", 2),
+                sample_approval_entry("4", 1),
+            ];
+            let mut requests = Vec::new();
+            let mut fetch_page = |request: iroha::client::MultisigApprovalsListRequest| {
+                requests.push((request.cursor.clone(), request.limit));
+                let page = match request.cursor.as_deref() {
+                    None => iroha::client::MultisigApprovalsListResponse {
+                        items: entries[..2].to_vec(),
+                        next_cursor: Some("cursor-1".to_owned()),
+                    },
+                    Some("cursor-1") => iroha::client::MultisigApprovalsListResponse {
+                        items: entries[2..4].to_vec(),
+                        next_cursor: Some("cursor-2".to_owned()),
+                    },
+                    Some("cursor-2") => iroha::client::MultisigApprovalsListResponse {
+                        items: entries[4..].to_vec(),
+                        next_cursor: None,
+                    },
+                    Some(other) => panic!("unexpected cursor {other}"),
+                };
+                Ok(page)
+            };
 
-            let root_instructions = vec![InstructionBox::from(Log::new(
-                Level::INFO,
-                "root".to_string(),
-            ))];
-            let root_key = HashOf::new(&root_instructions);
+            let actual = collect_multisig_approvals_with(Some(2), 1, Some(3), &mut fetch_page)
+                .expect("collect approvals");
 
-            let child_instructions = vec![InstructionBox::from(Log::new(
-                Level::INFO,
-                "child".to_string(),
-            ))];
-            let child_hash = HashOf::new(&child_instructions);
-
-            let relay_instruction: InstructionBox =
-                MultisigApprove::new(child_account.clone(), child_hash).into();
-            let relay_instructions = vec![relay_instruction.clone()];
-            let current_key = HashOf::new(&relay_instructions);
-            let proposal_value = MultisigProposalValue::new(
-                relay_instructions,
-                1_000,
-                2_000,
-                BTreeSet::new(),
-                Some(false),
+            let proposal_ids = actual
+                .iter()
+                .map(|entry| entry.proposal_id.clone())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                proposal_ids,
+                vec![
+                    "proposal-1".to_owned(),
+                    "proposal-2".to_owned(),
+                    "proposal-3".to_owned(),
+                ]
             );
-
-            let mut signatories = BTreeMap::new();
-            signatories.insert(parent_account.clone(), 3);
-            let spec = MultisigSpec::new(
-                signatories,
-                NonZeroU16::new(5).unwrap(),
-                NonZeroU64::new(60_000).unwrap(),
+            assert_eq!(
+                requests,
+                vec![
+                    (None, Some(2)),
+                    (Some("cursor-1".to_owned()), Some(2)),
+                ]
             );
-
-            let mut proposals = PendingProposals::new();
-            proposals.insert(root_key, ProposalView::default());
-            let mut stack = Vec::new();
-
-            let context = Context::new(
-                parent_account.clone(),
-                current_account.clone(),
-                Some((root_key, current_key)),
-            );
-
-            process_proposal(
-                &mut proposals,
-                &mut stack,
-                &context,
-                &current_key,
-                &proposal_value,
-                &spec,
-            );
-
-            assert_eq!(stack.len(), 1);
-            let expected = Context::new(
-                current_account.clone(),
-                child_account.clone(),
-                Some((root_key, child_hash)),
-            );
-            assert_eq!(stack.pop().unwrap(), expected);
-
-            let view = proposals.get(&root_key).unwrap();
-            assert!(view.instructions.is_empty());
-            assert_eq!(view.approval_path.len(), 1);
-            assert!(view.approval_path[0].contains(current_account.to_string().as_str()));
         }
 
         #[test]
-        fn process_proposal_records_root_instructions() {
-            let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
-            let user_account = account_from_seed(7, &domain);
-            let current_account = account_from_seed(9, &domain);
+        fn render_multisig_list_all_text_outputs_human_readable_blocks() {
+            let entry = multisig_list_all_entry_from_approval(sample_approval_entry("a", 42));
+            let rendered =
+                render_multisig_list_all_text(std::slice::from_ref(&entry)).expect("render text");
 
-            let root_instructions = vec![InstructionBox::from(Log::new(
-                Level::INFO,
-                "execute".to_string(),
-            ))];
-            let root_key = HashOf::new(&root_instructions);
+            assert!(rendered.contains("multisig_account_id: "));
+            assert!(rendered.contains("proposal_id: proposal-a"));
+            assert!(rendered.contains("status: COLLECTING_SIGNATURES"));
+            assert!(rendered.contains("operation_type: TRANSFER"));
+            assert!(rendered.contains("intent: {\"sequence\":\"a\"}"));
+            assert!(rendered.contains("proposed_at_ms: 42"));
+        }
 
-            let mut approvals = BTreeSet::new();
-            approvals.insert(user_account.clone());
-            let proposal_value = MultisigProposalValue::new(
-                root_instructions.clone(),
-                5_000,
-                10_000,
-                approvals,
-                None,
-            );
-
-            let mut signatories = BTreeMap::new();
-            signatories.insert(user_account.clone(), 4);
-            let spec = MultisigSpec::new(
-                signatories,
-                NonZeroU16::new(6).unwrap(),
-                NonZeroU64::new(90_000).unwrap(),
-            );
-
-            let mut proposals = PendingProposals::new();
-            let mut stack = Vec::new();
-            let context = Context::new(user_account.clone(), current_account.clone(), None);
-
-            process_proposal(
-                &mut proposals,
-                &mut stack,
-                &context,
-                &root_key,
-                &proposal_value,
-                &spec,
-            );
-
-            assert!(stack.is_empty());
-            let view = proposals.get(&root_key).unwrap();
-            assert_eq!(view.instructions, root_instructions);
-            assert!(!view.proposed_at.is_empty());
-            assert!(!view.expires_in.is_empty());
-            assert_eq!(view.approval_path.len(), 1);
-            assert!(view.approval_path[0].contains("joined"));
+        #[test]
+        fn render_multisig_list_all_text_is_empty_for_empty_results() {
+            let rendered = render_multisig_list_all_text(&[]).expect("render empty text");
+            assert!(rendered.is_empty());
         }
     }
 }

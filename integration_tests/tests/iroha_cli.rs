@@ -6,16 +6,25 @@ use std::{
     net::{TcpListener, TcpStream},
     num::NonZeroU32,
     path::{Path, PathBuf},
-    process::Command as ProcessCommand,
     sync::{
-        Arc, Once,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     thread,
     time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
-use integration_tests::sandbox;
+use integration_tests::{
+    binary_resolver::{
+        binary_supports_training_job_commands, cli_binary_name,
+        find_existing_binary_path_from_roots, find_existing_cli_binary_path_from_roots,
+        iroha_cli_test_build_profile_override, iroha_program, irohad_binary_name,
+        matching_irohad_binary_path_from_cli_path, newest_existing_binary_path,
+        prepare_iroha_cli_test_environment, should_reuse_existing_cli_binary_for_tests_from_value,
+        workspace_root,
+    },
+    sandbox,
+};
 use iroha::{
     client::Client,
     config::{DEFAULT_TRANSACTION_STATUS_TIMEOUT, DEFAULT_TRANSACTION_TIME_TO_LIVE},
@@ -45,265 +54,7 @@ const SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION: &str = "main";
 const SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES: usize = 4_096;
 
 fn program() -> PathBuf {
-    prepare_iroha_cli_test_environment();
-    iroha_test_network::Program::Iroha.resolve().unwrap()
-}
-
-fn prepare_iroha_cli_test_environment() {
-    enable_reentrant_builds_for_tests();
-    configure_program_overrides_from_existing_binaries();
-}
-
-fn iroha_cli_test_build_profile_override(current: Option<&str>) -> Option<&'static str> {
-    current
-        .is_none_or(|value| value.trim().is_empty())
-        .then_some("debug")
-}
-
-fn enable_reentrant_builds_for_tests() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        // Cargo sets `CARGO` for test binaries, which disables reentrant builds by default.
-        // Allow nested builds so the CLI binary can be compiled on-demand in fresh workspaces.
-        set_env_var("IROHA_TEST_ALLOW_REENTRANT_BUILD", "1");
-        if let Some(profile) = iroha_cli_test_build_profile_override(
-            std::env::var("IROHA_TEST_BUILD_PROFILE").ok().as_deref(),
-        ) {
-            set_env_var("IROHA_TEST_BUILD_PROFILE", profile);
-        }
-    });
-}
-
-fn configure_program_overrides_from_existing_binaries() {
-    static INIT: Once = Once::new();
-    INIT.call_once(|| {
-        const TEST_NETWORK_BIN_IROHA: &str = "TEST_NETWORK_BIN_IROHA";
-        const TEST_NETWORK_BIN_IROHAD: &str = "TEST_NETWORK_BIN_IROHAD";
-        if !should_reuse_existing_cli_binary_for_tests() {
-            return;
-        }
-
-        let cli_path =
-            if let Some(path) = std::env::var_os(TEST_NETWORK_BIN_IROHA).map(PathBuf::from) {
-                Some(path)
-            } else {
-                find_existing_cli_binary_path()
-            };
-
-        if std::env::var_os(TEST_NETWORK_BIN_IROHA).is_none()
-            && let Some(path) = cli_path.as_ref()
-        {
-            let value = path.to_string_lossy().into_owned();
-            set_env_var(TEST_NETWORK_BIN_IROHA, &value);
-        }
-
-        if std::env::var_os(TEST_NETWORK_BIN_IROHAD).is_none()
-            && let Some(path) = find_primary_target_irohad_binary_path()
-                .or_else(find_existing_irohad_binary_path)
-                .or_else(|| {
-                    cli_path
-                        .as_deref()
-                        .and_then(matching_irohad_binary_path_from_cli_path)
-                })
-        {
-            let value = path.to_string_lossy().into_owned();
-            set_env_var(TEST_NETWORK_BIN_IROHAD, &value);
-        }
-    });
-}
-
-fn should_reuse_existing_cli_binary_for_tests() -> bool {
-    should_reuse_existing_cli_binary_for_tests_from_value(
-        std::env::var("IROHA_TEST_SKIP_BUILD").ok().as_deref(),
-    )
-}
-
-fn should_reuse_existing_cli_binary_for_tests_from_value(value: Option<&str>) -> bool {
-    value.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
-}
-
-fn find_existing_cli_binary_path() -> Option<PathBuf> {
-    let mut target_roots = Vec::new();
-    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
-        let target_dir = PathBuf::from(target_dir);
-        target_roots.push(target_dir.join("iroha-test-network"));
-        target_roots.push(target_dir);
-    }
-    let workspace_target = workspace_root().join("target");
-    target_roots.push(workspace_target.join("iroha-test-network"));
-    target_roots.push(workspace_target);
-
-    let mut profiles = Vec::new();
-    if let Ok(profile) = std::env::var("PROFILE")
-        && !profile.trim().is_empty()
-    {
-        profiles.push(profile);
-    }
-    if !profiles.iter().any(|value| value == "debug") {
-        profiles.push("debug".to_owned());
-    }
-    if !profiles.iter().any(|value| value == "release") {
-        profiles.push("release".to_owned());
-    }
-
-    find_existing_cli_binary_path_from_roots(&target_roots, &profiles)
-        .filter(|path| binary_supports_training_job_commands(path.as_path()))
-}
-
-fn find_existing_cli_binary_path_from_roots(
-    target_roots: &[PathBuf],
-    profiles: &[String],
-) -> Option<PathBuf> {
-    find_existing_binary_path_from_roots(target_roots, profiles, cli_binary_name())
-}
-
-fn find_existing_irohad_binary_path() -> Option<PathBuf> {
-    let mut target_roots = Vec::new();
-    if let Some(target_dir) = std::env::var_os("CARGO_TARGET_DIR") {
-        let target_dir = PathBuf::from(target_dir);
-        target_roots.push(target_dir.join("iroha-test-network"));
-        target_roots.push(target_dir);
-    }
-    let workspace_target = workspace_root().join("target");
-    target_roots.push(workspace_target.join("iroha-test-network"));
-    target_roots.push(workspace_target);
-
-    let mut profiles = Vec::new();
-    if let Ok(profile) = std::env::var("PROFILE")
-        && !profile.trim().is_empty()
-    {
-        profiles.push(profile);
-    }
-    if !profiles.iter().any(|value| value == "debug") {
-        profiles.push("debug".to_owned());
-    }
-    if !profiles.iter().any(|value| value == "release") {
-        profiles.push("release".to_owned());
-    }
-
-    find_existing_binary_path_from_roots(&target_roots, &profiles, irohad_binary_name())
-}
-
-fn current_test_binary_target_root() -> Option<PathBuf> {
-    let exe = std::env::current_exe().ok()?;
-    let mut directory = exe.parent()?;
-    if directory.file_name().is_some_and(|value| value == "deps") {
-        directory = directory.parent()?;
-    }
-    directory.parent().map(Path::to_path_buf)
-}
-
-fn find_primary_target_irohad_binary_path() -> Option<PathBuf> {
-    let mut target_roots = Vec::new();
-    if let Some(target_root) = current_test_binary_target_root() {
-        target_roots.push(target_root);
-    }
-    if let Some(target_root) = std::env::var_os("CARGO_TARGET_DIR").map(PathBuf::from)
-        && !target_roots.contains(&target_root)
-    {
-        target_roots.push(target_root);
-    }
-    let workspace_target = workspace_root().join("target");
-    if !target_roots.contains(&workspace_target) {
-        target_roots.push(workspace_target);
-    }
-
-    let mut profiles = Vec::new();
-    if let Ok(profile) = std::env::var("PROFILE")
-        && !profile.trim().is_empty()
-    {
-        profiles.push(profile);
-    }
-    if !profiles.iter().any(|value| value == "debug") {
-        profiles.push("debug".to_owned());
-    }
-    if !profiles.iter().any(|value| value == "release") {
-        profiles.push("release".to_owned());
-    }
-
-    find_existing_binary_path_from_roots(&target_roots, &profiles, irohad_binary_name())
-}
-
-fn matching_irohad_binary_path_from_cli_path(path: &Path) -> Option<PathBuf> {
-    let candidate = path.parent()?.join(irohad_binary_name());
-    candidate.is_file().then_some(candidate)
-}
-
-fn binary_modified_at(path: &Path) -> Option<SystemTime> {
-    std::fs::metadata(path).ok()?.modified().ok()
-}
-
-fn newest_existing_binary_path(
-    paths: impl IntoIterator<Item = Option<PathBuf>>,
-) -> Option<PathBuf> {
-    let mut first_match = None;
-    let mut newest_match: Option<(SystemTime, PathBuf)> = None;
-
-    for candidate in paths.into_iter().flatten() {
-        if !candidate.is_file() {
-            continue;
-        }
-        if first_match.is_none() {
-            first_match = Some(candidate.clone());
-        }
-        if let Some(modified_at) = binary_modified_at(&candidate) {
-            let replace = newest_match
-                .as_ref()
-                .is_none_or(|(current_modified_at, _)| modified_at > *current_modified_at);
-            if replace {
-                newest_match = Some((modified_at, candidate));
-            }
-        }
-    }
-
-    newest_match.map(|(_, path)| path).or(first_match)
-}
-
-fn find_existing_binary_path_from_roots(
-    target_roots: &[PathBuf],
-    profiles: &[String],
-    binary_name: &str,
-) -> Option<PathBuf> {
-    newest_existing_binary_path(target_roots.iter().flat_map(|target_root| {
-        profiles
-            .iter()
-            .map(move |profile| Some(target_root.join(profile).join(binary_name)))
-    }))
-}
-
-const fn cli_binary_name() -> &'static str {
-    if cfg!(windows) { "iroha.exe" } else { "iroha" }
-}
-
-const fn irohad_binary_name() -> &'static str {
-    if cfg!(windows) {
-        "iroha3d.exe"
-    } else {
-        "iroha3d"
-    }
-}
-
-fn binary_supports_training_job_commands(path: &std::path::Path) -> bool {
-    let output = ProcessCommand::new(path)
-        .arg("app")
-        .arg("soracloud")
-        .arg("--help")
-        .output();
-    let Ok(output) = output else {
-        return false;
-    };
-    if !output.status.success() {
-        return false;
-    }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    stdout.contains("training-job-start") && stdout.contains("hf-deploy")
-}
-
-#[allow(unsafe_code)]
-fn set_env_var(key: &str, value: &str) {
-    unsafe {
-        std::env::set_var(key, value);
-    }
+    iroha_program().unwrap()
 }
 
 fn ivm_build_profile_exists() -> bool {
@@ -311,10 +62,6 @@ fn ivm_build_profile_exists() -> bool {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("../crates/ivm/target/prebuilt/build_config.toml")
         .exists()
-}
-
-fn workspace_root() -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
 fn soracloud_fixture(path: &str) -> PathBuf {

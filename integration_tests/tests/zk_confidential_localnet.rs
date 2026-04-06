@@ -47,6 +47,7 @@ const PRESSURE_TORII_REQUEST_TIMEOUT: Duration = Duration::from_secs(2);
 const PRESSURE_TRANSACTION_STATUS_TIMEOUT: Duration = Duration::from_secs(2);
 const COMBINED_PRESSURE_ALL_PEER_WAIT_TIMEOUT: Duration = Duration::from_secs(60);
 const COMBINED_PRESSURE_QUORUM_ATTEMPTS: usize = 600;
+const COMBINED_PRESSURE_RESTART_PROGRESS_TIMEOUT: Duration = Duration::from_secs(90);
 
 fn marker(byte: u8) -> [u8; 32] {
     [byte; 32]
@@ -134,21 +135,32 @@ fn best_downtime_peer_from_leaders(
         return None;
     }
 
-    let mut best = None;
+    let mut best_absent = None;
+    let mut best_buffered = None;
+    let mut best_fallback = None;
+    let final_slot = leaders.len().saturating_sub(1);
     for candidate in 0..total_peers {
-        let safe_prefix = leaders
-            .iter()
-            .take_while(|&&leader| leader != candidate)
-            .count();
-        match best {
+        let first_leader_slot = leaders.iter().position(|&leader| leader == candidate);
+        let safe_prefix = first_leader_slot.unwrap_or(leaders.len());
+        let bucket = if first_leader_slot.is_none() {
+            &mut best_absent
+        } else if first_leader_slot.is_some_and(|slot| slot < final_slot) {
+            // If the peer's first leadership slot is also the last planned pressured operation,
+            // restarting immediately before that slot leaves no runway to observe recovery.
+            &mut best_buffered
+        } else {
+            &mut best_fallback
+        };
+
+        match *bucket {
             Some((best_idx, best_prefix))
                 if safe_prefix < best_prefix
                     || (safe_prefix == best_prefix && candidate > best_idx) => {}
-            _ => best = Some((candidate, safe_prefix)),
+            _ => *bucket = Some((candidate, safe_prefix)),
         }
     }
 
-    best
+    best_absent.or(best_buffered).or(best_fallback)
 }
 
 fn select_downtime_peer_and_window(
@@ -234,6 +246,14 @@ fn pressure_submitter_clients(submitters: &[Client]) -> Vec<Client> {
         .collect()
 }
 
+fn restart_progress_timeout(context: &str) -> Duration {
+    if context.contains("combined downtime+timeout") {
+        COMBINED_PRESSURE_RESTART_PROGRESS_TIMEOUT
+    } else {
+        RESTART_PROGRESS_TIMEOUT
+    }
+}
+
 async fn restart_peer_and_wait_non_empty(
     network: &sandbox::SerializedNetwork,
     peer_index: usize,
@@ -275,7 +295,8 @@ async fn restart_peer_and_wait_reachable(
         .wrap_err_with(|| format!("{context}: restart peer {peer_index}"))?;
 
     let restart_client = peer.client();
-    let deadline = tokio::time::Instant::now() + RESTART_PROGRESS_TIMEOUT;
+    let progress_timeout = restart_progress_timeout(context);
+    let deadline = tokio::time::Instant::now() + progress_timeout;
 
     loop {
         match restart_client.get_status() {
@@ -290,7 +311,7 @@ async fn restart_peer_and_wait_reachable(
         if tokio::time::Instant::now() >= deadline {
             return Err(eyre!(
                 "{context}: restarted peer {peer_index} did not become reachable within {:?}",
-                RESTART_PROGRESS_TIMEOUT
+                progress_timeout
             ));
         }
 
@@ -311,7 +332,8 @@ async fn wait_for_peer_non_empty(
         )
     })?;
     let restart_client = peer.client();
-    let deadline = tokio::time::Instant::now() + RESTART_PROGRESS_TIMEOUT;
+    let progress_timeout = restart_progress_timeout(context);
+    let deadline = tokio::time::Instant::now() + progress_timeout;
 
     loop {
         match restart_client.get_status() {
@@ -326,7 +348,7 @@ async fn wait_for_peer_non_empty(
         if tokio::time::Instant::now() >= deadline {
             return Err(eyre!(
                 "{context}: peer {peer_index} did not reach non-empty height {target_non_empty} within {:?}",
-                RESTART_PROGRESS_TIMEOUT
+                progress_timeout
             ));
         }
 

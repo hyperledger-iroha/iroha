@@ -1269,6 +1269,52 @@ seiyaku Test {
     }
 
     #[test]
+    fn manifest_access_set_hints_include_state_wildcard_for_call_contract() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn relay(target: AccountId, payload: Json) -> bytes permission(Admin) {
+    return call_contract(target, "settle", payload);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert!(hints.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        assert!(hints.write_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let relay = entrypoints
+            .iter()
+            .find(|entry| entry.name == "relay")
+            .expect("relay entrypoint");
+        assert!(relay.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        assert!(relay.write_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        assert_eq!(relay.access_hints_complete, Some(true));
+        assert!(relay.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn compile_json_object_builders() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn build(owner: AccountId) -> Json {
+    let payload = json_object();
+    let payload = json_set_int(payload, name("bucket_id"), 1);
+    return json_set_account_id(payload, name("owner"), owner);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        compiler
+            .compile_source_with_manifest(src)
+            .expect("compile json object builders");
+    }
+
+    #[test]
     fn manifest_access_set_hints_include_create_trigger_from_json() {
         let src = r#"
 seiyaku Test {
@@ -3086,6 +3132,16 @@ impl Compiler {
                                     .writes
                                     .insert(STATE_WILDCARD_KEY.to_string());
                             }
+                        }
+                        ir::Instr::CallContract { .. } => {
+                            hint_diagnostics.state_wildcards =
+                                hint_diagnostics.state_wildcards.saturating_add(1);
+                            access_sets[func_idx]
+                                .reads
+                                .insert(STATE_WILDCARD_KEY.to_string());
+                            access_sets[func_idx]
+                                .writes
+                                .insert(STATE_WILDCARD_KEY.to_string());
                         }
                         _ => {}
                     }
@@ -5044,6 +5100,41 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
+                        Instr::CallContract {
+                            dest,
+                            contract,
+                            entrypoint,
+                            payload,
+                        } => {
+                            let contract_reg = src_reg(contract, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, contract_reg, 0)?);
+                            let publish_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(13, 10, 0)?);
+
+                            let entrypoint_reg = src_reg(entrypoint, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, entrypoint_reg, 0)?);
+                            code.extend_from_slice(&publish_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(14, 10, 0)?);
+
+                            let payload_reg = src_reg(payload, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, payload_reg, 0)?);
+                            code.extend_from_slice(&publish_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 13, 0)?);
+                            push_word(&mut code, encode_addi(11, 14, 0)?);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_CALL_CONTRACT as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::GetTriggerEvent { dest } => {
                             if !durable_enabled {
                                 return Err(i18n::translate(
@@ -6257,6 +6348,134 @@ impl Compiler {
                             let word = encoding::wide::encode_sys(
                                 instruction::wide::system::SCALL,
                                 syscalls::SYSCALL_JSON_DECODE as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::JsonObject { dest } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_OBJECT as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::JsonSetInt {
+                            dest,
+                            json,
+                            key,
+                            value,
+                        } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            if let Some(s) = string_map.get(&(func_idx, *json)) {
+                                let key = DataKey(DataKind::Json, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(json, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                            if let Some(s) = string_map.get(&(func_idx, *key)) {
+                                let kb = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, kb);
+                            } else {
+                                let r = src_reg(key, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            let value_reg = src_reg(value, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(12, value_reg, 0)?);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_SET_I64 as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::JsonSetAccountId {
+                            dest,
+                            json,
+                            key,
+                            value,
+                        } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            let mut load_ptr = |temp: &ir::Temp,
+                                                target: u8,
+                                                scratch: u8,
+                                                code: &mut Vec<u8>|
+                             -> Result<(), String> {
+                                if let Some(kind) =
+                                    dataref_kind_map.get(&(func_idx, *temp)).copied()
+                                    && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
+                                {
+                                    let key = data_key_for_pointer(kind, &lit);
+                                    emit_literal_stub(code, &mut fixups, target, key);
+                                } else {
+                                    if string_map.contains_key(&(func_idx, *temp))
+                                        && !dataref_kind_map.contains_key(&(func_idx, *temp))
+                                    {
+                                        return Err(i18n::translate(
+                                            self.lang,
+                                            Message::SemanticError(
+                                                "pointer literal missing ABI metadata during json_set_account_id lowering",
+                                            ),
+                                        ));
+                                    }
+                                    let rs = src_reg(temp, scratch, code)?;
+                                    push_word(code, encode_addi(target, rs, 0)?);
+                                }
+                                Ok(())
+                            };
+                            load_ptr(json, 10, scratch1, &mut code)?;
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                            load_ptr(key, 10, scratch1, &mut code)?;
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            load_ptr(value, 12, scratch1, &mut code)?;
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_SET_ACCOUNT_ID as u8,
                             );
                             code.extend_from_slice(&word.to_le_bytes());
                             let (rd, spilled, imm) = dst_reg(dest);
@@ -8709,6 +8928,7 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::TransferDomain { .. }
             | ir::Instr::VendorExecuteInstruction { .. }
             | ir::Instr::VendorExecuteQuery { .. }
+            | ir::Instr::CallContract { .. }
             | ir::Instr::SubscriptionBill
             | ir::Instr::SubscriptionRecordUsage
             | ir::Instr::BuildSubmitBallotInline { .. }

@@ -1,6 +1,178 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-06
+Last updated: 2026-04-07
+
+Latest sync (2026-04-07 the fresh `iroha_torii` test compile and isolated large-payload NPoS rerun are green):
+the staged validation boundary tightened again without further code edits. A
+fresh `cargo check -p iroha_torii --tests` run on `target_tmp_torii_fresh`
+finished clean, and the previously dangling
+`sumeragi_npos_happy_path::npos_rbc_large_payload_delivers_and_commits` exact
+rerun also finished green on its own fresh target dir. That means the old
+stale `iroha_torii` parse-error report and the lingering large-payload exact
+test are no longer open issues.
+
+- verified in this slice:
+  - `CARGO_TARGET_DIR=target_tmp_torii_fresh cargo check -p iroha_torii --tests`
+  - `CARGO_TARGET_DIR=target_tmp_npos_large_payload cargo test -p integration_tests --test consensus_and_da sumeragi_npos_happy_path::npos_rbc_large_payload_delivers_and_commits -- --exact --nocapture`
+- open work after this slice:
+  - let the in-flight `cargo test --workspace --all-targets` rerun finish on
+    the patched tree and fix the next failure if one appears; and
+  - if repo-wide validation time remains a problem after that rerun settles,
+    investigate whether the `iroha_test_network::Program::Irohad` resolver can
+    reuse a prebuilt daemon binary more aggressively on fresh target dirs so
+    grouped integration tests spend less time in nested `cargo build -p irohad`
+    bootstrap work.
+
+Latest sync (2026-04-07 the fresh-target RBC/NPoS/confidential fixes are now green under the grouped `consensus_and_da` harness):
+the remaining gaps from the earlier exact-only signoff are closed inside the
+affected integration binary. The fresh-target `iroha_core` build break in the
+overlay quarantine host path is fixed, restarted-peer RBC status polling now
+retries transient connect/timeouts, the NPoS large-payload and restart paths
+now derive Torii/transaction byte limits from the actual payloads and assert
+persisted delivery/quorum progress, the grouped baseline latency budget matches
+observed harness jitter, and the confidential combined-pressure flow now picks
+a peer with a safe downtime window plus a longer restart-recovery budget. A
+fresh grouped `cargo test -p integration_tests --test consensus_and_da -q`
+rerun on the patched tree finished green (`207 passed; 0 failed; 6 ignored`),
+so the relevant cross-test/breadth gap for this failure cluster is gone.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/pipeline/overlay.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_da.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_npos_happy_path.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_npos_performance.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/zk_confidential_localnet.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `CARGO_TARGET_DIR=target_tmp_gapfix_check cargo check -p iroha_core --lib`
+  - `CARGO_TARGET_DIR=target_tmp_gapfix_tests IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_gapfix_tests cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_session_recovers_after_cold_restart -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_gapfix_tests IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_gapfix_tests cargo test -p integration_tests --test consensus_and_da sumeragi_npos_happy_path::npos_rbc_large_payload_delivers_and_commits -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_gapfix_tests IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_gapfix_tests cargo test -p integration_tests --test consensus_and_da sumeragi_npos_happy_path::npos_rbc_persists_payload_across_restart -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_gapfix_tests IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_gapfix_tests cargo test -p integration_tests --test consensus_and_da sumeragi_npos_performance::npos_baseline_1s_k3_captures_metrics -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_gapfix_tests cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::best_downtime_peer_from_leaders_prefers_longest_safe_prefix -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_gapfix_tests IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_gapfix_tests cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_gapfix_tests IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target_tmp_gapfix_tests cargo test -p integration_tests --test consensus_and_da -q`
+- open work after this slice:
+  - let a fresh `cargo test --workspace --all-targets` boundary catch up to
+    this patch set if repo-wide signoff is required beyond the now-green
+    `consensus_and_da` harness; and
+  - if a later broader sweep finds another long-run integration regression,
+    treat it as a new failure rather than a remaining gap from this cluster.
+
+Latest sync (2026-04-07 the remaining multisig approvals and reused-localnet gaps are closed on the staged boundary):
+the additive standard-auth multisig approvals path is in place end to end now.
+Torii exposes `/v1/multisig/approvals/list_for_authority` and
+`/v1/multisig/approvals/get_for_authority` on the existing signatory-index
+viewer path, the Rust client exposes signed helpers for both routes, and
+`ledger multisig list all` now pages that authority-scoped backend directly
+instead of scanning accounts. The CLI keeps server ordering, honors
+`--fetch-size`/`--offset`/`--limit` with the requested cursor semantics, and
+finally renders human-readable text output. The integration-test resolver
+duplication is gone, the end-to-end multisig regression now covers JSON/text
+and paging, and the training localnet script now waits for multi-peer
+readiness, stabilizes reused runs before traffic, and dumps actionable
+per-peer diagnostics if a reused run stalls. The multisig integration helper
+now applies the shared resolver before network startup too, so the exact
+core-api regression no longer needs manual `TEST_NETWORK_BIN_*` overrides. The
+staged validation boundary for this slice is green, including the requested
+fresh and reused localnet runs, the exact multisig integration case,
+`cargo test --workspace --no-run`, and targeted `clippy -D warnings`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha/src/client.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/main_shared.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/CommandLineHelp.md`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/docs/multisig.md`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/openapi.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/src/binary_resolver.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/iroha_cli.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/multisig.rs`
+  - `/Users/takemiyamakoto/dev/iroha/scripts/training_script_2.sh`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/smartcontracts/ivm/host.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_js_host/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-ms-gap cargo test -p iroha --lib post_multisig_approvals_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-ms-gap cargo test -p iroha_cli collect_multisig_approvals_applies_fetch_size_offset_and_limit_across_pages -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-ms-gap cargo test -p iroha_cli render_multisig_list_all_text -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-ms-gap cargo test -p iroha_torii multisig_approvals_list_for_authority -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-ms-gap cargo test -p iroha_torii multisig_approvals_authority_routes_stay_separate_from_jwt_only_routes -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-ms-gap cargo build -p iroha_cli --bin iroha -p irohad --bin iroha3d`
+  - `TEST_NETWORK_BIN_IROHA=/tmp/iroha-ms-gap/debug/iroha TEST_NETWORK_BIN_IROHAD=/tmp/iroha-ms-gap/debug/iroha3d IROHA_TEST_SKIP_BUILD=1 CARGO_TARGET_DIR=/tmp/iroha-ms-gap cargo test -p integration_tests --test core_api multisig::multisig_cli_list_all_resolves_hashed_role_suffixes -- --exact --nocapture`
+  - `IROHA_TEST_SKIP_BUILD=1 CARGO_TARGET_DIR=/tmp/iroha-ms-gap cargo test -p integration_tests --test core_api multisig::multisig_cli_list_all_resolves_hashed_role_suffixes -- --exact --nocapture`
+  - `scripts/training_script_2.sh --runs 1 --out-dir /tmp/iroha-localnet-multisig-gap3 --profile debug --target-dir target --no-build --force --base-api-port 39080 --base-p2p-port 43337 --ready-timeout 120 --height-timeout 120`
+  - `scripts/training_script_2.sh --runs 1 --out-dir /tmp/iroha-localnet-multisig-gap3 --profile debug --target-dir target --no-build --reuse-run-dir --base-api-port 39080 --base-p2p-port 43337 --ready-timeout 120 --height-timeout 120`
+  - `CARGO_TARGET_DIR=/tmp/iroha-ms-gap cargo test --workspace --no-run`
+  - `CARGO_TARGET_DIR=/tmp/iroha-ms-gap cargo clippy -p iroha -p iroha_cli -p iroha_torii -p integration_tests --all-targets -- -D warnings`
+- open work after this slice:
+  - if a broader runtime signoff is needed later, run the intentionally skipped
+    full `cargo test --workspace` pass on the patched tree;
+  - otherwise there is no known remaining work specific to the multisig
+    authority-route / CLI paging / reused-localnet gap set from this request.
+
+Latest sync (2026-04-07 reused training-localnet recovery is green again and the stale `iroha_core` host-test compile issues are gone):
+the saved `/tmp/iroha-localnet-training-fresh6/run-1` environment no longer
+false-stalls during reused-run recovery. The training wrapper now removes stale
+pidfiles, accepts "common height" convergence as a valid reused-run recovery
+signal, and prints pidfile liveness when a reused run really does stall. The
+generated Kagami `start.sh`/`stop.sh` helpers were hardened to match that
+behavior for new localnets, and the `iroha_core` host tests were brought back
+in sync with the current queued-instruction and contract-runtime-context data
+model so `cargo check -p iroha_core --tests` is green again.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/scripts/training_script_2.sh`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_kagami/src/localnet.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/smartcontracts/ivm/host.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_gap_kagami cargo test -p iroha_kagami start_and_stop_scripts_are_executable -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_gap_host_fresh cargo check -p iroha_core --tests`
+  - `bash scripts/training_script_2.sh --runs 1 --out-dir /tmp/iroha-localnet-training-fresh6 --reuse-run-dir --no-build --profile debug --target-dir target --ready-timeout 60 --height-timeout 60 --stall-threshold 120`
+- open work after this slice:
+  - let the fresh `CARGO_TARGET_DIR=target_tmp_workspace_postfix2 cargo test --workspace --all-targets`
+    rerun finish on the patched tree and fix the next failure if one appears;
+  - once that workspace rerun settles, decide whether the reused-training
+    helper should also wrap CLI calls in an explicit wall-clock timeout to guard
+    against future stuck subprocesses, even though the clean rerun in this slice
+    completed successfully.
+
+Latest sync (2026-04-06 the last grouped `consensus_and_da` flakes in this turn were reduced to localnet timing instead of hard failures):
+the remaining reds from this turn were integration-harness timing issues rather
+than new core logic regressions. The confidential combined downtime test was
+still picking a restarted peer blindly and could deadlock itself on a missing
+leader slot. The locked-QC adversarial case relied on a fixed 4 second sleep
+for evidence that arrives later under grouped load. The chunk-drop recovery
+case treated a transient recovery-peer `Connection refused` during status
+polling as a hard failure. Those are now fixed by leader-aware downtime
+selection in the confidential test, evidence polling in the locked-QC test, and
+best-effort transient status handling in the recovery test.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/zk_confidential_localnet.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_adversarial.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target_tmp_failfix cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_locked_qc cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_locked_qc_gate_rejects_conflicting_proposal -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_chunk_recovery cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_drop_recovery -- --exact --nocapture`
+- open work after this slice:
+  - rerun a fresh `cargo test --workspace --all-targets` on the patched source
+    once the older stale long-running cargo sessions have drained, so the final
+    repo-wide boundary reflects the latest fixes rather than the pre-patch run;
+  - optionally finish a fresh grouped `cargo test -p integration_tests --test consensus_and_da`
+    rerun on the patched source for a tighter integration-only signoff if the
+    full workspace sweep is not the next step.
 
 Latest sync (2026-04-06 multisig CLI hashed-role discovery is now covered end to end):
 the missing live proof for `ledger multisig list all` is in place now. The

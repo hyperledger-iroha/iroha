@@ -522,6 +522,7 @@ pub(crate) fn parse_gas_limit(metadata: &Metadata) -> Result<Option<u64>, Valida
 pub(crate) struct ContractRuntimeExecutionContext {
     #[allow(dead_code)]
     pub(crate) contract_address: iroha_data_model::smart_contract::ContractAddress,
+    pub(crate) contract_subject: AccountId,
     pub(crate) contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
     pub(crate) entrypoint: String,
 }
@@ -545,8 +546,10 @@ pub(crate) struct ContractCallExecutionContext {
 
 impl ContractCallExecutionContext {
     pub(crate) fn runtime_context(&self) -> Option<ContractRuntimeExecutionContext> {
+        let contract_address = self.contract_address.clone()?;
         Some(ContractRuntimeExecutionContext {
-            contract_address: self.contract_address.clone()?,
+            contract_subject: contract_address.subject_id(),
+            contract_address,
             contract_alias: self.contract_alias.clone(),
             entrypoint: self.entrypoint.clone()?,
         })
@@ -1696,6 +1699,7 @@ impl Executor {
         let call_hash = transaction.hash_as_entrypoint();
         state_transaction.tx_call_hash = Some(iroha_crypto::Hash::from(call_hash));
         let tx_hash = transaction.hash();
+        state_transaction.current_tx_hash = Some(tx_hash.clone());
         let settlement_source_id = {
             let mut bytes = [0u8; iroha_crypto::Hash::LENGTH];
             bytes.copy_from_slice(tx_hash.as_ref());
@@ -2117,6 +2121,7 @@ impl Executor {
                 host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
                 host.set_query_state(state_transaction);
+                host.set_contract_runtime_context(contract_runtime_context.clone());
                 host.set_chain_id(&state_transaction.chain_id);
                 #[cfg(feature = "telemetry")]
                 host.set_telemetry(state_transaction.telemetry.clone());
@@ -2352,6 +2357,7 @@ impl Executor {
                 host.set_public_inputs_from_parameters(state_transaction.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&state_transaction.world);
                 host.set_query_state(state_transaction);
+                host.set_contract_runtime_context(contract_runtime_context.clone());
                 // Thread chain_id from StateTransaction into the IVM host for VRF binding
                 host.set_chain_id(&state_transaction.chain_id);
                 #[cfg(feature = "telemetry")]
@@ -2632,6 +2638,7 @@ impl Executor {
                     authority,
                     instruction,
                     profile,
+                    contract_runtime_context,
                 ),
                 Self::UserProvided(loaded_executor) => dispatch_instruction_with_ivm(
                     loaded_executor,
@@ -2710,6 +2717,7 @@ impl Executor {
         authority: &AccountId,
         instruction: InstructionBox,
         profile: InstructionExecutionProfile,
+        contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     ) -> Result<(), ValidationFail> {
         if matches!(profile, InstructionExecutionProfile::Runtime) {
             iroha_logger::trace!(
@@ -2955,7 +2963,12 @@ impl Executor {
 
         if !is_genesis
             && let Some(transfer_asset) = extract_transfer_asset(&instruction)
-            && !can_transfer_asset(&state_transaction.world, authority, &transfer_asset)?
+            && !can_transfer_asset(
+                &state_transaction.world,
+                authority,
+                contract_runtime_context,
+                &transfer_asset,
+            )?
         {
             return Err(ValidationFail::NotPermitted(
                 "Can't transfer asset: source asset owner must sign the transaction".to_owned(),
@@ -4379,9 +4392,16 @@ fn should_bypass_contract_runtime_asset_transfer_check(
 fn can_transfer_asset(
     world: &impl WorldReadOnly,
     authority: &AccountId,
+    contract_runtime_context: Option<&ContractRuntimeExecutionContext>,
     transfer: &Transfer<Asset, Numeric, Account>,
 ) -> Result<bool, ValidationFail> {
     if transfer.source().account() == authority {
+        return Ok(true);
+    }
+
+    if contract_runtime_context
+        .is_some_and(|context| transfer.source().account() == &context.contract_subject)
+    {
         return Ok(true);
     }
 
@@ -5380,7 +5400,7 @@ mod tests {
             .expect("expected to extract asset transfer from instruction");
 
         let stx = block.transaction();
-        let allowed = can_transfer_asset(&stx.world, &alice_id, &transfer)
+        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer)
             .expect("asset transfer permission check");
         assert!(
             allowed,
@@ -5434,7 +5454,7 @@ mod tests {
             .expect("expected to extract asset transfer from instruction");
 
         let mut stx = block.transaction();
-        let allowed = can_transfer_asset(&stx.world, &alice_id, &transfer)
+        let allowed = can_transfer_asset(&stx.world, &alice_id, None, &transfer)
             .expect("asset transfer permission check");
         assert!(
             !allowed,
@@ -5515,6 +5535,7 @@ mod tests {
         )
         .expect("bisp contract address");
         let context = ContractRuntimeExecutionContext {
+            contract_subject: contract_address.subject_id(),
             contract_address,
             contract_alias: Some("bisp::bisp".parse().expect("bisp alias")),
             entrypoint: "spend_to_merchant".to_owned(),
@@ -5589,6 +5610,7 @@ mod tests {
         )
         .expect("bisp contract address");
         let context = ContractRuntimeExecutionContext {
+            contract_subject: contract_address.subject_id(),
             contract_address,
             contract_alias: Some("bisp::bisp".parse().expect("bisp alias")),
             entrypoint: "create_tranche".to_owned(),

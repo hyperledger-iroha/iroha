@@ -5158,6 +5158,67 @@ export class ToriiClient {
   }
 
   /**
+   * Draft a Ministry agenda proposal submission transaction (`POST /v1/ministry/agenda/proposals/draft`).
+   * @param {{ proposal: Record<string, unknown>, authority: string }} payload
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async draftMinistryAgendaProposal(payload, options = {}) {
+    const body = JSON.stringify(normalizeMinistryAgendaProposalDraftRequest(payload));
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "draftMinistryAgendaProposal",
+    );
+    const response = await this._request(
+      "POST",
+      "/v1/ministry/agenda/proposals/draft",
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body,
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const draft = await this._maybeJson(response);
+    return normalizeMinistryAgendaProposalDraftResponse(draft);
+  }
+
+  /**
+   * Fetch a submitted Ministry agenda proposal record (`GET /v1/ministry/agenda/proposals/{proposal_id}`).
+   * @param {string} proposalId
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async getMinistryAgendaProposal(proposalId, options = {}) {
+    const normalizedProposalId = requireNonEmptyString(
+      proposalId,
+      "getMinistryAgendaProposal.proposalId",
+    );
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "getMinistryAgendaProposal",
+    );
+    const response = await this._request(
+      "GET",
+      `/v1/ministry/agenda/proposals/${encodeURIComponent(normalizedProposalId)}`,
+      {
+        headers: { Accept: "application/json" },
+        signal,
+      },
+    );
+    if (response.status === 404) {
+      return normalizeMinistryAgendaProposalGetResponse(
+        { found: false, record: null },
+        "ministry agenda proposal lookup response",
+      );
+    }
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    return normalizeMinistryAgendaProposalGetResponse(payload);
+  }
+
+  /**
    * Finalise a referendum (`POST /v1/gov/finalize`).
    * @param {Record<string, unknown>} payload
    * @returns {Promise<Record<string, unknown> | null>}
@@ -18317,6 +18378,83 @@ function normalizeGovernanceEnactPayload(input) {
     );
   }
   return payload;
+}
+
+function normalizeMinistryAgendaProposalDraftRequest(input) {
+  const record = ensureRecord(input, "draftMinistryAgendaProposal payload");
+  return {
+    proposal: ensureRecord(
+      record.proposal,
+      "draftMinistryAgendaProposal.proposal",
+    ),
+    authority: requireNonEmptyString(
+      record.authority,
+      "draftMinistryAgendaProposal.authority",
+    ),
+  };
+}
+
+function normalizeMinistryAgendaProposalRecord(
+  payload,
+  context = "ministry agenda proposal record",
+) {
+  const record = ensureRecord(payload, context);
+  return {
+    proposal: ensureRecord(record.proposal, `${context}.proposal`),
+    authority: requireNonEmptyString(record.authority, `${context}.authority`),
+    submitted_tx_hash_hex: normalizeHex32String(
+      record.submitted_tx_hash_hex,
+      `${context}.submitted_tx_hash_hex`,
+    ),
+    submitted_height: ToriiClient._normalizeUnsignedInteger(
+      record.submitted_height,
+      `${context}.submitted_height`,
+      { allowZero: true },
+    ),
+  };
+}
+
+function normalizeMinistryAgendaProposalDraftResponse(
+  payload,
+  context = "ministry agenda proposal draft response",
+) {
+  const record = ensureRecord(payload, context);
+  const base = normalizeGovernanceDraftResponse(
+    {
+      ok: record.ok,
+      tx_instructions: record.tx_instructions ?? [],
+    },
+    context,
+  );
+  return {
+    ok: base.ok,
+    agenda_proposal_id: requireNonEmptyString(
+      record.agenda_proposal_id,
+      `${context}.agenda_proposal_id`,
+    ),
+    authority: requireNonEmptyString(record.authority, `${context}.authority`),
+    tx_instructions: base.tx_instructions,
+    signable_transaction_b64: requireNonEmptyString(
+      record.signable_transaction_b64,
+      `${context}.signable_transaction_b64`,
+    ),
+  };
+}
+
+function normalizeMinistryAgendaProposalGetResponse(
+  payload,
+  context = "ministry agenda proposal lookup response",
+) {
+  const record = ensureRecord(payload, context);
+  const found = Boolean(record.found);
+  const proposalRecord =
+    record.record === undefined || record.record === null
+      ? null
+      : normalizeMinistryAgendaProposalRecord(record.record, `${context}.record`);
+  return {
+    found,
+    record: proposalRecord,
+  };
 }
 
 function normalizeGovernanceWindow(value, name) {

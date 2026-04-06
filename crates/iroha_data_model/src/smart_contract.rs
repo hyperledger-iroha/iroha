@@ -477,6 +477,21 @@ impl ContractAddress {
         Ok(DataSpaceId::new(u64::from_be_bytes(bytes)))
     }
 
+    /// Derive the canonical contract subject identifier used for contract-owned authority.
+    ///
+    /// The subject is a deterministic single-signature [`AccountId`] derived from the
+    /// canonical contract address literal so deployed contracts can be addressed from ABI v1
+    /// code without introducing a separate identifier surface.
+    #[must_use]
+    pub fn subject_id(&self) -> AccountId {
+        let mut seed =
+            Vec::with_capacity(b"iroha:contract-subject:v1:".len() + self.as_ref().len());
+        seed.extend_from_slice(b"iroha:contract-subject:v1:");
+        seed.extend_from_slice(self.as_ref().as_bytes());
+        let keypair = iroha_crypto::KeyPair::from_seed(seed, iroha_crypto::Algorithm::Ed25519);
+        AccountId::new(keypair.public_key().clone())
+    }
+
     /// Borrow the canonical encoded literal.
     #[must_use]
     pub fn as_str(&self) -> &str {
@@ -630,6 +645,28 @@ mod contract_address_tests {
         assert_ne!(mainnet, next_nonce);
         assert_ne!(mainnet, taira);
         assert!(taira.as_str().starts_with(CONTRACT_ADDRESS_HRP_TAIRA));
+    }
+
+    #[test]
+    fn contract_address_subject_is_deterministic_and_unique_per_address() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let first = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            0,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("first contract address");
+        let second = ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &authority,
+            1,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("second contract address");
+
+        assert_eq!(first.subject_id(), first.subject_id());
+        assert_ne!(first.subject_id(), second.subject_id());
     }
 
     #[test]

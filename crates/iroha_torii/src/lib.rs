@@ -3047,6 +3047,54 @@ async fn handler_gov_enact(
     .await
 }
 
+async fn handler_ministry_agenda_proposal_draft(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: crate::utils::extractors::NoritoJson<crate::gov::MinistryAgendaProposalDraftDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/ministry/agenda/proposals/draft",
+    )
+    .await?;
+    match crate::gov::handle_ministry_agenda_proposal_draft(
+        app.chain_id.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        body,
+    )
+    .await?
+    {
+        crate::gov::MinistryAgendaProposalDraftOutcome::Draft(payload) => {
+            Ok(JsonBody(payload).into_response())
+        }
+        crate::gov::MinistryAgendaProposalDraftOutcome::Duplicate(payload) => {
+            Ok((StatusCode::CONFLICT, JsonBody(payload)).into_response())
+        }
+    }
+}
+
+async fn handler_ministry_agenda_proposal_get(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    proposal_id: AxPath<String>,
+) -> Result<JsonBody<crate::gov::MinistryAgendaProposalGetResponse>, Error> {
+    let remote_ip = remote.ip();
+    check_access(
+        &app,
+        &headers,
+        Some(remote_ip),
+        "v1/ministry/agenda/proposals/{proposal_id}",
+    )
+    .await?;
+    crate::gov::handle_ministry_agenda_proposal_get(app.state.clone(), proposal_id).await
+}
+
 async fn handler_gov_council_current(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -18874,6 +18922,104 @@ async fn handler_post_multisig_approvals_get(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_list_for_authority(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        &format!("v1/multisig/approvals/list_for_authority:{authority}"),
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry.with_metrics(|tel| {
+            tel.inc_torii_contract_throttle("multisig_approvals_list_for_authority")
+        });
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    let request: crate::routing::MultisigApprovalsListRequestDto =
+        norito::json::from_slice(body.as_ref()).map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
+    match crate::routing::handle_post_multisig_approvals_list_for_authority(
+        app.state.clone(),
+        request,
+        authority,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry.with_metrics(|tel| {
+                tel.inc_torii_contract_error("multisig_approvals_list_for_authority")
+            });
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn handler_post_multisig_approvals_get_for_authority(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    body: axum::body::Bytes,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    validate_api_token(&app, &headers)?;
+    let authority = require_signed_alias_request(&app, &headers, &method, &uri, body.as_ref())?;
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        &format!("v1/multisig/approvals/get_for_authority:{authority}"),
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry.with_metrics(|tel| {
+            tel.inc_torii_contract_throttle("multisig_approvals_get_for_authority")
+        });
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    let request: crate::routing::MultisigApprovalsGetRequestDto =
+        norito::json::from_slice(body.as_ref()).map_err(|err| {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(err.to_string()),
+            ))
+        })?;
+    match crate::routing::handle_post_multisig_approvals_get_for_authority(
+        app.state.clone(),
+        request,
+        authority,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry.with_metrics(|tel| {
+                tel.inc_torii_contract_error("multisig_approvals_get_for_authority")
+            });
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_asset_transfer_control_get(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -24248,6 +24394,14 @@ impl Torii {
                     post(handler_post_multisig_approvals_get),
                 )
                 .route(
+                    "/v1/multisig/approvals/list_for_authority",
+                    post(handler_post_multisig_approvals_list_for_authority),
+                )
+                .route(
+                    "/v1/multisig/approvals/get_for_authority",
+                    post(handler_post_multisig_approvals_get_for_authority),
+                )
+                .route(
                     "/v1/controls/asset-transfer/get",
                     post(handler_post_asset_transfer_control_get),
                 );
@@ -25341,6 +25495,16 @@ impl Torii {
                 .route(
                     iroha_torii_shared::uri::RUNTIME_UPGRADES_CANCEL,
                     post(handler_runtime_cancel_upgrade),
+                );
+
+            router = router
+                .route(
+                    iroha_torii_shared::uri::MINISTRY_AGENDA_PROPOSAL_DRAFT,
+                    post(handler_ministry_agenda_proposal_draft),
+                )
+                .route(
+                    iroha_torii_shared::uri::MINISTRY_AGENDA_PROPOSAL_GET,
+                    get(handler_ministry_agenda_proposal_get),
                 );
 
             // Governance endpoints (convert to closures)
@@ -39169,6 +39333,67 @@ mod tests {
         let response = tx_history_viewer_from_headers(&app, &headers)
             .expect_err("bare subject aliases must be rejected");
         assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn multisig_approvals_authority_routes_stay_separate_from_jwt_only_routes() {
+        let _guard = app_auth_test_guard(crate::app_auth::CanonicalRequestAuthConfig::default());
+        let key_pair = KeyPair::random();
+        let account_id = AccountId::new(key_pair.public_key().clone());
+        let mut app = mk_app_state_for_tests_with_world(world_with_account(&account_id));
+        let app_state = Arc::get_mut(&mut app).expect("unique app state");
+        app_state.tx_history_access_policy = Arc::new(TxHistoryAccessPolicy {
+            jwt: Some(TxHistoryJwtConfig {
+                algorithm: JwtAlgorithm::HS256,
+                key: TxHistoryJwtKey::Hmac(b"shared-secret".to_vec()),
+                issuer: Some("pk-cbdc-dev".to_string()),
+                audience: Some("pk-cbdc".to_string()),
+            }),
+            ..TxHistoryAccessPolicy::default()
+        });
+
+        let request = crate::routing::MultisigApprovalsListRequestDto::default();
+        let body = norito::json::to_vec(&request).expect("serialize approvals request");
+        let method = axum::http::Method::POST;
+        let uri: axum::http::Uri = "/v1/multisig/approvals/list_for_authority"
+            .parse()
+            .expect("uri");
+        let headers = signed_app_headers(&account_id, &key_pair, &method, &uri, body.as_ref());
+
+        let authority_response = super::handler_post_multisig_approvals_list_for_authority(
+            State(app.clone()),
+            method,
+            uri,
+            headers,
+            crate::loopback_connect_info(),
+            axum::body::Bytes::from(body),
+        )
+        .await
+        .expect("authority response");
+        assert_eq!(authority_response.status(), StatusCode::OK);
+
+        let body = axum::body::to_bytes(authority_response.into_body(), usize::MAX)
+            .await
+            .expect("body");
+        let payload: norito::json::Value =
+            norito::json::from_slice(&body).expect("decode authority approvals response");
+        assert!(
+            payload
+                .get("items")
+                .and_then(norito::json::Value::as_array)
+                .is_some_and(|items| items.is_empty())
+        );
+
+        let jwt_only_response = super::handler_post_multisig_approvals_list(
+            State(app),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            NoritoJson(request),
+        )
+        .await
+        .expect("jwt-only response");
+        assert_eq!(jwt_only_response.status(), StatusCode::UNAUTHORIZED);
     }
 
     #[cfg(feature = "app_api")]

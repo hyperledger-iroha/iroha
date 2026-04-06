@@ -62,6 +62,57 @@ export interface BrowserConnectSocketOptions {
   protocols?: string | ReadonlyArray<string>;
 }
 
+export interface BrowserConnectPermissions {
+  methods?: ReadonlyArray<string>;
+  events?: ReadonlyArray<string>;
+  resources?: ReadonlyArray<string> | null;
+}
+
+export interface BrowserConnectAppMeta {
+  name: string;
+  url?: string | null;
+  iconHash?: string | null;
+  icon_hash?: string | null;
+}
+
+export interface BrowserConnectApproval {
+  accountId: string;
+  walletPublicKey: Uint8Array;
+}
+
+export interface BrowserConnectAppSessionOptions extends BrowserConnectSocketOptions {
+  baseUrl: string;
+  preview: BrowserConnectSessionPreview;
+  session: Pick<BrowserConnectSessionResponse, "sid" | "token_app">;
+  permissions?: BrowserConnectPermissions | null;
+  appMeta?: BrowserConnectAppMeta | null;
+}
+
+export interface BrowserConnectAppSession {
+  readonly socket: WebSocket;
+  readonly approvedAccountId: string | null;
+  waitForApproval(): Promise<BrowserConnectApproval>;
+  signTransaction(unsignedTxBytes: BrowserConnectBinaryLike): Promise<Uint8Array>;
+  close(reason?: string): void;
+}
+
+export class ConnectApprovalRejectedError extends Error {
+  readonly code: number | null;
+  readonly codeId: string | null;
+  readonly reason: string | null;
+}
+
+export class ConnectSessionClosedError extends Error {
+  readonly code: number | null;
+  readonly reason: string | null;
+  readonly retryable: boolean | null;
+  readonly who: number | null;
+}
+
+export class ConnectSignRequestError extends Error {
+  readonly code: string | null;
+}
+
 export function toHex(bytes: Uint8Array): string;
 export function toBase64Url(bytes: Uint8Array): string;
 export function buildConnectWebSocketUrl(
@@ -102,3 +153,6 @@ export function openConnectWebSocket(
   role?: "app" | "wallet",
   options?: BrowserConnectSocketOptions,
 ): WebSocket;
+export function createConnectAppSession(
+  options: BrowserConnectAppSessionOptions,
+): BrowserConnectAppSession;

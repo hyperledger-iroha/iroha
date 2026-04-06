@@ -108,6 +108,10 @@ use crate::{
 
 const APPLICATION_JSON: &str = "application/json";
 const HEADER_API_VERSION: &str = iroha_torii_shared::HEADER_API_VERSION;
+const HEADER_ACCOUNT: &str = "x-iroha-account";
+const HEADER_SIGNATURE: &str = "x-iroha-signature";
+const HEADER_TIMESTAMP_MS: &str = "x-iroha-timestamp-ms";
+const HEADER_NONCE: &str = "x-iroha-nonce";
 const HEADER_SORA_CLIENT: &str = "x-sorafs-client";
 const HEADER_SORA_NONCE: &str = "x-sorafs-nonce";
 const HEADER_OPERATOR_PUBLIC_KEY: &str = "x-iroha-operator-public-key";
@@ -271,6 +275,126 @@ pub struct MultisigProposalsListResponse {
     pub resolved_multisig_account_id: iroha_data_model::account::AccountId,
     /// Matching proposal entries.
     pub proposals: Vec<MultisigProposalEntry>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Request payload for caller-authority-scoped multisig approvals listing.
+pub struct MultisigApprovalsListRequest {
+    /// Optional status filter list such as `COLLECTING_SIGNATURES`, `FINALIZED`, `CANCELED`, or `EXPIRED`.
+    #[norito(default)]
+    pub status: Vec<String>,
+    /// Optional canonical proposal type filter list such as `TRANSFER` or `MINT_REQUEST`.
+    #[norito(default)]
+    pub operation_type: Vec<String>,
+    /// When true, return only proposals that still require the caller authority to sign.
+    #[norito(default)]
+    pub requires_my_signature: bool,
+    /// Opaque pagination cursor.
+    #[norito(default)]
+    pub cursor: Option<String>,
+    /// Optional page size.
+    #[norito(default)]
+    pub limit: Option<u64>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Caller-authority-visible multisig approval entry returned by Torii.
+pub struct MultisigApprovalEntry {
+    /// Canonical multisig account id that owns the proposal.
+    pub multisig_account_id: iroha_data_model::account::AccountId,
+    /// Active multisig specification for the owning account.
+    pub spec: iroha_executor_data_model::isi::multisig::MultisigSpec,
+    /// Stable proposal identifier.
+    pub proposal_id: String,
+    /// Deterministic hash of the proposal instructions.
+    pub instructions_hash: String,
+    /// Proposal payload and approval state.
+    pub proposal: iroha_executor_data_model::isi::multisig::MultisigProposalValue,
+    /// Canonical operation type inferred from the proposal payload.
+    pub operation_type: String,
+    /// Optional machine-readable intent payload for structured operation families.
+    #[norito(default)]
+    pub intent: Option<Json>,
+    /// Proposal lifecycle status.
+    pub status: String,
+    /// Terminal timestamp for finalized, canceled, or expired proposals.
+    #[norito(default)]
+    pub terminal_at_ms: Option<u64>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Response payload returned by the caller-authority-scoped multisig approvals listing API.
+pub struct MultisigApprovalsListResponse {
+    /// Matching approval entries.
+    pub items: Vec<MultisigApprovalEntry>,
+    /// Opaque cursor for the next page, if any.
+    #[norito(default)]
+    pub next_cursor: Option<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    Default,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Request payload for fetching one caller-authority-visible multisig approval.
+pub struct MultisigApprovalsGetRequest {
+    /// Stable proposal identifier.
+    #[norito(default)]
+    pub proposal_id: Option<String>,
+    /// Deterministic hash of the proposal instructions.
+    #[norito(default)]
+    pub instructions_hash: Option<String>,
+}
+
+#[derive(
+    Clone,
+    Debug,
+    PartialEq,
+    Eq,
+    JsonSerialize,
+    JsonDeserialize,
+    norito::derive::NoritoSerialize,
+    norito::derive::NoritoDeserialize,
+)]
+/// Response payload returned by the caller-authority-scoped multisig approvals get API.
+pub struct MultisigApprovalsGetResponse {
+    /// The matching approval entry.
+    pub item: MultisigApprovalEntry,
 }
 
 const DEFAULT_MAX_QUEUED_DURATION: Duration = Duration::from_secs(60);
@@ -3872,6 +3996,104 @@ mod evidence_http_tests {
     }
 
     #[test]
+    fn post_multisig_approvals_list_for_authority_builds_signed_request() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let response = json_response(StatusCode::OK, "{\"items\":[],\"next_cursor\":null}");
+        let request = MultisigApprovalsListRequest {
+            status: vec!["COLLECTING_SIGNATURES".to_owned()],
+            operation_type: vec!["TRANSFER".to_owned()],
+            requires_my_signature: true,
+            cursor: Some("cursor-1".to_owned()),
+            limit: Some(25),
+        };
+
+        with_mock_http(respond_with(&snapshots, response), || {
+            let resp = client
+                .post_multisig_approvals_list_for_authority(&request)
+                .expect("post multisig approvals list");
+            assert!(resp.items.is_empty());
+            assert!(resp.next_cursor.is_none());
+        });
+
+        let store = snapshots.lock().expect("lock snapshot store");
+        assert_eq!(store.len(), 1);
+        let snapshot = &store[0];
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.as_str(),
+            "http://mock.local/v1/multisig/approvals/list_for_authority"
+        );
+        let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(
+            body,
+            norito::json::to_value(&request).expect("serialize approvals request")
+        );
+        let has_header = |expected_name: &str| {
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(expected_name))
+        };
+        assert!(has_header(HEADER_ACCOUNT), "X-Iroha-Account header missing");
+        assert!(
+            has_header(HEADER_SIGNATURE),
+            "X-Iroha-Signature header missing"
+        );
+        assert!(
+            has_header(HEADER_TIMESTAMP_MS),
+            "X-Iroha-Timestamp-Ms header missing",
+        );
+        assert!(has_header(HEADER_NONCE), "X-Iroha-Nonce header missing");
+    }
+
+    #[test]
+    fn post_multisig_approvals_get_for_authority_builds_signed_request() {
+        let client = client_with_base_url(base_url());
+        let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let response = json_response(
+            StatusCode::OK,
+            &format!(
+                "{{\"item\":{{\"multisig_account_id\":\"{account_id}\",\"spec\":{{\"signatories\":{{}},\"quorum\":1,\"transaction_ttl_ms\":60000}},\"proposal_id\":\"hash\",\"instructions_hash\":\"hash\",\"proposal\":{{\"instructions\":[],\"proposed_at_ms\":1,\"expires_at_ms\":2,\"approvals\":[]}},\"operation_type\":\"UNKNOWN\",\"intent\":null,\"status\":\"COLLECTING_SIGNATURES\",\"terminal_at_ms\":null}}}}"
+            ),
+        );
+        let request = MultisigApprovalsGetRequest {
+            proposal_id: Some("hash".to_owned()),
+            instructions_hash: None,
+        };
+
+        with_mock_http(respond_with(&snapshots, response), || {
+            let resp = client
+                .post_multisig_approvals_get_for_authority(&request)
+                .expect("post multisig approvals get");
+            assert_eq!(resp.item.multisig_account_id, account_id);
+            assert_eq!(resp.item.proposal_id, "hash");
+        });
+
+        let store = snapshots.lock().expect("lock snapshot store");
+        assert_eq!(store.len(), 1);
+        let snapshot = &store[0];
+        assert_eq!(snapshot.method, HttpMethod::POST);
+        assert_eq!(
+            snapshot.url.as_str(),
+            "http://mock.local/v1/multisig/approvals/get_for_authority"
+        );
+        let body: Value = norito::json::from_slice(&snapshot.body).expect("decode request body");
+        assert_eq!(
+            body,
+            norito::json::to_value(&request).expect("serialize approvals get request")
+        );
+        assert!(
+            snapshot
+                .headers
+                .iter()
+                .any(|(name, _)| name.eq_ignore_ascii_case(HEADER_ACCOUNT)),
+            "X-Iroha-Account header missing",
+        );
+    }
+
+    #[test]
     fn post_zk_ivm_prove_json_builds_request() {
         let client = client_with_base_url(base_url());
         let snapshots: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
@@ -5891,6 +6113,37 @@ impl Client {
         message
     }
 
+    fn account_signed_request(
+        &self,
+        method: HttpMethod,
+        url: Url,
+        body: Vec<u8>,
+    ) -> DefaultRequestBuilder {
+        let timestamp_ms: u64 = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        let nonce_bytes: [u8; 12] = rand::rng().random();
+        let nonce = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(nonce_bytes);
+        let message = Self::operator_request_message(&method, &url, &body, timestamp_ms, &nonce);
+        let signature = Signature::new(self.key_pair.private_key(), &message);
+        let signature_b64 = base64::engine::general_purpose::STANDARD.encode(signature.payload());
+        let mut builder = self
+            .default_request(method, url)
+            .header(HEADER_ACCOUNT, &self.account.to_string())
+            .header(HEADER_SIGNATURE, &signature_b64)
+            .header(HEADER_TIMESTAMP_MS, &timestamp_ms.to_string())
+            .header(HEADER_NONCE, &nonce);
+
+        if !body.is_empty() {
+            builder = builder.body(body);
+        }
+
+        builder
+    }
+
     fn operator_signed_request(
         &self,
         method: HttpMethod,
@@ -7540,6 +7793,62 @@ impl Client {
         }
         norito::json::from_slice(resp.body())
             .map_err(|err| eyre!("failed to decode multisig proposals list response: {err}"))
+    }
+
+    /// Convenience: signed POST `/v1/multisig/approvals/list_for_authority` for the caller authority.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, JSON serialization, the HTTP call,
+    /// or response decoding fails.
+    pub fn post_multisig_approvals_list_for_authority(
+        &self,
+        request: &MultisigApprovalsListRequest,
+    ) -> Result<MultisigApprovalsListResponse> {
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode multisig approvals list request")?;
+        let url = join_torii_url(&self.torii_url, "v1/multisig/approvals/list_for_authority");
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        if response.status() != StatusCode::OK {
+            return Err(
+                ResponseReport::with_msg("failed to list multisig approvals", &response)
+                    .unwrap_or_else(core::convert::identity)
+                    .into(),
+            );
+        }
+        norito::json::from_slice(response.body())
+            .wrap_err("failed to decode multisig approvals list response")
+    }
+
+    /// Convenience: signed POST `/v1/multisig/approvals/get_for_authority` for the caller authority.
+    ///
+    /// # Errors
+    /// Returns an error if request construction, JSON serialization, the HTTP call,
+    /// or response decoding fails.
+    pub fn post_multisig_approvals_get_for_authority(
+        &self,
+        request: &MultisigApprovalsGetRequest,
+    ) -> Result<MultisigApprovalsGetResponse> {
+        let body = norito::json::to_vec(request)
+            .wrap_err("failed to encode multisig approvals get request")?;
+        let url = join_torii_url(&self.torii_url, "v1/multisig/approvals/get_for_authority");
+        let response = self.send_builder(
+            self.account_signed_request(HttpMethod::POST, url, body)
+                .header("Content-Type", APPLICATION_JSON)
+                .header("Accept", APPLICATION_JSON),
+        )?;
+        if response.status() != StatusCode::OK {
+            return Err(
+                ResponseReport::with_msg("failed to get multisig approval", &response)
+                    .unwrap_or_else(core::convert::identity)
+                    .into(),
+            );
+        }
+        norito::json::from_slice(response.body())
+            .wrap_err("failed to decode multisig approvals get response")
     }
 
     /// Convenience: GET `/v1/sorafs/pin` to list manifests in the pin registry.

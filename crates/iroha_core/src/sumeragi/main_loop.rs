@@ -6473,10 +6473,24 @@ impl Actor {
             return false;
         }
 
-        self.subsystems
-            .validation
-            .inflight
-            .contains_key(&block_hash)
+        let pending_commit_qc_observed = self
+            .pending
+            .pending_blocks
+            .get(&block_hash)
+            .is_some_and(|pending| {
+                !pending.aborted
+                    && !pending.is_retired_same_height()
+                    && pending.height == height
+                    && pending.view < min_view
+                    && pending.commit_qc_observed()
+            });
+
+        pending_commit_qc_observed
+            || self
+                .subsystems
+                .validation
+                .inflight
+                .contains_key(&block_hash)
             || self
                 .subsystems
                 .commit

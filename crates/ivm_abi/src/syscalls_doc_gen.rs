@@ -626,6 +626,12 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
         gas: "-",
     },
     crate::syscalls::SyscallDoc {
+        number: 169,
+        args: "r10=&AccountId(contract subject), r11=&Blob(entrypoint UTF-8), r12=&Json(payload)",
+        ret: "ptr (&NoritoBytes(return bytes)) or 0",
+        gas: "-",
+    },
+    crate::syscalls::SyscallDoc {
         number: 176,
         args: "r10=&AxtDescriptor",
         ret: "u64=0",

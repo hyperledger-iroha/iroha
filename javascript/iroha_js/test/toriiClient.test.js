@@ -9823,6 +9823,107 @@ test("typed governance finalize/enact helpers always return drafts", async () =>
   assert.equal(captures[1].url, `${BASE_URL}/v1/gov/enact`);
 });
 
+test("draftMinistryAgendaProposal normalizes the draft response payload", async () => {
+  let capturedBody;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      capturedBody = JSON.parse(String(init.body));
+      assert.equal(url, `${BASE_URL}/v1/ministry/agenda/proposals/draft`);
+      return createResponse({
+        status: 200,
+        jsonData: {
+          ok: true,
+          agenda_proposal_id: "AC-2026-001",
+          authority: "i105-test-account",
+          tx_instructions: [
+            { wire_id: "SubmitAgendaProposal", payload_hex: "aa55" },
+          ],
+          signable_transaction_b64: "AQID",
+        },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const proposal = {
+    proposal_id: "AC-2026-001",
+    action: "add-to-denylist",
+  };
+  const draft = await client.draftMinistryAgendaProposal({
+    proposal,
+    authority: " i105-test-account ",
+  });
+
+  assert.deepEqual(capturedBody, {
+    proposal,
+    authority: "i105-test-account",
+  });
+  assert.deepEqual(draft, {
+    ok: true,
+    agenda_proposal_id: "AC-2026-001",
+    authority: "i105-test-account",
+    tx_instructions: [
+      { wire_id: "SubmitAgendaProposal", payload_hex: "aa55" },
+    ],
+    signable_transaction_b64: "AQID",
+  });
+});
+
+test("getMinistryAgendaProposal returns missing and persisted records", async () => {
+  let call = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url) => {
+      call += 1;
+      assert.equal(url, `${BASE_URL}/v1/ministry/agenda/proposals/AC-2026-001`);
+      if (call === 1) {
+        return createResponse({
+          status: 200,
+          jsonData: {
+            found: false,
+            record: null,
+          },
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return createResponse({
+        status: 200,
+        jsonData: {
+          found: true,
+          record: {
+            proposal: {
+              proposal_id: "AC-2026-001",
+              action: "add-to-denylist",
+            },
+            authority: "i105-test-account",
+            submitted_tx_hash_hex: "ab".repeat(32),
+            submitted_height: 44,
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  const missing = await client.getMinistryAgendaProposal(" AC-2026-001 ");
+  const found = await client.getMinistryAgendaProposal("AC-2026-001");
+
+  assert.deepEqual(missing, {
+    found: false,
+    record: null,
+  });
+  assert.deepEqual(found, {
+    found: true,
+    record: {
+      proposal: {
+        proposal_id: "AC-2026-001",
+        action: "add-to-denylist",
+      },
+      authority: "i105-test-account",
+      submitted_tx_hash_hex: "ab".repeat(32),
+      submitted_height: 44,
+    },
+  });
+});
+
 test("governanceProposeDeployContract normalizes payloads", async () => {
   let capturedBody;
   const client = new ToriiClient(BASE_URL, {

@@ -3051,6 +3051,10 @@ fn parse_account_id_literal(raw: &str) -> Result<AccountId, VMError> {
 fn parse_account_subject_literal(raw: &str) -> Result<AccountId, VMError> {
     AccountId::parse_encoded(raw)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .or_else(|_| {
+            raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
+                .map(|address| address.subject_id())
+        })
         .map_err(|_| VMError::NoritoInvalid)
 }
 
@@ -3529,6 +3533,89 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
+            crate::syscalls::SYSCALL_JSON_OBJECT => {
+                let out_json = Json::from(njson::Value::Object(njson::Map::new()));
+                let body = norito::to_bytes(&out_json).map_err(|_| VMError::NoritoInvalid)?;
+                let mut out = Vec::with_capacity(7 + body.len() + 32);
+                out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                out.extend_from_slice(&body);
+                let h: [u8; 32] = CryptoHash::new(&body).into();
+                out.extend_from_slice(&h);
+                let p = vm.alloc_input_tlv(&out)?;
+                vm.set_register(10, p);
+                Ok(0)
+            }
+            crate::syscalls::SYSCALL_JSON_SET_I64
+            | crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID => {
+                let json_tlv = vm.memory.validate_tlv(vm.register(10))?;
+                let key_tlv = vm.memory.validate_tlv(vm.register(11))?;
+                if json_tlv.type_id != PointerType::Json || key_tlv.type_id != PointerType::Name {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, json_tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: json_tlv.type_id as u16,
+                    });
+                }
+                if !pointer_abi::is_type_allowed_for_policy(policy, key_tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: key_tlv.type_id as u16,
+                    });
+                }
+
+                let json: Json =
+                    decode_from_bytes(json_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let value: njson::Value = json
+                    .try_into_any_norito()
+                    .map_err(|_| VMError::DecodeError)?;
+                let mut obj = match value {
+                    njson::Value::Object(map) => map,
+                    _ => return Err(VMError::DecodeError),
+                };
+                let key_name: Name =
+                    decode_from_bytes(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
+
+                let field = match number {
+                    crate::syscalls::SYSCALL_JSON_SET_I64 => {
+                        njson::Value::from(vm.register(12) as i64)
+                    }
+                    crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID => {
+                        let value_tlv = vm.memory.validate_tlv(vm.register(12))?;
+                        if value_tlv.type_id != PointerType::AccountId {
+                            return Err(VMError::NoritoInvalid);
+                        }
+                        if !pointer_abi::is_type_allowed_for_policy(policy, value_tlv.type_id) {
+                            return Err(VMError::AbiTypeNotAllowed {
+                                abi: vm.abi_version(),
+                                type_id: value_tlv.type_id as u16,
+                            });
+                        }
+                        let account: AccountId = decode_from_bytes(value_tlv.payload)
+                            .map_err(|_| VMError::DecodeError)?;
+                        njson::Value::from(account.to_string())
+                    }
+                    _ => return Err(VMError::UnknownSyscall(number)),
+                };
+
+                obj.insert(key_name.to_string(), field);
+                let out_json = Json::from(njson::Value::Object(obj));
+                let body = norito::to_bytes(&out_json).map_err(|_| VMError::NoritoInvalid)?;
+                let mut out = Vec::with_capacity(7 + body.len() + 32);
+                out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                out.extend_from_slice(&body);
+                let h: [u8; 32] = CryptoHash::new(&body).into();
+                out.extend_from_slice(&h);
+                let p = vm.alloc_input_tlv(&out)?;
+                vm.set_register(10, p);
+                Ok(0)
+            }
             crate::syscalls::SYSCALL_TLV_LEN => {
                 let addr = vm.register(10);
                 if addr == 0 {
@@ -3629,8 +3716,12 @@ impl IVMHost for WsvHost {
                     crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID => {
                         let raw = field.as_str().ok_or(VMError::DecodeError)?;
                         let acct = iroha_data_model::account::AccountId::parse_encoded(raw)
-                            .map_err(|_| VMError::DecodeError)?
-                            .into_account_id();
+                            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                            .or_else(|_| {
+                                raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
+                                    .map(|address| address.subject_id())
+                            })
+                            .map_err(|_| VMError::DecodeError)?;
                         let body = norito::to_bytes(&acct).map_err(|_| VMError::NoritoInvalid)?;
                         let mut out = Vec::with_capacity(7 + body.len() + 32);
                         out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());

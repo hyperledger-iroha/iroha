@@ -3776,6 +3776,10 @@ async fn wait_for_persisted_inflight_rbc_session(
     }
 }
 
+fn is_transient_rbc_endpoint_error(err: &reqwest::Error) -> bool {
+    err.is_connect() || err.is_timeout()
+}
+
 async fn wait_for_recovered_flag(
     http: reqwest::Client,
     sessions_url: reqwest::Url,
@@ -3790,12 +3794,19 @@ async fn wait_for_recovered_flag(
                 "timed out waiting for recovered RBC session {block_hash_hex}"
             ));
         }
-        let response = http
+        let response = match http
             .get(sessions_url.clone())
             .header("Accept", "application/json")
             .send()
             .await
-            .wrap_err("fetch RBC sessions (recovery)")?;
+        {
+            Ok(response) => response,
+            Err(err) if is_transient_rbc_endpoint_error(&err) => {
+                sleep(Duration::from_millis(200)).await;
+                continue;
+            }
+            Err(err) => return Err(err).wrap_err("fetch RBC sessions (recovery)"),
+        };
         if !response.status().is_success() {
             sleep(Duration::from_millis(200)).await;
             continue;

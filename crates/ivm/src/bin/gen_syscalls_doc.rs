@@ -45,6 +45,18 @@ fn guess_defaults(n: u32) -> (String, String, String) {
         args = "r10=&NoritoBytes(JSON bytes)".into();
         ret = "ptr (&Json)".into();
         gas = "G_json_decode".into();
+    } else if up.contains("JSON_OBJECT") || n == 0x81 {
+        args = "-".into();
+        ret = "ptr (&Json({}))".into();
+        gas = "G_json_object".into();
+    } else if up.contains("JSON_SET_I64") || n == 0x82 {
+        args = "r10=&Json(object), r11=&Name(key), r12=value:i64".into();
+        ret = "ptr (&Json)".into();
+        gas = "G_json_set".into();
+    } else if up.contains("JSON_SET_ACCOUNT_ID") || n == 0x83 {
+        args = "r10=&Json(object), r11=&Name(key), r12=&AccountId".into();
+        ret = "ptr (&Json)".into();
+        gas = "G_json_set".into();
     } else if up.contains("SCHEMA_ENCODE") || n == 0x59 {
         args = "r10=&Name(schema), r11=&Json".into();
         ret = "ptr (&NoritoBytes)".into();

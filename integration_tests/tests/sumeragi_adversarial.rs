@@ -8,7 +8,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use eyre::{Result, WrapErr, ensure, eyre};
+use eyre::{Report, Result, WrapErr, ensure, eyre};
 use iroha::{
     client::{Client, Status},
     data_model::{
@@ -559,7 +559,7 @@ async fn run_chunk_drop_recovery_scenario() -> Result<()> {
     .await?
     {
         Some(statuses) => statuses,
-        None => collect_client_statuses(&recovery_clients)?,
+        None => collect_client_statuses_best_effort(&recovery_clients)?,
     };
     let recovery_min_blocks = status_after_recovery_all
         .iter()
@@ -1450,6 +1450,20 @@ fn blocking_status(client: &Client) -> Result<Status> {
     tokio::task::block_in_place(|| client_clone.get_status()).wrap_err("fetch status")
 }
 
+fn is_transient_status_fetch_error(err: &Report) -> bool {
+    const NEEDLES: [&str; 5] = [
+        "Failed to send http",
+        "error sending request for url",
+        "Connection refused",
+        "connection closed",
+        "operation timed out",
+    ];
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        NEEDLES.iter().any(|needle| text.contains(needle))
+    })
+}
+
 async fn wait_for_rbc_session(
     client: &Client,
     target_height: u64,
@@ -1491,6 +1505,25 @@ fn collect_client_statuses(clients: &[Client]) -> Result<Vec<Status>> {
     clients.iter().map(blocking_status).collect()
 }
 
+fn collect_client_statuses_best_effort(clients: &[Client]) -> Result<Vec<Status>> {
+    let mut statuses = Vec::with_capacity(clients.len());
+    let mut transient_err = None;
+
+    for client in clients {
+        match blocking_status(client) {
+            Ok(status) => statuses.push(status),
+            Err(err) if is_transient_status_fetch_error(&err) => transient_err = Some(err),
+            Err(err) => return Err(err),
+        }
+    }
+
+    if statuses.is_empty() {
+        return Err(transient_err.unwrap_or_else(|| eyre!("no recovery client status available")));
+    }
+
+    Ok(statuses)
+}
+
 async fn try_wait_for_cluster_height(
     clients: &[Client],
     target_height: u64,
@@ -1498,7 +1531,7 @@ async fn try_wait_for_cluster_height(
 ) -> Result<Option<Vec<Status>>> {
     let deadline = Instant::now() + timeout;
     loop {
-        let statuses = collect_client_statuses(clients)?;
+        let statuses = collect_client_statuses_best_effort(clients)?;
         if statuses.iter().any(|status| status.blocks >= target_height) {
             return Ok(Some(statuses));
         }

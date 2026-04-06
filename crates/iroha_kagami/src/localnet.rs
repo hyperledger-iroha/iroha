@@ -2390,16 +2390,31 @@ fn write_scripts(out_dir: &Path, peers: u16, build_line: BuildLine, sora_mode: b
         start_file,
         "  SNAPSHOT_STORE_DIR=\"$DIR/storage/peer${{i}}/snapshot\""
     )?;
+    writeln!(start_file, "  PIDFILE=\"$DIR/peer${{i}}.pid\"")?;
+    writeln!(start_file, "  if [ -f \"$PIDFILE\" ]; then")?;
+    writeln!(
+        start_file,
+        "    existing_pid=\"$(cat \"$PIDFILE\" 2>/dev/null || true)\""
+    )?;
+    writeln!(
+        start_file,
+        "    if [ -n \"$existing_pid\" ] && kill -0 \"$existing_pid\" 2>/dev/null; then"
+    )?;
+    writeln!(
+        start_file,
+        "      echo \"peer$i already running with pid $existing_pid\" >&2"
+    )?;
+    writeln!(start_file, "      exit 1")?;
+    writeln!(start_file, "    fi")?;
+    writeln!(start_file, "    rm -f \"$PIDFILE\"")?;
+    writeln!(start_file, "  fi")?;
     writeln!(start_file, "  mkdir -p \"$SNAPSHOT_STORE_DIR\"")?;
     writeln!(
         start_file,
         "  nohup env SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" RUST_LOG=${{RUST_LOG:-info}} \"$IROHAD_BIN\" {sora_flag}--config \"$DIR/peer${{i}}.toml\" > \"$DIR/peer${{i}}.log\" 2>&1 &"
     )?;
-    writeln!(start_file, "  echo $! > \"$DIR/peer${{i}}.pid\"")?;
-    writeln!(
-        start_file,
-        "  echo \"peer$i pid $(cat $DIR/peer${{i}}.pid)\""
-    )?;
+    writeln!(start_file, "  echo $! > \"$PIDFILE\"")?;
+    writeln!(start_file, "  echo \"peer$i pid $(cat \"$PIDFILE\")\"")?;
     writeln!(start_file, "done")?;
     start_file.flush()?;
 
@@ -2409,7 +2424,26 @@ fn write_scripts(out_dir: &Path, peers: u16, build_line: BuildLine, sora_mode: b
     writeln!(stop_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
     writeln!(stop_file, "for pidfile in \"$DIR\"/peer*.pid; do")?;
     writeln!(stop_file, "  [ -f \"$pidfile\" ] || continue")?;
-    writeln!(stop_file, "  kill \"$(cat \"$pidfile\")\" || true")?;
+    writeln!(
+        stop_file,
+        "  pid=\"$(cat \"$pidfile\" 2>/dev/null || true)\""
+    )?;
+    writeln!(stop_file, "  if [ -z \"$pid\" ]; then")?;
+    writeln!(stop_file, "    rm -f \"$pidfile\"")?;
+    writeln!(stop_file, "    continue")?;
+    writeln!(stop_file, "  fi")?;
+    writeln!(stop_file, "  kill \"$pid\" 2>/dev/null || true")?;
+    writeln!(stop_file, "  for _ in $(seq 1 40); do")?;
+    writeln!(stop_file, "    if kill -0 \"$pid\" 2>/dev/null; then")?;
+    writeln!(stop_file, "      sleep 0.25")?;
+    writeln!(stop_file, "    else")?;
+    writeln!(stop_file, "      break")?;
+    writeln!(stop_file, "    fi")?;
+    writeln!(stop_file, "  done")?;
+    writeln!(stop_file, "  if kill -0 \"$pid\" 2>/dev/null; then")?;
+    writeln!(stop_file, "    kill -9 \"$pid\" 2>/dev/null || true")?;
+    writeln!(stop_file, "  fi")?;
+    writeln!(stop_file, "  rm -f \"$pidfile\"")?;
     writeln!(stop_file, "done")?;
     stop_file.flush()?;
 
@@ -5236,6 +5270,23 @@ mod tests {
         assert!(
             start_contents.contains("nohup env SNAPSHOT_STORE_DIR="),
             "start script should launch peers under nohup so they survive wrapper exit"
+        );
+        assert!(
+            start_contents.contains("peer$i already running with pid $existing_pid"),
+            "start script should refuse to overwrite live pidfiles"
+        );
+        assert!(
+            start_contents.contains("rm -f \"$PIDFILE\""),
+            "start script should clear stale pidfiles before relaunch"
+        );
+        let stop_contents = fs::read_to_string(&stop_path).expect("read stop script");
+        assert!(
+            stop_contents.contains("kill -9 \"$pid\" 2>/dev/null || true"),
+            "stop script should force-stop stubborn peers"
+        );
+        assert!(
+            stop_contents.contains("rm -f \"$pidfile\""),
+            "stop script should clean pidfiles after shutdown"
         );
     }
 

@@ -10,6 +10,8 @@ pub mod content;
 pub mod domain;
 pub mod identifier;
 pub mod kaigi;
+/// Ministry agenda submission handlers.
+pub mod ministry;
 pub mod multisig;
 pub mod nft;
 /// Offline allowance settlement instruction handlers.
@@ -261,6 +263,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::endorsement::RegisterDomainCommittee>,
     dispatch_instruction::<iroha_data_model::isi::endorsement::SetDomainEndorsementPolicy>,
     dispatch_instruction::<iroha_data_model::isi::endorsement::SubmitDomainEndorsement>,
+    dispatch_instruction::<iroha_data_model::isi::ministry::SubmitAgendaProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeDeployContract>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::CastZkBallot>,

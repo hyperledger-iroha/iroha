@@ -555,6 +555,7 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         || any.is::<iroha_data_model::isi::governance::ApproveGovernanceProposal>()
         || any.is::<iroha_data_model::isi::governance::EnactReferendum>()
         || any.is::<iroha_data_model::isi::governance::FinalizeReferendum>()
+        || any.is::<iroha_data_model::isi::ministry::SubmitAgendaProposal>()
 }
 
 fn is_time_sensitive_executable(executable: &Executable) -> bool {

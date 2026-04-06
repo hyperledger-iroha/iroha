@@ -1,6 +1,8 @@
 //! Shared helpers for integration tests.
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
 
+/// Shared binary lookup and env-override helpers for CLI integration tests.
+pub mod binary_resolver;
 /// Data availability simulators shared with tooling and docs.
 pub mod da;
 /// Shared binary resolution helpers for `kagami`-driven localnet tests.

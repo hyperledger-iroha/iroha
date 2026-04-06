@@ -511,6 +511,7 @@ macro_rules! build_world_block {
             zk_assets: $state.zk_assets.$method(),
             elections: $state.elections.$method(),
             citizens: $state.citizens.$method(),
+            ministry_agenda_proposals: $state.ministry_agenda_proposals.$method(),
             governance_proposals: $state.governance_proposals.$method(),
             governance_referenda: $state.governance_referenda.$method(),
             governance_stage_approvals: $state.governance_stage_approvals.$method(),
@@ -705,6 +706,7 @@ macro_rules! build_world_transaction {
             zk_assets: $state.zk_assets.transaction(),
             elections: $state.elections.transaction(),
             citizens: $state.citizens.transaction(),
+            ministry_agenda_proposals: $state.ministry_agenda_proposals.transaction(),
             governance_proposals: $state.governance_proposals.transaction(),
             governance_referenda: $state.governance_referenda.transaction(),
             governance_stage_approvals: $state.governance_stage_approvals.transaction(),
@@ -1814,6 +1816,9 @@ pub struct World {
     pub(crate) elections: Storage<String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: Storage<AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals:
+        Storage<String, iroha_data_model::ministry::AgendaProposalRecordV1>,
     /// Governance proposals keyed by deterministic id.
     pub(crate) governance_proposals: Storage<[u8; 32], GovernanceProposalRecord>,
     /// Governance referenda keyed by referendum id.
@@ -2214,6 +2219,9 @@ pub struct WorldBlock<'world> {
     pub(crate) elections: StorageBlock<'world, String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: StorageBlock<'world, AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals:
+        StorageBlock<'world, String, iroha_data_model::ministry::AgendaProposalRecordV1>,
     /// Governance proposals
     pub(crate) governance_proposals: StorageBlock<'world, [u8; 32], GovernanceProposalRecord>,
     /// Governance referenda
@@ -2309,6 +2317,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.smart_contract_state, SmartContractState);
         collect_reverts!(self.zk_assets, ZkAsset);
         collect_reverts!(self.elections, Election);
+        collect_reverts!(self.ministry_agenda_proposals, MinistryAgendaProposal);
         collect_reverts!(self.governance_proposals, GovernanceProposal);
         collect_reverts!(self.governance_referenda, GovernanceReferendum);
         collect_reverts!(self.governance_locks, GovernanceLock);
@@ -2369,6 +2378,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.smart_contract_state, SmartContractState);
         collect_payload!(self.zk_assets, ZkAsset);
         collect_payload!(self.elections, Election);
+        collect_payload!(self.ministry_agenda_proposals, MinistryAgendaProposal);
         collect_payload!(self.governance_proposals, GovernanceProposal);
         collect_payload!(self.governance_referenda, GovernanceReferendum);
         collect_payload!(self.governance_locks, GovernanceLock);
@@ -2831,6 +2841,13 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) elections: StorageTransaction<'block, 'world, String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: StorageTransaction<'block, 'world, AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals: StorageTransaction<
+        'block,
+        'world,
+        String,
+        iroha_data_model::ministry::AgendaProposalRecordV1,
+    >,
     pub(crate) governance_proposals:
         StorageTransaction<'block, 'world, [u8; 32], GovernanceProposalRecord>,
     /// Governance referenda
@@ -3570,6 +3587,9 @@ pub struct WorldView<'world> {
     pub(crate) elections: StorageView<'world, String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: StorageView<'world, AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals:
+        StorageView<'world, String, iroha_data_model::ministry::AgendaProposalRecordV1>,
     pub(crate) governance_proposals: StorageView<'world, [u8; 32], GovernanceProposalRecord>,
     pub(crate) governance_referenda: StorageView<'world, String, GovernanceReferendumRecord>,
     pub(crate) governance_stage_approvals: StorageView<'world, String, GovernanceStageApprovals>,
@@ -6441,6 +6461,9 @@ pub struct StateTransaction<'block, 'state> {
     /// Hash of the current transaction entrypoint (`call_hash`), when executing a transaction.
     /// Not set for ad-hoc instruction execution in tests.
     pub tx_call_hash: Option<iroha_crypto::Hash>,
+    /// Canonical hash of the current signed transaction, when executing a transaction.
+    pub current_tx_hash:
+        Option<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>,
     /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
     pub(crate) rwa_generated_id_ordinal: u64,
     /// Remaining executor fuel budget for runtime executor validation in this transaction.
@@ -11059,6 +11082,7 @@ impl World {
             offline_to_online_transfers: Storage::default(),
             offline_lineages: Storage::default(),
             offline_lineage_operation_results: Storage::default(),
+            ministry_agenda_proposals: Storage::default(),
             governance_proposals: Storage::default(),
             governance_referenda: Storage::default(),
             governance_stage_approvals: Storage::default(),
@@ -11743,6 +11767,7 @@ impl World {
             zk_assets: self.zk_assets.view(),
             elections: self.elections.view(),
             citizens: self.citizens.view(),
+            ministry_agenda_proposals: self.ministry_agenda_proposals.view(),
             governance_proposals: self.governance_proposals.view(),
             governance_referenda: self.governance_referenda.view(),
             governance_stage_approvals: self.governance_stage_approvals.view(),
@@ -12296,6 +12321,10 @@ pub trait WorldReadOnly {
     fn elections(&self) -> &impl StorageReadOnly<String, ElectionState>;
     /// Registered citizens keyed by account id (read-only).
     fn citizens(&self) -> &impl StorageReadOnly<AccountId, CitizenshipRecord>;
+    /// Submitted Ministry agenda proposals keyed by `proposal_id` (read-only).
+    fn ministry_agenda_proposals(
+        &self,
+    ) -> &impl StorageReadOnly<String, iroha_data_model::ministry::AgendaProposalRecordV1>;
     /// Governance proposals (read-only) keyed by deterministic id.
     fn governance_proposals(&self) -> &impl StorageReadOnly<[u8; 32], GovernanceProposalRecord>;
     /// Parliament approvals recorded per referendum id (read-only).
@@ -13501,6 +13530,12 @@ macro_rules! impl_world_ro {
             fn citizens(&self) -> &impl StorageReadOnly<AccountId, CitizenshipRecord> {
                 &self.citizens
             }
+            fn ministry_agenda_proposals(
+                &self,
+            ) -> &impl StorageReadOnly<String, iroha_data_model::ministry::AgendaProposalRecordV1>
+            {
+                &self.ministry_agenda_proposals
+            }
             fn governance_proposals(
                 &self,
             ) -> &impl StorageReadOnly<[u8; 32], GovernanceProposalRecord> {
@@ -13795,6 +13830,7 @@ impl<'world> WorldBlock<'world> {
             zk_assets,
             elections,
             citizens,
+            ministry_agenda_proposals,
             governance_proposals,
             governance_referenda,
             governance_stage_approvals,
@@ -13907,6 +13943,7 @@ impl<'world> WorldBlock<'world> {
         zk_assets.commit();
         elections.commit();
         citizens.commit();
+        ministry_agenda_proposals.commit();
         governance_proposals.commit();
         governance_referenda.commit();
         governance_stage_approvals.commit();
@@ -14934,6 +14971,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             zk_assets,
             elections,
             citizens,
+            ministry_agenda_proposals,
             governance_proposals,
             governance_referenda,
             governance_stage_approvals,
@@ -15044,6 +15082,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         zk_assets.apply();
         elections.apply();
         citizens.apply();
+        ministry_agenda_proposals.apply();
         governance_proposals.apply();
         governance_referenda.apply();
         governance_stage_approvals.apply();
@@ -21716,6 +21755,7 @@ impl<'state> StateBlock<'state> {
             confidential_gas_used_in_tx: 0,
             confidential_gas_used_in_block_so_far: self.confidential_gas_used_in_block,
             tx_call_hash: None,
+            current_tx_hash: None,
             rwa_generated_id_ordinal: 0,
             executor_fuel_remaining: None,
             preverified_batch: self.preverified_batch.clone(),
@@ -26853,6 +26893,7 @@ impl StateTransaction<'_, '_> {
                 host.set_public_inputs_from_parameters(self.world.parameters.get());
                 host.set_vrf_epoch_seeds_from_world(&self.world);
                 host.set_query_state(self);
+                host.set_contract_runtime_context(contract_runtime_context.clone());
                 host.set_zk_snapshots_from_world(&self.world, &self.zk)
                     .map_err(|e| {
                         ValidationFail::InternalError(format!("invalid ZK snapshot state: {e}"))
@@ -26983,6 +27024,7 @@ impl StateTransaction<'_, '_> {
                     host.set_public_inputs_from_parameters(self.world.parameters.get());
                     host.set_vrf_epoch_seeds_from_world(&self.world);
                     host.set_query_state(self);
+                    host.set_contract_runtime_context(contract_runtime_context.clone());
                     host.set_zk_snapshots_from_world(&self.world, &self.zk)
                         .map_err(|e| {
                             ValidationFail::InternalError(format!("invalid ZK snapshot state: {e}"))
@@ -27844,6 +27886,8 @@ pub(crate) mod deserialize {
         let zk_assets = take_optional_default(&mut map, "zk_assets")?;
         let elections = take_optional_default(&mut map, "elections")?;
         let citizens = take_optional_default(&mut map, "citizens")?;
+        let ministry_agenda_proposals =
+            take_optional_default(&mut map, "ministry_agenda_proposals")?;
         let governance_proposals = take_optional_default(&mut map, "governance_proposals")?;
         let governance_referenda = take_optional_default(&mut map, "governance_referenda")?;
         let governance_stage_approvals =
@@ -28025,6 +28069,7 @@ pub(crate) mod deserialize {
             zk_assets,
             elections,
             citizens,
+            ministry_agenda_proposals,
             governance_proposals,
             governance_referenda,
             governance_stage_approvals,

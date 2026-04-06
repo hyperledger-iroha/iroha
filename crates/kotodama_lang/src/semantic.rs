@@ -234,6 +234,7 @@ const INSTRUCTION_EMITTING_BUILTINS: &[&str] = &[
     "sc_execute_submit_ballot",
     "sc_execute_unshield",
     "execute_instruction",
+    "call_contract",
 ];
 
 const HOST_SIDE_EFFECT_BUILTINS: &[&str] = &["subscription_bill", "subscription_record_usage"];
@@ -2955,6 +2956,56 @@ fn analyze_surface_builtin_call(
                 ty: Type::Name,
             })
         }
+        Builtin::JsonObject => {
+            if !arg_typed.is_empty() {
+                return Err(SemanticError {
+                    message: "json_object expects no arguments".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Json,
+            })
+        }
+        Builtin::JsonSetInt => {
+            if arg_typed.len() != 3
+                || arg_typed[0].ty != Type::Json
+                || arg_typed[1].ty != Type::Name
+                || !is_int_like(&arg_typed[2].ty)
+            {
+                return Err(SemanticError {
+                    message: "json_set_int expects (Json, Name, int)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Json,
+            })
+        }
+        Builtin::JsonSetAccountId => {
+            if arg_typed.len() != 3
+                || arg_typed[0].ty != Type::Json
+                || arg_typed[1].ty != Type::Name
+                || arg_typed[2].ty != Type::AccountId
+            {
+                return Err(SemanticError {
+                    message: "json_set_account_id expects (Json, Name, AccountId)".into(),
+                });
+            }
+            Ok(TypedExpr {
+                expr: ExprKind::Call {
+                    name: builtin.name().to_string(),
+                    args: arg_typed,
+                },
+                ty: Type::Json,
+            })
+        }
         Builtin::GetInt
         | Builtin::GetNumeric
         | Builtin::GetJson
@@ -4022,6 +4073,24 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                             args: arg_typed,
                         },
                         ty: Type::AccountId,
+                    })
+                }
+                "call_contract" => {
+                    if arg_typed.len() != 3
+                        || arg_typed[0].ty != Type::AccountId
+                        || !(arg_typed[1].ty == Type::String || is_blob_like(&arg_typed[1].ty))
+                        || arg_typed[2].ty != Type::Json
+                    {
+                        return Err(SemanticError {
+                            message: "call_contract expects (AccountId, String|Blob, Json)".into(),
+                        });
+                    }
+                    Ok(TypedExpr {
+                        expr: ExprKind::Call {
+                            name: name.clone(),
+                            args: arg_typed,
+                        },
+                        ty: Type::Bytes,
                     })
                 }
                 // Current trigger event payload as Json (data/by-call triggers).

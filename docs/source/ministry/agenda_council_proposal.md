@@ -6,13 +6,69 @@ The Agenda Council workflow batches citizen-submitted blacklist and policy chang
 proposals before the governance panels review them. This document defines the
 canonical payload schema, evidence requirements, and duplication detection rules
 consumed by the new validator (`cargo xtask ministry-agenda validate`) so
-proposers can lint JSON submissions locally before uploading them to the portal.
+proposers can lint JSON submissions locally before drafting a wallet-signed
+submission through Torii.
 
 ## Payload overview
 
 Agenda proposals use the `AgendaProposalV1` Norito schema
 (`iroha_data_model::ministry::AgendaProposalV1`). Fields are encoded as JSON when
-submitting through CLI/portal surfaces.
+drafting or exporting proposal payloads for review tooling.
+
+## Draft and submit flow
+
+Agenda Council submissions now use a draft-plus-signed-submit flow instead of a
+portal-only upload path:
+
+1. Build and validate an `AgendaProposalV1` payload locally.
+2. Call `POST /v1/ministry/agenda/proposals/draft` with:
+
+   ```json
+   {
+     "proposal": { "...": "AgendaProposalV1" },
+     "authority": "<canonical i105 account id>"
+   }
+   ```
+
+3. Torii validates the payload, rejects duplicate `proposal_id` values with
+   `409 Conflict`, and returns:
+
+   ```json
+   {
+     "ok": true,
+     "agenda_proposal_id": "AC-2026-001",
+     "authority": "<canonical i105 account id>",
+     "tx_instructions": [/* TxInstr[] */],
+     "signable_transaction_b64": "<base64 unsigned transaction bytes>"
+   }
+   ```
+
+4. Present `signable_transaction_b64` to the user’s wallet (for example through
+   IrohaConnect) and collect a detached Ed25519 signature.
+5. Assemble the signed transaction locally and submit it through the normal
+   Torii transaction route. Torii does not accept `private_key` payloads for
+   Ministry agenda submissions.
+6. Poll `/v1/pipeline/transactions/status` until the transaction reaches a
+   terminal state.
+7. Confirm persistence through
+   `GET /v1/ministry/agenda/proposals/{proposal_id}`, which returns:
+
+   ```json
+   {
+     "found": true,
+     "record": {
+       "proposal": { "...": "AgendaProposalV1" },
+       "authority": "<canonical i105 account id>",
+       "submitted_tx_hash_hex": "<64-char lowercase hex>",
+       "submitted_height": 12345
+     }
+   }
+   ```
+
+The draft endpoint is intentionally non-persistent. It prepares the exact
+instruction set and signable transaction payload, but the proposal record is
+only written after the signed transaction is accepted and executed by the normal
+transaction pipeline.
 
 | Field | Type | Requirements |
 |-------|------|--------------|
