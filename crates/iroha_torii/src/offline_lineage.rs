@@ -4154,6 +4154,7 @@ fn validate_cash_attestation(
         ));
     }
     let request_binding = apple_app_attest_binding_from_request(attestation)?;
+    let is_stored_binding = request_binding.is_none() && stored_apple_app_attest_binding.is_some();
     if let Some(binding) = request_binding.as_ref().or(stored_apple_app_attest_binding) {
         let metadata = metadata_from_apple_binding(binding)?;
         let attestation_report = BASE64_STANDARD
@@ -4179,6 +4180,7 @@ fn validate_cash_attestation(
                 assertion,
                 counter: attestation.counter,
                 challenge_hash: decode_challenge_hash_hex(&attestation.challenge_hash_hex)?,
+                skip_attestation_nonce: is_stored_binding,
             },
             latest_block_timestamp_ms(app),
             settlement_cfg,
@@ -4350,6 +4352,7 @@ fn validate_lineage_attestation(
         ));
     }
     let request_binding = apple_app_attest_binding_from_request(attestation)?;
+    let is_stored_binding = request_binding.is_none() && stored_apple_app_attest_binding.is_some();
     if let Some(binding) = request_binding.as_ref().or(stored_apple_app_attest_binding) {
         let metadata = metadata_from_apple_binding(binding)?;
         let attestation_report = BASE64_STANDARD
@@ -4375,6 +4378,7 @@ fn validate_lineage_attestation(
                 assertion,
                 counter: attestation.counter,
                 challenge_hash: decode_challenge_hash_hex(&attestation.challenge_hash_hex)?,
+                skip_attestation_nonce: is_stored_binding,
             },
             latest_block_timestamp_ms(app),
             settlement_cfg,
