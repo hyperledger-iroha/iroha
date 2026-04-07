@@ -36,11 +36,11 @@ fn domain_owner_domain_permissions() -> Result<()> {
     let (bob_id, _bob_keypair) = gen_account_in("kingdom");
     let coin_id: AssetDefinitionId =
         AssetDefinitionId::new(DomainId::try_new("kingdom", "universal")?, "coin".parse()?);
-    let coin = AssetDefinition::numeric(coin_id.clone());
+    let coin = AssetDefinition::numeric(coin_id.clone()).with_name(coin_id.name().to_string());
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
-    test_client.submit_blocking(Register::domain(kingdom))?;
+    submit_register_domain_with_network_lease(&network, &test_client, kingdom)?;
 
     let bob = Account::new(bob_id.clone());
     test_client.submit_blocking(Register::account(bob))?;
@@ -88,20 +88,36 @@ fn domain_owner_account_permissions() -> Result<()> {
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id);
-    test_client.submit_blocking(Register::domain(kingdom))?;
+    submit_register_domain_with_network_lease(&network, &test_client, kingdom)?;
 
     let mad_hatter = Account::new(mad_hatter_id.clone());
     test_client.submit_blocking(Register::account(mad_hatter))?;
 
-    // check that the canonical ALICE account as owner of domain can edit metadata of account in her domain
+    // Domain ownership no longer grants direct account metadata mutation rights.
     let key: Name = "key".parse()?;
     let value = Json::new("value");
-    test_client.submit_blocking(SetKeyValue::account(
-        mad_hatter_id.clone(),
-        key.clone(),
-        value,
-    ))?;
-    test_client.submit_blocking(RemoveKeyValue::account(mad_hatter_id.clone(), key))?;
+    let err = test_client
+        .submit_blocking(SetKeyValue::account(
+            mad_hatter_id.clone(),
+            key.clone(),
+            value,
+        ))
+        .expect_err("domain owner must not edit another account metadata");
+    assert!(
+        err.chain()
+            .any(|cause| cause
+                .to_string()
+                .contains("Can't set value to the metadata of another account"))
+    );
+    let err = test_client
+        .submit_blocking(RemoveKeyValue::account(mad_hatter_id.clone(), key))
+        .expect_err("domain owner must not remove another account metadata");
+    assert!(
+        err.chain()
+            .any(|cause| cause
+                .to_string()
+                .contains("metadata of another account"))
+    );
 
     // check that the canonical ALICE account as owner of domain can grant and revoke account related permissions in her domain
     let bob_id = BOB_ID.clone();
@@ -142,7 +158,7 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
-    test_client.submit_blocking(Register::domain(kingdom))?;
+    submit_register_domain_with_network_lease(&network, &test_client, kingdom)?;
 
     let bob = Account::new(bob_id.clone());
     test_client.submit_blocking(Register::account(bob))?;
@@ -151,20 +167,26 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
     test_client.submit_blocking(Register::account(rabbit))?;
 
     // Register asset definition by "bob@kingdom" so he is owner of it.
-    let coin = AssetDefinition::numeric(coin_id.clone());
+    let coin = AssetDefinition::numeric(coin_id.clone()).with_name(coin_id.name().to_string());
     let transaction = TransactionBuilder::new(network.chain_id(), bob_id.clone())
         .with_instructions([Register::asset_definition(coin)])
         .sign(bob_keypair.private_key());
     test_client.submit_transaction_blocking(&transaction)?;
 
-    // check that the canonical ALICE account as owner of domain can transfer asset definitions in her domain
-    test_client.submit_blocking(Transfer::asset_definition(
-        bob_id.clone(),
-        coin_id.clone(),
-        rabbit_id,
-    ))?;
+    // Asset definitions are issuer-owned in first-release semantics.
+    let err = test_client
+        .submit_blocking(Transfer::asset_definition(
+            bob_id.clone(),
+            coin_id.clone(),
+            rabbit_id,
+        ))
+        .expect_err("domain owner must not transfer another account's asset definition");
+    assert!(
+        err.chain().any(|cause| cause
+            .to_string()
+            .contains("Can't transfer asset definition of another account"))
+    );
 
-    // check that the canonical ALICE account as owner of domain can edit metadata of asset definition in her domain
     let key: Name = "key".parse()?;
     let value = Json::new("value");
     test_client.submit_blocking(SetKeyValue::asset_definition(
@@ -174,7 +196,6 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
     ))?;
     test_client.submit_blocking(RemoveKeyValue::asset_definition(coin_id.clone(), key))?;
 
-    // check that the canonical ALICE account as owner of domain can grant and revoke asset definition related permissions in her domain
     let permission = CanUnregisterAssetDefinition {
         asset_definition: coin_id.clone(),
     };
@@ -186,7 +207,6 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
         permission, bob_id,
     )))?;
 
-    // check that the canonical ALICE account as owner of domain can unregister asset definitions in her domain
     test_client.submit_blocking(Unregister::asset_definition(coin_id))?;
 
     Ok(())
@@ -209,23 +229,34 @@ fn domain_owner_asset_permissions() -> Result<()> {
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
-    test_client.submit_blocking(Register::domain(kingdom))?;
+    submit_register_domain_with_network_lease(&network, &test_client, kingdom)?;
 
     let bob = Account::new(bob_id.clone());
     test_client.submit_blocking(Register::account(bob))?;
 
     // Register asset definition by "bob@kingdom" so he is owner of it.
-    let coin = AssetDefinition::numeric(coin_id.clone());
+    let coin = AssetDefinition::numeric(coin_id.clone()).with_name(coin_id.name().to_string());
     let transaction = TransactionBuilder::new(network.chain_id(), bob_id.clone())
         .with_instructions([Register::asset_definition(coin)])
         .sign(bob_keypair.private_key());
     test_client.submit_transaction_blocking(&transaction)?;
 
-    // check that the canonical ALICE account as owner of domain can burn, mint and transfer assets in her domain
+    // Domain ownership still covers mint/burn, but asset transfers require the source owner or an explicit grant.
     let bob_coin_id = AssetId::new(coin_id, bob_id.clone());
     test_client.submit_blocking(Mint::asset_numeric(10u32, bob_coin_id.clone()))?;
     test_client.submit_blocking(Burn::asset_numeric(5u32, bob_coin_id.clone()))?;
-    test_client.submit_blocking(Transfer::asset_numeric(bob_coin_id.clone(), 5u32, alice_id))?;
+    let err = test_client
+        .submit_blocking(Transfer::asset_numeric(
+            bob_coin_id.clone(),
+            5u32,
+            alice_id,
+        ))
+        .expect_err("domain owner must not transfer another account asset without explicit grant");
+    assert!(
+        err.chain().any(|cause| cause
+            .to_string()
+            .contains("source asset owner must sign the transaction"))
+    );
 
     // check that the canonical ALICE account as owner of domain can grant and revoke asset related permissions in her domain
     let permission = CanTransferAsset { asset: bob_coin_id };
@@ -251,11 +282,14 @@ fn domain_owner_nft_permissions() -> Result<()> {
 
     let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal")?;
     let (bob_id, bob_keypair) = gen_account_in("kingdom");
-    let nft_id: NftId = "nft$kingdom".parse()?;
+    let nft_id = NftId::new(
+        DomainId::try_new("kingdom", "universal")?,
+        "nft".parse()?,
+    );
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
-    test_client.submit_blocking(Register::domain(kingdom))?;
+    submit_register_domain_with_network_lease(&network, &test_client, kingdom)?;
 
     let bob = Account::new(bob_id.clone());
     test_client.submit_blocking(Register::account(bob))?;
@@ -307,11 +341,11 @@ fn domain_owner_trigger_permissions() -> Result<()> {
 
     let alice_id = ALICE_ID.clone();
     let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal")?;
-    let (bob_id, _bob_keypair) = gen_account_in("kingdom");
+    let (bob_id, bob_keypair) = gen_account_in("kingdom");
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id);
-    test_client.submit_blocking(Register::domain(kingdom))?;
+    submit_register_domain_with_network_lease(&network, &test_client, kingdom)?;
 
     let bob = Account::new(bob_id.clone());
     test_client.submit_blocking(Register::account(bob))?;
@@ -333,41 +367,54 @@ fn domain_owner_trigger_permissions() -> Result<()> {
             ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
         ),
     ));
-    test_client.submit_blocking(register_trigger)?;
+    let err = test_client
+        .submit_blocking(register_trigger.clone())
+        .expect_err("domain owner must not register a trigger owned by another account");
+    assert!(
+        err.chain().any(|cause| cause
+            .to_string()
+            .contains("Missing CanRegisterTrigger"))
+    );
+    let grant_register_permission = TransactionBuilder::new(network.chain_id(), bob_id.clone())
+        .with_instructions([Grant::account_permission(
+            iroha_executor_data_model::permission::trigger::CanRegisterTrigger {
+                authority: bob_id.clone(),
+            },
+            bob_id.clone(),
+        )])
+        .sign(bob_keypair.private_key());
+    test_client.submit_transaction_blocking(&grant_register_permission)?;
+    let transaction = TransactionBuilder::new(network.chain_id(), bob_id.clone())
+        .with_instructions([register_trigger])
+        .sign(bob_keypair.private_key());
+    test_client.submit_transaction_blocking(&transaction)?;
 
-    // check that the canonical ALICE account as owner of domain can edit repetitions of triggers in her domain
     test_client.submit_blocking(Mint::trigger_repetitions(1_u32, trigger_id.clone()))?;
     test_client.submit_blocking(Burn::trigger_repetitions(1_u32, trigger_id.clone()))?;
 
-    // check that the canonical ALICE account as owner of domain can grant execute permission and call triggers in her domain
     let execute_permission = CanExecuteTrigger {
         trigger: trigger_id.clone(),
     };
+    let execute_trigger = ExecuteTrigger::new(trigger_id.clone());
+    let err = test_client
+        .submit_blocking(Instruction::into_instruction_box(Box::new(execute_trigger)))
+        .expect_err("manual execute should still be rejected for this trigger shape");
+    assert!(
+        err.chain()
+            .any(|cause| cause
+                .to_string()
+                .contains("Trigger can't be executed manually: filter mismatch"))
+    );
     test_client.submit_blocking(Grant::account_permission(
-        execute_permission.clone(),
+        execute_permission,
         alice_id.clone(),
     ))?;
 
-    let execute_trigger = ExecuteTrigger::new(trigger_id.clone());
-    test_client.submit_blocking(Instruction::into_instruction_box(Box::new(execute_trigger)))?;
-    test_client.submit_blocking(RevokeBox::from(Revoke::account_permission(
-        execute_permission,
-        alice_id.clone(),
-    )))?;
-
-    // check that the canonical ALICE account as owner of domain can grant and revoke trigger related permissions in her domain
     let permission = CanUnregisterTrigger {
         trigger: trigger_id.clone(),
     };
-    test_client.submit_blocking(Grant::account_permission(
-        permission.clone(),
-        bob_id.clone(),
-    ))?;
-    test_client.submit_blocking(RevokeBox::from(Revoke::account_permission(
-        permission, bob_id,
-    )))?;
+    test_client.submit_blocking(Grant::account_permission(permission, bob_id))?;
 
-    // check that the canonical ALICE account as owner of domain can unregister triggers in her domain
     test_client.submit_blocking(Unregister::trigger(trigger_id))?;
 
     Ok(())
@@ -387,7 +434,7 @@ fn domain_owner_transfer() -> Result<()> {
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
-    test_client.submit_blocking(Register::domain(kingdom))?;
+    submit_register_domain_with_network_lease(&network, &test_client, kingdom)?;
 
     let bob = Account::new(bob_id.clone());
     test_client.submit_blocking(Register::account(bob))?;

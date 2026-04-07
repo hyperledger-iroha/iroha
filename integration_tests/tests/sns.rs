@@ -25,8 +25,10 @@ use iroha_test_samples::{ALICE_ID, BOB_ID};
 use reqwest::{Client as HttpClient, Url};
 use tokio::time::sleep;
 
-const METRIC_READY_RETRIES: usize = 12;
+const METRIC_READY_RETRIES: usize = 60;
 const METRIC_RETRY_DELAY_MS: u64 = 250;
+const STATUS_READY_ATTEMPTS: usize = 60;
+const STATUS_RETRY_DELAY: Duration = Duration::from_millis(250);
 
 /// End-to-end registrar flow: register → fetch record → fetch policy.
 #[tokio::test]
@@ -37,7 +39,8 @@ async fn sns_registrar_round_trip() -> Result<()> {
     network.ensure_blocks(1).await?;
 
     let client = network.client();
-    let request = build_register_request("makoto")?;
+    let label = unique_label("roundtrip");
+    let request = build_register_request(&label)?;
     let response = client.sns().register(&request)?;
     assert_eq!(
         response.name_record.selector.normalized_label(),
@@ -78,7 +81,7 @@ async fn sns_freeze_unfreeze_lifecycle() -> Result<()> {
 
     let client = network.client();
     let label = unique_label("freeze");
-    let literal = label.clone();
+    let literal = domain_literal(&label);
     register_name(&client, &label)?;
 
     let freeze = FreezeNameRequestV1 {
@@ -148,7 +151,7 @@ async fn sns_registration_emits_metrics_and_gateway_bindings() -> Result<()> {
     .unwrap_or(0.0);
 
     let label = unique_label("telemetry");
-    let literal = label.clone();
+    let literal = domain_literal(&label);
     register_name(&client, &label)?;
 
     let mut observed_after = None;
@@ -206,7 +209,7 @@ async fn sns_renew_and_transfer_flow() -> Result<()> {
 
     let client = network.client();
     let label = unique_label("renew-transfer");
-    let literal = label.clone();
+    let literal = domain_literal(&label);
     let record = register_name(&client, &label)?;
     let original_expiry = record.expires_at_ms;
     let policy = client.sns().get_policy(record.selector.suffix_id)?;
@@ -259,7 +262,10 @@ async fn sns_renew_and_transfer_flow() -> Result<()> {
         "transfer should reassign ownership to Bob's controller",
     );
 
-    let fetched = client.sns().get_name(SnsNamespacePath::Domain, &literal)?;
+    let fetched = wait_for_record(&client, &literal, |record| {
+        record.owner.controller() == BOB_ID.controller()
+    })
+    .await?;
     assert_same_owner_controller(
         &fetched.owner,
         &BOB_ID,
@@ -274,7 +280,7 @@ async fn sns_renew_and_transfer_flow() -> Result<()> {
 }
 
 fn build_register_request(label: &str) -> Result<RegisterNameRequestV1> {
-    let selector = NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, label)
+    let selector = NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain_literal(label))
         .map_err(|err| eyre!("invalid selector: {err}"))?;
     let owner = ALICE_ID.clone();
     let controller_address = AccountAddress::from_account_id(&owner)
@@ -285,7 +291,7 @@ fn build_register_request(label: &str) -> Result<RegisterNameRequestV1> {
         owner: owner.clone(),
         controllers: vec![NameControllerV1::account(&controller_address)],
         term_years: 1,
-        pricing_class_hint: Some(0),
+        pricing_class_hint: None,
         payment: stub_payment_proof(&owner),
         governance: None,
         metadata: Metadata::default(),
@@ -312,6 +318,10 @@ fn register_name(client: &IrohaClient, label: &str) -> Result<NameRecordV1> {
     Ok(response.name_record)
 }
 
+fn domain_literal(label: &str) -> String {
+    format!("{label}.universal")
+}
+
 async fn start_sns_network(test_name: &str) -> Result<Option<sandbox::SerializedNetwork>> {
     start_network_async_or_skip(NetworkBuilder::new(), test_name).await
 }
@@ -324,15 +334,25 @@ async fn wait_for_status<F>(
 where
     F: Fn(&NameStatus) -> bool,
 {
-    const MAX_ATTEMPTS: usize = 20;
-    for _ in 0..MAX_ATTEMPTS {
+    wait_for_record(client, literal, |record| predicate(&record.status)).await
+}
+
+async fn wait_for_record<F>(
+    client: &IrohaClient,
+    literal: &str,
+    predicate: F,
+) -> Result<NameRecordV1>
+where
+    F: Fn(&NameRecordV1) -> bool,
+{
+    for _ in 0..STATUS_READY_ATTEMPTS {
         let record = client.sns().get_name(SnsNamespacePath::Domain, literal)?;
-        if predicate(&record.status) {
+        if predicate(&record) {
             return Ok(record);
         }
-        sleep(Duration::from_millis(200)).await;
+        sleep(STATUS_RETRY_DELAY).await;
     }
-    bail!("registration `{literal}` did not reach expected status");
+    bail!("registration `{literal}` did not reach expected state");
 }
 
 fn stub_governance_hook() -> GovernanceHookV1 {

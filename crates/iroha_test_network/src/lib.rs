@@ -4530,6 +4530,11 @@ impl NetworkBuilder {
         self
     }
 
+    /// Return the pipeline time that will be injected into genesis, if explicitly configured.
+    pub fn configured_pipeline_time(&self) -> Option<Duration> {
+        self.pipeline_time
+    }
+
     /// Override the block gossip period used by block sync and gossip topics.
     ///
     /// Increasing the period introduces additional message delay between peers,
@@ -11678,6 +11683,16 @@ exit 0
         assert_eq!(commit_time_ms, Some(expected_commit));
         let total_ms = duration.as_millis() as u64;
         assert_eq!(expected_block + expected_commit, total_ms);
+    }
+
+    #[test]
+    fn configured_pipeline_time_reports_explicit_override() {
+        let duration = Duration::from_secs(9);
+        let builder = NetworkBuilder::new().with_pipeline_time(duration);
+        assert_eq!(builder.configured_pipeline_time(), Some(duration));
+
+        let default_builder = NetworkBuilder::new().with_default_pipeline_time();
+        assert_eq!(default_builder.configured_pipeline_time(), None);
     }
 
     #[test]

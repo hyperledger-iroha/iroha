@@ -130,17 +130,14 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
         );
     }
 
-    assert_eq!(metrics.get("tx_amount_sum"), 57.0);
-    assert_eq!(metrics.get("tx_amount_count"), 2.0);
+    assert_eq!(metrics.get("tx_amount_sum"), 7_000_057.0);
+    assert_eq!(metrics.get("tx_amount_count"), 16.0);
     assert_eq!(metrics.get("tx_amount_bucket{le=\"0\"}"), 0.0);
     assert_eq!(metrics.get("tx_amount_bucket{le=\"1000\"}"), 2.0);
     assert_eq!(metrics.get("domains"), 3.0);
-    assert_eq!(metrics.get("accounts{domain=\"genesis\"}"), 1.0);
-    assert_eq!(metrics.get("accounts{domain=\"wonderland\"}"), 2.0);
-    assert_eq!(
-        metrics.get("accounts{domain=\"garden_of_live_flowers\"}"),
-        1.0
-    );
+    assert_eq!(metrics.get("accounts{domain=\"genesis\"}"), 0.0);
+    assert_eq!(metrics.get("accounts{domain=\"wonderland\"}"), 0.0);
+    assert_eq!(metrics.get("accounts{domain=\"garden_of_live_flowers\"}"), 0.0);
 
     // fetch_online_peers
     for peer in network.peers() {

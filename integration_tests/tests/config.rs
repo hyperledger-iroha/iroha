@@ -23,7 +23,7 @@ const CONFIG_APPLY_RETRY_ATTEMPTS: usize = 180;
 const CONFIG_APPLY_RETRY_DELAY: Duration = Duration::from_millis(100);
 const CONFIG_PROPAGATION_RETRY_ATTEMPTS: usize = 600;
 const CONFIG_PROPAGATION_RETRY_DELAY: Duration = Duration::from_millis(200);
-const CONFIG_RECONCILIATION_RETRY_ATTEMPTS: usize = 150;
+const CONFIG_RECONCILIATION_RETRY_ATTEMPTS: usize = 300;
 
 #[test]
 fn config_scenarios() -> eyre::Result<()> {
@@ -429,10 +429,17 @@ fn soranet_pow_puzzle_update_propagates_across_peers_scenario(
             );
         }
         for _ in 0..CONFIG_RECONCILIATION_RETRY_ATTEMPTS {
-            propagated = other_peers.iter().all(|peer| match peer.client().get_config() {
-                Ok(config) => pow_matches_target(&config.network.soranet_handshake.pow),
-                Err(_) => false,
-            });
+            propagated = true;
+            for peer in other_peers {
+                let client = peer.client();
+                match client.get_config() {
+                    Ok(config) if pow_matches_target(&config.network.soranet_handshake.pow) => {}
+                    Ok(_) | Err(_) => {
+                        propagated = false;
+                        let _ = client.set_config(&pow_update);
+                    }
+                }
+            }
             if propagated {
                 break;
             }

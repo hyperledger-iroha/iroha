@@ -50,6 +50,7 @@ use norito::json::{self, Value};
 use reqwest::Url;
 
 const SORACLOUD_TEST_CONTROL_PLANE_TIMEOUT_SECS: &str = "60";
+const SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT: Duration = Duration::from_secs(60);
 const SORACLOUD_LIVE_HF_TEST_RESOLVED_REVISION: &str = "main";
 const SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES: usize = 4_096;
 
@@ -424,6 +425,89 @@ async fn run_soracloud_command(
         .envs(config.envs())
         .output()
         .await?)
+}
+
+async fn wait_for_soracloud_json_command(
+    cwd: &Path,
+    config: &ProgramConfig,
+    args: &[&str],
+    timeout: Duration,
+    predicate: impl Fn(&Value) -> bool,
+) -> eyre::Result<Value> {
+    let deadline = Instant::now() + timeout;
+    loop {
+        let output = run_soracloud_command(cwd, config, args).await?;
+        let detail = if output.status.success() {
+            match json::from_slice::<Value>(&output.stdout) {
+                Ok(payload) => {
+                    if predicate(&payload) {
+                        return Ok(payload);
+                    }
+                    json::to_string_pretty(&payload).unwrap_or_else(|_| format!("{payload:?}"))
+                }
+                Err(err) => {
+                    format!("failed to decode Soracloud JSON payload: {err}")
+                }
+            }
+        } else {
+            format!(
+                "command `iroha app soracloud {}` exited with {} and stderr: {}",
+                args.join(" "),
+                output.status,
+                String::from_utf8_lossy(&output.stderr)
+            )
+        };
+
+        if Instant::now() >= deadline {
+            return Err(eyre::eyre!(
+                "timed out waiting for soracloud command convergence after {:?}; last detail: {}",
+                timeout,
+                detail
+            ));
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+async fn wait_for_soracloud_status_payload(
+    cwd: &Path,
+    config: &ProgramConfig,
+    torii_url: &str,
+    timeout: Duration,
+    predicate: impl Fn(&Value) -> bool,
+) -> eyre::Result<Value> {
+    wait_for_soracloud_json_command(cwd, config, &["status", "--torii-url", torii_url], timeout, predicate)
+        .await
+}
+
+async fn wait_for_soracloud_hf_status_payload(
+    cwd: &Path,
+    config: &ProgramConfig,
+    repo_id: &str,
+    lease_term_ms: &str,
+    account_id: &str,
+    torii_url: &str,
+    timeout: Duration,
+    predicate: impl Fn(&Value) -> bool,
+) -> eyre::Result<Value> {
+    wait_for_soracloud_json_command(
+        cwd,
+        config,
+        &[
+            "hf-status",
+            "--repo-id",
+            repo_id,
+            "--lease-term-ms",
+            lease_term_ms,
+            "--account-id",
+            account_id,
+            "--torii-url",
+            torii_url,
+        ],
+        timeout,
+        predicate,
+    )
+    .await
 }
 
 fn soracloud_command_args(args: &[&str]) -> Vec<String> {
@@ -1008,21 +1092,22 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         norito::json::to_vec_pretty(&service_v2).expect("encode service v2"),
     )
     .await?;
+    let torii_url = network.client().torii_url.to_string();
 
-    let deploy = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("app")
-        .arg("soracloud")
-        .arg("deploy")
-        .arg("--container")
-        .arg(container_path.to_string_lossy().into_owned())
-        .arg("--service")
-        .arg(service_v1_path.to_string_lossy().into_owned())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .output()
-        .await?;
+    let deploy = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "deploy",
+            "--container",
+            container_path.to_string_lossy().as_ref(),
+            "--service",
+            service_v1_path.to_string_lossy().as_ref(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
     assert!(
         deploy.status.success(),
         "deploy failed with status {} and stderr: {}",
@@ -1039,20 +1124,20 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         Some("1.0.0")
     );
 
-    let upgrade = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("app")
-        .arg("soracloud")
-        .arg("upgrade")
-        .arg("--container")
-        .arg(container_path.to_string_lossy().into_owned())
-        .arg("--service")
-        .arg(service_v2_path.to_string_lossy().into_owned())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .output()
-        .await?;
+    let upgrade = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "upgrade",
+            "--container",
+            container_path.to_string_lossy().as_ref(),
+            "--service",
+            service_v2_path.to_string_lossy().as_ref(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
     assert!(
         upgrade.status.success(),
         "upgrade failed with status {} and stderr: {}",
@@ -1081,24 +1166,25 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         Some("Canary")
     );
 
-    let rollout = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("app")
-        .arg("soracloud")
-        .arg("rollout")
-        .arg("--service-name")
-        .arg(service_v1.service_name.to_string())
-        .arg("--rollout-handle")
-        .arg(rollout_handle)
-        .arg("--promote-to-percent")
-        .arg("100")
-        .arg("--governance-tx-hash")
-        .arg(Hash::new(b"cli-live-rollout-promote").to_string())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .output()
-        .await?;
+    let rollout_governance_hash = Hash::new(b"cli-live-rollout-promote").to_string();
+    let rollout = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "rollout",
+            "--service-name",
+            service_v1.service_name.to_string().as_ref(),
+            "--rollout-handle",
+            rollout_handle,
+            "--promote-to-percent",
+            "100",
+            "--governance-tx-hash",
+            rollout_governance_hash.as_str(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
     assert!(
         rollout.status.success(),
         "rollout failed with status {} and stderr: {}",
@@ -1129,18 +1215,18 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         Some(100)
     );
 
-    let rollback = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("app")
-        .arg("soracloud")
-        .arg("rollback")
-        .arg("--service-name")
-        .arg(service_v1.service_name.to_string())
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .output()
-        .await?;
+    let rollback = run_soracloud_command(
+        dir.path(),
+        &config,
+        &[
+            "rollback",
+            "--service-name",
+            service_v1.service_name.to_string().as_ref(),
+            "--torii-url",
+            torii_url.as_str(),
+        ],
+    )
+    .await?;
     assert!(
         rollback.status.success(),
         "rollback failed with status {} and stderr: {}",
@@ -1157,25 +1243,32 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         Some("1.0.0")
     );
 
-    let status = tokio::process::Command::new(program())
-        .current_dir(dir.path())
-        .arg("app")
-        .arg("soracloud")
-        .arg("status")
-        .arg("--torii-url")
-        .arg(network.client().torii_url.to_string())
-        .envs(config.envs())
-        .output()
-        .await?;
-    assert!(
-        status.status.success(),
-        "status failed with status {} and stderr: {}",
-        status.status,
-        String::from_utf8_lossy(&status.stderr)
-    );
-
-    let status_payload: Value =
-        json::from_slice(&status.stdout).expect("CLI should emit soracloud status payload");
+    let status_payload = wait_for_soracloud_status_payload(
+        dir.path(),
+        &config,
+        torii_url.as_str(),
+        SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT,
+        |payload| {
+            let Some(network_status) = payload.get("network_status").and_then(Value::as_object) else {
+                return false;
+            };
+            let Some(control_plane) = network_status.get("control_plane").and_then(Value::as_object) else {
+                return false;
+            };
+            if control_plane.get("service_count").and_then(Value::as_u64) != Some(1) {
+                return false;
+            }
+            if control_plane.get("audit_event_count").and_then(Value::as_u64) != Some(4) {
+                return false;
+            }
+            let Some(services) = control_plane.get("services").and_then(Value::as_array) else {
+                return false;
+            };
+            services.len() == 1
+                && services[0].get("current_version").and_then(Value::as_str) == Some("1.0.0")
+        },
+    )
+    .await?;
     let network_status = status_payload
         .get("network_status")
         .and_then(Value::as_object)
@@ -2906,29 +2999,36 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         Some("Join")
     );
 
-    let bob_status = run_soracloud_command(
+    let bob_status_payload = wait_for_soracloud_hf_status_payload(
         dir.path(),
         &bob_config,
-        &[
-            "hf-status",
-            "--repo-id",
-            repo_id,
-            "--lease-term-ms",
-            lease_term_ms_literal.as_str(),
-            "--account-id",
-            bob_account_id.as_str(),
-            "--torii-url",
-            torii_url.as_str(),
-        ],
+        repo_id,
+        lease_term_ms_literal.as_str(),
+        bob_account_id.as_str(),
+        torii_url.as_str(),
+        SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT,
+        |payload| {
+            payload
+                .get("pool")
+                .and_then(Value::as_object)
+                .and_then(|pool| pool.get("active_member_count"))
+                .and_then(Value::as_u64)
+                == Some(2)
+                && payload
+                    .get("latest_audit_event")
+                    .and_then(Value::as_object)
+                    .and_then(|event| event.get("action"))
+                    .and_then(|value| tagged_enum_label(value, "action"))
+                    == Some("Join")
+                && payload
+                    .get("latest_audit_event")
+                    .and_then(Value::as_object)
+                    .and_then(|event| event.get("account_id"))
+                    .and_then(Value::as_str)
+                    == Some(bob_account_id.as_str())
+        },
     )
     .await?;
-    assert!(
-        bob_status.status.success(),
-        "bob hf-status failed with status {} and stderr: {}",
-        bob_status.status,
-        String::from_utf8_lossy(&bob_status.stderr)
-    );
-    let bob_status_payload: Value = json::from_slice(&bob_status.stdout).expect("bob status json");
     let bob_pool = bob_status_payload
         .get("pool")
         .and_then(Value::as_object)
@@ -3008,30 +3108,36 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         Some("Join")
     );
 
-    let carpenter_status = run_soracloud_command(
+    let carpenter_status_payload = wait_for_soracloud_hf_status_payload(
         dir.path(),
         &carpenter_config,
-        &[
-            "hf-status",
-            "--repo-id",
-            repo_id,
-            "--lease-term-ms",
-            lease_term_ms_literal.as_str(),
-            "--account-id",
-            carpenter_account_id.as_str(),
-            "--torii-url",
-            torii_url.as_str(),
-        ],
+        repo_id,
+        lease_term_ms_literal.as_str(),
+        carpenter_account_id.as_str(),
+        torii_url.as_str(),
+        SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT,
+        |payload| {
+            payload
+                .get("pool")
+                .and_then(Value::as_object)
+                .and_then(|pool| pool.get("active_member_count"))
+                .and_then(Value::as_u64)
+                == Some(3)
+                && payload
+                    .get("latest_audit_event")
+                    .and_then(Value::as_object)
+                    .and_then(|event| event.get("action"))
+                    .and_then(|value| tagged_enum_label(value, "action"))
+                    == Some("Join")
+                && payload
+                    .get("latest_audit_event")
+                    .and_then(Value::as_object)
+                    .and_then(|event| event.get("account_id"))
+                    .and_then(Value::as_str)
+                    == Some(carpenter_account_id.as_str())
+        },
     )
     .await?;
-    assert!(
-        carpenter_status.status.success(),
-        "carpenter hf-status failed with status {} and stderr: {}",
-        carpenter_status.status,
-        String::from_utf8_lossy(&carpenter_status.stderr)
-    );
-    let carpenter_status_payload: Value =
-        json::from_slice(&carpenter_status.stdout).expect("carpenter status json");
     let carpenter_pool = carpenter_status_payload
         .get("pool")
         .and_then(Value::as_object)
@@ -3080,59 +3186,59 @@ async fn soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts() -
         Some(carpenter_expected_charge)
     );
 
-    let alice_status = run_soracloud_command(
+    let alice_status_payload = wait_for_soracloud_hf_status_payload(
         dir.path(),
         &alice_config,
-        &[
-            "hf-status",
-            "--repo-id",
-            repo_id,
-            "--lease-term-ms",
-            lease_term_ms_literal.as_str(),
-            "--account-id",
-            alice_account_id.as_str(),
-            "--torii-url",
-            torii_url.as_str(),
-        ],
+        repo_id,
+        lease_term_ms_literal.as_str(),
+        alice_account_id.as_str(),
+        torii_url.as_str(),
+        SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT,
+        |payload| {
+            payload
+                .get("pool")
+                .and_then(Value::as_object)
+                .and_then(|pool| pool.get("active_member_count"))
+                .and_then(Value::as_u64)
+                == Some(3)
+                && payload
+                    .get("member")
+                    .and_then(Value::as_object)
+                    .and_then(|member| member.get("total_refunded_nanos"))
+                    .and_then(Value::as_u64)
+                    .is_some()
+        },
     )
     .await?;
-    assert!(
-        alice_status.status.success(),
-        "alice hf-status failed with status {} and stderr: {}",
-        alice_status.status,
-        String::from_utf8_lossy(&alice_status.stderr)
-    );
-    let alice_status_payload: Value =
-        json::from_slice(&alice_status.stdout).expect("alice status json");
     let alice_member = alice_status_payload
         .get("member")
         .and_then(Value::as_object)
         .expect("alice member");
 
-    let bob_final_status = run_soracloud_command(
+    let bob_final_status_payload = wait_for_soracloud_hf_status_payload(
         dir.path(),
         &bob_config,
-        &[
-            "hf-status",
-            "--repo-id",
-            repo_id,
-            "--lease-term-ms",
-            lease_term_ms_literal.as_str(),
-            "--account-id",
-            bob_account_id.as_str(),
-            "--torii-url",
-            torii_url.as_str(),
-        ],
+        repo_id,
+        lease_term_ms_literal.as_str(),
+        bob_account_id.as_str(),
+        torii_url.as_str(),
+        SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT,
+        |payload| {
+            payload
+                .get("pool")
+                .and_then(Value::as_object)
+                .and_then(|pool| pool.get("active_member_count"))
+                .and_then(Value::as_u64)
+                == Some(3)
+                && payload
+                    .get("member")
+                    .and_then(Value::as_object)
+                    .and_then(|member| member.get("total_refunded_nanos"))
+                    .and_then(Value::as_u64)
+                    .is_some()
+        },
     )
     .await?;
-    assert!(
-        bob_final_status.status.success(),
-        "bob final hf-status failed with status {} and stderr: {}",
-        bob_final_status.status,
-        String::from_utf8_lossy(&bob_final_status.stderr)
-    );
-    let bob_final_status_payload: Value =
-        json::from_slice(&bob_final_status.stdout).expect("bob final status json");
     let bob_member = bob_final_status_payload
         .get("member")
         .and_then(Value::as_object)
