@@ -9,6 +9,7 @@
 use std::env;
 
 use iroha_crypto::PublicKey;
+use iroha_crypto::{RamLfeBackend, RamLfeVerificationMode};
 use iroha_data_model::account::{AccountId, NewAccount, OpaqueAccountId};
 use iroha_data_model::asset::{AssetDefinitionId, AssetId};
 use iroha_data_model::domain::DomainId;
@@ -20,9 +21,8 @@ use iroha_data_model::isi::register::{Register, RegisterBox};
 use iroha_data_model::isi::transfer::{Transfer, TransferBox};
 use iroha_data_model::name::Name;
 use iroha_data_model::nexus::UniversalAccountId;
-use iroha_crypto::{RamLfeBackend, RamLfeVerificationMode};
-use iroha_data_model::ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId};
 use iroha_data_model::prelude::Numeric;
+use iroha_data_model::ram_lfe::{RamLfeExecutionReceiptPayload, RamLfeProgramId};
 use norito::codec::Encode;
 
 /// Well-known public key shared with the Kotlin parity tests.
@@ -87,10 +87,7 @@ fn emit_transfer_asset() {
 
 fn emit_claim_identifier() {
     let account_id = parity_account_id();
-    let policy_id = IdentifierPolicyId::new(
-        "phone".parse().unwrap(),
-        "e164".parse().unwrap(),
-    );
+    let policy_id = IdentifierPolicyId::new("phone".parse().unwrap(), "e164".parse().unwrap());
     let program_id: RamLfeProgramId = "parity_test".parse().unwrap();
     let dummy_hash = iroha_crypto::Hash::new([0xAB; 32]);
     let execution = RamLfeExecutionReceiptPayload {

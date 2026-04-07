@@ -8661,6 +8661,7 @@ pub(crate) mod valid {
                                 Some(routing_decisions[idx].dataspace_id);
                             let authority = tx.authority().clone();
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
+                            state_tx.current_tx_hash = Some(tx.hash());
                             if missing_authority_requires_rejection(
                                 &state_tx,
                                 tx,
@@ -8945,6 +8946,7 @@ pub(crate) mod valid {
                             state_tx.world.current_dataspace_id =
                                 Some(routing_decisions[idx].dataspace_id);
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
+                            state_tx.current_tx_hash = Some(tx.hash());
                             let missing_authority = missing_authority_requires_rejection(
                                 &state_tx,
                                 tx,
@@ -9099,6 +9101,7 @@ pub(crate) mod valid {
                         state_tx.world.current_dataspace_id =
                             Some(routing_decisions[idx].dataspace_id);
                         state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
+                        state_tx.current_tx_hash = Some(tx.hash());
                         let missing_authority = missing_authority_requires_rejection(
                             &state_tx,
                             tx,

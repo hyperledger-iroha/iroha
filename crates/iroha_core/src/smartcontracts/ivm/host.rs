@@ -734,6 +734,11 @@ pub trait QueryStateRefOps {
         &self,
         contract_subject: &AccountId,
     ) -> Option<crate::smartcontracts::code::BoundContractRecord>;
+    /// Resolve the fully bound contract record for a deployed contract address literal.
+    fn bound_contract_record_by_address(
+        &self,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    ) -> Option<crate::smartcontracts::code::BoundContractRecord>;
 }
 
 impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
@@ -846,6 +851,26 @@ impl QueryStateRefOps for QueryStateRef<'_, '_, '_> {
                     tx,
                     contract_subject,
                 )
+            }
+        }
+    }
+
+    fn bound_contract_record_by_address(
+        &self,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    ) -> Option<crate::smartcontracts::code::BoundContractRecord> {
+        match *self {
+            QueryStateRef::View(view) => {
+                crate::smartcontracts::code::fetch_bound_contract_record(view, contract_address)
+            }
+            QueryStateRef::QueryView(view) => {
+                crate::smartcontracts::code::fetch_bound_contract_record(view, contract_address)
+            }
+            QueryStateRef::Block(block) => {
+                crate::smartcontracts::code::fetch_bound_contract_record(block, contract_address)
+            }
+            QueryStateRef::Transaction(tx) => {
+                crate::smartcontracts::code::fetch_bound_contract_record(tx, contract_address)
             }
         }
     }
@@ -2642,20 +2667,76 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// # Errors
     /// Returns an error if the pointer type does not match, the type is not allowed
     /// by the current syscall policy, or the Norito payload cannot be decoded.
-    pub fn decode_tlv_typed<T>(vm: &IVM, ptr: u64, expected: PointerType) -> Result<T, ivm::VMError>
-    where
-        T: for<'de> NoritoDeserialize<'de>,
-    {
-        let tlv = vm.memory.validate_tlv(ptr)?;
-        if tlv.type_id != expected {
-            return Err(ivm::VMError::NoritoInvalid);
-        }
+    fn decode_pointer_tlv<'a>(
+        vm: &'a IVM,
+        ptr: u64,
+        expected: PointerType,
+    ) -> Result<pointer_abi::Tlv<'a>, ivm::VMError> {
+        let input_lo = ivm::Memory::INPUT_START;
+        let input_hi = ivm::Memory::INPUT_START + ivm::Memory::INPUT_SIZE;
+        let tlv = if ptr >= input_lo && ptr + 7 <= input_hi {
+            let tlv = vm.memory.validate_tlv(ptr)?;
+            if tlv.type_id != expected {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+            tlv
+        } else {
+            let code_len = vm.memory.code_len();
+            if ptr >= code_len || ptr + 7 > code_len {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+            let mut hdr = [0u8; 7];
+            vm.memory
+                .load_bytes(ptr, &mut hdr)
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            let type_id = u16::from_be_bytes([hdr[0], hdr[1]]);
+            if type_id != expected as u16 || hdr[2] != 1 {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+            let len = u32::from_be_bytes([hdr[3], hdr[4], hdr[5], hdr[6]]) as usize;
+            let total = 7usize
+                .checked_add(len)
+                .and_then(|value| value.checked_add(Hash::LENGTH))
+                .ok_or(ivm::VMError::NoritoInvalid)?;
+            if usize::try_from(ptr)
+                .ok()
+                .and_then(|addr| addr.checked_add(total))
+                .is_none_or(|end| end > code_len as usize)
+            {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+            let envelope = vm
+                .memory
+                .load_region(ptr, total as u64)
+                .map_err(|_| ivm::VMError::NoritoInvalid)?;
+            let tlv = pointer_abi::validate_tlv_bytes(envelope)?;
+            if tlv.type_id != expected {
+                return Err(ivm::VMError::NoritoInvalid);
+            }
+            tlv
+        };
         if !is_type_allowed_for_policy(vm.syscall_policy(), expected) {
             return Err(ivm::VMError::AbiTypeNotAllowed {
                 abi: vm.abi_version(),
                 type_id: expected as u16,
             });
         }
+        Ok(tlv)
+    }
+
+    /// Decode a typed pointer-ABI TLV into a Norito value.
+    ///
+    /// The decoder accepts pointers that already live in INPUT as well as
+    /// literal TLVs returned directly from the contract code/literal section.
+    ///
+    /// # Errors
+    /// Returns an error if the pointer type does not match, the type is not allowed
+    /// by the current syscall policy, or the Norito payload cannot be decoded.
+    pub fn decode_tlv_typed<T>(vm: &IVM, ptr: u64, expected: PointerType) -> Result<T, ivm::VMError>
+    where
+        T: for<'de> NoritoDeserialize<'de>,
+    {
+        let tlv = Self::decode_pointer_tlv(vm, ptr, expected)?;
         match decode_from_bytes(tlv.payload) {
             Ok(value) => Ok(value),
             Err(_) => {
@@ -2671,16 +2752,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// # Errors
     /// Returns an error if the pointer is invalid for the active ABI policy.
     pub fn decode_tlv_blob(vm: &IVM, ptr: u64) -> Result<Vec<u8>, ivm::VMError> {
-        let tlv = vm.memory.validate_tlv(ptr)?;
-        if tlv.type_id != PointerType::Blob {
-            return Err(ivm::VMError::NoritoInvalid);
-        }
-        if !is_type_allowed_for_policy(vm.syscall_policy(), PointerType::Blob) {
-            return Err(ivm::VMError::AbiTypeNotAllowed {
-                abi: vm.abi_version(),
-                type_id: PointerType::Blob as u16,
-            });
-        }
+        let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::Blob)?;
         Ok(tlv.payload.to_vec())
     }
 
@@ -2689,16 +2761,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
     /// # Errors
     /// Returns an error if the pointer is invalid for the active ABI policy or the payload fails to decode.
     pub fn decode_tlv_json(vm: &IVM, ptr: u64) -> Result<Json, ivm::VMError> {
-        let tlv = vm.memory.validate_tlv(ptr)?;
-        if tlv.type_id != PointerType::Json {
-            return Err(ivm::VMError::NoritoInvalid);
-        }
-        if !is_type_allowed_for_policy(vm.syscall_policy(), PointerType::Json) {
-            return Err(ivm::VMError::AbiTypeNotAllowed {
-                abi: vm.abi_version(),
-                type_id: PointerType::Json as u16,
-            });
-        }
+        let tlv = Self::decode_pointer_tlv(vm, ptr, PointerType::Json)?;
 
         match decode_from_bytes(tlv.payload) {
             Ok(value) => Ok(value),
@@ -3497,13 +3560,14 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
     }
 
-    fn resolve_bound_contract_record_by_subject(
+    fn resolve_bound_contract_record_by_address(
         &self,
-        contract_subject: &AccountId,
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
     ) -> Option<crate::smartcontracts::code::BoundContractRecord> {
         if let Some(record) = self
             .bound_contract_records_by_subject
-            .get(contract_subject)
+            .values()
+            .find(|record| record.contract_address == *contract_address)
             .cloned()
         {
             return Some(record);
@@ -3511,7 +3575,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
 
         self.query_state
             .get()
-            .and_then(|state_ref| state_ref.bound_contract_record_by_subject(contract_subject))
+            .and_then(|state_ref| state_ref.bound_contract_record_by_address(contract_address))
     }
 
     fn handle_call_contract(&mut self, vm: &mut IVM) -> Result<u64, ivm::VMError> {
@@ -3519,8 +3583,11 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             .current_contract_runtime_context
             .clone()
             .ok_or(ivm::VMError::PermissionDenied)?;
-        let contract_subject: AccountId =
-            Self::decode_tlv_typed(vm, vm.register(10), PointerType::AccountId)?;
+        let contract_literal = String::from_utf8(Self::decode_tlv_blob(vm, vm.register(10))?)
+            .map_err(|_| ivm::VMError::DecodeError)?;
+        let contract_address = contract_literal
+            .parse::<iroha_data_model::smart_contract::ContractAddress>()
+            .map_err(|_| ivm::VMError::PermissionDenied)?;
         let entrypoint_blob = Self::decode_tlv_blob(vm, vm.register(11))?;
         let entrypoint =
             String::from_utf8(entrypoint_blob).map_err(|_| ivm::VMError::DecodeError)?;
@@ -3529,7 +3596,7 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         }
         let payload = Self::decode_tlv_json(vm, vm.register(12))?;
         let record = self
-            .resolve_bound_contract_record_by_subject(&contract_subject)
+            .resolve_bound_contract_record_by_address(&contract_address)
             .ok_or(ivm::VMError::PermissionDenied)?;
         let invocation = iroha_data_model::transaction::executable::ContractInvocation {
             contract_address: record.contract_address.clone(),
@@ -9152,7 +9219,8 @@ mod tests {
             .execute_transaction(&mut stx, authority, tx, ivm_cache)
             .expect("contract call transaction should execute");
         stx.apply();
-        block.commit()
+        block
+            .commit()
             .expect("commit contract call transaction block");
     }
 
@@ -9183,8 +9251,8 @@ mod tests {
             .expect("load metadata-only program");
         let target_ptr = store_tlv(
             &mut vm,
-            PointerType::AccountId,
-            &norito_blob(&callee_contract.subject_id()),
+            PointerType::Blob,
+            callee_contract.as_ref().as_bytes(),
         );
         let entrypoint_ptr = store_tlv(&mut vm, PointerType::Blob, entrypoint.as_bytes());
         let payload_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&payload));
@@ -10557,6 +10625,82 @@ seiyaku Callee {
     }
 
     #[test]
+    fn call_contract_syscall_unit_return_survives_unaligned_requested_stack_limit() {
+        struct StackLimitGuard {
+            guest_limit: u64,
+            budget_limit: u64,
+        }
+
+        impl Drop for StackLimitGuard {
+            fn drop(&mut self) {
+                ivm::set_guest_stack_limit(self.guest_limit);
+                ivm::Memory::set_stack_budget_limit(self.budget_limit);
+            }
+        }
+
+        crate::test_alias::ensure();
+        let _stack_guard = StackLimitGuard {
+            guest_limit: ivm::guest_stack_limit(),
+            budget_limit: ivm::Memory::stack_budget_limit(),
+        };
+        ivm::set_guest_stack_limit(0x60a04);
+        ivm::Memory::set_stack_budget_limit(0x60a04);
+
+        let authority: AccountId = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let caller_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Caller {
+  kotoage fn main() -> int { return 0; }
+}
+"#,
+            0,
+        );
+        let callee_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Callee {
+  state int backlog;
+  state int safe_mode;
+
+  kotoage fn report(backlog_value: int, safe_mode_value: int) {
+    backlog = backlog_value;
+    safe_mode = safe_mode_value;
+  }
+}
+"#,
+            1,
+        );
+
+        let payload = Json::from(norito::json!({
+            "backlog_value": 3,
+            "safe_mode_value": 1
+        }));
+        let (result, vm, durable_state_overlay) = call_contract_syscall(
+            &state,
+            &authority,
+            &caller_contract,
+            &callee_contract,
+            "report",
+            payload,
+        );
+
+        result.expect("unit nested contract call should succeed");
+        assert_eq!(vm.register(10), 0, "unit return should clear r10");
+        assert!(
+            durable_state_overlay.contains_key("backlog"),
+            "state overlay should include nested unit-return writes",
+        );
+        assert!(
+            durable_state_overlay.contains_key("safe_mode"),
+            "state overlay should include all nested unit-return writes",
+        );
+    }
+
+    #[test]
     fn call_contract_syscall_rolls_back_failed_nested_state_mutation() {
         crate::test_alias::ensure();
         let authority: AccountId = fixture_account("alice");
@@ -10683,7 +10827,7 @@ seiyaku Callee {
         host.syscall(ivm_sys::SYSCALL_TRANSFER_ASSET, &mut vm)
             .expect("root transfer should enqueue");
 
-        let nested_target = callee_contract.subject_id().to_string();
+        let nested_target = callee_contract.to_string();
         let nested_asset = asset_def_id.to_string();
         let nested_payload = Json::from(norito::json!({
             "target": nested_target,
@@ -10692,8 +10836,8 @@ seiyaku Callee {
         }));
         let target_ptr = store_tlv(
             &mut vm,
-            PointerType::AccountId,
-            &norito_blob(&callee_contract.subject_id()),
+            PointerType::Blob,
+            callee_contract.as_ref().as_bytes(),
         );
         let entrypoint_ptr = store_tlv(&mut vm, PointerType::Blob, b"pull_into_vault");
         let payload_ptr = store_tlv(&mut vm, PointerType::Json, &norito_blob(&nested_payload));
@@ -10760,12 +10904,12 @@ seiyaku Callee {
             r#"
 seiyaku Caller {
   state AccountId CallerAccount;
-  state AccountId VaultContract;
+  state bytes VaultContract;
   state AssetDefinitionId SettlementAsset;
 
   #[access(read="*", write="*")]
   kotoage fn bind(caller_account: AccountId,
-                  vault_contract: AccountId,
+                  vault_contract: bytes,
                   settlement_asset: AssetDefinitionId) {
     CallerAccount = caller_account;
     VaultContract = vault_contract;
@@ -10829,7 +10973,7 @@ seiyaku Vault {
         let caller_bind_payload = Json::from_str_norito(&format!(
             r#"{{"caller_account":"{}","vault_contract":"{}","settlement_asset":"{}"}}"#,
             caller_contract.subject_id(),
-            callee_contract.subject_id(),
+            format!("0x{}", hex::encode(callee_contract.as_ref())),
             asset_def_id
         ))
         .expect("caller bind payload");
@@ -10844,8 +10988,7 @@ seiyaku Vault {
             },
             &mut ivm_cache,
         );
-        let open_payload =
-            Json::from_str_norito(r#"{"amount":3}"#).expect("open payload");
+        let open_payload = Json::from_str_norito(r#"{"amount":3}"#).expect("open payload");
         execute_contract_call_transaction(
             &state,
             &authority,
@@ -12072,6 +12215,25 @@ seiyaku Vault {
             ),
             "expected AbiTypeNotAllowed with annotated abi/type, got {err:?}"
         );
+    }
+
+    #[test]
+    fn decode_tlv_blob_accepts_code_region_literal() {
+        crate::test_alias::ensure();
+
+        let mut vm = ivm::IVM::new(1_000_000);
+        vm.load_program(&build_program(
+            &encoding::wide::encode_halt().to_le_bytes(),
+            0,
+        ))
+        .expect("load abi v1 program");
+
+        let payload = b"risk".to_vec();
+        let tlv = make_tlv(PointerType::Blob as u16, &payload);
+        vm.memory.load_code(&tlv);
+
+        let decoded = CoreHost::decode_tlv_blob(&vm, 0).expect("decode code literal");
+        assert_eq!(decoded, payload);
     }
 
     #[test]

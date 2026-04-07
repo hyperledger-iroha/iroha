@@ -1436,50 +1436,20 @@ impl<'tx> AcceptedTransaction<'tx> {
                 }
             }
             Executable::ContractCall(_) => {
-                let gas_limit_key = iroha_data_model::name::Name::from_str("gas_limit")
-                    .expect("static gas_limit key");
-                let Some(raw_gas_limit) = tx.metadata().get(&gas_limit_key) else {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "missing gas_limit in transaction metadata".into(),
-                        },
-                    ));
-                };
-                let gas_limit = raw_gas_limit.try_into_any_norito::<u64>().map_err(|err| {
-                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                        reason: format!("invalid gas_limit metadata: {err}"),
-                    })
-                })?;
-                if gas_limit == 0 {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "gas_limit must be positive".into(),
-                        },
-                    ));
-                }
+                iroha_data_model::transaction::require_transaction_gas_limit(tx.metadata())
+                    .map_err(|err| {
+                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                            reason: err.to_string(),
+                        })
+                    })?;
             }
             Executable::IvmProved(proved) => {
-                let gas_limit_key = iroha_data_model::name::Name::from_str("gas_limit")
-                    .expect("static gas_limit key");
-                let Some(raw_gas_limit) = tx.metadata().get(&gas_limit_key) else {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "missing gas_limit in transaction metadata".into(),
-                        },
-                    ));
-                };
-                let gas_limit = raw_gas_limit.try_into_any_norito::<u64>().map_err(|err| {
-                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                        reason: format!("invalid gas_limit metadata: {err}"),
-                    })
-                })?;
-                if gas_limit == 0 {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "gas_limit must be positive".into(),
-                        },
-                    ));
-                }
+                iroha_data_model::transaction::require_transaction_gas_limit(tx.metadata())
+                    .map_err(|err| {
+                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                            reason: err.to_string(),
+                        })
+                    })?;
 
                 let instruction_limit = limits.max_instructions().get();
                 let instruction_count = u64::try_from(proved.overlay.len()).unwrap_or(u64::MAX);
@@ -1555,27 +1525,12 @@ impl<'tx> AcceptedTransaction<'tx> {
                 }
             }
             Executable::Ivm(smart_contract) => {
-                let gas_limit_key = iroha_data_model::name::Name::from_str("gas_limit")
-                    .expect("static gas_limit key");
-                let Some(raw_gas_limit) = tx.metadata().get(&gas_limit_key) else {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "missing gas_limit in transaction metadata".into(),
-                        },
-                    ));
-                };
-                let gas_limit = raw_gas_limit.try_into_any_norito::<u64>().map_err(|err| {
-                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                        reason: format!("invalid gas_limit metadata: {err}"),
-                    })
-                })?;
-                if gas_limit == 0 {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "gas_limit must be positive".into(),
-                        },
-                    ));
-                }
+                iroha_data_model::transaction::require_transaction_gas_limit(tx.metadata())
+                    .map_err(|err| {
+                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                            reason: err.to_string(),
+                        })
+                    })?;
 
                 let ivm_bytecode_size_limit = limits.ivm_bytecode_size().get();
                 let bytecode_size = u64::try_from(smart_contract.size_bytes()).unwrap_or(u64::MAX);
@@ -6742,6 +6697,80 @@ pub mod tests {
             AcceptTransactionFail::TransactionLimit(limit) => {
                 assert!(
                     limit.reason.contains("gas_limit must be positive"),
+                    "unexpected reason: {}",
+                    limit.reason
+                );
+            }
+            other => panic!("Expected TransactionLimit failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ivm_proved_missing_gas_limit_rejected_at_admission() {
+        use std::time::Duration;
+
+        use iroha_data_model::transaction::{Executable, IvmProved, TransactionBuilder};
+
+        let chain: ChainId = "chain".parse().unwrap();
+        let (authority_id, kp) = gen_account_in("wonderland");
+        let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
+        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode: IvmBytecode::from_compiled(prog),
+                overlay: Vec::<InstructionBox>::new().into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            }))
+            .sign(kp.private_key());
+
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let limits = TransactionParameters::default();
+        let err =
+            AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
+                .expect_err("missing gas_limit should be rejected");
+
+        match err {
+            AcceptTransactionFail::TransactionLimit(limit) => {
+                assert!(
+                    limit.reason.contains("missing gas_limit"),
+                    "unexpected reason: {}",
+                    limit.reason
+                );
+            }
+            other => panic!("Expected TransactionLimit failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn contract_call_missing_gas_limit_rejected_at_admission() {
+        use std::time::Duration;
+
+        use iroha_data_model::transaction::{
+            Executable, TransactionBuilder, executable::ContractInvocation,
+        };
+
+        let chain: ChainId = "chain".parse().unwrap();
+        let (authority_id, kp) = gen_account_in("wonderland");
+        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
+            .with_executable(Executable::ContractCall(ContractInvocation {
+                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                    .parse()
+                    .expect("contract address"),
+                entrypoint: "call".to_owned(),
+                payload: None,
+            }))
+            .sign(kp.private_key());
+
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let limits = TransactionParameters::default();
+        let err =
+            AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
+                .expect_err("missing gas_limit should be rejected");
+
+        match err {
+            AcceptTransactionFail::TransactionLimit(limit) => {
+                assert!(
+                    limit.reason.contains("missing gas_limit"),
                     "unexpected reason: {}",
                     limit.reason
                 );

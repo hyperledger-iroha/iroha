@@ -2,6 +2,40 @@
 
 Last updated: 2026-04-07
 
+Latest sync (2026-04-07 the grouped `core_api` harness is green on the patched tree):
+the remaining grouped-only `core_api` reds from this cluster are closed now. The
+asset helper no longer boots a real network just to inspect an explicit pipeline
+override, the earlier config/permissions hardening now holds inside the grouped
+binary, and the live Soracloud mutation plus multi-account HF shared-lease
+tests now wait for authoritative control-plane convergence instead of assuming a
+single immediate snapshot under grouped load. A fresh grouped
+`cargo test -p integration_tests --test core_api -q` rerun on
+`target_tmp_core_api_assetfix2` finished green (`170 passed; 0 failed;
+3 ignored`).
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_test_network/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/asset.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/config.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/permissions.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/iroha_cli.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `CARGO_TARGET_DIR=target_tmp_core_api_groupfix cargo test -p integration_tests --test core_api asset::helper_tests::quiet_network_builder_uses_fast_pipeline_time -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_core_api_groupfix cargo test -p integration_tests --test core_api config::config_scenarios -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_core_api_groupfix cargo test -p integration_tests --test core_api permissions::account_permission_revoke_then_grant_last_wins_detached -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_core_api_assetfix2 cargo test -p integration_tests --test core_api asset::helper_tests::quiet_network_builder_uses_fast_pipeline_time -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_core_api_assetfix2 cargo test -p integration_tests --test core_api iroha_cli::soracloud_mutations_use_live_torii_control_plane -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_core_api_assetfix2 cargo test -p integration_tests --test core_api iroha_cli::soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_core_api_assetfix2 cargo test -p iroha_test_network --lib tests::configured_pipeline_time_reports_explicit_override -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_core_api_assetfix2 cargo test -p integration_tests --test core_api -q`
+- open work after this slice:
+  - let the long-lived `cargo test --workspace --all-targets` rerun finish on
+    the patched tree if repo-wide signoff is still required; and
+  - if that broader sweep finds another late runtime regression, treat it as a
+    new issue rather than a remaining gap in the now-green `core_api` cluster.
+
 Latest sync (2026-04-07 the fresh `iroha_torii` test compile and isolated large-payload NPoS rerun are green):
 the staged validation boundary tightened again without further code edits. A
 fresh `cargo check -p iroha_torii --tests` run on `target_tmp_torii_fresh`

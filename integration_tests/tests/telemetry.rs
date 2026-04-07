@@ -137,7 +137,10 @@ async fn telemetry_permissioned_smoke() -> eyre::Result<()> {
     assert_eq!(metrics.get("domains"), 3.0);
     assert_eq!(metrics.get("accounts{domain=\"genesis\"}"), 0.0);
     assert_eq!(metrics.get("accounts{domain=\"wonderland\"}"), 0.0);
-    assert_eq!(metrics.get("accounts{domain=\"garden_of_live_flowers\"}"), 0.0);
+    assert_eq!(
+        metrics.get("accounts{domain=\"garden_of_live_flowers\"}"),
+        0.0
+    );
 
     // fetch_online_peers
     for peer in network.peers() {

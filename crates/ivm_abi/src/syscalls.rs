@@ -360,7 +360,7 @@ pub const SYSCALL_SUBSCRIPTION_RECORD_USAGE: u32 = 0xA6;
 pub const SYSCALL_RESOLVE_ACCOUNT_ALIAS: u32 = 0xA7;
 /// Get the current trusted host time in unix milliseconds.
 pub const SYSCALL_CURRENT_TIME_MS: u32 = 0xA8;
-/// Call a deployed ABI v1 contract synchronously by deterministic contract subject.
+/// Call a deployed ABI v1 contract synchronously by contract-address literal.
 pub const SYSCALL_CALL_CONTRACT: u32 = 0xA9;
 /// Begin an atomic cross-transaction (AXT) envelope.
 pub const SYSCALL_AXT_BEGIN: u32 = 0xB0;

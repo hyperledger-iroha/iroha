@@ -6625,24 +6625,30 @@ impl Client {
         transaction: &SignedTransaction,
     ) -> Result<HashOf<SignedTransaction>> {
         let (init_sender, init_receiver) = tokio::sync::oneshot::channel();
+        let (submit_result_sender, submit_result_receiver) =
+            tokio::sync::oneshot::channel::<Result<(), eyre::Report>>();
         let hash = transaction.hash();
         let entry_hash = transaction.hash_as_entrypoint();
         tracing::debug!(%hash, ?transaction, "Submitting transaction");
 
         thread::scope(|spawner| {
-            let submitter_handle = spawner.spawn(move || -> Result<()> {
+            let submitter_handle = spawner.spawn(move || {
                 // Wait for the listener connection attempt so we don't miss early
                 // events, but still proceed even if setup fails.
                 let _ = init_receiver.blocking_recv();
-                self.submit_transaction(transaction)?;
-                Ok(())
+                let result = self.submit_transaction(transaction).map(|_| ());
+                let _ = submit_result_sender.send(result);
             });
 
-            let confirmation_res = self.listen_for_tx_confirmation(init_sender, hash, entry_hash);
+            let confirmation_res = self.listen_for_tx_confirmation(
+                init_sender,
+                submit_result_receiver,
+                hash,
+                entry_hash,
+            );
 
             match submitter_handle.join() {
-                Ok(Ok(())) => confirmation_res,
-                Ok(Err(e)) => Err(e).wrap_err("Transaction submitter thread exited with error"),
+                Ok(()) => confirmation_res,
                 Err(_) => Err(eyre!("Transaction submitter thread panicked")),
             }
         })
@@ -6664,6 +6670,7 @@ impl Client {
     fn listen_for_tx_confirmation(
         &self,
         init_sender: tokio::sync::oneshot::Sender<bool>,
+        submit_result_receiver: tokio::sync::oneshot::Receiver<Result<(), eyre::Report>>,
         hash: HashOf<SignedTransaction>,
         entry_hash: HashOf<TransactionEntrypoint>,
     ) -> Result<HashOf<SignedTransaction>> {
@@ -6718,6 +6725,7 @@ impl Client {
                         };
                         let poll_interval =
                             Self::tx_confirmation_poll_interval(client.transaction_status_timeout);
+                        let mut submit_result_receiver = Some(submit_result_receiver);
                         let hash_for_check = hash;
                         let entry_hash_for_check = entry_hash;
                         let result = if let Some(ref mut iterator) = event_iterator {
@@ -6728,6 +6736,7 @@ impl Client {
                                     hash,
                                     max_queued_duration,
                                     poll_interval,
+                                    submit_result_receiver.take(),
                                     || {
                                         client.transaction_confirmation_status(
                                             hash_for_check,
@@ -6746,6 +6755,7 @@ impl Client {
                                     hash,
                                     max_queued_duration,
                                     poll_interval,
+                                    submit_result_receiver.take(),
                                     || {
                                         client.transaction_confirmation_status(
                                             hash_for_check,
@@ -6811,6 +6821,7 @@ impl Client {
         hash: HashOf<SignedTransaction>,
         max_queued_duration: Duration,
         poll_interval: Duration,
+        submit_result_receiver: Option<tokio::sync::oneshot::Receiver<Result<(), eyre::Report>>>,
         status_check: F,
     ) -> Result<HashOf<SignedTransaction>>
     where
@@ -6821,6 +6832,7 @@ impl Client {
             hash,
             max_queued_duration,
             poll_interval,
+            submit_result_receiver,
             status_check,
         )
         .await
@@ -11151,6 +11163,7 @@ where
         hash,
         max_queued_duration,
         Duration::ZERO,
+        None,
         || Ok(None),
     )
     .await
@@ -11162,6 +11175,7 @@ async fn listen_for_tx_confirmation_stream_with_status_check<S, F>(
     hash: HashOf<SignedTransaction>,
     max_queued_duration: Duration,
     poll_interval: Duration,
+    submit_result_receiver: Option<tokio::sync::oneshot::Receiver<Result<(), eyre::Report>>>,
     mut status_check: F,
 ) -> Result<HashOf<SignedTransaction>>
 where
@@ -11186,10 +11200,30 @@ where
         poll.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     }
     let mut stream_open = true;
+    let mut submit_result_receiver = submit_result_receiver;
 
     loop {
         tokio::select! {
             biased;
+            submit_outcome = async {
+                match submit_result_receiver.as_mut() {
+                    Some(receiver) => Some(receiver.await),
+                    None => None,
+                }
+            }, if submit_result_receiver.is_some() => {
+                match submit_outcome.expect("submit result branch is gated by receiver presence") {
+                    Ok(Ok(())) => {
+                        debug!(%hash, "transaction submission acknowledged; awaiting terminal status");
+                        submit_result_receiver = None;
+                    }
+                    Ok(Err(err)) => {
+                        return Err(tx_confirmation_final_report(err));
+                    }
+                    Err(_recv_err) => return Err(tx_confirmation_final_report(eyre!(
+                        "transaction submitter thread exited before reporting submit result"
+                    ))),
+                }
+            }
             _ = poll.tick(), if poll_enabled => {
                 match status_check() {
                     Ok(Some(status)) => match status {
@@ -12334,7 +12368,7 @@ mod tx_confirmation_stream_tests {
 
     use eyre::eyre;
     use futures_util::stream;
-    use tokio::sync::mpsc;
+    use tokio::sync::{mpsc, oneshot};
     use tokio_stream::wrappers::UnboundedReceiverStream;
 
     use super::{
@@ -12393,6 +12427,7 @@ mod tx_confirmation_stream_tests {
             hash,
             Duration::from_secs(1),
             Duration::from_millis(1),
+            None,
             || {
                 checks = checks.saturating_add(1);
                 if checks > 0 {
@@ -12417,6 +12452,7 @@ mod tx_confirmation_stream_tests {
             hash,
             Duration::from_secs(1),
             Duration::from_millis(1),
+            None,
             || {
                 checks = checks.saturating_add(1);
                 if checks < 3 {
@@ -12478,6 +12514,7 @@ mod tx_confirmation_stream_tests {
                 hash,
                 Duration::from_secs(1),
                 Duration::from_millis(1),
+                None,
                 || Ok(Some(super::TxConfirmationStatus::Approved(Some(height)))),
             )
             .await
@@ -12584,6 +12621,7 @@ mod tx_confirmation_stream_tests {
             hash,
             Duration::from_secs(1),
             Duration::from_millis(1),
+            None,
             || {
                 checks = checks.saturating_add(1);
                 if checks > 1 {
@@ -12637,6 +12675,7 @@ mod tx_confirmation_stream_tests {
             hash,
             Duration::from_secs(1),
             Duration::from_millis(1),
+            None,
             || {
                 checks = checks.saturating_add(1);
                 if checks > 1 {
@@ -12666,6 +12705,7 @@ mod tx_confirmation_stream_tests {
             hash,
             Duration::from_millis(20),
             Duration::from_millis(5),
+            None,
             || Ok(Some(super::TxConfirmationStatus::Queued)),
         )
         .await
@@ -12699,6 +12739,7 @@ mod tx_confirmation_stream_tests {
             hash,
             Duration::from_secs(1),
             Duration::from_millis(1),
+            None,
             || {
                 checks = checks.saturating_add(1);
                 Ok(Some(super::TxConfirmationStatus::Rejected(Some(
@@ -12710,6 +12751,68 @@ mod tx_confirmation_stream_tests {
         .expect_err("expected rejection from status polling");
         assert!(err.to_string().contains("Transaction rejected"));
         assert!(checks > 0);
+    }
+
+    #[tokio::test]
+    async fn submit_failure_short_circuits_confirmation_wait() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([16_u8; Hash::LENGTH]));
+        let mut events = stream::pending::<Result<EventBox, eyre::Report>>();
+        let (submit_result_sender, submit_result_receiver) = oneshot::channel();
+        submit_result_sender
+            .send(Err(eyre!(
+                "Unexpected transaction response: 400 Bad Request failed to accept transaction: missing gas_limit in transaction metadata"
+            )))
+            .expect("submit result receiver should be open");
+
+        let err = tokio::time::timeout(
+            Duration::from_millis(50),
+            listen_for_tx_confirmation_stream_with_status_check(
+                &mut events,
+                hash,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                Some(submit_result_receiver),
+                || Ok(None),
+            ),
+        )
+        .await
+        .expect("submission failure should stop confirmation without hanging")
+        .expect_err("submission failure should surface as an error");
+
+        assert!(
+            err.to_string()
+                .contains("missing gas_limit in transaction metadata")
+        );
+    }
+
+    #[tokio::test]
+    async fn closed_submit_result_channel_short_circuits_confirmation_wait() {
+        let hash: HashOf<SignedTransaction> =
+            HashOf::from_untyped_unchecked(Hash::prehashed([17_u8; Hash::LENGTH]));
+        let mut events = stream::pending::<Result<EventBox, eyre::Report>>();
+        let (submit_result_sender, submit_result_receiver) = oneshot::channel();
+        drop(submit_result_sender);
+
+        let err = tokio::time::timeout(
+            Duration::from_millis(50),
+            listen_for_tx_confirmation_stream_with_status_check(
+                &mut events,
+                hash,
+                Duration::from_secs(1),
+                Duration::from_secs(1),
+                Some(submit_result_receiver),
+                || Ok(None),
+            ),
+        )
+        .await
+        .expect("closed submit result channel should stop confirmation without hanging")
+        .expect_err("closed submit result channel should surface as an error");
+
+        assert!(
+            err.to_string()
+                .contains("submitter thread exited before reporting submit result")
+        );
     }
 
     #[test]
@@ -15819,6 +15922,74 @@ mod tests {
         );
         assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
         assert_eq!(store_guard[1].url.path(), torii_uri::TRANSACTION);
+    }
+
+    #[test]
+    fn submit_transaction_blocking_returns_submit_rejection_without_waiting_for_timeout() {
+        use iroha_data_model::query::{
+            QueryOutput, QueryOutputBatchBox, QueryOutputBatchBoxTuple, QueryResponse,
+        };
+
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let capabilities_body = compatible_capabilities_body();
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_string();
+                store.lock().expect("snapshot lock").push(snapshot);
+                let response = match path.as_str() {
+                    "/v1/node/capabilities" => json_response(StatusCode::OK, &capabilities_body),
+                    p if p == torii_uri::TRANSACTION => json_response(
+                        StatusCode::BAD_REQUEST,
+                        r#"{"code":"transaction_rejected","message":"failed to accept transaction: missing gas_limit in transaction metadata"}"#,
+                    ),
+                    "/query" => {
+                        let response = QueryResponse::Iterable(QueryOutput {
+                            batch: QueryOutputBatchBoxTuple {
+                                tuple: vec![QueryOutputBatchBox::CommittedTransaction(Vec::new())],
+                            },
+                            remaining_items: 0,
+                            continue_cursor: None,
+                        });
+                        HttpResponse::builder()
+                            .status(StatusCode::OK)
+                            .header("content-type", APPLICATION_NORITO)
+                            .body(
+                                norito::to_bytes(&response)
+                                    .expect("encode norito committed query response"),
+                            )
+                            .expect("response build")
+                    }
+                    "/v1/pipeline/transactions/status" => HttpResponse::builder()
+                        .status(StatusCode::NO_CONTENT)
+                        .body(Vec::new())
+                        .expect("response build"),
+                    other => panic!("unexpected request path: {other}"),
+                };
+                Ok(response)
+            }
+        };
+
+        with_mock_http(responder, || {
+            let mut client =
+                client_with_base_url(Url::parse("http://127.0.0.1:1/").expect("valid URL"));
+            client.transaction_status_timeout = Duration::from_secs(2);
+            let tx = client.build_transaction(Vec::<InstructionBox>::new(), Metadata::default());
+            let started = Instant::now();
+            let err = client
+                .submit_transaction_blocking(&tx)
+                .expect_err("transaction submission should fail immediately");
+            let elapsed = started.elapsed();
+
+            assert!(
+                elapsed < Duration::from_secs(1),
+                "submit rejection should not wait for the 2s status timeout; elapsed={elapsed:?}"
+            );
+            assert!(
+                err.to_string()
+                    .contains("missing gas_limit in transaction metadata")
+            );
+        });
     }
 
     #[test]

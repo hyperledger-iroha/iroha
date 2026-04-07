@@ -452,9 +452,8 @@ fn account_can_query_only_its_own_domain() -> Result<()> {
     let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
     let new_domain_id: DomainId = DomainId::try_new("wonderland2", "universal")?;
     let Some((network, _rt)) = start_network_with_builder(
-        NetworkBuilder::new().with_genesis_instruction(Register::domain(Domain::new(
-            new_domain_id.clone(),
-        ))),
+        NetworkBuilder::new()
+            .with_genesis_instruction(Register::domain(Domain::new(new_domain_id.clone()))),
         stringify!(account_can_query_only_its_own_domain),
     ) else {
         return Ok(());
@@ -495,8 +494,12 @@ fn permissions_differ_not_only_by_names() {
         return;
     };
     let client = network.client();
-    submit_register_domain_with_network_lease(&network, &client, Domain::new(outfit_domain.clone()))
-        .expect("Failed to register outfit domain");
+    submit_register_domain_with_network_lease(
+        &network,
+        &client,
+        Domain::new(outfit_domain.clone()),
+    )
+    .expect("Failed to register outfit domain");
 
     let submit_with_authority = |isi: InstructionBox,
                                  authority: &AccountId,
@@ -683,14 +686,11 @@ fn permissions_are_unified() {
 #[test]
 fn associated_permissions_removed_on_unregister() {
     let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
-    let Some((network, _rt)) =
-        start_network_with_builder(
-            NetworkBuilder::new().with_genesis_instruction(Register::domain(Domain::new(
-                kingdom_id.clone(),
-            ))),
-            stringify!(associated_permissions_removed_on_unregister),
-        )
-    else {
+    let Some((network, _rt)) = start_network_with_builder(
+        NetworkBuilder::new()
+            .with_genesis_instruction(Register::domain(Domain::new(kingdom_id.clone()))),
+        stringify!(associated_permissions_removed_on_unregister),
+    ) else {
         return;
     };
     let iroha = network.client();
@@ -742,9 +742,8 @@ fn associated_permissions_removed_on_unregister() {
 fn associated_permissions_removed_from_role_on_unregister() {
     let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal").expect("Valid");
     let Some((network, _rt)) = start_network_with_builder(
-        NetworkBuilder::new().with_genesis_instruction(Register::domain(Domain::new(
-            kingdom_id.clone(),
-        ))),
+        NetworkBuilder::new()
+            .with_genesis_instruction(Register::domain(Domain::new(kingdom_id.clone()))),
         stringify!(associated_permissions_removed_from_role_on_unregister),
     ) else {
         return;

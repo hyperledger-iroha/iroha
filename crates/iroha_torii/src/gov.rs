@@ -3412,8 +3412,11 @@ mod tests {
         let tx_bytes = base64::engine::general_purpose::STANDARD
             .decode(body.signable_transaction_b64.as_bytes())
             .expect("decode signable payload");
-        let payload: iroha_data_model::transaction::signed::TransactionPayload =
-            norito::decode_from_bytes(&tx_bytes).expect("decode transaction payload");
+        let payload: iroha_data_model::transaction::signed::TransactionPayload = {
+            let _guard = norito::core::PayloadCtxGuard::enter(&tx_bytes);
+            let mut cursor = std::io::Cursor::new(tx_bytes.as_slice());
+            norito::codec::Decode::decode(&mut cursor).expect("decode transaction payload")
+        };
         assert_eq!(payload.authority, harness.authority);
         assert_eq!(payload.instructions.instruction_count(), 1);
     }

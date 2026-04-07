@@ -40,6 +40,7 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_executor_data_model(FindExecutorDataModel),
         visit_find_parameters(FindParameters),
         visit_find_account_by_id(FindAccountById),
+        visit_find_account_by_alias(FindAccountByAlias),
         visit_find_aliases_by_account_id(FindAliasesByAccountId),
         visit_find_account_recovery_policy_by_alias(FindAccountRecoveryPolicyByAlias),
         visit_find_account_recovery_request_by_alias(FindAccountRecoveryRequestByAlias),
@@ -56,6 +57,7 @@ pub fn visit_singular_query<V: Visit + ?Sized>(visitor: &mut V, query: &Singular
         visit_find_da_pin_intent_by_lane_epoch_sequence(FindDaPinIntentByLaneEpochSequence),
         visit_find_lane_relay_envelope_by_ref(FindLaneRelayEnvelopeByRef),
         visit_find_sorafs_provider_owner(FindSorafsProviderOwner),
+        visit_find_domain_by_id(FindDomainById),
     }
 }
 
@@ -118,6 +120,7 @@ macro_rules! query_visitors {
             visit_find_executor_data_model(&FindExecutorDataModel),
             visit_find_parameters(&FindParameters),
             visit_find_account_by_id(&$crate::query::account::FindAccountById),
+            visit_find_account_by_alias(&$crate::query::account::FindAccountByAlias),
             visit_find_aliases_by_account_id(&$crate::query::account::FindAliasesByAccountId),
             visit_find_account_recovery_policy_by_alias(
                 &$crate::query::account::FindAccountRecoveryPolicyByAlias
@@ -156,6 +159,7 @@ macro_rules! query_visitors {
             visit_find_sorafs_provider_owner(
                 &$crate::query::sorafs::prelude::FindSorafsProviderOwner
             ),
+            visit_find_domain_by_id(&$crate::query::domain::FindDomainById),
 
             // Iterable Query visitors
             visit_find_domains(&$crate::query::ErasedIterQuery<$crate::domain::Domain>),
@@ -220,6 +224,7 @@ mod tests {
             SingularQueryBox::FindExecutorDataModel(_) => {}
             SingularQueryBox::FindParameters(_) => {}
             SingularQueryBox::FindAccountById(_) => {}
+            SingularQueryBox::FindAccountByAlias(_) => {}
             SingularQueryBox::FindAliasesByAccountId(_) => {}
             SingularQueryBox::FindAccountRecoveryPolicyByAlias(_) => {}
             SingularQueryBox::FindAccountRecoveryRequestByAlias(_) => {}
@@ -237,6 +242,7 @@ mod tests {
             SingularQueryBox::FindLaneRelayEnvelopeByRef(_) => {}
             SingularQueryBox::FindSorafsProviderOwner(_) => {}
             SingularQueryBox::FindDataspaceNameOwnerById(_) => {}
+            SingularQueryBox::FindDomainById(_) => {}
             SingularQueryBox::FindDomainEndorsements(_) => {}
             SingularQueryBox::FindDomainEndorsementPolicy(_) => {}
             SingularQueryBox::FindDomainCommittee(_) => {}
@@ -326,6 +332,14 @@ mod tests {
             SingularQueryBox::FindAccountById(
                 crate::query::account::prelude::FindAccountById::new(account_id.clone()),
             ),
+            SingularQueryBox::FindAccountByAlias(
+                crate::query::account::prelude::FindAccountByAlias::new(
+                    crate::account::AccountAlias::domainless(
+                        "alice".parse().expect("alias label"),
+                        crate::nexus::DataSpaceId::GLOBAL,
+                    ),
+                ),
+            ),
             SingularQueryBox::FindAliasesByAccountId(
                 crate::query::account::prelude::FindAliasesByAccountId::new(
                     account_id.clone(),
@@ -355,6 +369,9 @@ mod tests {
                     "demo_trigger".parse().expect("valid trigger id"),
                 ),
             ),
+            SingularQueryBox::FindDomainById(crate::query::domain::prelude::FindDomainById::new(
+                DomainId::try_new("wonderland", "universal").expect("valid domain id"),
+            )),
         ];
 
         for query in &queries {

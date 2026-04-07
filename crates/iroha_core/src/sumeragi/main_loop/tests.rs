@@ -62237,6 +62237,69 @@ async fn vote_log_preserves_far_future_views_for_active_height_local_votes() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn vote_log_preserves_far_future_new_view_votes_for_active_height() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+    let committed_height = actor.state.view().height() as u64;
+    let active_height = committed_height.saturating_add(1);
+    let current_view = 0_u64;
+    let epoch = actor.epoch_for_height(active_height);
+    let far_view = current_view
+        .saturating_add(super::VOTE_CACHE_VIEW_WINDOW)
+        .saturating_add(1);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(active_height);
+    let far_signature_topology =
+        super::topology_for_view(&topology, active_height, far_view, mode_tag, prf_seed);
+    let signer = far_signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .find_map(|(idx, peer)| {
+            (peer != actor.common_config.peer.id())
+                .then(|| u32::try_from(idx).expect("validator index fits u32"))
+        })
+        .expect("remote validator index");
+    let far_block = sample_block(active_height, far_view, None);
+    let far_vote = crate::sumeragi::consensus::Vote {
+        phase: Phase::NewView,
+        block_hash: far_block.hash(),
+        parent_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+        post_state_root: Hash::prehashed([0_u8; Hash::LENGTH]),
+        height: active_height,
+        view: far_view,
+        epoch,
+        highest_qc: Some(QcHeaderRef {
+            subject_block_hash: far_block.hash(),
+            height: committed_height,
+            view: 0,
+            epoch: actor.epoch_for_height(committed_height),
+            phase: Phase::Commit,
+        }),
+        signer,
+        bls_sig: vec![0_u8; 96],
+    };
+    actor
+        .phase_tracker
+        .on_view_change(active_height, current_view, Instant::now());
+    actor.vote_log.insert(
+        (Phase::NewView, active_height, far_view, epoch, signer),
+        far_vote,
+    );
+
+    actor.prune_vote_caches_horizon(committed_height);
+
+    assert!(
+        actor
+            .vote_log
+            .contains_key(&(Phase::NewView, active_height, far_view, epoch, signer)),
+        "same-height NEW_VIEW votes must survive long future-view gaps so QC assembly can catch up"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn commit_topology_change_preserves_state_on_reorder() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
@@ -74646,6 +74709,123 @@ async fn stale_new_view_votes_still_form_qc_after_local_view_advance() {
     assert!(
         actor.qc_cache.contains_key(&qc_key),
         "stale NEW_VIEW votes should still aggregate into a QC after the local view advances"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn future_new_view_votes_still_form_qc_when_local_view_lags() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    seed_genesis_block_for_state(&actor.state);
+    while harness.background_rx.try_recv().is_ok() {}
+
+    let view = actor.state.view();
+    let committed_height = view.height() as u64;
+    let highest_qc = QcHeaderRef {
+        subject_block_hash: view.latest_block_hash().expect("committed block hash"),
+        height: committed_height,
+        view: 0,
+        epoch: actor.epoch_for_height(committed_height),
+        phase: Phase::Commit,
+    };
+    drop(view);
+
+    let height = highest_qc.height.saturating_add(1);
+    let local_view = 0_u64;
+    let far_view = local_view
+        .saturating_add(super::VOTE_CACHE_VIEW_WINDOW)
+        .saturating_add(4);
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let epoch = actor.epoch_for_height(height);
+    let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
+    let signature_topology =
+        super::topology_for_view(&topology, height, far_view, mode_tag, prf_seed);
+    let local_signer = actor
+        .local_validator_index_for_topology(&signature_topology)
+        .expect("local peer in far-view topology");
+    let remote_signers: Vec<_> = signature_topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, _)| {
+            let signer = ValidatorIndex::try_from(idx).ok()?;
+            (signer != local_signer).then_some(signer)
+        })
+        .take(signature_topology.min_votes_for_commit())
+        .collect();
+    assert_eq!(
+        remote_signers.len(),
+        signature_topology.min_votes_for_commit(),
+        "test requires enough remote signers to finish the far-view NEW_VIEW quorum"
+    );
+    let qc_key = (
+        Phase::NewView,
+        highest_qc.subject_block_hash,
+        height,
+        far_view,
+        epoch,
+    );
+
+    for signer in remote_signers {
+        let mut vote = crate::sumeragi::consensus::Vote {
+            phase: Phase::NewView,
+            block_hash: highest_qc.subject_block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height,
+            view: far_view,
+            epoch,
+            highest_qc: Some(highest_qc),
+            signer,
+            bls_sig: Vec::new(),
+        };
+        sign_vote_for_view(
+            &mut vote,
+            &actor.common_config.chain,
+            &topology,
+            &harness.key_pairs,
+        );
+        actor.handle_vote(vote);
+    }
+
+    let recorded_votes = actor
+        .vote_log
+        .values()
+        .filter(|vote| {
+            vote.phase == Phase::NewView
+                && vote.block_hash == highest_qc.subject_block_hash
+                && vote.height == height
+                && vote.view == far_view
+                && vote.epoch == epoch
+        })
+        .count();
+    assert_eq!(
+        recorded_votes,
+        signature_topology.min_votes_for_commit(),
+        "far-future NEW_VIEW votes should remain recorded while the local round catches up"
+    );
+    let qc_signers = actor.qc_signers_for_votes(
+        Phase::NewView,
+        highest_qc.subject_block_hash,
+        height,
+        far_view,
+        epoch,
+        &signature_topology,
+    );
+    assert_eq!(
+        qc_signers.len(),
+        signature_topology.min_votes_for_commit(),
+        "far-future NEW_VIEW votes should remain QC-eligible while the local round lags"
+    );
+    assert!(
+        actor.qc_cache.contains_key(&qc_key),
+        "far-future NEW_VIEW quorum should still aggregate into a QC"
     );
 
     harness.shutdown.send();

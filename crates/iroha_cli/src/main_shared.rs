@@ -67,6 +67,51 @@ const VERGEN_GIT_SHA: &str = match option_env!("VERGEN_GIT_SHA") {
 fn build_line() -> BuildLine {
     BuildLine::from_bin_name(env!("CARGO_BIN_NAME"))
 }
+
+fn validate_executable_metadata(executable: &Executable, metadata: &Metadata) -> Result<()> {
+    if !executable.requires_transaction_gas_limit() {
+        return Ok(());
+    }
+    iroha::data_model::transaction::require_transaction_gas_limit(metadata)
+        .map(|_| ())
+        .map_err(|err| eyre!(format_gas_limit_validation_error(executable, err)))
+}
+
+fn format_gas_limit_validation_error(
+    executable: &Executable,
+    err: iroha::data_model::transaction::TransactionGasLimitError,
+) -> String {
+    let executable_label = match executable {
+        Executable::Instructions(_) => "instruction transactions",
+        Executable::ContractCall(_) => "contract-call transactions",
+        Executable::Ivm(_) | Executable::IvmProved(_) => "IVM transactions",
+    };
+    match err {
+        iroha::data_model::transaction::TransactionGasLimitError::Missing => {
+            if matches!(executable, Executable::Ivm(_) | Executable::IvmProved(_)) {
+                format!(
+                    "{executable_label} require transaction metadata `gas_limit`; pass `--gas-limit <u64>` or `--metadata <json>` with `{{\"gas_limit\": <positive u64>}}`"
+                )
+            } else {
+                format!(
+                    "{executable_label} require transaction metadata `gas_limit`; pass `--metadata <json>` with `{{\"gas_limit\": <positive u64>}}`"
+                )
+            }
+        }
+        iroha::data_model::transaction::TransactionGasLimitError::Invalid(source) => {
+            format!("invalid transaction metadata `gas_limit` for {executable_label}: {source}")
+        }
+        iroha::data_model::transaction::TransactionGasLimitError::Zero => {
+            format!("transaction metadata `gas_limit` for {executable_label} must be positive")
+        }
+    }
+}
+
+fn apply_cli_gas_limit_override(metadata: &mut Metadata, gas_limit: Option<u64>) {
+    if let Some(gas_limit) = gas_limit {
+        iroha::data_model::transaction::insert_transaction_gas_limit(metadata, gas_limit);
+    }
+}
 /// Norito JSON derive macros exported for CLI data definitions.
 pub mod json_macros {
     pub use norito::derive::{FastJsonWrite, JsonDeserialize, JsonSerialize};
@@ -346,6 +391,7 @@ trait RunContext {
                 Executable::Instructions(out.into())
             }
         };
+        validate_executable_metadata(&executable, &metadata)?;
         let client = self.client_from_config();
         let transaction = client.build_transaction(executable, metadata);
         let i18n = self.i18n().clone();
@@ -4729,20 +4775,26 @@ mod transaction {
         /// Path to the IVM bytecode file. If omitted, reads from stdin
         #[arg(short, long)]
         path: Option<PathBuf>,
+        /// Transaction gas limit to attach as metadata for this IVM submit
+        #[arg(long, value_name("U64"))]
+        gas_limit: Option<u64>,
     }
 
     impl Run for Ivm {
         fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
-            let blob = if let Some(path) = self.path {
+            let Ivm { path, gas_limit } = self;
+            let blob = if let Some(path) = path {
                 fs::read(path)
                     .wrap_err("Failed to read IVM bytecode from the file into the buffer")?
             } else {
                 bytes_from_stdin()
                     .wrap_err("Failed to read IVM bytecode from stdin into the buffer")?
             };
+            let mut metadata = context.transaction_metadata().cloned().unwrap_or_default();
+            apply_cli_gas_limit_override(&mut metadata, gas_limit);
 
             context
-                .finish(IvmBytecode::from_compiled(blob))
+                .submit_with_metadata(IvmBytecode::from_compiled(blob), metadata, true)
                 .wrap_err("Failed to submit an IVM transaction")
         }
     }
@@ -7742,6 +7794,97 @@ mod tests {
         let err = result.expect_err("stream error should propagate");
         assert!(err.to_string().contains("connection failed"));
         assert_eq!(processed, 0);
+    }
+
+    fn metadata_with_gas_limit(limit: u64) -> Metadata {
+        let mut metadata = Metadata::default();
+        iroha::data_model::transaction::insert_transaction_gas_limit(&mut metadata, limit);
+        metadata
+    }
+
+    #[test]
+    fn validate_executable_metadata_accepts_positive_ivm_gas_limit() {
+        let executable = Executable::Ivm(IvmBytecode::from_compiled(vec![0x00]));
+        let metadata = metadata_with_gas_limit(42);
+        validate_executable_metadata(&executable, &metadata).expect("gas_limit should validate");
+    }
+
+    #[test]
+    fn validate_executable_metadata_rejects_missing_ivm_gas_limit() {
+        let executable = Executable::Ivm(IvmBytecode::from_compiled(vec![0x00]));
+        let err = validate_executable_metadata(&executable, &Metadata::default())
+            .expect_err("missing gas_limit must fail");
+        assert!(err.to_string().contains("IVM transactions require"));
+        assert!(err.to_string().contains("--gas-limit <u64>"));
+        assert!(err.to_string().contains("gas_limit"));
+    }
+
+    #[test]
+    fn validate_executable_metadata_rejects_non_numeric_ivm_gas_limit() {
+        let executable = Executable::Ivm(IvmBytecode::from_compiled(vec![0x00]));
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            iroha::data_model::transaction::transaction_gas_limit_metadata_key().clone(),
+            iroha_primitives::json::Json::from("oops"),
+        );
+        let err = validate_executable_metadata(&executable, &metadata)
+            .expect_err("non-numeric gas_limit must fail");
+        assert!(err.to_string().contains("invalid transaction metadata `gas_limit`"));
+    }
+
+    #[test]
+    fn validate_executable_metadata_rejects_zero_ivm_gas_limit() {
+        let executable = Executable::Ivm(IvmBytecode::from_compiled(vec![0x00]));
+        let metadata = metadata_with_gas_limit(0);
+        let err = validate_executable_metadata(&executable, &metadata)
+            .expect_err("zero gas_limit must fail");
+        assert!(err.to_string().contains("must be positive"));
+    }
+
+    #[test]
+    fn validate_executable_metadata_skips_instruction_transactions() {
+        let executable = Executable::Instructions(Vec::<InstructionBox>::new().into());
+        validate_executable_metadata(&executable, &Metadata::default())
+            .expect("plain instructions should not require gas_limit");
+    }
+
+    #[test]
+    fn validate_executable_metadata_accepts_positive_ivm_proved_gas_limit() {
+        let executable = Executable::IvmProved(iroha::data_model::transaction::IvmProved {
+            bytecode: IvmBytecode::from_compiled(vec![0x00]),
+            overlay: Vec::<InstructionBox>::new().into(),
+            events_commitment: Hash::new(b"events"),
+            gas_policy_commitment: Hash::new(b"gas"),
+        });
+        let metadata = metadata_with_gas_limit(42);
+        validate_executable_metadata(&executable, &metadata).expect("gas_limit should validate");
+    }
+
+    #[test]
+    fn validate_executable_metadata_rejects_missing_contract_call_gas_limit() {
+        let executable = Executable::ContractCall(
+            iroha::data_model::transaction::executable::ContractInvocation {
+                contract_address:
+                    "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                        .parse()
+                        .expect("contract address"),
+                entrypoint: "call".to_owned(),
+                payload: None,
+            },
+        );
+        let err = validate_executable_metadata(&executable, &Metadata::default())
+            .expect_err("missing gas_limit must fail");
+        assert!(err.to_string().contains("contract-call transactions require"));
+        assert!(!err.to_string().contains("--gas-limit <u64>"));
+    }
+
+    #[test]
+    fn apply_cli_gas_limit_override_sets_and_replaces_metadata_value() {
+        let mut metadata = metadata_with_gas_limit(10);
+        apply_cli_gas_limit_override(&mut metadata, Some(42));
+        let gas_limit = iroha::data_model::transaction::require_transaction_gas_limit(&metadata)
+            .expect("gas_limit should be present");
+        assert_eq!(gas_limit, 42);
     }
 
     #[test]

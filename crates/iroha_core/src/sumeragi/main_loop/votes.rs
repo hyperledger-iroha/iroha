@@ -1069,6 +1069,18 @@ impl Actor {
             .iter()
             .filter_map(|key| self.vote_log.get(key).map(|vote| vote.block_hash))
             .collect();
+        // NEW_VIEW votes may legitimately arrive far ahead of the local round while the node is
+        // catching up. Pruning them by the local view window drops the very quorum evidence needed
+        // to advance, so keep same-height NEW_VIEW votes until the height itself moves on.
+        let preserved_active_new_view_votes: BTreeSet<_> = self
+            .vote_log
+            .iter()
+            .filter_map(|(key, vote)| {
+                let keep_active_new_view_vote = key.1 == active_height
+                    && matches!(vote.phase, crate::sumeragi::consensus::Phase::NewView);
+                keep_active_new_view_vote.then_some(*key)
+            })
+            .collect();
         let min_height = active_height.saturating_sub(super::VOTE_CACHE_HEIGHT_WINDOW);
         let max_height = active_height.saturating_add(super::VOTE_CACHE_HEIGHT_WINDOW);
         let current_view = self.phase_tracker.current_view(active_height);
@@ -1093,7 +1105,9 @@ impl Actor {
             true
         };
         let should_keep_vote_key = |key: &VoteLogKey| -> bool {
-            should_keep(key.1, key.2) || preserved_local_active_votes.contains(key)
+            should_keep(key.1, key.2)
+                || preserved_local_active_votes.contains(key)
+                || preserved_active_new_view_votes.contains(key)
         };
         self.vote_log.retain(|key, _| should_keep_vote_key(key));
         self.vote_validation_cache

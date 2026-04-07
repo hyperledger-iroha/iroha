@@ -11064,6 +11064,17 @@ struct ContractViewExecutionError {
 }
 
 #[cfg(feature = "app_api")]
+fn contract_view_error_message(err: &Error) -> String {
+    use iroha_data_model::{ValidationFail, query::error::QueryExecutionFail};
+
+    match err {
+        Error::Query(ValidationFail::QueryFailed(QueryExecutionFail::Conversion(message)))
+        | Error::Query(ValidationFail::InternalError(message)) => message.clone(),
+        _ => err.to_string(),
+    }
+}
+
+#[cfg(feature = "app_api")]
 struct ContractCallSimulationExecution {
     gas_used: u64,
     queued_instructions: Vec<norito::json::Value>,
@@ -11206,7 +11217,7 @@ fn execute_contract_view(
         .unwrap_or(ContractSchemaType::Unit);
     let (value, _) = decode_contract_view_result_value(&vm, 10, &schema).map_err(|err| {
         ContractViewExecutionError {
-            message: err.to_string(),
+            message: contract_view_error_message(&err),
             vm_diagnostic: vm.last_diagnostic().map(map_vm_diagnostic),
         }
     })?;

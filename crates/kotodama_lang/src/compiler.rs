@@ -1272,7 +1272,7 @@ seiyaku Test {
     fn manifest_access_set_hints_include_state_wildcard_for_call_contract() {
         let src = r#"
 seiyaku Test {
-  kotoage fn relay(target: AccountId, payload: Json) -> bytes permission(Admin) {
+  kotoage fn relay(target: bytes, payload: Json) -> bytes permission(Admin) {
     return call_contract(target, "settle", payload);
   }
 }

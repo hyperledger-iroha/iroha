@@ -4077,12 +4077,13 @@ fn analyze_expr(expr: &Expr, vars: &mut HashMap<String, Type>) -> Result<TypedEx
                 }
                 "call_contract" => {
                     if arg_typed.len() != 3
-                        || arg_typed[0].ty != Type::AccountId
+                        || !(arg_typed[0].ty == Type::String || is_blob_like(&arg_typed[0].ty))
                         || !(arg_typed[1].ty == Type::String || is_blob_like(&arg_typed[1].ty))
                         || arg_typed[2].ty != Type::Json
                     {
                         return Err(SemanticError {
-                            message: "call_contract expects (AccountId, String|Blob, Json)".into(),
+                            message: "call_contract expects (String|Blob, String|Blob, Json)"
+                                .into(),
                         });
                     }
                     Ok(TypedExpr {

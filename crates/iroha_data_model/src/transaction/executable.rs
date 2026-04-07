@@ -1,6 +1,6 @@
 //! Types representing executable parts of a transaction.
 
-use std::{iter::IntoIterator, vec::Vec};
+use std::{fmt, iter::IntoIterator, sync::LazyLock, vec::Vec};
 
 use ::base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_data_model_derive::model;
@@ -11,8 +11,7 @@ use norito::codec::{Decode, Encode};
 pub use self::model::*;
 #[cfg(test)]
 use crate::isi::Instruction;
-use crate::isi::InstructionBox;
-use crate::smart_contract::ContractAddress;
+use crate::{isi::InstructionBox, metadata::Metadata, name::Name, smart_contract::ContractAddress};
 
 #[model]
 mod model {
@@ -137,6 +136,66 @@ impl From<ContractInvocation> for Executable {
     }
 }
 
+static TRANSACTION_GAS_LIMIT_METADATA_KEY: LazyLock<Name> =
+    LazyLock::new(|| "gas_limit".parse().expect("static gas_limit key"));
+
+/// Errors raised while decoding transaction `gas_limit` metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransactionGasLimitError {
+    /// The metadata key is missing.
+    Missing,
+    /// The metadata value is present but cannot be decoded as `u64`.
+    Invalid(String),
+    /// The metadata value is present but zero.
+    Zero,
+}
+
+impl fmt::Display for TransactionGasLimitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing => f.write_str("missing gas_limit in transaction metadata"),
+            Self::Invalid(err) => write!(f, "invalid gas_limit metadata: {err}"),
+            Self::Zero => f.write_str("gas_limit must be positive"),
+        }
+    }
+}
+
+impl std::error::Error for TransactionGasLimitError {}
+
+/// Returns the canonical transaction metadata key used for `gas_limit`.
+pub fn transaction_gas_limit_metadata_key() -> &'static Name {
+    &TRANSACTION_GAS_LIMIT_METADATA_KEY
+}
+
+/// Parse the optional transaction `gas_limit` metadata entry.
+///
+/// Returns `Ok(None)` when the metadata key is absent.
+pub fn parse_transaction_gas_limit(
+    metadata: &Metadata,
+) -> Result<Option<u64>, TransactionGasLimitError> {
+    let Some(raw) = metadata.get(transaction_gas_limit_metadata_key()) else {
+        return Ok(None);
+    };
+    let value = raw
+        .clone()
+        .try_into_any_norito::<u64>()
+        .map_err(|err| TransactionGasLimitError::Invalid(err.to_string()))?;
+    if value == 0 {
+        return Err(TransactionGasLimitError::Zero);
+    }
+    Ok(Some(value))
+}
+
+/// Parse the required transaction `gas_limit` metadata entry.
+pub fn require_transaction_gas_limit(metadata: &Metadata) -> Result<u64, TransactionGasLimitError> {
+    parse_transaction_gas_limit(metadata)?.ok_or(TransactionGasLimitError::Missing)
+}
+
+/// Insert or replace the transaction `gas_limit` metadata entry.
+pub fn insert_transaction_gas_limit(metadata: &mut Metadata, gas_limit: u64) {
+    metadata.insert(transaction_gas_limit_metadata_key().clone(), gas_limit);
+}
+
 impl AsRef<[u8]> for IvmBytecode {
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
@@ -153,6 +212,13 @@ impl IvmBytecode {
     /// Size of the smart contract in bytes
     pub fn size_bytes(&self) -> usize {
         self.0.len()
+    }
+}
+
+impl Executable {
+    /// Returns `true` if the executable kind requires transaction `gas_limit` metadata.
+    pub fn requires_transaction_gas_limit(&self) -> bool {
+        !matches!(self, Self::Instructions(_))
     }
 }
 
@@ -449,6 +515,56 @@ mod tests {
         // IVM bytecode debug output should only show its length
         let ivm_bytecode = IvmBytecode::from_compiled(vec![0, 1, 2, 3, 4]);
         assert_eq!(format!("{ivm_bytecode:?}"), "IVM bytecode(len = 5)");
+    }
+
+    #[test]
+    fn executable_kind_reports_gas_limit_requirement() {
+        assert!(
+            !Executable::from_iter(Vec::<InstructionBox>::new()).requires_transaction_gas_limit()
+        );
+        assert!(
+            Executable::Ivm(IvmBytecode::from_compiled(vec![1])).requires_transaction_gas_limit()
+        );
+        assert!(
+            Executable::ContractCall(ContractInvocation {
+                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                    .parse()
+                    .expect("contract address"),
+                entrypoint: "ping".to_owned(),
+                payload: None,
+            })
+            .requires_transaction_gas_limit()
+        );
+    }
+
+    #[test]
+    fn transaction_gas_limit_roundtrip_helpers_work() {
+        let mut metadata = Metadata::default();
+        assert_eq!(
+            parse_transaction_gas_limit(&metadata).expect("missing gas_limit should be allowed"),
+            None
+        );
+        insert_transaction_gas_limit(&mut metadata, 42);
+        assert_eq!(
+            parse_transaction_gas_limit(&metadata).expect("gas_limit should parse"),
+            Some(42)
+        );
+        assert_eq!(
+            require_transaction_gas_limit(&metadata).expect("gas_limit should be required"),
+            42
+        );
+    }
+
+    #[test]
+    fn transaction_gas_limit_reports_invalid_and_zero_values() {
+        let mut metadata = Metadata::default();
+        metadata.insert(transaction_gas_limit_metadata_key().clone(), "oops");
+        let err = parse_transaction_gas_limit(&metadata).expect_err("invalid gas_limit must fail");
+        assert!(matches!(err, TransactionGasLimitError::Invalid(_)));
+
+        insert_transaction_gas_limit(&mut metadata, 0);
+        let err = require_transaction_gas_limit(&metadata).expect_err("zero gas_limit must fail");
+        assert_eq!(err, TransactionGasLimitError::Zero);
     }
 
     #[test]

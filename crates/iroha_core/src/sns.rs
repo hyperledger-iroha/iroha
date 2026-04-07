@@ -36,7 +36,9 @@ use norito::codec::{Decode as _, Encode as _};
 use regex::Regex;
 use thiserror::Error;
 
-use crate::state::{State, StateReadOnly, StateTransaction, World, WorldReadOnly, WorldTransaction};
+use crate::state::{
+    State, StateReadOnly, StateTransaction, World, WorldReadOnly, WorldTransaction,
+};
 
 pub use iroha_data_model::sns::{
     ACCOUNT_ALIAS_SUFFIX_ID, DATASPACE_ALIAS_SUFFIX_ID, DOMAIN_NAME_SUFFIX_ID,
@@ -263,7 +265,12 @@ pub fn ensure_account_alias_lease(
 ) -> Result<(), iroha_data_model::error::ParseError> {
     let selector = selector_for_account_alias(label, catalog)?;
     let storage_key = record_storage_key(&selector);
-    if world.smart_contract_state.view().get(&storage_key).is_none() {
+    if world
+        .smart_contract_state
+        .view()
+        .get(&storage_key)
+        .is_none()
+    {
         let address = AccountAddress::from_account_id(owner)
             .expect("account id should convert to account address");
         let record = NameRecordV1::new(

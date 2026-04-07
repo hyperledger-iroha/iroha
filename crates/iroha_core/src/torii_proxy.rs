@@ -53,6 +53,8 @@ pub enum ToriiProxyResponseFormatV1 {
 pub enum ToriiReadEndpointV1 {
     /// `GET /v1/accounts/{account_id}`
     AccountGet,
+    /// `GET /v1/explorer/accounts/{account_id}`
+    ExplorerAccountDetail,
     /// `GET /v1/accounts/{account_id}/assets`
     AccountAssetsGet,
     /// `POST /v1/accounts/{account_id}/assets/query`

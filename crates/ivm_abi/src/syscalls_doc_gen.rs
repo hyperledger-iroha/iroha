@@ -627,7 +627,7 @@ pub static DOCS: &[crate::syscalls::SyscallDoc] = &[
     },
     crate::syscalls::SyscallDoc {
         number: 169,
-        args: "r10=&AccountId(contract subject), r11=&Blob(entrypoint UTF-8), r12=&Json(payload)",
+        args: "r10=&Blob(contract address UTF-8), r11=&Blob(entrypoint UTF-8), r12=&Json(payload)",
         ret: "ptr (&NoritoBytes(return bytes)) or 0",
         gas: "-",
     },

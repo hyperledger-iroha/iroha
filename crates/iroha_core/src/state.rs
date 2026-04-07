@@ -11792,7 +11792,13 @@ fn derive_account_scope_directory_entry(
     };
 
     let mut entry = AccountScopeDirectoryEntry::default();
-    entry.ensure_dataspace(DataSpaceId::GLOBAL);
+    let primary_label_dataspace = account.as_ref().label().map(|label| {
+        entry.ensure_dataspace(label.dataspace);
+        if let Some(domain) = label.domain.clone() {
+            entry.bind_domain(label.dataspace, domain);
+        }
+        label.dataspace
+    });
 
     if let Some(uaid) = account.as_ref().uaid().copied()
         && let Some(bindings) = world.uaid_dataspaces().get(&uaid)
@@ -11809,6 +11815,10 @@ fn derive_account_scope_directory_entry(
         if let Some(domain) = alias.domain.clone() {
             entry.bind_domain(alias.dataspace, domain);
         }
+    }
+
+    if primary_label_dataspace.is_none_or(|dataspace| dataspace == DataSpaceId::GLOBAL) {
+        entry.ensure_dataspace(DataSpaceId::GLOBAL);
     }
 
     Ok(Some(entry))
@@ -12387,12 +12397,14 @@ pub trait WorldReadOnly {
         self.domains().iter().map(|(_, domain)| domain)
     }
 
-    /// Collect the account's dataspace -> domain hierarchy from Space Directory bindings and
-    /// bound aliases.
+    /// Collect the account's dataspace -> domain hierarchy from primary label
+    /// materialization, Space Directory bindings, and bound aliases.
     ///
-    /// Every materialized account implicitly belongs to the universal dataspace. Additional
-    /// dataspaces come from UAID bindings and bound aliases. Domains remain optional within each
-    /// dataspace, so a dataspace entry may contain an empty domain set.
+    /// Accounts materialized with a non-global primary label inherit that label's dataspace/domain
+    /// immediately. Unlabeled or universal-labeled accounts keep the universal dataspace as their
+    /// fallback materialization scope. Additional dataspaces come from UAID bindings and bound
+    /// aliases. Domains remain optional within each dataspace, so a dataspace entry may contain an
+    /// empty domain set.
     fn account_scope_entry(
         &self,
         account_id: &AccountId,
@@ -29404,6 +29416,81 @@ mod tests {
             unbound_scopes,
             BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())]),
             "alias unbinds should remove the extra dataspace from the account scope directory",
+        );
+    }
+
+    #[test]
+    fn account_scope_directory_uses_primary_label_materialization_for_private_accounts() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        stx.world.dataspace_catalog = dataspace_catalog;
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        let private_domain = DomainId::try_new("treasury", "retail").expect("domain");
+        let private_primary_label = iroha_data_model::account::rekey::AccountAlias::new(
+            "retaildesk".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                private_domain.name().clone(),
+            )),
+            retail_dataspace,
+        );
+        stx.world.domains.insert(
+            private_domain.clone(),
+            Domain::new(private_domain.clone()).build(&authority),
+        );
+        let (authority_id, authority_value) = Account::new(authority.clone())
+            .build(&authority)
+            .into_key_value();
+        stx.world.accounts.insert(authority_id, authority_value);
+        let (account_key, account_value) = Account::new(account_id.clone())
+            .with_label(Some(private_primary_label.clone()))
+            .build(&authority)
+            .into_key_value();
+        stx.world.accounts.insert(account_key, account_value);
+
+        let scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("account scope")
+            .expect("materialized account should have an account scope entry")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            scopes,
+            BTreeMap::from([(
+                retail_dataspace,
+                BTreeSet::from([iroha_data_model::account::rekey::AccountAliasDomain::new(
+                    "treasury".parse::<Name>().expect("domain name"),
+                )]),
+            )]),
+            "private primary labels should materialize the account scope in that private dataspace without a universal fallback",
+        );
+        assert_eq!(
+            stx.world
+                .account_scope_hierarchy(&account_id)
+                .expect("account hierarchy"),
+            BTreeMap::from([(retail_dataspace, BTreeSet::from([private_domain]))]),
+            "hierarchy should resolve the primary-label dataspace/domain pair",
         );
     }
 

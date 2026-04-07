@@ -81,6 +81,8 @@ static DEFAULT_STACK_LIMIT: LazyLock<AtomicU64> =
 static STACK_BUDGET_LIMIT: LazyLock<AtomicU64> = LazyLock::new(|| AtomicU64::new(u64::MAX));
 
 impl Memory {
+    /// Alignment enforced for the guest stack top and effective stack budgets.
+    pub const STACK_ALIGNMENT: u64 = 16;
     /// Define static addresses for memory regions
     pub const HEAP_START: u64 = 0x0010_0000;
     /// Maximum heap size allowed (from HEAP_START up to INPUT_START).
@@ -109,9 +111,16 @@ impl Memory {
         DEFAULT_STACK_LIMIT.load(Ordering::Relaxed)
     }
 
+    /// Align a stack byte count to the VM guest-stack boundary.
+    #[must_use]
+    pub fn align_stack_bytes(bytes: u64) -> u64 {
+        let bytes = bytes.max(Self::STACK_ALIGNMENT);
+        bytes - (bytes % Self::STACK_ALIGNMENT)
+    }
+
     /// Override the default stack limit (bytes) applied to new memory instances.
     pub fn set_default_stack_limit(bytes: u64) {
-        DEFAULT_STACK_LIMIT.store(bytes.max(1), Ordering::Relaxed);
+        DEFAULT_STACK_LIMIT.store(Self::align_stack_bytes(bytes), Ordering::Relaxed);
     }
 
     /// Global budget cap applied to stack limits for new memory instances.
@@ -121,7 +130,7 @@ impl Memory {
 
     /// Override the global budget cap applied to stack limits for new memory instances.
     pub fn set_stack_budget_limit(bytes: u64) {
-        STACK_BUDGET_LIMIT.store(bytes.max(1), Ordering::Relaxed);
+        STACK_BUDGET_LIMIT.store(Self::align_stack_bytes(bytes), Ordering::Relaxed);
     }
 
     /// Current stack limit (bytes) enforced for this memory instance.
@@ -277,9 +286,10 @@ impl Memory {
 
     /// Initialize memory with an explicit stack limit (bytes).
     pub fn new_with_stack_limit(code_size: u64, stack_limit: u64) -> Self {
-        let budget = STACK_BUDGET_LIMIT.load(Ordering::Relaxed);
-        let effective_stack = stack_limit.max(1).min(budget);
-        if effective_stack < stack_limit {
+        let requested_stack = Self::align_stack_bytes(stack_limit);
+        let budget = Self::align_stack_bytes(STACK_BUDGET_LIMIT.load(Ordering::Relaxed));
+        let effective_stack = requested_stack.min(budget);
+        if effective_stack < requested_stack {
             record_stack_budget_hit();
         }
         let total_size = Memory::STACK_START + effective_stack + Memory::STACK_SLOP;
@@ -984,6 +994,23 @@ mod tests {
         ));
         Memory::set_default_stack_limit(Memory::STACK_SIZE);
         Memory::set_stack_budget_limit(u64::MAX);
+    }
+
+    #[test]
+    fn unaligned_stack_limits_are_normalized_before_stack_top_is_exposed() {
+        let prev_default = Memory::default_stack_limit();
+        let prev_budget = Memory::stack_budget_limit();
+        Memory::set_default_stack_limit(0x60a04);
+        Memory::set_stack_budget_limit(0x60a04);
+
+        let mut mem = Memory::new(0);
+        assert_eq!(mem.stack_limit() % Memory::STACK_ALIGNMENT, 0);
+        assert_eq!(mem.stack_top() % Memory::STACK_ALIGNMENT, 0);
+        mem.store_u64(mem.stack_top() - 8, 7)
+            .expect("aligned stack top must accept 64-bit stores");
+
+        Memory::set_default_stack_limit(prev_default);
+        Memory::set_stack_budget_limit(prev_budget);
     }
 
     #[test]

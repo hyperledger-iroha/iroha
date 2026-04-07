@@ -504,18 +504,8 @@ pub(crate) fn can_use_fee_sponsor_read_only(
 
 /// Parse optional `gas_limit` from transaction metadata.
 pub(crate) fn parse_gas_limit(metadata: &Metadata) -> Result<Option<u64>, ValidationFail> {
-    let Some(raw) = metadata.get("gas_limit") else {
-        return Ok(None);
-    };
-    let value = raw.try_into_any_norito::<u64>().map_err(|err| {
-        ValidationFail::NotPermitted(format!("invalid gas_limit metadata: {err}"))
-    })?;
-    if value == 0 {
-        return Err(ValidationFail::NotPermitted(
-            "gas_limit must be positive".to_owned(),
-        ));
-    }
-    Ok(Some(value))
+    iroha_data_model::transaction::parse_transaction_gas_limit(metadata)
+        .map_err(|err| ValidationFail::NotPermitted(err.to_string()))
 }
 
 #[derive(Clone, Debug)]

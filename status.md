@@ -2,6 +2,45 @@
 
 Last updated: 2026-04-07
 
+## 2026-04-07 Follow-up: the grouped `core_api` harness is green on the patched tree
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_test_network/src/lib.rs`
+  now exposes `NetworkBuilder::configured_pipeline_time()` so test helpers can
+  assert explicit pipeline overrides without booting a live network.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/asset.rs` now keeps
+  `quiet_network_builder_uses_fast_pipeline_time` at the builder layer instead
+  of starting a 4-peer network just to read `pipeline_time`, which removes the
+  grouped-startup flake that still remained after the quiet-tracing permit fix.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/config.rs` and
+  `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/permissions.rs`
+  retain the earlier reconciliation and detached-permission sequencing
+  hardening, and that current-tree behavior has now been re-proven inside the
+  full grouped `core_api` binary rather than only through exact reruns.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/iroha_cli.rs` now
+  routes the live Soracloud mutation test through the shared
+  `--timeout-secs 60` helper, polls final control-plane status until the
+  rollback snapshot converges, and polls `hf-status` snapshots in the
+  multi-account shared-lease refund test until the authoritative control plane
+  reflects the latest join/refund state before asserting on live accounting.
+- Focused validation completed in this slice:
+  - `CARGO_TARGET_DIR=target_tmp_core_api_groupfix cargo test -p integration_tests --test core_api asset::helper_tests::quiet_network_builder_uses_fast_pipeline_time -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_core_api_groupfix cargo test -p integration_tests --test core_api config::config_scenarios -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_core_api_groupfix cargo test -p integration_tests --test core_api permissions::account_permission_revoke_then_grant_last_wins_detached -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_core_api_assetfix2 cargo test -p integration_tests --test core_api asset::helper_tests::quiet_network_builder_uses_fast_pipeline_time -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_core_api_assetfix2 cargo test -p integration_tests --test core_api iroha_cli::soracloud_mutations_use_live_torii_control_plane -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_core_api_assetfix2 cargo test -p integration_tests --test core_api iroha_cli::soracloud_hf_shared_lease_prorates_refunds_across_multiple_accounts -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_core_api_assetfix2 cargo test -p iroha_test_network --lib tests::configured_pipeline_time_reports_explicit_override -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target_tmp_core_api_assetfix2 cargo test -p integration_tests --test core_api -q`
+- Current verification boundary:
+  - the five grouped-only `core_api` reds from the stale grouped run
+    (`asset` helper, `config_scenarios`, detached permissions, Soracloud
+    mutations, and Soracloud HF shared-lease refund proration) are green as
+    current-source exact reruns;
+  - the full grouped `core_api` harness is now green on the patched tree
+    (`170 passed; 0 failed; 3 ignored; finished in 2307.35s`); and
+  - the remaining broader validation item, if repo-wide signoff is still
+    desired, is the long-lived `cargo test --workspace --all-targets` rerun
+    rather than another known `core_api` gap.
+
 ## 2026-04-07 Follow-up: the fresh `iroha_torii` test compile and isolated large-payload NPoS rerun are green on the patched tree
 - No new source changes were needed in this slice; the work here was reducing
   the remaining validation uncertainty after the reused-localnet and grouped
@@ -21417,3 +21456,29 @@ Last updated: 2026-04-07
 - Teardown-time read-side `connection refused` is now treated as shutdown noise once Izanami has entered stop/shutdown, so late audit/status reads no longer pollute throughput failure accounting.
 - Validation completed:
   - `CARGO_TARGET_DIR=/tmp/iroha_codex_throughput_20260404 cargo test -p izanami --bin izanami -- --nocapture`
+
+## 2026-04-07 Blocking Submit Now Fails Fast On Admission Rejection
+- Updated [`crates/iroha/src/client.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha/src/client.rs) so `Client::submit_transaction_blocking(...)` no longer waits for the transaction-status timeout when Torii rejects the submit request during admission.
+- The blocking confirmation path now listens for the submitter thread's HTTP result in parallel with event-stream/status polling and returns the original submission error immediately. This closes the CLI hang where `iroha tx ivm --path ...` could stall after Torii rejected the transaction with `missing gas_limit in transaction metadata`.
+- Added shared transaction-gas helpers in [`crates/iroha_data_model/src/transaction/executable.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/src/transaction/executable.rs) and re-used them from [`crates/iroha_core/src/executor.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/executor.rs), [`crates/iroha_core/src/tx.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/tx.rs), and [`crates/iroha_cli/src/main_shared.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/main_shared.rs) so missing / invalid / zero `gas_limit` rules are defined once and applied consistently across CLI preflight and admission.
+- Updated [`crates/iroha_cli/src/main_shared.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/main_shared.rs) so CLI submission rejects missing, non-numeric, or zero `gas_limit` locally for IVM, IVM-proved, and contract-call transactions before any Torii request is sent, and added `iroha tx ivm --gas-limit <u64>` as an explicit override for IVM bytecode submits.
+- Added regressions for both layers:
+  - `submit_failure_short_circuits_confirmation_wait` covers the confirmation loop directly.
+  - `closed_submit_result_channel_short_circuits_confirmation_wait` covers the submitter-thread exit path where the submit result channel closes before confirmation completes.
+  - `submit_transaction_blocking_returns_submit_rejection_without_waiting_for_timeout` covers the end-to-end blocking submit path with an HTTP `400 Bad Request` admission rejection.
+  - `transaction_gas_limit_roundtrip_helpers_work` and `transaction_gas_limit_reports_invalid_and_zero_values` cover the shared metadata helpers.
+  - `ivm_proved_missing_gas_limit_rejected_at_admission` and `contract_call_missing_gas_limit_rejected_at_admission` cover the other executable kinds on the admission path.
+  - `tx_ivm_rejects_missing_gas_limit_without_hanging` covers the real `iroha tx ivm --path ...` CLI path and verifies that missing `gas_limit` fails locally instead of hanging or reaching the network.
+  - `tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_metadata_error` covers the real `iroha tx ivm --path ... --gas-limit ...` CLI path and verifies that the new flag bypasses the local missing-metadata rejection.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-dm-gaslimit cargo test -p iroha_data_model gas_limit -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-gaslimit-unit cargo test -p iroha_cli validate_executable_metadata_ -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-gaslimit-unit cargo test -p iroha_cli gas_limit -- --nocapture`
+  - `cargo test -p iroha submit_failure_short_circuits_confirmation_wait -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-gaslimit cargo test -p iroha closed_submit_result_channel_short_circuits_confirmation_wait -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-client-gaslimit cargo test -p iroha submit_transaction_blocking_returns_submit_rejection_without_waiting_for_timeout -- --nocapture`
+  - `cargo test -p iroha tx_confirmation_stream_tests -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-gaslimit-it cargo test -p integration_tests --test core_api iroha_cli::tx_ivm_rejects_missing_gas_limit_without_hanging -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-gaslimit-it2 cargo test -p integration_tests --test core_api iroha_cli::tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_metadata_error -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-gaslimit cargo test -p iroha_core gas_limit_rejected_at_admission -- --nocapture`

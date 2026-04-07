@@ -602,42 +602,44 @@ fn prune_redundant_contract_ops_with_metadata<R, M>(
     let retain: Vec<bool> = queued
         .iter()
         .map(|instr| {
-        if let Some(reg) = instr.as_any().downcast_ref::<RegisterSmartContractCode>() {
-            if let Some(hash) = reg.manifest().code_hash {
-                let existing = manifest_cache
-                    .entry(hash)
-                    .or_insert_with(|| state_ro.world().contract_manifests().get(&hash).cloned());
-                if let Some(existing) = existing {
-                    if existing == reg.manifest() {
-                        return false;
+            if let Some(reg) = instr.as_any().downcast_ref::<RegisterSmartContractCode>() {
+                if let Some(hash) = reg.manifest().code_hash {
+                    let existing = manifest_cache.entry(hash).or_insert_with(|| {
+                        state_ro.world().contract_manifests().get(&hash).cloned()
+                    });
+                    if let Some(existing) = existing {
+                        if existing == reg.manifest() {
+                            return false;
+                        }
                     }
                 }
-            }
-        } else if let Some(bytes) = instr.as_any().downcast_ref::<RegisterSmartContractBytes>() {
-            let cached = code_cache.entry(*bytes.code_hash()).or_insert_with(|| {
-                state_ro
-                    .world()
-                    .contract_code()
-                    .get(bytes.code_hash())
-                    .cloned()
-            });
-            if cached
-                .as_ref()
-                .is_some_and(|existing| existing.as_slice() == bytes.code().as_slice())
+            } else if let Some(bytes) = instr.as_any().downcast_ref::<RegisterSmartContractBytes>()
             {
-                return false;
+                let cached = code_cache.entry(*bytes.code_hash()).or_insert_with(|| {
+                    state_ro
+                        .world()
+                        .contract_code()
+                        .get(bytes.code_hash())
+                        .cloned()
+                });
+                if cached
+                    .as_ref()
+                    .is_some_and(|existing| existing.as_slice() == bytes.code().as_slice())
+                {
+                    return false;
+                }
+            } else if let Some(activate) = instr.as_any().downcast_ref::<ActivateContractInstance>()
+            {
+                let key = activate.contract_address().clone();
+                let bound = binding_cache
+                    .entry(key.clone())
+                    .or_insert_with(|| state_ro.world().contract_instances().get(&key).copied());
+                if bound.is_some_and(|hash| hash == *activate.code_hash()) {
+                    return false;
+                }
             }
-        } else if let Some(activate) = instr.as_any().downcast_ref::<ActivateContractInstance>() {
-            let key = activate.contract_address().clone();
-            let bound = binding_cache
-                .entry(key.clone())
-                .or_insert_with(|| state_ro.world().contract_instances().get(&key).copied());
-            if bound.is_some_and(|hash| hash == *activate.code_hash()) {
-                return false;
-            }
-        }
-        true
-    })
+            true
+        })
         .collect();
     if retain.iter().all(|keep| *keep) {
         return;
@@ -913,10 +915,12 @@ fn tx_overlay_from_host_queued<R: StateReadOnly>(
     let queued = queued_instructions
         .into_iter()
         .zip(execution_contexts)
-        .map(|(instruction, execution_context)| crate::smartcontracts::ivm::host::QueuedInstruction {
-            instruction,
-            authority: execution_context.authority,
-            contract_runtime_context: execution_context.contract_runtime_context,
+        .map(|(instruction, execution_context)| {
+            crate::smartcontracts::ivm::host::QueuedInstruction {
+                instruction,
+                authority: execution_context.authority,
+                contract_runtime_context: execution_context.contract_runtime_context,
+            }
         })
         .collect();
     TxOverlay::from_host_execution(queued, ivm_gas_used, durable_state_overlay)
@@ -1052,10 +1056,9 @@ where
             let ivm_gas_used = gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
-            let queued =
-                host.drain_queued_instructions_with_contract_runtime_context(
-                    contract_runtime_context.clone(),
-                );
+            let queued = host.drain_queued_instructions_with_contract_runtime_context(
+                contract_runtime_context.clone(),
+            );
             let durable_state_overlay = host.drain_durable_state_overlay();
             if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
                 let trace = vm.register_trace();
@@ -1478,10 +1481,9 @@ where
             let ivm_gas_used = tx_gas_limit.saturating_sub(vm.remaining_gas());
             let transport_caps_snapshot = host.transport_caps_snapshot().copied();
             let negotiated_caps_snapshot = host.negotiated_caps_snapshot().copied();
-            let queued =
-                host.drain_queued_instructions_with_contract_runtime_context(
-                    contract_runtime_context.clone(),
-                );
+            let queued = host.drain_queued_instructions_with_contract_runtime_context(
+                contract_runtime_context.clone(),
+            );
             let durable_state_overlay = host.drain_durable_state_overlay();
             if state_ro.zk().halo2.enabled && vm.zk_mode_enabled() {
                 let trace = vm.register_trace();

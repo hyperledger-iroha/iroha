@@ -6419,18 +6419,49 @@ async fn handler_telemetry_propagation(
 #[axum::debug_handler]
 async fn handler_explorer_account_detail(
     State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
     headers: axum::http::HeaderMap,
     axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
     AxPath(account_raw): AxPath<String>,
 ) -> Result<AxResponse, Error> {
     let remote_ip = remote.ip();
-    let allowed = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
-    if !allowed {
+    let trusted_internal = limits::is_allowed_by_cidr(&headers, Some(remote_ip), &app.allow_nets);
+    if !trusted_internal {
         check_access(&app, &headers, Some(remote_ip), "v1/explorer/accounts/{id}").await?;
     }
-    let account_id =
-        parse_account_id_for_endpoint(&app, &account_raw, CONTEXT_EXPLORER_ACCOUNT_DETAIL)?;
-    routing::handle_v1_explorer_account_detail(app.state.clone(), account_id).await
+    let (parsed_account_id, canonical_account_id) = routing::parse_account_path_segment_with_state(
+        app.state.as_ref(),
+        &account_raw,
+        &app.telemetry_handle(),
+        CONTEXT_EXPLORER_ACCOUNT_DETAIL,
+    )?;
+    let visibility = torii_visibility_account_from_headers(
+        &app,
+        &headers,
+        &method,
+        &uri,
+        &[],
+        CONTEXT_EXPLORER_ACCOUNT_DETAIL,
+    )?;
+    let routes = match torii_account_read_routes(
+        app.as_ref(),
+        &parsed_account_id,
+        visibility.caller(),
+        trusted_internal || visibility.is_signed(),
+    ) {
+        Ok(routes) => routes,
+        Err(response) => return Ok(response),
+    };
+    Ok(execute_torii_singleton_read_for_routes(
+        &app,
+        routes,
+        ToriiReadEndpointV1::ExplorerAccountDetail,
+        vec![canonical_account_id],
+        None,
+        Vec::new(),
+    )
+    .await)
 }
 
 #[cfg(feature = "app_api")]
@@ -10636,6 +10667,50 @@ fn torii_target_account_routes(
     })
 }
 
+fn torii_target_alias_routes(
+    app: &AppState,
+    alias: &iroha_data_model::account::AccountAlias,
+) -> Result<Vec<RoutingDecision>, Response> {
+    torii_routes_for_dataspaces(app, [alias.dataspace]).map_err(|error| {
+        torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            format!("failed to resolve target-alias routes for {alias:?}: {error}"),
+        )
+    })
+}
+
+fn torii_target_domain_routes(
+    app: &AppState,
+    domain_id: &iroha_data_model::domain::DomainId,
+) -> Result<Vec<RoutingDecision>, Response> {
+    let dataspace_id = app
+        .state
+        .view()
+        .nexus()
+        .dataspace_catalog
+        .by_alias(domain_id.dataspace().as_ref())
+        .map(|entry| entry.id)
+        .ok_or_else(|| {
+            torii_proxy_error_response(
+                StatusCode::BAD_REQUEST,
+                "route_unavailable",
+                format!(
+                    "unknown dataspace alias `{}` for domain {domain_id}",
+                    domain_id.dataspace()
+                ),
+            )
+        })?;
+
+    torii_routes_for_dataspaces(app, [dataspace_id]).map_err(|error| {
+        torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            format!("failed to resolve target-domain routes for {domain_id}: {error}"),
+        )
+    })
+}
+
 fn torii_proxy_error_response(
     status: StatusCode,
     code: &'static str,
@@ -11191,6 +11266,8 @@ enum SignedQueryScope {
     AuthorityRouted,
     CrossDataspaceFanout,
     TargetAccount(AccountId),
+    TargetAlias(iroha_data_model::account::AccountAlias),
+    TargetDomain(iroha_data_model::domain::DomainId),
 }
 
 fn payload_matches_query<Query>(payload: &[u8]) -> bool
@@ -11240,14 +11317,30 @@ where
     cursor.is_empty().then_some(query)
 }
 
-fn target_account_singular_query(
+fn target_scope_singular_query(
     query: &iroha_data_model::query::SingularQueryBox,
-) -> Option<AccountId> {
+) -> Option<SignedQueryScope> {
     use iroha_data_model::query::SingularQueryBox;
 
     match query {
-        SingularQueryBox::FindAccountById(query) => Some(query.account_id().clone()),
-        SingularQueryBox::FindAliasesByAccountId(query) => Some(query.account_id().clone()),
+        SingularQueryBox::FindAccountById(query) => {
+            Some(SignedQueryScope::TargetAccount(query.account_id().clone()))
+        }
+        SingularQueryBox::FindAliasesByAccountId(query) => {
+            Some(SignedQueryScope::TargetAccount(query.account_id().clone()))
+        }
+        SingularQueryBox::FindAccountByAlias(query) => {
+            Some(SignedQueryScope::TargetAlias(query.alias().clone()))
+        }
+        SingularQueryBox::FindAccountRecoveryPolicyByAlias(query) => {
+            Some(SignedQueryScope::TargetAlias(query.alias().clone()))
+        }
+        SingularQueryBox::FindAccountRecoveryRequestByAlias(query) => {
+            Some(SignedQueryScope::TargetAlias(query.alias().clone()))
+        }
+        SingularQueryBox::FindDomainById(query) => {
+            Some(SignedQueryScope::TargetDomain(query.domain_id().clone()))
+        }
         _ => None,
     }
 }
@@ -11256,12 +11349,30 @@ fn target_account_iterable_query(
     query: &iroha_data_model::query::QueryWithParams,
 ) -> Option<AccountId> {
     use iroha_data_model::{
-        prelude::{FindPermissionsByAccountId, FindRolesByAccountId},
+        prelude::{
+            FindAssetsByAccountId, FindDomainsByAccountId, FindNftsByAccountId,
+            FindPermissionsByAccountId, FindRolesByAccountId,
+        },
         query::{QueryItemKind, iter_query_inner},
         role::RoleId,
     };
 
     if let Some(query_box) = query.query_box() {
+        if let Some(erased) = iter_query_inner::<iroha_data_model::domain::Domain>(query_box)
+            && let Some(query) = decode_query_payload::<FindDomainsByAccountId>(erased.payload())
+        {
+            return Some(query.account_id().clone());
+        }
+        if let Some(erased) = iter_query_inner::<iroha_data_model::asset::value::Asset>(query_box)
+            && let Some(query) = decode_query_payload::<FindAssetsByAccountId>(erased.payload())
+        {
+            return Some(query.account_id().clone());
+        }
+        if let Some(erased) = iter_query_inner::<iroha_data_model::nft::Nft>(query_box)
+            && let Some(query) = decode_query_payload::<FindNftsByAccountId>(erased.payload())
+        {
+            return Some(query.account_id().clone());
+        }
         if let Some(erased) = iter_query_inner::<Permission>(query_box)
             && let Some(query) =
                 decode_query_payload::<FindPermissionsByAccountId>(erased.payload())
@@ -11279,6 +11390,12 @@ fn target_account_iterable_query(
     query
         .fast_dsl_parts()
         .and_then(|(item_kind, _, _, payload)| match item_kind {
+            QueryItemKind::Domain => decode_query_payload::<FindDomainsByAccountId>(payload)
+                .map(|query| query.account_id().clone()),
+            QueryItemKind::Asset => decode_query_payload::<FindAssetsByAccountId>(payload)
+                .map(|query| query.account_id().clone()),
+            QueryItemKind::Nft => decode_query_payload::<FindNftsByAccountId>(payload)
+                .map(|query| query.account_id().clone()),
             QueryItemKind::Permission => {
                 decode_query_payload::<FindPermissionsByAccountId>(payload)
                     .map(|query| query.account_id().clone())
@@ -11295,10 +11412,7 @@ fn signed_query_scope(request: &iroha_data_model::query::QueryRequest) -> Signed
     match request {
         iroha_data_model::query::QueryRequest::Continue(_) => SignedQueryScope::AuthorityRouted,
         iroha_data_model::query::QueryRequest::Singular(query) => {
-            target_account_singular_query(query).map_or(
-                SignedQueryScope::CrossDataspaceFanout,
-                SignedQueryScope::TargetAccount,
-            )
+            target_scope_singular_query(query).unwrap_or(SignedQueryScope::CrossDataspaceFanout)
         }
         iroha_data_model::query::QueryRequest::Start(query)
             if is_trigger_inventory_query(query) =>
@@ -13662,6 +13776,26 @@ async fn execute_torii_read_request_locally(
                 routed_by,
             )
         }
+        ToriiReadEndpointV1::ExplorerAccountDetail => {
+            let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
+                return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
+            };
+            let telemetry = app.telemetry_handle();
+            let account_id = match routing::parse_account_path_segment_with_state(
+                app.state.as_ref(),
+                &account_id,
+                &telemetry,
+                CONTEXT_EXPLORER_ACCOUNT_DETAIL,
+            ) {
+                Ok((account_id, _)) => account_id,
+                Err(err) => return err.into_response(),
+            };
+            finish_torii_read_result(
+                routing::handle_v1_explorer_account_detail(app.state.clone(), account_id).await,
+                routing_decision,
+                routed_by,
+            )
+        }
         ToriiReadEndpointV1::AccountAssetsGet => {
             let Ok(account_id) = torii_proxy_path_arg(&request, 0, "account_id") else {
                 return torii_proxy_path_arg(&request, 0, "account_id").unwrap_err();
@@ -14369,6 +14503,46 @@ async fn execute_torii_fanout_singleton_read(
     body: Vec<u8>,
 ) -> Response {
     let routes = torii_all_dataspace_routes(app.as_ref());
+    if routes.is_empty() {
+        return torii_proxy_error_response(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "route_unavailable",
+            "no Nexus dataspace routes are configured",
+        );
+    }
+
+    let payloads = match collect_torii_singleton_json_payloads(&routes, |route| {
+        execute_torii_read_for_route(
+            app,
+            route,
+            torii_read_request(
+                endpoint,
+                route,
+                path_args.clone(),
+                query_string.clone(),
+                body.clone(),
+            ),
+        )
+    })
+    .await
+    {
+        Ok(payloads) => payloads,
+        Err(response) => return response,
+    };
+
+    merged_singleton_response(payloads, routed_by_for_routes(app, &routes))
+        .unwrap_or_else(|response| response)
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_torii_singleton_read_for_routes(
+    app: &SharedAppState,
+    routes: Vec<RoutingDecision>,
+    endpoint: ToriiReadEndpointV1,
+    path_args: Vec<String>,
+    query_string: Option<String>,
+    body: Vec<u8>,
+) -> Response {
     if routes.is_empty() {
         return torii_proxy_error_response(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -21642,6 +21816,38 @@ async fn handler_signed_query(
                 .await);
             }
         }
+        SignedQueryScope::TargetAlias(alias) => {
+            let routes = match torii_target_alias_routes(app.as_ref(), alias) {
+                Ok(routes) => routes,
+                Err(response) => return Ok(response),
+            };
+            if routes.len() > 1 {
+                let verified_query = routing::verify_signed_query_request(&query_request)?;
+                return Ok(execute_torii_query_via_fanout_for_routes(
+                    &app,
+                    verified_query,
+                    routes,
+                    format,
+                )
+                .await);
+            }
+        }
+        SignedQueryScope::TargetDomain(domain_id) => {
+            let routes = match torii_target_domain_routes(app.as_ref(), domain_id) {
+                Ok(routes) => routes,
+                Err(response) => return Ok(response),
+            };
+            if routes.len() > 1 {
+                let verified_query = routing::verify_signed_query_request(&query_request)?;
+                return Ok(execute_torii_query_via_fanout_for_routes(
+                    &app,
+                    verified_query,
+                    routes,
+                    format,
+                )
+                .await);
+            }
+        }
         _ => {}
     }
 
@@ -21649,6 +21855,18 @@ async fn handler_signed_query(
         SignedQueryScope::LocalReplicated => None,
         SignedQueryScope::TargetAccount(account_id) => {
             match torii_target_account_routes(app.as_ref(), account_id) {
+                Ok(routes) => routes.into_iter().next(),
+                Err(response) => return Ok(response),
+            }
+        }
+        SignedQueryScope::TargetAlias(alias) => {
+            match torii_target_alias_routes(app.as_ref(), alias) {
+                Ok(routes) => routes.into_iter().next(),
+                Err(response) => return Ok(response),
+            }
+        }
+        SignedQueryScope::TargetDomain(domain_id) => {
+            match torii_target_domain_routes(app.as_ref(), domain_id) {
                 Ok(routes) => routes.into_iter().next(),
                 Err(response) => return Ok(response),
             }
@@ -29182,6 +29400,48 @@ pub(crate) mod tests_runtime_handlers {
         executor.into_query()
     }
 
+    fn build_find_domains_by_account_query_for_test(
+        account_id: AccountId,
+    ) -> iroha_data_model::query::QueryWithParams {
+        use iroha_data_model::query::builder::QueryBuilderExt;
+
+        let executor = CapturingIterableQueryExecutor::default();
+        let _ = iroha_data_model::query::builder::QueryBuilder::new(
+            &executor,
+            iroha_data_model::prelude::FindDomainsByAccountId::new(account_id),
+        )
+        .execute();
+        executor.into_query()
+    }
+
+    fn build_find_assets_by_account_query_for_test(
+        account_id: AccountId,
+    ) -> iroha_data_model::query::QueryWithParams {
+        use iroha_data_model::query::builder::QueryBuilderExt;
+
+        let executor = CapturingIterableQueryExecutor::default();
+        let _ = iroha_data_model::query::builder::QueryBuilder::new(
+            &executor,
+            iroha_data_model::prelude::FindAssetsByAccountId::new(account_id),
+        )
+        .execute();
+        executor.into_query()
+    }
+
+    fn build_find_nfts_by_account_query_for_test(
+        account_id: AccountId,
+    ) -> iroha_data_model::query::QueryWithParams {
+        use iroha_data_model::query::builder::QueryBuilderExt;
+
+        let executor = CapturingIterableQueryExecutor::default();
+        let _ = iroha_data_model::query::builder::QueryBuilder::new(
+            &executor,
+            iroha_data_model::prelude::FindNftsByAccountId::new(account_id),
+        )
+        .execute();
+        executor.into_query()
+    }
+
     fn assert_permissions_query_targets_account(
         query: &iroha_data_model::query::QueryWithParams,
         account_id: &AccountId,
@@ -29236,6 +29496,87 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(item_kind, QueryItemKind::RoleId);
         let decoded = super::decode_query_payload::<FindRolesByAccountId>(payload)
             .expect("roles query payload should decode");
+        assert_eq!(decoded.account_id(), account_id);
+    }
+
+    fn assert_domains_query_targets_account(
+        query: &iroha_data_model::query::QueryWithParams,
+        account_id: &AccountId,
+    ) {
+        use iroha_data_model::{
+            prelude::FindDomainsByAccountId,
+            query::{QueryItemKind, iter_query_inner},
+        };
+
+        if let Some(query_box) = query.query_box() {
+            let erased = iter_query_inner::<iroha_data_model::domain::Domain>(query_box)
+                .expect("domains query should preserve erased domain item kind");
+            let decoded = super::decode_query_payload::<FindDomainsByAccountId>(erased.payload())
+                .expect("domains query payload should decode");
+            assert_eq!(decoded.account_id(), account_id);
+            return;
+        }
+
+        let (item_kind, _, _, payload) = query
+            .fast_dsl_parts()
+            .expect("domains query should expose fast-dsl payload");
+        assert_eq!(item_kind, QueryItemKind::Domain);
+        let decoded = super::decode_query_payload::<FindDomainsByAccountId>(payload)
+            .expect("domains query payload should decode");
+        assert_eq!(decoded.account_id(), account_id);
+    }
+
+    fn assert_assets_query_targets_account(
+        query: &iroha_data_model::query::QueryWithParams,
+        account_id: &AccountId,
+    ) {
+        use iroha_data_model::{
+            prelude::FindAssetsByAccountId,
+            query::{QueryItemKind, iter_query_inner},
+        };
+
+        if let Some(query_box) = query.query_box() {
+            let erased = iter_query_inner::<iroha_data_model::asset::value::Asset>(query_box)
+                .expect("assets query should preserve erased asset item kind");
+            let decoded = super::decode_query_payload::<FindAssetsByAccountId>(erased.payload())
+                .expect("assets query payload should decode");
+            assert_eq!(decoded.account_id(), account_id);
+            return;
+        }
+
+        let (item_kind, _, _, payload) = query
+            .fast_dsl_parts()
+            .expect("assets query should expose fast-dsl payload");
+        assert_eq!(item_kind, QueryItemKind::Asset);
+        let decoded = super::decode_query_payload::<FindAssetsByAccountId>(payload)
+            .expect("assets query payload should decode");
+        assert_eq!(decoded.account_id(), account_id);
+    }
+
+    fn assert_nfts_query_targets_account(
+        query: &iroha_data_model::query::QueryWithParams,
+        account_id: &AccountId,
+    ) {
+        use iroha_data_model::{
+            prelude::FindNftsByAccountId,
+            query::{QueryItemKind, iter_query_inner},
+        };
+
+        if let Some(query_box) = query.query_box() {
+            let erased = iter_query_inner::<iroha_data_model::nft::Nft>(query_box)
+                .expect("nfts query should preserve erased nft item kind");
+            let decoded = super::decode_query_payload::<FindNftsByAccountId>(erased.payload())
+                .expect("nfts query payload should decode");
+            assert_eq!(decoded.account_id(), account_id);
+            return;
+        }
+
+        let (item_kind, _, _, payload) = query
+            .fast_dsl_parts()
+            .expect("nfts query should expose fast-dsl payload");
+        assert_eq!(item_kind, QueryItemKind::Nft);
+        let decoded = super::decode_query_payload::<FindNftsByAccountId>(payload)
+            .expect("nfts query payload should decode");
         assert_eq!(decoded.account_id(), account_id);
     }
 
@@ -30350,6 +30691,15 @@ pub(crate) mod tests_runtime_handlers {
     fn iterable_target_account_query_builders_capture_target_payload() {
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
 
+        let domains_query = build_find_domains_by_account_query_for_test(account_id.clone());
+        assert_domains_query_targets_account(&domains_query, &account_id);
+
+        let assets_query = build_find_assets_by_account_query_for_test(account_id.clone());
+        assert_assets_query_targets_account(&assets_query, &account_id);
+
+        let nfts_query = build_find_nfts_by_account_query_for_test(account_id.clone());
+        assert_nfts_query_targets_account(&nfts_query, &account_id);
+
         let permissions_query =
             build_find_permissions_by_account_query_for_test(account_id.clone());
         assert_permissions_query_targets_account(&permissions_query, &account_id);
@@ -30361,6 +30711,12 @@ pub(crate) mod tests_runtime_handlers {
     #[test]
     fn signed_query_scope_classifies_target_account_queries() {
         let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let alias = iroha_data_model::account::AccountAlias::domainless(
+            "banking".parse().expect("alias label"),
+            DataSpaceId::new(10),
+        );
+        let domain_id =
+            iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
 
         assert_eq!(
             super::signed_query_scope(&iroha_data_model::query::QueryRequest::Singular(
@@ -30386,6 +30742,24 @@ pub(crate) mod tests_runtime_handlers {
         );
         assert_eq!(
             super::signed_query_scope(&iroha_data_model::query::QueryRequest::Start(
+                build_find_domains_by_account_query_for_test(account_id.clone()),
+            )),
+            super::SignedQueryScope::TargetAccount(account_id.clone())
+        );
+        assert_eq!(
+            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Start(
+                build_find_assets_by_account_query_for_test(account_id.clone()),
+            )),
+            super::SignedQueryScope::TargetAccount(account_id.clone())
+        );
+        assert_eq!(
+            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Start(
+                build_find_nfts_by_account_query_for_test(account_id.clone()),
+            )),
+            super::SignedQueryScope::TargetAccount(account_id.clone())
+        );
+        assert_eq!(
+            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Start(
                 build_find_permissions_by_account_query_for_test(account_id.clone()),
             )),
             super::SignedQueryScope::TargetAccount(account_id.clone())
@@ -30396,6 +30770,60 @@ pub(crate) mod tests_runtime_handlers {
             )),
             super::SignedQueryScope::TargetAccount(account_id)
         );
+        assert_eq!(
+            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Singular(
+                iroha_data_model::query::SingularQueryBox::FindAccountByAlias(
+                    iroha_data_model::query::account::prelude::FindAccountByAlias::new(
+                        alias.clone(),
+                    ),
+                ),
+            )),
+            super::SignedQueryScope::TargetAlias(alias.clone())
+        );
+        assert_eq!(
+            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Singular(
+                iroha_data_model::query::SingularQueryBox::FindAccountRecoveryPolicyByAlias(
+                    iroha_data_model::query::account::prelude::FindAccountRecoveryPolicyByAlias::new(
+                        alias.clone(),
+                    ),
+                ),
+            )),
+            super::SignedQueryScope::TargetAlias(alias.clone())
+        );
+        assert_eq!(
+            super::signed_query_scope(&iroha_data_model::query::QueryRequest::Singular(
+                iroha_data_model::query::SingularQueryBox::FindDomainById(
+                    iroha_data_model::query::domain::prelude::FindDomainById::new(
+                        domain_id.clone(),
+                    ),
+                ),
+            )),
+            super::SignedQueryScope::TargetDomain(domain_id)
+        );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn torii_target_scope_routes_resolve_alias_and_domain_dataspaces() {
+        let mut app = mk_app_state_for_tests();
+        let (_restricted_lane, restricted_dataspace) =
+            configure_private_ingress_routes_for_test(&mut app);
+
+        let alias = iroha_data_model::account::AccountAlias::domainless(
+            "banking".parse().expect("alias label"),
+            restricted_dataspace,
+        );
+        let alias_routes =
+            super::torii_target_alias_routes(app.as_ref(), &alias).expect("alias routes");
+        assert_eq!(alias_routes.len(), 1);
+        assert_eq!(alias_routes[0].dataspace_id, restricted_dataspace);
+
+        let domain_id =
+            iroha_data_model::domain::DomainId::try_new("hbl", "restricted").expect("domain id");
+        let domain_routes =
+            super::torii_target_domain_routes(app.as_ref(), &domain_id).expect("domain routes");
+        assert_eq!(domain_routes.len(), 1);
+        assert_eq!(domain_routes[0].dataspace_id, restricted_dataspace);
     }
 
     #[cfg(feature = "app_api")]
@@ -30649,6 +31077,54 @@ pub(crate) mod tests_runtime_handlers {
                 .is_none(),
             "global account fanout should not expose a singular dataspace",
         );
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn handler_explorer_account_detail_uses_target_account_routes_for_internal_reads() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let restricted_dataspace = DataSpaceId::new(10);
+        let uaid =
+            UniversalAccountId::from_hash(Hash::new(b"torii::explorer-account-detail-routes"));
+        let mut app = mk_app_state_for_tests_with_world(world_with_account_bound_to_dataspace(
+            &authority,
+            uaid,
+            restricted_dataspace,
+        ));
+        let (_restricted_lane, configured_restricted_dataspace) =
+            configure_private_ingress_routes_for_test(&mut app);
+        assert_eq!(configured_restricted_dataspace, restricted_dataspace);
+
+        let response = super::handler_explorer_account_detail(
+            State(app),
+            axum::http::Method::GET,
+            format!("/v1/explorer/accounts/{authority}")
+                .parse()
+                .expect("valid explorer account uri"),
+            HeaderMap::new(),
+            crate::loopback_connect_info(),
+            AxPath(authority.to_string()),
+        )
+        .await
+        .expect("explorer account detail should execute")
+        .into_response();
+
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-routed-by")
+                .and_then(|value| value.to_str().ok()),
+            Some("local"),
+            "internal explorer account reads should use the routed target-account path",
+        );
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("explorer account detail body");
+        let json: norito::json::Value =
+            norito::json::from_slice(&body).expect("explorer account detail json");
+        let authority_literal = authority.to_string();
+        assert_eq!(json["id"].as_str(), Some(authority_literal.as_str()));
     }
 
     #[cfg(any(feature = "p2p_ws", feature = "connect"))]

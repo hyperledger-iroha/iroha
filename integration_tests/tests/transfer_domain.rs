@@ -103,20 +103,17 @@ fn domain_owner_account_permissions() -> Result<()> {
             value,
         ))
         .expect_err("domain owner must not edit another account metadata");
-    assert!(
-        err.chain()
-            .any(|cause| cause
-                .to_string()
-                .contains("Can't set value to the metadata of another account"))
-    );
+    assert!(err.chain().any(|cause| {
+        cause
+            .to_string()
+            .contains("Can't set value to the metadata of another account")
+    }));
     let err = test_client
         .submit_blocking(RemoveKeyValue::account(mad_hatter_id.clone(), key))
         .expect_err("domain owner must not remove another account metadata");
     assert!(
         err.chain()
-            .any(|cause| cause
-                .to_string()
-                .contains("metadata of another account"))
+            .any(|cause| cause.to_string().contains("metadata of another account"))
     );
 
     // check that the canonical ALICE account as owner of domain can grant and revoke account related permissions in her domain
@@ -181,11 +178,11 @@ fn domain_owner_asset_definition_permissions() -> Result<()> {
             rabbit_id,
         ))
         .expect_err("domain owner must not transfer another account's asset definition");
-    assert!(
-        err.chain().any(|cause| cause
+    assert!(err.chain().any(|cause| {
+        cause
             .to_string()
-            .contains("Can't transfer asset definition of another account"))
-    );
+            .contains("Can't transfer asset definition of another account")
+    }));
 
     let key: Name = "key".parse()?;
     let value = Json::new("value");
@@ -246,17 +243,13 @@ fn domain_owner_asset_permissions() -> Result<()> {
     test_client.submit_blocking(Mint::asset_numeric(10u32, bob_coin_id.clone()))?;
     test_client.submit_blocking(Burn::asset_numeric(5u32, bob_coin_id.clone()))?;
     let err = test_client
-        .submit_blocking(Transfer::asset_numeric(
-            bob_coin_id.clone(),
-            5u32,
-            alice_id,
-        ))
+        .submit_blocking(Transfer::asset_numeric(bob_coin_id.clone(), 5u32, alice_id))
         .expect_err("domain owner must not transfer another account asset without explicit grant");
-    assert!(
-        err.chain().any(|cause| cause
+    assert!(err.chain().any(|cause| {
+        cause
             .to_string()
-            .contains("source asset owner must sign the transaction"))
-    );
+            .contains("source asset owner must sign the transaction")
+    }));
 
     // check that the canonical ALICE account as owner of domain can grant and revoke asset related permissions in her domain
     let permission = CanTransferAsset { asset: bob_coin_id };
@@ -282,10 +275,7 @@ fn domain_owner_nft_permissions() -> Result<()> {
 
     let kingdom_id: DomainId = DomainId::try_new("kingdom", "universal")?;
     let (bob_id, bob_keypair) = gen_account_in("kingdom");
-    let nft_id = NftId::new(
-        DomainId::try_new("kingdom", "universal")?,
-        "nft".parse()?,
-    );
+    let nft_id = NftId::new(DomainId::try_new("kingdom", "universal")?, "nft".parse()?);
 
     // the canonical ALICE account is owner of "kingdom" domain
     let kingdom = Domain::new(kingdom_id.clone());
@@ -371,9 +361,8 @@ fn domain_owner_trigger_permissions() -> Result<()> {
         .submit_blocking(register_trigger.clone())
         .expect_err("domain owner must not register a trigger owned by another account");
     assert!(
-        err.chain().any(|cause| cause
-            .to_string()
-            .contains("Missing CanRegisterTrigger"))
+        err.chain()
+            .any(|cause| cause.to_string().contains("Missing CanRegisterTrigger"))
     );
     let grant_register_permission = TransactionBuilder::new(network.chain_id(), bob_id.clone())
         .with_instructions([Grant::account_permission(
@@ -399,12 +388,11 @@ fn domain_owner_trigger_permissions() -> Result<()> {
     let err = test_client
         .submit_blocking(Instruction::into_instruction_box(Box::new(execute_trigger)))
         .expect_err("manual execute should still be rejected for this trigger shape");
-    assert!(
-        err.chain()
-            .any(|cause| cause
-                .to_string()
-                .contains("Trigger can't be executed manually: filter mismatch"))
-    );
+    assert!(err.chain().any(|cause| {
+        cause
+            .to_string()
+            .contains("Trigger can't be executed manually: filter mismatch")
+    }));
     test_client.submit_blocking(Grant::account_permission(
         execute_permission,
         alice_id.clone(),

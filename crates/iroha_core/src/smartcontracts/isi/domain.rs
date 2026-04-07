@@ -781,9 +781,7 @@ pub mod isi {
                     label,
                     &state_transaction.nexus.dataspace_catalog,
                 )
-                .map_err(|e| {
-                    InstructionExecutionError::InvariantViolation(e.to_string().into())
-                })?;
+                .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
                 purge_stale_account_label_state(state_transaction, label);
                 if state_transaction.world.account_aliases.get(label).is_some()
                     || state_transaction
@@ -2578,9 +2576,7 @@ pub mod isi {
                 &alias,
                 &state_transaction.nexus.dataspace_catalog,
             )
-            .map_err(|e| {
-                InstructionExecutionError::InvariantViolation(e.to_string().into())
-            })?;
+            .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
             purge_stale_account_label_state(state_transaction, &alias);
@@ -2686,9 +2682,7 @@ pub mod isi {
                 &alias,
                 &state_transaction.nexus.dataspace_catalog,
             )
-            .map_err(|e| {
-                InstructionExecutionError::InvariantViolation(e.to_string().into())
-            })?;
+            .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
             purge_stale_account_label_state(state_transaction, &alias);
@@ -2932,7 +2926,24 @@ pub mod query {
     };
 
     use super::*;
-    use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+    use crate::{
+        smartcontracts::{ValidQuery, ValidSingularQuery},
+        state::StateReadOnly,
+    };
+
+    impl ValidSingularQuery for FindDomainById {
+        #[metrics(+"find_domain_by_id")]
+        fn execute(
+            &self,
+            state_ro: &impl StateReadOnly,
+        ) -> std::result::Result<Domain, QueryExecutionFail> {
+            state_ro
+                .world()
+                .domain(self.domain_id())
+                .cloned()
+                .map_err(QueryExecutionFail::from)
+        }
+    }
 
     impl ValidQuery for FindDomains {
         #[metrics(+"find_domains")]
@@ -2945,6 +2956,24 @@ pub mod query {
                 .world()
                 .domains_iter()
                 .filter(move |&v| filter.applies(v))
+                .cloned())
+        }
+    }
+
+    impl ValidQuery for FindDomainsByAccountId {
+        #[metrics(+"find_domains_by_account_id")]
+        fn execute(
+            self,
+            filter: CompoundPredicate<Domain>,
+            state_ro: &impl StateReadOnly,
+        ) -> std::result::Result<impl Iterator<Item = Domain>, QueryExecutionFail> {
+            let account_id = self.account_id().clone();
+            state_ro.world().account(&account_id)?;
+
+            Ok(state_ro
+                .world()
+                .domains_iter()
+                .filter(move |domain| domain.owned_by() == &account_id && filter.applies(domain))
                 .cloned())
         }
     }
@@ -3000,6 +3029,7 @@ mod tests {
         nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
         prelude::World,
         query::store::LiveQueryStore,
+        smartcontracts::{ValidQuery, ValidSingularQuery},
         state::State,
     };
 
@@ -3030,6 +3060,49 @@ mod tests {
         let _ = domain_id;
         let (account_id, account_value) = account.into_key_value();
         state.world.accounts.insert(account_id, account_value);
+    }
+
+    #[test]
+    fn find_domain_by_id_returns_registered_domain() {
+        let mut state = test_state();
+        let domain_id = DomainId::try_new("banka", "universal").expect("domain id");
+        seed_domain(&mut state, &domain_id, &ALICE_ID);
+
+        let view = state.view();
+        let domain = FindDomainById::new(domain_id.clone())
+            .execute(&view)
+            .unwrap();
+        assert_eq!(domain.id(), &domain_id);
+        assert_eq!(domain.owned_by(), &*ALICE_ID);
+    }
+
+    #[test]
+    fn find_domains_by_account_id_returns_owned_domains_only() {
+        use std::collections::BTreeSet;
+
+        let mut state = test_state();
+        let owner_domain = DomainId::try_new("owner", "universal").expect("domain id");
+        let alice_owned = DomainId::try_new("banka", "universal").expect("domain id");
+        let bob_owned = DomainId::try_new("bankb", "universal").expect("domain id");
+        let bob_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        seed_domain(&mut state, &owner_domain, &ALICE_ID);
+        seed_account(&mut state, &ALICE_ID, &owner_domain);
+        seed_account(&mut state, &bob_id, &owner_domain);
+        seed_domain(&mut state, &alice_owned, &ALICE_ID);
+        seed_domain(&mut state, &bob_owned, &bob_id);
+
+        let view = state.view();
+        let domains: Vec<_> = FindDomainsByAccountId::new(ALICE_ID.clone())
+            .execute(CompoundPredicate::PASS, &view)
+            .unwrap()
+            .map(|domain| domain.id().clone())
+            .collect();
+
+        assert_eq!(
+            domains.into_iter().collect::<BTreeSet<_>>(),
+            BTreeSet::from([owner_domain, alice_owned])
+        );
     }
 
     fn alias_domain(domain: &DomainId) -> AccountAliasDomain {

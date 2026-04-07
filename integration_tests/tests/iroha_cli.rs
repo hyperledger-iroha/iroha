@@ -476,8 +476,14 @@ async fn wait_for_soracloud_status_payload(
     timeout: Duration,
     predicate: impl Fn(&Value) -> bool,
 ) -> eyre::Result<Value> {
-    wait_for_soracloud_json_command(cwd, config, &["status", "--torii-url", torii_url], timeout, predicate)
-        .await
+    wait_for_soracloud_json_command(
+        cwd,
+        config,
+        &["status", "--torii-url", torii_url],
+        timeout,
+        predicate,
+    )
+    .await
 }
 
 async fn wait_for_soracloud_hf_status_payload(
@@ -960,6 +966,102 @@ async fn reads_client_toml_by_default() -> eyre::Result<()> {
     Ok(())
 }
 
+#[test]
+fn tx_ivm_rejects_missing_gas_limit_without_hanging() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
+
+    let dir = tempfile::tempdir()?;
+    let config = local_program_config();
+    std::fs::write(
+        dir.path().join("client.toml"),
+        toml::to_string(&config.toml())?.as_bytes(),
+    )?;
+    let program_path = dir.path().join("hello.to");
+    std::fs::write(&program_path, b"fake-ivm-bytecode")?;
+    let binary = program();
+
+    let started_at = Instant::now();
+    let output = std::process::Command::new(binary)
+        .current_dir(dir.path())
+        .arg("tx")
+        .arg("ivm")
+        .arg("--path")
+        .arg(&program_path)
+        .output()?;
+    let elapsed = started_at.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "iroha tx ivm should fail quickly instead of hanging; elapsed {elapsed:?}"
+    );
+
+    assert!(
+        !output.status.success(),
+        "CLI unexpectedly succeeded with stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("IVM transactions require transaction metadata `gas_limit`"),
+        "unexpected stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("Connection refused"),
+        "CLI should reject missing gas_limit before any network call: {stderr}"
+    );
+
+    Ok(())
+}
+
+#[test]
+fn tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_metadata_error() -> eyre::Result<()> {
+    prepare_iroha_cli_test_environment();
+
+    let dir = tempfile::tempdir()?;
+    let config = local_program_config();
+    std::fs::write(
+        dir.path().join("client.toml"),
+        toml::to_string(&config.toml())?.as_bytes(),
+    )?;
+    let program_path = dir.path().join("hello.to");
+    std::fs::write(&program_path, b"fake-ivm-bytecode")?;
+    let binary = program();
+
+    let started_at = Instant::now();
+    let output = std::process::Command::new(binary)
+        .current_dir(dir.path())
+        .arg("tx")
+        .arg("ivm")
+        .arg("--path")
+        .arg(&program_path)
+        .arg("--gas-limit")
+        .arg("42")
+        .output()?;
+    let elapsed = started_at.elapsed();
+
+    assert!(
+        elapsed < Duration::from_secs(5),
+        "iroha tx ivm --gas-limit should complete quickly; elapsed {elapsed:?}"
+    );
+
+    assert!(
+        !output.status.success(),
+        "CLI unexpectedly succeeded with stdout: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("require transaction metadata `gas_limit`"),
+        "CLI should accept --gas-limit and skip local missing-metadata rejection: {stderr}"
+    );
+    assert!(
+        stderr.contains("Failed to submit an IVM transaction"),
+        "unexpected stderr: {stderr}"
+    );
+
+    Ok(())
+}
+
 // Add more CLI tests here!
 
 #[tokio::test]
@@ -1249,16 +1351,24 @@ async fn soracloud_mutations_use_live_torii_control_plane() -> eyre::Result<()> 
         torii_url.as_str(),
         SORACLOUD_TEST_CONTROL_PLANE_POLL_TIMEOUT,
         |payload| {
-            let Some(network_status) = payload.get("network_status").and_then(Value::as_object) else {
+            let Some(network_status) = payload.get("network_status").and_then(Value::as_object)
+            else {
                 return false;
             };
-            let Some(control_plane) = network_status.get("control_plane").and_then(Value::as_object) else {
+            let Some(control_plane) = network_status
+                .get("control_plane")
+                .and_then(Value::as_object)
+            else {
                 return false;
             };
             if control_plane.get("service_count").and_then(Value::as_u64) != Some(1) {
                 return false;
             }
-            if control_plane.get("audit_event_count").and_then(Value::as_u64) != Some(4) {
+            if control_plane
+                .get("audit_event_count")
+                .and_then(Value::as_u64)
+                != Some(4)
+            {
                 return false;
             }
             let Some(services) = control_plane.get("services").and_then(Value::as_array) else {

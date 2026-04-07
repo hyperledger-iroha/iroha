@@ -290,9 +290,7 @@ async fn contract_state_values(
     Ok(out)
 }
 
-fn decode_contract_state_entry_json(
-    entry: &norito::json::Value,
-) -> Result<norito::json::Value> {
+fn decode_contract_state_entry_json(entry: &norito::json::Value) -> Result<norito::json::Value> {
     if let Some(value_json) = entry.get("value_json").cloned() {
         return Ok(value_json);
     }
@@ -338,10 +336,7 @@ fn decode_contract_state_entry_json(
     Ok(value)
 }
 
-fn decode_contract_state_norito_bytes(
-    path: &str,
-    payload: &[u8],
-) -> Result<norito::json::Value> {
+fn decode_contract_state_norito_bytes(path: &str, payload: &[u8]) -> Result<norito::json::Value> {
     match path {
         "payer_account" | "recipient_account" | "escrow_account_id" => {
             let account = decode_norito_value_with_optional_inner_tlv::<AccountId>(
@@ -352,12 +347,11 @@ fn decode_contract_state_norito_bytes(
             Ok(norito::json::Value::from(account.to_string()))
         }
         "escrow_asset_definition" => {
-            let asset_definition =
-                decode_norito_value_with_optional_inner_tlv::<AssetDefinitionId>(
-                    payload,
-                    ivm::pointer_abi::PointerType::AssetDefinitionId,
-                    "AssetDefinitionId",
-                )?;
+            let asset_definition = decode_norito_value_with_optional_inner_tlv::<AssetDefinitionId>(
+                payload,
+                ivm::pointer_abi::PointerType::AssetDefinitionId,
+                "AssetDefinitionId",
+            )?;
             Ok(norito::json::Value::from(asset_definition.to_string()))
         }
         "target_amount_value" | "funded_amount_value" => {
@@ -450,8 +444,12 @@ async fn setup_ledger_for_sample(
         let escrow_id = escrow_id.clone();
         let escrow_keypair = escrow_keypair.clone();
         move || {
-            let grant_transfer =
-                Grant::account_permission(CanTransferAsset { asset: escrow_asset }, ALICE_ID.clone());
+            let grant_transfer = Grant::account_permission(
+                CanTransferAsset {
+                    asset: escrow_asset,
+                },
+                ALICE_ID.clone(),
+            );
             let tx = TransactionBuilder::new(client.chain.clone(), escrow_id)
                 .with_instructions([grant_transfer])
                 .sign(escrow_keypair.private_key());

@@ -520,8 +520,12 @@ pub fn apply_stack_sizes(
 ) -> StackSizeOutcome {
     let sched = scheduler_bytes.clamp(MIN_STACK_BYTES, MAX_STACK_BYTES);
     let prover = prover_bytes.clamp(MIN_STACK_BYTES, MAX_STACK_BYTES);
-    let guest = guest_bytes.clamp(MIN_STACK_BYTES as u64, MAX_STACK_BYTES as u64);
-    let budget = budget_bytes.clamp(MIN_STACK_BYTES as u64, MAX_STACK_BYTES as u64);
+    let guest = crate::memory::Memory::align_stack_bytes(
+        guest_bytes.clamp(MIN_STACK_BYTES as u64, MAX_STACK_BYTES as u64),
+    );
+    let budget = crate::memory::Memory::align_stack_bytes(
+        budget_bytes.clamp(MIN_STACK_BYTES as u64, MAX_STACK_BYTES as u64),
+    );
     let outcome = StackSizeOutcome {
         requested_scheduler_bytes: scheduler_bytes,
         requested_prover_bytes: prover_bytes,
@@ -694,6 +698,30 @@ mod tests {
         let vm = IVM::new(100_000);
         assert_eq!(vm.memory.stack_limit(), target);
         set_guest_stack_limit(prev);
+        crate::memory::Memory::set_stack_budget_limit(prev_budget);
+    }
+
+    #[test]
+    fn apply_stack_sizes_aligns_guest_and_budget_limits() {
+        let prev_guest = guest_stack_limit();
+        let prev_budget = crate::memory::Memory::stack_budget_limit();
+        let outcome = apply_stack_sizes(32 * 1024 * 1024, 32 * 1024 * 1024, 0x60a04, 0x60a04);
+
+        assert_eq!(
+            outcome.guest_bytes % crate::memory::Memory::STACK_ALIGNMENT,
+            0
+        );
+        assert_eq!(
+            outcome.budget_bytes % crate::memory::Memory::STACK_ALIGNMENT,
+            0
+        );
+        assert_eq!(guest_stack_limit(), outcome.guest_bytes);
+        assert_eq!(
+            crate::memory::Memory::stack_budget_limit(),
+            outcome.budget_bytes
+        );
+
+        set_guest_stack_limit(prev_guest);
         crate::memory::Memory::set_stack_budget_limit(prev_budget);
     }
 

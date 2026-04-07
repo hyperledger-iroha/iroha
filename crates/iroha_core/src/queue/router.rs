@@ -591,6 +591,26 @@ fn account_matches_alias_scope(
         return false;
     }
 
+    if state_view
+        .world()
+        .account_scope_hierarchy(account_id)
+        .ok()
+        .is_some_and(|hierarchy| {
+            hierarchy.into_iter().any(|(dataspace_id, domains)| {
+                state_view
+                    .nexus()
+                    .dataspace_catalog
+                    .by_id(dataspace_id)
+                    .is_some_and(|entry| entry.alias.eq_ignore_ascii_case(scope.as_str()))
+                    || domains
+                        .into_iter()
+                        .any(|domain| domain.to_string().eq_ignore_ascii_case(scope.as_str()))
+            })
+        })
+    {
+        return true;
+    }
+
     state_view
         .world()
         .bound_account_aliases(account_id)
@@ -1048,12 +1068,13 @@ fn matcher_needs_state(matcher: &LaneRoutingMatcher) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeSet;
+    use std::collections::{BTreeMap, BTreeSet};
 
     use iroha_config::parameters::actual::{LaneRoutingMatcher, LaneRoutingRule};
     use iroha_crypto::Hash;
     use iroha_data_model::{
         IntoKeyValue,
+        account::AccountAliasDomain,
         isi::{
             prelude::{Mint, Register, Transfer},
             smart_contract_code::RegisterSmartContractBytes,
@@ -1064,7 +1085,10 @@ mod tests {
         prelude::*,
         transaction::TransactionBuilder,
     };
-    use iroha_executor_data_model::permission::nexus::CanPublishSpaceDirectoryManifest;
+    use iroha_executor_data_model::permission::{
+        account::{AccountAliasPermissionScope, CanManageAccountAlias},
+        nexus::CanPublishSpaceDirectoryManifest,
+    };
     use iroha_test_samples::gen_account_in;
     use nonzero_ext::nonzero;
 
@@ -1184,6 +1208,30 @@ mod tests {
         #[cfg(not(feature = "telemetry"))]
         let state = crate::state::State::new(world, kura, query);
         state.nexus.write().dataspace_catalog = dataspace_catalog;
+        state
+    }
+
+    fn state_with_account_scope_entries(
+        accounts: &[(
+            AccountId,
+            crate::nexus::space_directory::AccountScopeDirectoryEntry,
+        )],
+        dataspace_catalog: DataSpaceCatalog,
+    ) -> crate::state::State {
+        let mut state = blank_state();
+        state.nexus.write().dataspace_catalog = dataspace_catalog;
+        for (account_id, entry) in accounts {
+            let account = Account::new(account_id.clone()).build(account_id);
+            let (account_id, account_value) = account.into_key_value();
+            state
+                .world
+                .accounts
+                .insert(account_id.clone(), account_value);
+            state
+                .world
+                .account_scope_directory
+                .insert(account_id, entry.clone());
+        }
         state
     }
 
@@ -2359,5 +2407,75 @@ mod tests {
             RoutingResolveError::ConflictingDataspaceScopedPermissions { .. }
         ));
         assert_eq!(err.as_label(), "conflicting_dataspace_scoped_permissions");
+    }
+
+    #[test]
+    fn account_scope_directory_scope_matches_destination_account_permission_route() {
+        let (submitter_id, submitter_keypair) = gen_account_in("wonderland");
+        let (holder_id, _) = gen_account_in("wonderland");
+        let dataspace_id = DataSpaceId::new(10);
+        let catalog = dataspace_catalog(&[(dataspace_id, "sbp")]);
+
+        let policy = LaneRoutingPolicy {
+            default_lane: LaneId::SINGLE,
+            default_dataspace: DataSpaceId::GLOBAL,
+            rules: vec![LaneRoutingRule {
+                lane: LaneId::new(1),
+                dataspace: Some(dataspace_id),
+                matcher: LaneRoutingMatcher {
+                    account: Some("*@hbl.sbp".to_string()),
+                    instruction: None,
+                    description: None,
+                },
+            }],
+        };
+        let lane_catalog = catalog_with_lane_dataspaces(&[
+            (LaneId::SINGLE, DataSpaceId::GLOBAL),
+            (LaneId::new(1), dataspace_id),
+        ]);
+        let router = ConfigLaneRouter::new(policy, catalog.clone(), lane_catalog);
+
+        let permission = Permission::from(CanManageAccountAlias {
+            scope: AccountAliasPermissionScope::Domain(
+                DomainId::try_new("hbl", "sbp").expect("domain id"),
+            ),
+        });
+        let tx = sample_transaction(
+            &submitter_id,
+            submitter_keypair.private_key(),
+            vec![InstructionBox::from(Grant::account_permission(
+                permission,
+                holder_id.clone(),
+            ))],
+        );
+
+        let mut scope_entry = crate::nexus::space_directory::AccountScopeDirectoryEntry::default();
+        scope_entry.ensure_dataspace(dataspace_id);
+        scope_entry.bind_domain(
+            dataspace_id,
+            AccountAliasDomain::from("hbl".parse::<Name>().expect("domain label")),
+        );
+        let state = state_with_account_scope_entries(&[(holder_id.clone(), scope_entry)], catalog);
+        let state_view = state.view();
+        assert_eq!(
+            state_view
+                .world()
+                .account_scope_hierarchy(&holder_id)
+                .expect("scope hierarchy"),
+            BTreeMap::from([(
+                dataspace_id,
+                BTreeSet::from([DomainId::try_new("hbl", "sbp").expect("domain id")]),
+            )])
+        );
+        assert!(account_matches_alias_scope(
+            "hbl.sbp",
+            &holder_id,
+            &state_view
+        ));
+
+        assert_eq!(
+            router.route_with_view(&tx, &state_view),
+            RoutingDecision::new(LaneId::new(1), dataspace_id)
+        );
     }
 }

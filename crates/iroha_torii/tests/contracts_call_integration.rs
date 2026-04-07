@@ -17,8 +17,7 @@ use iroha_core::{
 };
 use iroha_crypto::Signature;
 use iroha_data_model::{
-    Registrable,
-    DomainId,
+    DomainId, Registrable,
     asset::{Asset, AssetDefinition, AssetDefinitionId, AssetId},
     name::Name,
     smart_contract::ContractAddress,
@@ -220,13 +219,13 @@ seiyaku ContractCallNestedTransferCallerTest {{
   meta {{ abi_version: 1; }}
 
   state AccountId CallerAccount;
-  state AccountId VaultContract;
+  state bytes VaultContract;
   state AssetDefinitionId SettlementAsset;
 
   kotoage fn main() {{}}
 
   kotoage fn bind(caller_account: AccountId,
-                  vault_contract: AccountId,
+                  vault_contract: bytes,
                   settlement_asset: AssetDefinitionId) {{
     CallerAccount = caller_account;
     VaultContract = vault_contract;
@@ -295,6 +294,39 @@ seiyaku ContractViewTrapTest {
     })
     .compile_source(src)
     .expect("compile contract view trap test program")
+}
+
+fn contract_view_bytes_program() -> Vec<u8> {
+    let src = r#"
+seiyaku ContractViewBytesTest {
+  meta { abi_version: 1; }
+
+  state AssetDefinitionId Asset;
+  state bytes Target;
+
+  kotoage fn main() {}
+
+  kotoage fn init(asset: AssetDefinitionId, target: bytes) {
+    Asset = asset;
+    Target = target;
+  }
+
+  view fn literal() -> bytes {
+    return blob("risk");
+  }
+
+  view fn target() -> bytes {
+    return Target;
+  }
+
+  view fn config() -> (AssetDefinitionId, bytes) {
+    return (Asset, Target);
+  }
+}
+"#;
+    ivm::KotodamaCompiler::new()
+        .compile_source(src)
+        .expect("compile contract view bytes test program")
 }
 
 fn contract_test_app(
@@ -370,6 +402,19 @@ async fn run_contract_view(
     entrypoint: &str,
     payload: Option<&norito::json::Value>,
 ) -> json::Value {
+    let (status, body) =
+        run_contract_view_response(app, authority, contract_address, entrypoint, payload).await;
+    assert_eq!(status, http::StatusCode::OK, "{body:?}");
+    body
+}
+
+async fn run_contract_view_response(
+    app: &Router,
+    authority: &iroha_data_model::account::AccountId,
+    contract_address: &str,
+    entrypoint: &str,
+    payload: Option<&norito::json::Value>,
+) -> (http::StatusCode, json::Value) {
     let body = iroha_torii::test_utils::contract_view_request_json(
         authority,
         contract_address,
@@ -386,9 +431,12 @@ async fn run_contract_view(
         .body(axum::body::Body::from(body))
         .unwrap();
     let resp = app.clone().oneshot(req).await.unwrap();
-    assert_eq!(resp.status(), http::StatusCode::OK);
+    let status = resp.status();
     let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    json::from_slice(&bytes).expect("decode contract view response")
+    (
+        status,
+        json::from_slice(&bytes).expect("decode contract view response"),
+    )
 }
 
 fn deployed_contract_address(response: &json::Value) -> String {
@@ -763,6 +811,113 @@ async fn contracts_view_surfaces_source_path_in_vm_diagnostic() {
             .and_then(|diag| diag.get("source_path"))
             .and_then(json::Value::as_str),
         Some(source_path)
+    );
+}
+
+#[tokio::test]
+async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
+    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
+        eprintln!(
+            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
+        );
+        return;
+    }
+
+    let creds = iroha_torii::test_utils::random_authority();
+    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
+
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = Arc::new(State::new_for_testing(world, kura, query));
+    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
+    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+    let queue_cfg = iroha_config::parameters::actual::Queue::default();
+    let queue = Arc::new(Queue::from_config(queue_cfg, events));
+    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
+    #[cfg(feature = "telemetry")]
+    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
+    #[cfg(not(feature = "telemetry"))]
+    let telemetry = iroha_torii::MaybeTelemetry::disabled();
+
+    let app = contract_test_app(
+        state.clone(),
+        queue.clone(),
+        chain_id.clone(),
+        telemetry.clone(),
+    );
+
+    let program = contract_view_bytes_program();
+    let deploy_body = iroha_torii::test_utils::deploy_request_json(
+        &creds.account,
+        &creds.private_key,
+        &base64::engine::general_purpose::STANDARD.encode(&program),
+    );
+    let deploy_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/deploy")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(deploy_body))
+        .unwrap();
+    let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
+    assert_eq!(deploy_resp.status(), http::StatusCode::OK);
+    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
+    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
+    let contract_address = deployed_contract_address(&deploy_json);
+    let applied_deploy =
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+    assert_eq!(applied_deploy, 1);
+
+    let asset_definition_id = "6qLb5RYJbzychndCXgFa9aZzjWyx"
+        .parse::<AssetDefinitionId>()
+        .expect("asset definition id");
+    let init_payload = iroha_torii::json_object(vec![
+        iroha_torii::json_entry("asset", asset_definition_id.to_string()),
+        iroha_torii::json_entry("target", "risk_vault::risk.universal"),
+    ]);
+    let init_body = iroha_torii::test_utils::contract_call_request_json(
+        &creds.account,
+        &creds.private_key,
+        contract_address.as_str(),
+        iroha_torii::test_utils::ContractCallOptions {
+            entrypoint: Some("init"),
+            payload: Some(&init_payload),
+            gas_asset_id: None,
+            gas_limit: 10_000,
+        },
+    );
+    let init_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/call")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(init_body))
+        .unwrap();
+    let init_resp = app.clone().oneshot(init_req).await.unwrap();
+    assert_eq!(init_resp.status(), http::StatusCode::OK);
+    let applied_init =
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+    assert_eq!(applied_init, 1);
+
+    let literal = run_contract_view(&app, &creds.account, &contract_address, "literal", None).await;
+    assert_eq!(
+        literal.get("result").and_then(json::Value::as_str),
+        Some("0x7269736b")
+    );
+
+    let target = run_contract_view(&app, &creds.account, &contract_address, "target", None).await;
+    assert_eq!(
+        target.get("result").and_then(json::Value::as_str),
+        Some("0x7269736b5f7661756c743a3a7269736b2e756e6976657273616c")
+    );
+
+    let config = run_contract_view(&app, &creds.account, &contract_address, "config", None).await;
+    assert_eq!(
+        config.get("result"),
+        Some(&json::Value::Array(vec![
+            json::Value::String(asset_definition_id.to_string()),
+            json::Value::String(
+                "0x7269736b5f7661756c743a3a7269736b2e756e6976657273616c".to_owned()
+            ),
+        ]))
     );
 }
 
@@ -1693,7 +1848,12 @@ async fn contracts_call_preserves_root_and_nested_transfer_authorities() {
         .unwrap();
     let vault_deploy_resp = app.clone().oneshot(vault_deploy_req).await.unwrap();
     assert_eq!(vault_deploy_resp.status(), http::StatusCode::OK);
-    let vault_deploy_bytes = vault_deploy_resp.into_body().collect().await.unwrap().to_bytes();
+    let vault_deploy_bytes = vault_deploy_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
     let vault_deploy_json: json::Value = json::from_slice(&vault_deploy_bytes).unwrap();
     let vault_contract_address = deployed_contract_address(&vault_deploy_json);
     let applied_vault_deploy =
@@ -1714,7 +1874,12 @@ async fn contracts_call_preserves_root_and_nested_transfer_authorities() {
         .unwrap();
     let caller_deploy_resp = app.clone().oneshot(caller_deploy_req).await.unwrap();
     assert_eq!(caller_deploy_resp.status(), http::StatusCode::OK);
-    let caller_deploy_bytes = caller_deploy_resp.into_body().collect().await.unwrap().to_bytes();
+    let caller_deploy_bytes = caller_deploy_resp
+        .into_body()
+        .collect()
+        .await
+        .unwrap()
+        .to_bytes();
     let caller_deploy_json: json::Value = json::from_slice(&caller_deploy_bytes).unwrap();
     let caller_contract_address = deployed_contract_address(&caller_deploy_json);
     let applied_caller_deploy =
@@ -1759,7 +1924,7 @@ async fn contracts_call_preserves_root_and_nested_transfer_authorities() {
 
     let caller_bind_payload = iroha_torii::json_object(vec![
         iroha_torii::json_entry("caller_account", caller_contract_subject.clone()),
-        iroha_torii::json_entry("vault_contract", vault_contract_subject.clone()),
+        iroha_torii::json_entry("vault_contract", vault_contract_address.as_str()),
         iroha_torii::json_entry("settlement_asset", asset_definition_id.to_string()),
     ]);
     let caller_bind_body = iroha_torii::test_utils::contract_call_request_json(
