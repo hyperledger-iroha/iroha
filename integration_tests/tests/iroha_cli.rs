@@ -18,7 +18,8 @@ use integration_tests::{
     binary_resolver::{
         binary_supports_training_job_commands, cli_binary_name,
         find_existing_binary_path_from_roots, find_existing_cli_binary_path_from_roots,
-        iroha_cli_test_build_profile_override, iroha_program, irohad_binary_name,
+        iroha_cli_test_build_profile_override, iroha_program,
+        iroha_program_reuse_existing_or_resolve, irohad_binary_name,
         matching_irohad_binary_path_from_cli_path, newest_existing_binary_path,
         prepare_iroha_cli_test_environment, should_reuse_existing_cli_binary_for_tests_from_value,
         workspace_root,
@@ -56,6 +57,10 @@ const SORACLOUD_LIVE_HF_TEST_WEIGHT_BYTES: usize = 4_096;
 
 fn program() -> PathBuf {
     iroha_program().unwrap()
+}
+
+fn program_reuse_existing_or_build() -> PathBuf {
+    iroha_program_reuse_existing_or_resolve().unwrap()
 }
 
 fn ivm_build_profile_exists() -> bool {
@@ -978,7 +983,7 @@ fn tx_ivm_rejects_missing_gas_limit_without_hanging() -> eyre::Result<()> {
     )?;
     let program_path = dir.path().join("hello.to");
     std::fs::write(&program_path, b"fake-ivm-bytecode")?;
-    let binary = program();
+    let binary = program_reuse_existing_or_build();
 
     let started_at = Instant::now();
     let output = std::process::Command::new(binary)
@@ -1025,7 +1030,7 @@ fn tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_metadata_error() -> eyr
     )?;
     let program_path = dir.path().join("hello.to");
     std::fs::write(&program_path, b"fake-ivm-bytecode")?;
-    let binary = program();
+    let binary = program_reuse_existing_or_build();
 
     let started_at = Instant::now();
     let output = std::process::Command::new(binary)

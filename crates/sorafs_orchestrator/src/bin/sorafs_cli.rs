@@ -145,12 +145,12 @@ fn infer_i105_network_prefix(raw: &str) -> Option<u16> {
 
 fn parse_account_id_arg(flag: &str, raw: &str, context: &str) -> Result<AccountId, String> {
     let trimmed = raw.trim();
-    if let Some(prefix) = infer_i105_network_prefix(trimmed) {
-        if let Ok(address) = AccountAddress::from_i105_for_discriminant(trimmed, Some(prefix)) {
-            return address.to_account_id().map_err(|err| {
-                format!("failed to decode `{flag}` for `{context}` as account id: {err}")
-            });
-        }
+    if let Some(prefix) = infer_i105_network_prefix(trimmed)
+        && let Ok(address) = AccountAddress::from_i105_for_discriminant(trimmed, Some(prefix))
+    {
+        return address.to_account_id().map_err(|err| {
+            format!("failed to decode `{flag}` for `{context}` as account id: {err}")
+        });
     }
     if let Ok(address) = AccountAddress::from_i105(trimmed) {
         return address.to_account_id().map_err(|err| {

@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 862849acdc73db944c653b8c542976b57ba708bda06259e5d4584c6fcdcba0b3
-source_last_modified: "2026-01-22T16:26:46.502812+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 0541f1f5775744c518f4f102326e725d73043b1756bb62a979f8eed4cc9472e6
+source_last_modified: "2026-04-08T09:19:38.795296+00:00"
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: དཔེར་བརྗོད/སྤོ་བཤུད་/སྤོ་�
 
 - སྔོན་དངུལ་ཨེ་ལིསི་འདི་དམིགས་གཏད་རྒྱུ་དངོས་དང་གཅིག་ཁར་ཨེ་ལིསི་ (དཔེར་ན་ “ཐོ་བཀོད་དང་ཨེམ་ཊི་” པར་ཆས་ ཡང་ན་ ཨེསི་ཌི་ཀེ་ མགྱོགས་དྲགས་ཀྱི་རྒྱུན་རིམ་ཚུ་བརྒྱུད་དེ་) བརྒྱུད་དེ་)།
 - `do_transfer` འཛུལ་སྒོ་འདི་ ཨེ་ལིསི་ལས་ བོབ་ལུ་སྤོ་བཤུད་འབད་ནིའི་དོན་ལུ་ I18NI000000008X གནང་བ་འདི་ བསྒྲུབ་ཚུགསཔ་ཨིན།
-- འདྲི་དཔྱད་ལྷག་ལུས་ཚུ་ (I18NI0000009X, `iroha_cli ledger assets list`) ཡང་ན་ སྤོ་བཤུད་གྲུབ་འབྲས་བལྟ་ནིའི་དོན་ལུ་ མདོང་ལམ་བྱུང་རིམ་ཚུ་ལུ་ མིང་རྟགས་བཀོད།
+- འདྲི་དཔྱད་ལྷག་ལུས་ཚུ་ (I18NI0000009X, `iroha ledger asset list all --verbose`) ཡང་ན་ སྤོ་བཤུད་གྲུབ་འབྲས་བལྟ་ནིའི་དོན་ལུ་ མདོང་ལམ་བྱུང་རིམ་ཚུ་ལུ་ མིང་རྟགས་བཀོད།
 
 ## འབྲེལ་བའི་ཨེས་ཌི་ཀེ་ལམ་སྟོན།
 

@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 479d552d0f641875518c62059be1084af6ddf99213662a753c73ea57512b8e5f
 source_last_modified: "2026-04-02T18:24:28.189405+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: examples/transfer/transfer.ko
 
 - Ալիսի նախնական ֆինանսավորումը թիրախային ակտիվի հետ (օրինակ՝ «գրանցել և դրամահատարան» հատվածի կամ SDK արագ մեկնարկի հոսքերի միջոցով):
 - Գործարկեք `do_transfer` մուտքի կետը՝ 10 միավոր Ալիսից Բոբ տեղափոխելու համար՝ բավարարելով `AssetTransferRole` թույլտվությունը:
-- Հարցրեք մնացորդները (`FindAccountAssets`, `iroha_cli ledger asset list`) կամ բաժանորդագրվեք խողովակաշարի իրադարձություններին՝ դիտարկելու փոխանցման արդյունքը:
+- Հարցրեք մնացորդները (`FindAccountAssets`, `iroha ledger asset list all --verbose`) կամ բաժանորդագրվեք խողովակաշարի իրադարձություններին՝ դիտարկելու փոխանցման արդյունքը:
 
 ## Առնչվող SDK ուղեցույցներ
 

@@ -13,7 +13,7 @@ Walks through an NFT lifecycle end to end: minting to the owner, transferring, t
 
 - Ensure the NFT definition (for example `n0#wonderland`) exists alongside the owner/recipient accounts used in the snippet (`<i105-account-id>` for Alice, `<i105-account-id>` for Bob).
 - Invoke the `nft_issue_and_transfer` entrypoint to mint the NFT, transfer it from Alice to Bob, and attach a metadata flag describing the issuance.
-- Inspect the NFT ledger state with `iroha_cli ledger nft list --account <id>` or the SDK equivalents to verify the transfer, then confirm the asset is removed once the burn instruction runs.
+- Inspect the NFT ledger state with `iroha ledger nft list all --verbose` or the SDK equivalents to verify the transfer, then confirm the asset is removed once the burn instruction runs.
 
 ## Related SDK guides
 

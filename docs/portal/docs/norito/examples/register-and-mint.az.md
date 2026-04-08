@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4e686495c642a08740504c4bb5f88e623c89a896787388b61e4451f550f87af6
 source_last_modified: "2026-03-26T13:01:47.376183+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 - Hər bir SDK sürətli başlanğıcda quraşdırma mərhələsini əks etdirərək təyinat hesabının (məsələn, Alice üçün `<i105-account-id>`) mövcud olduğundan əmin olun.
 - ROSE aktiv tərifini yaratmaq üçün `register_and_mint` giriş nöqtəsini çağırın və bir əməliyyatda Aliceyə 250 vahid nanə edin.
-- Nanənin uğur qazandığını təsdiqləmək üçün `client.request(FindAccountAssets)` və ya `iroha_cli ledger asset list --account <i105-account-id>` vasitəsilə balansları yoxlayın.
+- Nanənin uğur qazandığını təsdiqləmək üçün `client.request(FindAccountAssets)` və ya `iroha ledger asset list all --verbose` vasitəsilə balansları yoxlayın.
 
 ## Əlaqədar SDK təlimatları
 

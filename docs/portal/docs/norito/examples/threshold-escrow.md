@@ -15,7 +15,7 @@ Single-payer escrow that accepts top-ups to an exact target amount, then release
 - Call `open_escrow(recipient, escrow_account, asset_definition, target_amount)` once to record the payer, recipient, escrow account, asset definition, exact target, and open/released/refunded flags in durable contract state.
 - Call `deposit(amount)` from the same payer until `funded_amount_value == target_amount_value`; deposits must stay positive and any top-up that would overfund the escrow is rejected.
 - Call `release_if_ready()` to move the escrowed funds to the recipient once the target is met, or call `refund()` while the escrow is still open to return the funded amount to the payer.
-- Inspect balances with `FindAssetById` / `iroha_cli ledger asset list` and inspect contract state with `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.
+- Inspect balances with `FindAssetById` / `iroha ledger asset list all --verbose` and inspect contract state with `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.
 
 ## Related SDK guides
 

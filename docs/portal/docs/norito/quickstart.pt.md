@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 7c9a8e27bb8f586eac6bf4925cc69357dfa6d3f94c3dcf9e032b916c27fadf21
-source_last_modified: "2025-11-07T12:25:50.867928+00:00"
-translation_last_reviewed: 2025-12-30
+source_hash: a3e8979ab9bbd6bd10b5635fc6864573e5d0dc97ad4731d7207a3cbd2b8c291c
+source_last_modified: "2026-04-08T09:18:21.504877+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -17,13 +17,13 @@ slug: /norito/quickstart
 
 Este passo a passo espelha o fluxo que esperamos que desenvolvedores sigam ao aprender Norito e Kotodama pela primeira vez: iniciar uma rede deterministica de um unico peer, compilar um contrato, fazer dry-run localmente e depois enviar via Torii com o CLI de referencia.
 
-O contrato de exemplo grava um par chave/valor na conta do chamador para que voce possa verificar o efeito colateral imediatamente com `iroha_cli`.
+O contrato de exemplo grava um par chave/valor na conta do chamador para que voce possa verificar o efeito colateral imediatamente com `iroha`.
 
 ## Pre-requisitos
 
 - [Docker](https://docs.docker.com/engine/install/) com Compose V2 habilitado (usado para iniciar o peer de exemplo definido em `defaults/docker-compose.single.yml`).
 - Toolchain Rust (1.76+) para compilar os binarios auxiliares se voce nao baixar os publicados.
-- Binarios `koto_compile`, `ivm_run` e `iroha_cli`. Voce pode compila-los a partir do checkout do workspace como mostrado abaixo ou baixar os artifacts de release correspondentes:
+- Binarios `koto_compile`, `ivm_run` e `iroha`. Voce pode compila-los a partir do checkout do workspace como mostrado abaixo ou baixar os artifacts de release correspondentes:
 
 ```sh
 cargo install --locked --path crates/ivm --bin koto_compile --bin ivm_run
@@ -58,8 +58,14 @@ seiyaku Hello {
     info("Hello from Kotodama");
   }
 
+  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
+  kotoage fn main() permission(Admin) {
+    info("Hello from Kotodama");
+    write_detail();
+  }
+
   // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
+  kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),
       name!("example"),

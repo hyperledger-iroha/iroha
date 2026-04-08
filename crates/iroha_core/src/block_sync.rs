@@ -8,7 +8,7 @@ use std::{
 };
 
 use iroha_config::parameters::actual::{BlockSync as Config, ConsensusMode};
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
     consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
@@ -1059,6 +1059,7 @@ mod gossip_backoff_tests {
             kura,
             peer,
             trusted_peers: BTreeSet::new(),
+            trusted_pops: BTreeMap::new(),
             gossip_period: Duration::from_secs(1),
             gossip_max_period: Duration::from_secs(8),
             gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -2076,6 +2077,7 @@ pub struct BlockSynchronizer {
     kura: Arc<Kura>,
     peer: Peer,
     trusted_peers: BTreeSet<PeerId>,
+    trusted_pops: BTreeMap<PublicKey, Vec<u8>>,
     gossip_period: Duration,
     gossip_max_period: Duration,
     gossip_size: NonZeroU32,
@@ -2318,6 +2320,7 @@ impl BlockSynchronizer {
         kura: Arc<Kura>,
         peer: Peer,
         trusted_peers: BTreeSet<PeerId>,
+        trusted_pops: BTreeMap<PublicKey, Vec<u8>>,
         network: IrohaNetwork,
         state: Arc<State>,
         telemetry: Option<Telemetry>,
@@ -2331,6 +2334,7 @@ impl BlockSynchronizer {
         Self {
             peer,
             trusted_peers,
+            trusted_pops,
             sumeragi,
             kura,
             gossip_period,
@@ -4699,6 +4703,7 @@ pub mod message {
             topology,
             block_signers,
             stake_snapshot,
+            None,
         )
     }
 
@@ -4713,6 +4718,7 @@ pub mod message {
         topology: &Topology,
         block_signers: &BTreeSet<ValidatorIndex>,
         stake_snapshot: Option<&CommitStakeSnapshot>,
+        fallback_pops: Option<&BTreeMap<PublicKey, Vec<u8>>>,
     ) -> Option<Qc> {
         let consensus_mode = consensus_mode_for_block_sync_from_world(
             world,
@@ -4840,6 +4846,16 @@ pub mod message {
                 pops.insert(peer.public_key().clone(), pop);
             }
         }
+        if let Some(fallback_pops) = fallback_pops {
+            for peer in topology.as_ref() {
+                if pops.contains_key(peer.public_key()) {
+                    continue;
+                }
+                if let Some(pop) = fallback_pops.get(peer.public_key()) {
+                    pops.insert(peer.public_key().clone(), pop.clone());
+                }
+            }
+        }
         let empty_signers = BTreeSet::new();
         let qc_block_signers = if qc_from_cache {
             &empty_signers
@@ -4963,12 +4979,31 @@ pub mod message {
             (signers.len() >= quorum).then_some(signers)
         }
 
+        #[allow(dead_code)]
         fn filter_blocks_with_valid_signatures(
             entries: Vec<(SignedBlock, Option<Qc>)>,
             rosters: &BTreeMap<HashOf<BlockHeader>, RosterMetadata>,
             fallback_topology: Option<&Topology>,
             state: &State,
             fallback_consensus_mode: ConsensusMode,
+        ) -> (Vec<(SignedBlock, Option<Qc>)>, usize) {
+            Self::filter_blocks_with_valid_signatures_with_pops(
+                entries,
+                rosters,
+                fallback_topology,
+                state,
+                fallback_consensus_mode,
+                None,
+            )
+        }
+
+        fn filter_blocks_with_valid_signatures_with_pops(
+            entries: Vec<(SignedBlock, Option<Qc>)>,
+            rosters: &BTreeMap<HashOf<BlockHeader>, RosterMetadata>,
+            fallback_topology: Option<&Topology>,
+            state: &State,
+            fallback_consensus_mode: ConsensusMode,
+            fallback_pops: Option<&BTreeMap<PublicKey, Vec<u8>>>,
         ) -> (Vec<(SignedBlock, Option<Qc>)>, usize) {
             let mut dropped = 0usize;
             let fallback_topology = fallback_topology.cloned();
@@ -5033,6 +5068,7 @@ pub mod message {
                         &topology,
                         &block_signers,
                         stake_snapshot,
+                        fallback_pops,
                     );
                     (context, signature_check, sanitized_qc)
                 };
@@ -5491,13 +5527,15 @@ pub mod message {
                         let commit_topology = block_sync.state.commit_topology_snapshot();
                         (!commit_topology.is_empty()).then(|| Topology::new(commit_topology))
                     };
-                    let (filtered_blocks, dropped) = Self::filter_blocks_with_valid_signatures(
-                        paired,
-                        &roster_by_hash,
-                        fallback_topology.as_ref(),
-                        &block_sync.state,
-                        block_sync.fallback_consensus_mode,
-                    );
+                    let (filtered_blocks, dropped) =
+                        Self::filter_blocks_with_valid_signatures_with_pops(
+                            paired,
+                            &roster_by_hash,
+                            fallback_topology.as_ref(),
+                            &block_sync.state,
+                            block_sync.fallback_consensus_mode,
+                            Some(&block_sync.trusted_pops),
+                        );
                     if dropped > 0 {
                         warn!(
                             dropped,
@@ -5822,6 +5860,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -5935,6 +5974,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -6029,6 +6069,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -6109,6 +6150,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -6197,6 +6239,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_millis(1),
                     gossip_max_period: Duration::from_millis(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -6298,6 +6341,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_millis(1),
                     gossip_max_period: Duration::from_millis(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -6385,6 +6429,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_millis(1),
                     gossip_max_period: Duration::from_millis(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -6462,6 +6507,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::from([trusted_peer_id.clone()]),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -6541,6 +6587,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -7661,6 +7708,81 @@ pub mod message {
             assert_eq!(filtered.len(), 1);
             assert_eq!(filtered[0].0.hash(), block.hash());
             assert!(filtered[0].1.is_some());
+        }
+
+        #[test]
+        fn filter_blocks_uses_trusted_pops_for_lagging_re_registration_qc() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_rejoined = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_rejoined.public_key().clone()),
+            ]);
+
+            // Simulate a restarted peer that has only replayed the pre-re-registration world.
+            let state = state_with_consensus_key_pops(&[&kp_leader]);
+            let state_view = state.view();
+            let (chain_id, mode_tag) = test_chain_config();
+
+            let leader_candidates = [&kp_leader, &kp_rejoined];
+            let (mut block, signature_topology) = (0_u64..8)
+                .find_map(|candidate_view| {
+                    let block: SignedBlock =
+                        unique_dummy_block(kp_leader.private_key(), |header| {
+                            header.set_height(nonzero_ext::nonzero!(1_u64));
+                            header.set_prev_block_hash(None);
+                            header.set_view_change_index(candidate_view);
+                        })
+                        .into();
+                    let signature_topology =
+                        signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+                    let leader = leader_keypair(&signature_topology, &leader_candidates);
+                    (leader.public_key() == kp_leader.public_key())
+                        .then_some((block, signature_topology))
+                })
+                .expect("test must find a view where the block signer stays in the lagging world");
+            let leader = leader_keypair(&signature_topology, &leader_candidates);
+            block = sign_block_for_topology(block, &signature_topology, &[leader]);
+
+            let qc = qc_from_signers_with_aggregate(
+                &chain_id,
+                &mode_tag,
+                block.hash(),
+                block.header().height().get(),
+                block.header().view_change_index(),
+                0,
+                signer_indices_for_topology(&signature_topology, &[&kp_leader, &kp_rejoined]),
+                &signature_topology,
+                &topology,
+                &[kp_leader.clone(), kp_rejoined.clone()],
+            );
+
+            let (without_fallback, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(block.clone(), Some(qc.clone()))],
+                &BTreeMap::new(),
+                Some(&topology),
+                &state,
+                ConsensusMode::Permissioned,
+            );
+            assert_eq!(dropped, 0);
+            assert_eq!(without_fallback, vec![(block.clone(), None)]);
+
+            let trusted_pops = BTreeMap::from([(
+                kp_rejoined.public_key().clone(),
+                iroha_crypto::bls_normal_pop_prove(kp_rejoined.private_key())
+                    .expect("trusted peer pop"),
+            )]);
+            let (with_fallback, dropped) =
+                super::Message::filter_blocks_with_valid_signatures_with_pops(
+                    vec![(block.clone(), Some(qc.clone()))],
+                    &BTreeMap::new(),
+                    Some(&topology),
+                    &state,
+                    ConsensusMode::Permissioned,
+                    Some(&trusted_pops),
+                );
+            assert_eq!(dropped, 0);
+            assert_eq!(with_fallback, vec![(block, Some(qc))]);
         }
 
         #[test]

@@ -2,6 +2,9 @@
 
 Iroha Client CLI is a "thin" wrapper around functionality exposed in the `iroha` crate. Specifically, it should be used as a reference for using `iroha`'s features, and not as a production-ready client. As such, the CLI client is not guaranteed to support all features supported by the client library. Check [Iroha 2 documentation](https://docs.iroha.tech/get-started/operate-iroha-2-via-cli.html) for a detailed tutorial on working with Iroha Client CLI.
 
+Within this workspace, `crates/iroha` is the reusable Rust client library and
+`crates/iroha_cli` is the crate that builds the `iroha` command-line binary.
+
 ## Installation
 
 **Requirements:** the stable [Rust toolchain](https://www.rust-lang.org/learn/get-started) (the project pins `stable` via `rust-toolchain.toml`), installed and configured.

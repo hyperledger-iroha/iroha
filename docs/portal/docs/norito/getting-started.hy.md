@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/getting-started.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8e153602cfb465bd5f65bab0cf97c44604bba982a7a7f1edc8d5af8fd67a9e29
-source_last_modified: "2026-01-22T16:26:46.504508+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 3754b8549f90a4f325bb58a6b4e24bc052ec65d46a6352995c13555a8d5544bf
+source_last_modified: "2026-04-08T09:18:21.504260+00:00"
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -22,7 +22,7 @@ translator: machine-google-reviewed
 2. Կառուցեք կամ ներբեռնեք աջակցող երկուականները.
    - `koto_compile` – Kotodama կոմպիլյատոր, որը թողարկում է IVM/Norito բայթկոդ
    - `ivm_run` և `ivm_tool` – տեղական կատարման և ստուգման կոմունալ ծառայություններ
-   - `iroha_cli` – օգտագործվում է Torii-ի միջոցով պայմանագրային տեղակայման համար
+   - `iroha` – օգտագործվում է Torii-ի միջոցով պայմանագրային տեղակայման համար
 
    Makefile պահոցն ակնկալում է այս երկուականները `PATH`-ում: Դուք կարող եք կամ
    ներբեռնեք նախապես պատրաստված արտեֆակտներ կամ կառուցեք դրանք աղբյուրից: Եթե դուք կազմում եք
@@ -34,7 +34,7 @@ translator: machine-google-reviewed
 
 3. Համոզվեք, որ Iroha հանգույցն աշխատում է, երբ հասնեք տեղակայման քայլին: Այն
    Ստորև բերված օրինակները ենթադրում են, որ Torii հասանելի է ձեր հասցեում կազմաձևված URL-ով
-   `iroha_cli` պրոֆիլ (`~/.config/iroha/cli.toml`):
+   `iroha` պրոֆիլ (`~/.config/iroha/cli.toml`):
 
 ## 1. Կազմեք Kotodama պայմանագիր
 
@@ -80,14 +80,14 @@ ivm_run target/examples/hello.to --args '{}'
 Տեղական աշխատանքն օգտակար է, մինչ հրապարակելը պայմանագրային տրամաբանությունը կրկնելիս
 այն շղթայի վրա:
 
-## 4. Տեղադրեք `iroha_cli`-ի միջոցով
+## 4. Տեղադրեք `iroha`-ի միջոցով
 
 Երբ դուք գոհ եք պայմանագրից, տեղադրեք այն մի հանգույցում՝ օգտագործելով CLI:
 Տրամադրեք հեղինակային հաշիվ, դրա ստորագրման բանալին և կամ `.to` ֆայլ կամ
 Base64 ծանրաբեռնվածություն.
 
 ```sh
-iroha_cli app contracts deploy \
+iroha app contracts deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -98,14 +98,13 @@ iroha_cli app contracts deploy \
 Պատասխանում ցուցադրված հեշը կարող է օգտագործվել մանիֆեստները կամ օրինակները ցուցակագրելու համար.
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha app contracts manifest get --code-hash 0x<hash>
 ```
 
 ## 5. Վազիր Torii-ի դեմ
 
 Գրանցված բայթկոդով կարող եք այն կանչել՝ հրահանգ ներկայացնելով
-որը վկայակոչում է պահված կոդը (օրինակ՝ `iroha_cli ledger transaction submit`-ի միջոցով
+որը վկայակոչում է պահված կոդը (օրինակ՝ `iroha app contracts call --contract-address <contract-address> --entrypoint main --wait`-ի միջոցով
 կամ ձեր դիմումի հաճախորդը): Համոզվեք, որ հաշվի թույլտվությունները թույլ են տալիս ցանկալիին
 syscals (`set_account_detail`, `transfer_asset` և այլն):
 
@@ -118,7 +117,7 @@ syscals (`set_account_detail`, `transfer_asset` և այլն):
   երկուսն էլ թիրախ են ABI v1 (գործարկել `koto_compile --abi` առանց արգումենտների ցուցակման
   աջակցություն):
 - CLI-ն ընդունում է վեցանկյուն կամ Base64 ստորագրման բանալիներ: Փորձարկման համար կարող եք օգտագործել
-  բանալիներ, որոնք թողարկվել են `iroha_cli tools crypto keypair`-ի կողմից:
+  բանալիներ, որոնք թողարկվել են `kagami keys --json`-ի կողմից:
 - Norito օգտակար բեռները կարգաբերելիս օգնում է `ivm_tool disassemble` ենթահրամանը
   փոխկապակցեք հրահանգները Kotodama աղբյուրի հետ:
 

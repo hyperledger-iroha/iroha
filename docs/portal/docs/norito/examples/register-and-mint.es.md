@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c30c710be94cd99f3c7a0484040155bf63ff4dc0d464d76237bddc8bf589ef26
-source_last_modified: "2025-11-07T11:59:47.168250+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 470eb5de8cd9a7f94275062d1e8c3a448a2d734bf86f650ce94a3971baa3527d
+source_last_modified: "2026-04-08T09:19:38.793794+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -22,7 +22,7 @@ Demuestra la creación de dominios con permisos, el registro de activos y la acu
 
 - Asegúrate de que exista la cuenta de destino (por ejemplo `<i105-account-id>`), reflejando la fase de configuración en cada quickstart del SDK.
 - Invoca el entrypoint `register_and_mint` para crear la definición de activo ROSE y acuñar 250 unidades para Alice en una sola transacción.
-- Verifica los balances mediante `client.request(FindAccountAssets)` o `iroha_cli ledger assets list --account <i105-account-id>` para confirmar que la acuñación tuvo éxito.
+- Verifica los balances mediante `client.request(FindAccountAssets)` o `iroha ledger asset list all --verbose` para confirmar que la acuñación tuvo éxito.
 
 ## Guías de SDK relacionadas
 

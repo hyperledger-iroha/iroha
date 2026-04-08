@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 54b6d543cff8df6e8fd50632cfed6265770edc33855f06912be603457c5b517e
 source_last_modified: "2026-04-02T18:31:54.074495+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 

@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 54b6d543cff8df6e8fd50632cfed6265770edc33855f06912be603457c5b517e
 source_last_modified: "2026-04-02T18:31:54.074495+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -27,7 +27,7 @@ source: crates/kotodama_lang/src/samples/threshold_escrow.ko
 - התקשר ל-`open_escrow(recipient, escrow_account, asset_definition, target_amount)` פעם אחת כדי לתעד את המשלם, המקבל, חשבון הנאמנות, הגדרת הנכס, היעד המדויק ודגלים פתוחים/שוחררו/מוחזרים במצב חוזה עמיד.
 - התקשר ל-`deposit(amount)` מאותו משלם עד ל-`funded_amount_value == target_amount_value`; ההפקדות חייבות להישאר חיוביות וכל תוספת שתגרום למימון יתר של הנאמנות נדחתה.
 - התקשר ל-`release_if_ready()` כדי להעביר את הכספים המופקדים למקבל לאחר השגת היעד, או התקשר ל-`refund()` בזמן שהנאמנות עדיין פתוחה כדי להחזיר את הסכום הממומן למשלם.
-- בדוק יתרות עם `FindAssetById` / `iroha_cli ledger asset list` ובדוק את מצב החוזה עם `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.
+- בדוק יתרות עם `FindAssetById` / `iroha ledger asset list all --verbose` ובדוק את מצב החוזה עם `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.
 
 ## מדריכי SDK קשורים
 

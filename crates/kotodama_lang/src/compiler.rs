@@ -1748,6 +1748,53 @@ seiyaku Test {
     }
 
     #[test]
+    fn main_entrypoint_is_compiled_first_before_hajimari() {
+        let src = r#"
+seiyaku Hello {
+  hajimari() {
+    info("Hello from hajimari");
+  }
+
+  kotoage fn main() permission(Admin) {
+    write_detail();
+  }
+
+  kotoage fn write_detail() permission(Admin) {
+    set_account_detail(
+      authority(),
+      name("example"),
+      json("{\"hello\":\"world\"}")
+    );
+  }
+}
+"#;
+        let (bytes, manifest) = Compiler::new()
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        assert_eq!(entrypoints.len(), 3);
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.name, "main");
+
+        let parsed = ivm_abi::metadata::ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let embedded = parsed
+            .contract_interface
+            .expect("embedded contract interface");
+        let main_embedded = embedded
+            .entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("embedded main entrypoint");
+        assert_eq!(
+            main_embedded.entry_pc, 0,
+            "public `main` must be laid out first so raw VM startup enters `main` before `hajimari`"
+        );
+    }
+
+    #[test]
     fn staged_mint_helper_keeps_state_map_base_literals_after_call_propagation() {
         let src = r#"
 seiyaku StagedMintRequest {

@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 54b6d543cff8df6e8fd50632cfed6265770edc33855f06912be603457c5b517e
 source_last_modified: "2026-04-02T18:31:54.074495+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -27,7 +27,7 @@ source: crates/kotodama_lang/src/samples/threshold_escrow.ko
 - `open_escrow(recipient, escrow_account, asset_definition, target_amount)` руу нэг удаа залгаж төлбөр төлөгч, хүлээн авагч, эскроу данс, хөрөнгийн тодорхойлолт, тодорхой зорилт, нээлттэй/суллагдсан/буцаасан дарцагуудыг бат бөх гэрээний төлөвт бүртгэнэ.
 - Нэг төлбөр төлөгчөөс `funded_amount_value == target_amount_value` хүртэл `deposit(amount)` руу залгах; хадгаламж эерэг хэвээр байх ёстой бөгөөд эскроуг хэтрүүлэн санхүүжүүлэх аливаа цэнэглэлтээс татгалзана.
 - Зорилтот хэмжээнд хүрсэний дараа хадгалсан мөнгийг хүлээн авагч руу шилжүүлэхийн тулд `release_if_ready()` руу залгах, эскроу нээлттэй хэвээр байхад `refund()` руу залгаж санхүүжүүлсэн мөнгийг төлбөр төлөгчид буцааж өгнө.
-- Үлдэгдлийг `FindAssetById` / `iroha_cli ledger asset list`, `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json` ашиглан гэрээний төлөвийг шалгана уу.
+- Үлдэгдлийг `FindAssetById` / `iroha ledger asset list all --verbose`, `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json` ашиглан гэрээний төлөвийг шалгана уу.
 
 ## Холбогдох SDK гарын авлага
 

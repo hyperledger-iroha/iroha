@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 54b6d543cff8df6e8fd50632cfed6265770edc33855f06912be603457c5b517e
 source_last_modified: "2026-04-02T18:31:54.074495+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -27,7 +27,7 @@ source: crates/kotodama_lang/src/samples/threshold_escrow.ko
 - ငွေပေးချေသူ၊ လက်ခံသူ၊ အာမခံအကောင့်၊ ပိုင်ဆိုင်မှုသတ်မှတ်ချက်၊ အတိအကျပစ်မှတ်၊ နှင့် တာရှည်ခံစာချုပ်အခြေအနေတွင် ဖွင့်/ထုတ်/ပြန်အမ်းပေးသည့် အလံများကို မှတ်တမ်းတင်ရန် `open_escrow(recipient, escrow_account, asset_definition, target_amount)` ကို တစ်ကြိမ်ခေါ်ဆိုပါ။
 - `deposit(amount)` ကို `funded_amount_value == target_amount_value` အထိ တူညီသောငွေပေးသူထံမှ `deposit(amount)` သို့ခေါ်ဆိုပါ။ အပ်ငွေများသည် အပြုသဘောဆောင်နေရမည် ဖြစ်ပြီး escrow ကို ငွေပိုပေးမည့် မည်သည့်ငွေဖြည့်သွင်းမှုကိုမဆို ပယ်ချပါသည်။
 - ပစ်မှတ်ပြည့်သွားသည်နှင့် လက်ခံရရှိထားသော ရန်ပုံငွေများကို လက်ခံသူထံ ပြောင်းရွှေ့ရန် `release_if_ready()` သို့ ဖုန်းခေါ်ဆိုပါ သို့မဟုတ် ငွေပေးချေသူထံ ရန်ပုံငွေပမာဏကို ပြန်ပေးရန်အတွက် `refund()` သို့ ဖုန်းခေါ်ဆိုပါ။
-- `FindAssetById` / `iroha_cli ledger asset list` ဖြင့် လက်ကျန်များကို စစ်ဆေးပြီး `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json` ဖြင့် စာချုပ်အခြေအနေကို စစ်ဆေးပါ။
+- `FindAssetById` / `iroha ledger asset list all --verbose` ဖြင့် လက်ကျန်များကို စစ်ဆေးပြီး `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json` ဖြင့် စာချုပ်အခြေအနေကို စစ်ဆေးပါ။
 
 ## သက်ဆိုင်ရာ SDK လမ်းညွှန်များ
 

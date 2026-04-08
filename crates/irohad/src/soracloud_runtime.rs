@@ -3,9 +3,8 @@
 //! This subsystem continuously projects authoritative Soracloud world state
 //! into a node-local materialization plan and now serves deterministic local
 //! reads/apartment observations directly from the committed snapshot plus the
-//! hydrated artifact cache. Soracloud runtime v1 is currently `Ivm`-only;
-//! `NativeProcess` deployments are rejected during admission and runtime
-//! activation.
+//! hydrated artifact cache. Soracloud runtime v1 runs IVM handlers directly
+//! and supervises `NativeProcess` revisions as loopback HTTP services.
 //!
 //! Ordered mailbox execution now runs admitted IVM bundles directly through
 //! the Soracloud host surface while local reads continue to resolve from the
@@ -26,7 +25,10 @@ use std::{
 
 use eyre::WrapErr;
 use iroha_core::soracloud_runtime::{
+    SORACLOUD_NATIVE_PROCESS_RUNTIME_STATE_FILE_V1,
+    SORACLOUD_NATIVE_PROCESS_RUNTIME_STATE_VERSION_V1,
     SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1,
+    SoracloudNativeProcessRuntimeStateV1,
     SoracloudApartmentAutonomyExecutionSummaryV1, SoracloudApartmentAutonomyWorkflowStepSummaryV1,
     SoracloudApartmentExecutionRequest, SoracloudApartmentExecutionResult,
     SoracloudLocalReadRequest, SoracloudLocalReadResponse, SoracloudOrderedMailboxExecutionRequest,
@@ -2032,6 +2034,8 @@ struct HfLocalImportManifestV1 {
 }
 
 type SharedHfLocalRunnerWorkers = Arc<Mutex<BTreeMap<String, Arc<Mutex<HfLocalRunnerWorker>>>>>;
+type SharedNativeProcessWorkers =
+    Arc<Mutex<BTreeMap<(String, String), Arc<Mutex<NativeProcessWorker>>>>>;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct HfLocalRunnerWorkerCacheKey {
@@ -2055,6 +2059,27 @@ struct HfLocalRunnerWorker {
     stdin: ChildStdin,
     stdout_rx: mpsc::Receiver<io::Result<Vec<u8>>>,
     stdout_reader: Option<thread::JoinHandle<()>>,
+    stderr_log_path: PathBuf,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct NativeProcessWorkerCacheKey {
+    service_name: String,
+    service_version: String,
+    bundle_hash: String,
+    bundle_path: String,
+    entrypoint: String,
+    process_generation: u64,
+    args: Vec<String>,
+    effective_env: BTreeMap<String, String>,
+    healthcheck_path: Option<String>,
+    service_data_dir: PathBuf,
+}
+
+struct NativeProcessWorker {
+    cache_key: NativeProcessWorkerCacheKey,
+    child: std::process::Child,
+    listen_base_url: String,
     stderr_log_path: PathBuf,
 }
 
@@ -2093,6 +2118,7 @@ pub(crate) struct SoracloudRuntimeManager {
     state: Arc<State>,
     snapshot: Arc<RwLock<SoracloudRuntimeSnapshot>>,
     hf_local_workers: SharedHfLocalRunnerWorkers,
+    native_process_workers: SharedNativeProcessWorkers,
     host_violation_reporter: Arc<SoracloudModelHostViolationReporter>,
     mutation_sink: Option<Arc<dyn SoracloudRuntimeMutationSink>>,
     last_model_host_heartbeat_attempt_ms: Mutex<Option<u64>>,
@@ -2132,6 +2158,7 @@ impl SoracloudRuntimeManager {
             state,
             snapshot: Arc::new(RwLock::new(SoracloudRuntimeSnapshot::default())),
             hf_local_workers: Arc::new(Mutex::new(BTreeMap::new())),
+            native_process_workers: Arc::new(Mutex::new(BTreeMap::new())),
             host_violation_reporter: SoracloudModelHostViolationReporter::disabled(),
             mutation_sink: None,
             last_model_host_heartbeat_attempt_ms: Mutex::new(None),
@@ -2269,6 +2296,8 @@ impl SoracloudRuntimeManager {
             .wrap_err_with(|| format!("create {}", self.credentials_root().display()))?;
         fs::create_dir_all(self.hf_sources_root())
             .wrap_err_with(|| format!("create {}", self.hf_sources_root().display()))?;
+        fs::create_dir_all(self.service_data_root())
+            .wrap_err_with(|| format!("create {}", self.service_data_root().display()))?;
 
         let view = self.state.view();
         self.report_local_model_host_advert_contradictions(&view);
@@ -2288,6 +2317,7 @@ impl SoracloudRuntimeManager {
         self.import_hf_sources(&view, &initial_snapshot)?;
         self.probe_local_hf_execution_hosts(&view, &initial_snapshot);
         self.hydrate_missing_artifacts(&view, &initial_snapshot, &bundle_registry)?;
+        self.reconcile_native_processes(&initial_snapshot, &bundle_registry)?;
         self.enforce_cache_budgets(&view, &initial_snapshot)?;
         let snapshot = build_runtime_snapshot(
             &view,
@@ -2367,6 +2397,357 @@ impl SoracloudRuntimeManager {
         }
     }
 
+    fn desired_native_process_keys(
+        &self,
+        snapshot: &SoracloudRuntimeSnapshot,
+    ) -> BTreeSet<(String, String)> {
+        snapshot
+            .services
+            .iter()
+            .filter_map(|(service_name, versions)| {
+                versions.iter().find_map(|(service_version, plan)| {
+                    (plan.runtime == iroha_data_model::soracloud::SoraContainerRuntimeV1::NativeProcess
+                        && plan.role == SoracloudRuntimeRevisionRole::Active
+                        && plan.process_generation.is_some())
+                    .then_some((service_name.clone(), service_version.clone()))
+                })
+            })
+            .collect()
+    }
+
+    fn reconcile_native_processes(
+        &self,
+        snapshot: &SoracloudRuntimeSnapshot,
+        bundle_registry: &BTreeMap<(String, String), SoraDeploymentBundleV1>,
+    ) -> eyre::Result<()> {
+        let desired_keys = self.desired_native_process_keys(snapshot);
+        let stale_workers = {
+            let mut workers = self.native_process_workers.lock();
+            let stale_keys = workers
+                .keys()
+                .filter(|key| !desired_keys.contains(*key))
+                .cloned()
+                .collect::<Vec<_>>();
+            stale_keys
+                .into_iter()
+                .filter_map(|key| workers.remove(&key))
+                .collect::<Vec<_>>()
+        };
+        for worker in stale_workers {
+            worker.lock().stop();
+        }
+
+        let max_processes = self.config.native_process.max_concurrent_processes.get();
+        let mut running_processes = {
+            let workers = self.native_process_workers.lock();
+            workers.len()
+        };
+
+        for (service_name, versions) in &snapshot.services {
+            let Some((service_version, plan)) = versions.iter().find(|(_service_version, plan)| {
+                plan.runtime == iroha_data_model::soracloud::SoraContainerRuntimeV1::NativeProcess
+                    && plan.role == SoracloudRuntimeRevisionRole::Active
+                    && plan.process_generation.is_some()
+            }) else {
+                continue;
+            };
+            let Some(bundle) = bundle_registry.get(&(service_name.clone(), service_version.clone()))
+            else {
+                continue;
+            };
+            let process_generation = plan.process_generation.unwrap_or_default();
+            let service_data_dir = build_native_service_data_dir(&self.config.state_dir, service_name);
+            let cache_key = NativeProcessWorkerCacheKey {
+                service_name: service_name.clone(),
+                service_version: service_version.clone(),
+                bundle_hash: plan.bundle_hash.clone(),
+                bundle_path: plan.bundle_path.clone(),
+                entrypoint: plan.entrypoint.clone(),
+                process_generation,
+                args: bundle.container.args.clone(),
+                effective_env: plan.effective_env.clone(),
+                healthcheck_path: bundle.container.lifecycle.healthcheck_path.clone(),
+                service_data_dir: service_data_dir.clone(),
+            };
+            let key = (service_name.clone(), service_version.clone());
+            let existing_worker = {
+                let workers = self.native_process_workers.lock();
+                workers.get(&key).cloned()
+            };
+
+            if let Some(worker) = existing_worker {
+                let mut guard = worker.lock();
+                let exited = match guard.try_wait() {
+                    Ok(Some(status)) => Some(format!("native-process exited with status {status}")),
+                    Ok(None) => None,
+                    Err(error) => Some(format!("failed to poll native-process status: {error}")),
+                };
+                let same_cache_key = guard.cache_key == cache_key;
+                if exited.is_none() && same_cache_key {
+                    let health = probe_native_process_health(
+                        &guard.listen_base_url,
+                        guard.cache_key.healthcheck_path.as_deref(),
+                    );
+                    let (health_status, last_error) = match health {
+                        Ok(()) => (SoraServiceHealthStatusV1::Healthy, None),
+                        Err(error) => (SoraServiceHealthStatusV1::Degraded, Some(error.to_string())),
+                    };
+                    write_native_process_runtime_state(
+                        &PathBuf::from(&plan.materialization_dir),
+                        service_name,
+                        service_version,
+                        process_generation,
+                        health_status,
+                        Some(&guard.listen_base_url),
+                        guard.pid(),
+                        last_error,
+                    )?;
+                    continue;
+                }
+                let last_error = exited.or_else(|| {
+                    (!same_cache_key).then_some("native-process runtime config changed".to_owned())
+                });
+                guard.stop();
+                drop(guard);
+                let removed = self.native_process_workers.lock().remove(&key);
+                if removed.is_some() && running_processes > 0 {
+                    running_processes = running_processes.saturating_sub(1);
+                }
+                write_native_process_runtime_state(
+                    &PathBuf::from(&plan.materialization_dir),
+                    service_name,
+                    service_version,
+                    process_generation,
+                    SoraServiceHealthStatusV1::Degraded,
+                    None,
+                    None,
+                    last_error,
+                )?;
+            }
+
+            if !plan.bundle_available_locally {
+                write_native_process_runtime_state(
+                    &PathBuf::from(&plan.materialization_dir),
+                    service_name,
+                    service_version,
+                    process_generation,
+                    SoraServiceHealthStatusV1::Hydrating,
+                    None,
+                    None,
+                    Some("native-process bundle is still hydrating".to_owned()),
+                )?;
+                continue;
+            }
+
+            if running_processes >= max_processes {
+                write_native_process_runtime_state(
+                    &PathBuf::from(&plan.materialization_dir),
+                    service_name,
+                    service_version,
+                    process_generation,
+                    SoraServiceHealthStatusV1::Degraded,
+                    None,
+                    None,
+                    Some(format!(
+                        "native-process concurrency limit {max_processes} is already exhausted"
+                    )),
+                )?;
+                continue;
+            }
+
+            let worker = match self
+                .start_native_process_worker(plan, bundle, cache_key.clone())
+                .wrap_err_with(|| {
+                    format!(
+                        "start native-process Soracloud service `{service_name}` revision `{service_version}`"
+                    )
+                }) {
+                Ok(worker) => worker,
+                Err(error) => {
+                    iroha_logger::warn!(
+                        ?error,
+                        service_name = %service_name,
+                        service_version = %service_version,
+                        "failed to start native-process Soracloud service"
+                    );
+                    write_native_process_runtime_state(
+                        &PathBuf::from(&plan.materialization_dir),
+                        service_name,
+                        service_version,
+                        process_generation,
+                        SoraServiceHealthStatusV1::Degraded,
+                        None,
+                        None,
+                        Some(error.to_string()),
+                    )?;
+                    continue;
+                }
+            };
+            write_native_process_runtime_state(
+                &PathBuf::from(&plan.materialization_dir),
+                service_name,
+                service_version,
+                process_generation,
+                SoraServiceHealthStatusV1::Healthy,
+                Some(&worker.listen_base_url),
+                worker.pid(),
+                None,
+            )?;
+            self.native_process_workers
+                .lock()
+                .insert(key, Arc::new(Mutex::new(worker)));
+            running_processes = running_processes.saturating_add(1);
+        }
+
+        Ok(())
+    }
+
+    fn start_native_process_worker(
+        &self,
+        plan: &SoracloudRuntimeServicePlan,
+        bundle: &SoraDeploymentBundleV1,
+        cache_key: NativeProcessWorkerCacheKey,
+    ) -> eyre::Result<NativeProcessWorker> {
+        let materialization_dir = PathBuf::from(&plan.materialization_dir);
+        fs::create_dir_all(&materialization_dir)
+            .wrap_err_with(|| format!("create {}", materialization_dir.display()))?;
+        fs::create_dir_all(&cache_key.service_data_dir)
+            .wrap_err_with(|| format!("create {}", cache_key.service_data_dir.display()))?;
+
+        let bundle_root = materialization_dir.join("native_bundle");
+        ensure_native_bundle_extracted(
+            &PathBuf::from(&plan.bundle_cache_path),
+            &plan.bundle_hash,
+            &bundle_root,
+        )?;
+
+        let bundle_path = bundle_root.join(strip_leading_slashes(&bundle.container.bundle_path));
+        let entrypoint_path = bundle_root.join(strip_leading_slashes(&bundle.container.entrypoint));
+        let executable_path = if bundle_path.exists() {
+            bundle_path
+        } else if entrypoint_path.exists() {
+            entrypoint_path
+        } else {
+            eyre::bail!(
+                "native-process bundle does not contain `{}` or `{}` under {}",
+                bundle.container.bundle_path,
+                bundle.container.entrypoint,
+                bundle_root.display(),
+            );
+        };
+
+        let port = next_native_process_loopback_port()
+            .wrap_err("allocate loopback port for native Soracloud service")?;
+        let listen_base_url = format!("http://127.0.0.1:{port}");
+        let stdout_log_path = materialization_dir.join("native_process.stdout.log");
+        let stderr_log_path = materialization_dir.join("native_process.stderr.log");
+        let stdout = fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&stdout_log_path)
+            .wrap_err_with(|| format!("open {}", stdout_log_path.display()))?;
+        let stderr = fs::OpenOptions::new()
+            .create(true)
+            .truncate(true)
+            .write(true)
+            .open(&stderr_log_path)
+            .wrap_err_with(|| format!("open {}", stderr_log_path.display()))?;
+
+        let mut command = Command::new(&executable_path);
+        command
+            .args(&bundle.container.args)
+            .stdout(Stdio::from(stdout))
+            .stderr(Stdio::from(stderr));
+        if let Some(parent) = executable_path.parent() {
+            command.current_dir(parent);
+        }
+        for (key, value) in &cache_key.effective_env {
+            command.env(key, value);
+        }
+        command.env("PORT", port.to_string());
+        command.env(
+            "SORACLOUD_SERVICE_NAME",
+            cache_key.service_name.as_str(),
+        );
+        command.env(
+            "SORACLOUD_SERVICE_VERSION",
+            cache_key.service_version.as_str(),
+        );
+        command.env(
+            "SORACLOUD_SERVICE_DATA_DIR",
+            cache_key.service_data_dir.display().to_string(),
+        );
+        command.env(
+            "SORACLOUD_SERVICE_MATERIALIZATION_DIR",
+            materialization_dir.display().to_string(),
+        );
+
+        let mut child = command.spawn().wrap_err_with(|| {
+            format!(
+                "spawn native-process executable {}",
+                executable_path.display()
+            )
+        })?;
+        let started_at = std::time::Instant::now();
+        loop {
+            if let Some(status) = child
+                .try_wait()
+                .wrap_err("poll native-process child during startup")?
+            {
+                let stderr = stderr_log_excerpt(&stderr_log_path);
+                eyre::bail!(
+                    "native-process child exited during startup with status {status}{}",
+                    if stderr.is_empty() {
+                        String::new()
+                    } else {
+                        format!(": {stderr}")
+                    }
+                );
+            }
+            match probe_native_process_health(
+                &listen_base_url,
+                bundle.container.lifecycle.healthcheck_path.as_deref(),
+            ) {
+                Ok(()) => {
+                    return Ok(NativeProcessWorker::new(
+                        cache_key,
+                        child,
+                        listen_base_url,
+                        stderr_log_path,
+                    ));
+                }
+                Err(error)
+                    if started_at.elapsed()
+                        < self
+                            .config
+                            .native_process
+                            .start_grace
+                            .max(Duration::from_secs(
+                                u64::from(bundle.container.lifecycle.start_grace_secs.get()),
+                            )) =>
+                {
+                    let _ = error;
+                    thread::sleep(Duration::from_millis(250));
+                }
+                Err(error) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let stderr = stderr_log_excerpt(&stderr_log_path);
+                    eyre::bail!(
+                        "native-process failed healthcheck during startup: {}{}",
+                        error,
+                        if stderr.is_empty() {
+                            String::new()
+                        } else {
+                            format!(": {stderr}")
+                        }
+                    );
+                }
+            }
+        }
+    }
+
     fn services_root(&self) -> PathBuf {
         self.config.state_dir.join("services")
     }
@@ -2397,6 +2778,10 @@ impl SoracloudRuntimeManager {
 
     fn hf_sources_root(&self) -> PathBuf {
         self.config.state_dir.join("hf_sources")
+    }
+
+    fn service_data_root(&self) -> PathBuf {
+        self.config.state_dir.join("service_data")
     }
 
     fn hf_source_root(&self, source_id: &str) -> PathBuf {
@@ -6829,8 +7214,6 @@ fn build_runtime_snapshot(
                         "deployment for service `{service_name}` references missing admitted revision `{service_version}`"
                     )
                 })?;
-            ensure_ivm_runtime(bundle.container.runtime, &service_name, &service_version)
-                .map_err(eyre::Report::msg)?;
             let is_runtime_active = runtime_state
                 .as_ref()
                 .is_some_and(|state| state.active_service_version == service_version);
@@ -6846,6 +7229,7 @@ fn build_runtime_snapshot(
                 .join("secrets")
                 .join(sanitize_path_component(&service_name))
                 .join(sanitize_path_component(&service_version));
+            let service_data_dir = build_native_service_data_dir(state_dir, &service_name);
             let bundle_cache_path =
                 artifacts_root.join(hash_cache_name(bundle.container.bundle_hash));
             let active_runtime_state = runtime_state
@@ -6860,7 +7244,29 @@ fn build_runtime_snapshot(
             let hydration_complete = artifact_plans
                 .iter()
                 .all(|artifact| artifact.available_locally);
-            let effective_env = build_effective_service_environment(bundle, deployment)?;
+            let native_runtime_state = if bundle.container.runtime
+                == iroha_data_model::soracloud::SoraContainerRuntimeV1::NativeProcess
+            {
+                match read_native_process_runtime_state(&service_dir) {
+                    Ok(state) => state,
+                    Err(error) => {
+                        iroha_logger::warn!(
+                            ?error,
+                            service_name = %service_name,
+                            service_version = %service_version,
+                            "failed to read native-process runtime state while building Soracloud snapshot"
+                        );
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            let mut effective_env = build_effective_service_environment(bundle, deployment)?;
+            effective_env.insert(
+                "SORACLOUD_SERVICE_DATA_DIR".to_owned(),
+                service_data_dir.display().to_string(),
+            );
             let plan = SoracloudRuntimeServicePlan {
                 service_name: service_name.clone(),
                 service_version: service_version.clone(),
@@ -6872,13 +7278,41 @@ fn build_runtime_snapshot(
                 entrypoint: bundle.container.entrypoint.clone(),
                 bundle_cache_path: bundle_cache_path.display().to_string(),
                 bundle_available_locally: bundle_cache_path.exists(),
-                process_generation: is_runtime_active.then_some(deployment.process_generation),
-                health_status: if hydration_complete {
-                    active_runtime_state.map_or(SoraServiceHealthStatusV1::Hydrating, |state| {
-                        state.health_status
-                    })
-                } else {
+                process_generation: match bundle.container.runtime {
+                    iroha_data_model::soracloud::SoraContainerRuntimeV1::Ivm => {
+                        is_runtime_active.then_some(deployment.process_generation)
+                    }
+                    iroha_data_model::soracloud::SoraContainerRuntimeV1::NativeProcess
+                        if role == SoracloudRuntimeRevisionRole::Active =>
+                    {
+                        Some(deployment.process_generation)
+                    }
+                    iroha_data_model::soracloud::SoraContainerRuntimeV1::NativeProcess => None,
+                },
+                health_status: if !hydration_complete {
                     SoraServiceHealthStatusV1::Hydrating
+                } else {
+                    match bundle.container.runtime {
+                        iroha_data_model::soracloud::SoraContainerRuntimeV1::Ivm => active_runtime_state
+                            .map_or(SoraServiceHealthStatusV1::Hydrating, |state| {
+                                state.health_status
+                            }),
+                        iroha_data_model::soracloud::SoraContainerRuntimeV1::NativeProcess
+                            if role == SoracloudRuntimeRevisionRole::Active =>
+                        {
+                            native_runtime_state
+                                .as_ref()
+                                .filter(|state| {
+                                    state.process_generation == deployment.process_generation
+                                })
+                                .map_or(SoraServiceHealthStatusV1::Degraded, |state| {
+                                    state.health_status
+                                })
+                        }
+                        iroha_data_model::soracloud::SoraContainerRuntimeV1::NativeProcess => {
+                            SoraServiceHealthStatusV1::Hydrating
+                        }
+                    }
                 },
                 load_factor_bps: active_runtime_state.map_or(0, |state| state.load_factor_bps),
                 reported_pending_mailbox_messages: active_runtime_state
@@ -8098,6 +8532,153 @@ impl Drop for HfLocalRunnerWorker {
     }
 }
 
+impl NativeProcessWorker {
+    fn new(
+        cache_key: NativeProcessWorkerCacheKey,
+        child: std::process::Child,
+        listen_base_url: String,
+        stderr_log_path: PathBuf,
+    ) -> Self {
+        Self {
+            cache_key,
+            child,
+            listen_base_url,
+            stderr_log_path,
+        }
+    }
+
+    fn pid(&self) -> Option<u32> {
+        Some(self.child.id())
+    }
+
+    fn try_wait(&mut self) -> io::Result<Option<std::process::ExitStatus>> {
+        self.child.try_wait()
+    }
+
+    fn stop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+
+}
+
+impl Drop for NativeProcessWorker {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
+fn native_process_runtime_state_path(materialization_dir: &Path) -> PathBuf {
+    materialization_dir.join(SORACLOUD_NATIVE_PROCESS_RUNTIME_STATE_FILE_V1)
+}
+
+fn write_native_process_runtime_state(
+    materialization_dir: &Path,
+    service_name: &str,
+    service_version: &str,
+    process_generation: u64,
+    health_status: SoraServiceHealthStatusV1,
+    listen_base_url: Option<&str>,
+    pid: Option<u32>,
+    last_error: Option<String>,
+) -> eyre::Result<()> {
+    write_json_atomic(
+        &native_process_runtime_state_path(materialization_dir),
+        &SoracloudNativeProcessRuntimeStateV1 {
+            schema_version: SORACLOUD_NATIVE_PROCESS_RUNTIME_STATE_VERSION_V1,
+            service_name: service_name.to_owned(),
+            service_version: service_version.to_owned(),
+            process_generation,
+            health_status,
+            listen_base_url: listen_base_url.map(ToOwned::to_owned),
+            pid,
+            last_error,
+            updated_at_ms: soracloud_runtime_observed_at_ms(),
+        },
+    )
+    .map_err(eyre::Report::from)
+}
+
+fn read_native_process_runtime_state(
+    materialization_dir: &Path,
+) -> io::Result<Option<SoracloudNativeProcessRuntimeStateV1>> {
+    read_json_optional(&native_process_runtime_state_path(materialization_dir))
+}
+
+fn next_native_process_loopback_port() -> io::Result<u16> {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+    listener.local_addr().map(|addr| addr.port())
+}
+
+fn build_native_service_data_dir(state_dir: &Path, service_name: &str) -> PathBuf {
+    state_dir
+        .join("service_data")
+        .join(sanitize_path_component(service_name))
+}
+
+fn strip_leading_slashes(path: &str) -> &str {
+    path.trim_start_matches('/')
+}
+
+fn ensure_native_bundle_extracted(
+    bundle_cache_path: &Path,
+    bundle_hash: &str,
+    bundle_root: &Path,
+) -> eyre::Result<()> {
+    let stamp_path = bundle_root.join(".bundle_hash");
+    if read_json_optional::<String>(&stamp_path)
+        .ok()
+        .flatten()
+        .is_some_and(|value| value == bundle_hash)
+    {
+        return Ok(());
+    }
+
+    reset_directory(bundle_root).wrap_err_with(|| format!("reset {}", bundle_root.display()))?;
+    let result = Command::new("tar")
+        .arg("-xzf")
+        .arg(bundle_cache_path)
+        .arg("-C")
+        .arg(bundle_root)
+        .status()
+        .wrap_err_with(|| format!("spawn tar for {}", bundle_cache_path.display()))?;
+    if !result.success() {
+        eyre::bail!(
+            "extract native bundle {} into {} failed with status {result}",
+            bundle_cache_path.display(),
+            bundle_root.display(),
+        );
+    }
+    write_json_atomic(&stamp_path, &bundle_hash.to_owned())
+        .wrap_err_with(|| format!("write {}", stamp_path.display()))?;
+    Ok(())
+}
+
+fn probe_native_process_health(
+    listen_base_url: &str,
+    healthcheck_path: Option<&str>,
+) -> eyre::Result<()> {
+    let Some(path) = healthcheck_path else {
+        return Ok(());
+    };
+    let url = format!(
+        "{}{}",
+        listen_base_url,
+        if path.starts_with('/') { path } else { "/" }
+    );
+    let response = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .wrap_err("build native-process healthcheck client")?
+        .get(&url)
+        .send()
+        .wrap_err_with(|| format!("probe native-process healthcheck {url}"))?;
+    if !response.status().is_success() {
+        eyre::bail!("native-process healthcheck {url} returned {}", response.status());
+    }
+    Ok(())
+}
+
 fn remote_hydration_nonce(
     manifest_cid_hex: &str,
     provider_id: &[u8; 32],
@@ -8959,6 +9540,7 @@ mod tests {
             chunk_count: 1,
             chunk_profile_handle: chunk_profile_handle.clone(),
             stored_at_unix_secs: 1,
+            files: Vec::new(),
         };
         let manifest_response_body = norito::json::to_vec(&manifest_response)?;
         let mut chunk_entry = norito::json::native::Map::new();
@@ -13002,10 +13584,12 @@ mod tests {
     }
 
     #[test]
-    fn reconcile_once_rejects_unsupported_native_process_runtime() -> Result<()> {
+    fn reconcile_once_projects_native_process_runtime_into_snapshot() -> Result<()> {
         let mut state = test_state()?;
         let mut bundle = load_deployment_bundle_fixture()?;
         bundle.container.runtime = SoraContainerRuntimeV1::NativeProcess;
+        let deployment_state = sample_deployment_state(&bundle);
+        let expected_process_generation = deployment_state.process_generation;
         {
             let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
             world.soracloud_service_revisions_mut_for_testing().insert(
@@ -13017,10 +13601,7 @@ mod tests {
             );
             world
                 .soracloud_service_deployments_mut_for_testing()
-                .insert(
-                    bundle.service.service_name.clone(),
-                    sample_deployment_state(&bundle),
-                );
+                .insert(bundle.service.service_name.clone(), deployment_state);
         }
 
         let temp_dir = tempfile::tempdir()?;
@@ -13028,13 +13609,16 @@ mod tests {
             test_runtime_manager_config(temp_dir.path().to_path_buf()),
             Arc::clone(&state),
         );
-        let error = manager
-            .reconcile_once()
-            .expect_err("native-process revisions must be rejected during activation");
-        assert!(
-            error.to_string().contains("admits only `Ivm`"),
-            "unexpected reconcile error: {error:?}"
-        );
+        manager.reconcile_once()?;
+        let snapshot = manager.snapshot.read().clone();
+        let plan = snapshot
+            .services
+            .get(bundle.service.service_name.as_ref())
+            .and_then(|versions| versions.get(&bundle.service.service_version))
+            .expect("native-process runtime plan present");
+        assert_eq!(plan.runtime, SoraContainerRuntimeV1::NativeProcess);
+        assert_eq!(plan.process_generation, Some(expected_process_generation));
+        assert_eq!(plan.health_status, SoraServiceHealthStatusV1::Hydrating);
         Ok(())
     }
 

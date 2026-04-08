@@ -1802,6 +1802,19 @@ pub(crate) struct LocalReadRouteMatch {
     pub handler_path: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct NativeProcessRouteMatch {
+    pub service_name: String,
+    pub service_version: String,
+    pub request_path: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum PublicRouteMatch {
+    LocalRead(LocalReadRouteMatch),
+    NativeProcess(NativeProcessRouteMatch),
+}
+
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 pub(crate) struct HealthComplianceReportResponse {
     pub schema_version: u16,
@@ -9080,6 +9093,113 @@ pub(crate) fn resolve_public_local_read_route(
     best_match.map(|(_route_len, route_match)| route_match)
 }
 
+pub(crate) fn resolve_public_route(
+    app: &SharedAppState,
+    host: &str,
+    request_path: &str,
+) -> Option<PublicRouteMatch> {
+    let normalized_host = normalize_public_route_host(host);
+    if normalized_host.is_empty() {
+        return None;
+    }
+    let normalized_path = normalize_public_route_path(request_path);
+    let state_view = app.state.view();
+    let world = state_view.world();
+    let mut best_match: Option<(usize, PublicRouteMatch, (String, String, String))> = None;
+
+    for (service_id, deployment) in world.soracloud_service_deployments().iter() {
+        let service_name = service_id.to_string();
+        let Some(bundle) = world.soracloud_service_revisions().get(&(
+            service_name.clone(),
+            deployment.current_service_version.clone(),
+        )) else {
+            continue;
+        };
+        let Some(route) = bundle.service.route.as_ref() else {
+            continue;
+        };
+        if route.visibility != iroha_data_model::soracloud::SoraRouteVisibilityV1::Public {
+            continue;
+        }
+        if !route.host.eq_ignore_ascii_case(normalized_host) {
+            continue;
+        }
+
+        if bundle.container.runtime == SoraContainerRuntimeV1::NativeProcess {
+            let Some(request_path) =
+                split_public_handler_path(normalized_path, route.path_prefix.as_str())
+            else {
+                continue;
+            };
+            let route_len = route.path_prefix.len();
+            let route_match = PublicRouteMatch::NativeProcess(NativeProcessRouteMatch {
+                service_name: service_name.clone(),
+                service_version: deployment.current_service_version.clone(),
+                request_path,
+            });
+            let sort_key = (
+                service_name.clone(),
+                deployment.current_service_version.clone(),
+                String::new(),
+            );
+            let replace = best_match
+                .as_ref()
+                .is_none_or(|(best_len, _, best_sort_key)| {
+                    route_len > *best_len || (route_len == *best_len && sort_key < *best_sort_key)
+                });
+            if replace {
+                best_match = Some((route_len, route_match, sort_key));
+            }
+            continue;
+        }
+
+        for handler in &bundle.service.handlers {
+            let handler_class = match handler.class {
+                iroha_data_model::soracloud::SoraServiceHandlerClassV1::Asset => {
+                    SoracloudLocalReadKind::Asset
+                }
+                iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query => {
+                    SoracloudLocalReadKind::Query
+                }
+                iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update
+                | iroha_data_model::soracloud::SoraServiceHandlerClassV1::PrivateUpdate => {
+                    continue;
+                }
+            };
+            let full_route = join_public_route_paths(
+                route.path_prefix.as_str(),
+                handler.route_path.as_deref().unwrap_or("/"),
+            );
+            let Some(handler_path) = split_public_handler_path(normalized_path, &full_route) else {
+                continue;
+            };
+            let route_len = full_route.len();
+            let route_match = PublicRouteMatch::LocalRead(LocalReadRouteMatch {
+                service_name: service_name.clone(),
+                service_version: deployment.current_service_version.clone(),
+                handler_name: handler.handler_name.to_string(),
+                handler_class,
+                handler_path,
+            });
+            let sort_key = (
+                service_name.clone(),
+                deployment.current_service_version.clone(),
+                handler.handler_name.to_string(),
+            );
+            let replace = best_match
+                .as_ref()
+                .is_none_or(|(best_len, _, best_sort_key)| {
+                    route_len > *best_len || (route_len == *best_len && sort_key < *best_sort_key)
+                });
+            if replace {
+                best_match = Some((route_len, route_match, sort_key));
+            }
+        }
+    }
+
+    best_match.map(|(_route_len, route_match, _)| route_match)
+}
+
 fn normalize_public_route_host(host: &str) -> &str {
     host.trim()
         .trim_end_matches('.')
@@ -13893,6 +14013,63 @@ mod tests {
         assert!(
             resolve_public_local_read_route(&app, "wrong.sora", "/app/assets").is_none(),
             "host matching must stay authoritative"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_public_route_projects_native_process_services() {
+        use iroha_core::state::World;
+
+        let mut world = World::new();
+        let mut bundle = fixture_bundle("2026.04.0");
+        bundle.container.runtime =
+            iroha_data_model::soracloud::SoraContainerRuntimeV1::NativeProcess;
+        let service_name = bundle.service.service_name.clone();
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (
+                bundle.service.service_name.to_string(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                service_name.clone(),
+                SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name,
+                    current_service_version: bundle.service.service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    service_configs: BTreeMap::new(),
+                    service_secrets: BTreeMap::new(),
+                },
+            );
+        let app = mk_app_state_for_tests_with_world(world);
+
+        let route_match = resolve_public_route(&app, "portal.sora", "/app/v1/health")
+            .expect("native process route");
+        match route_match {
+            PublicRouteMatch::NativeProcess(route_match) => {
+                assert_eq!(route_match.service_name, "web_portal");
+                assert_eq!(route_match.service_version, "2026.04.0");
+                assert_eq!(route_match.request_path, "/v1/health");
+            }
+            other => panic!("expected native-process route, got {other:?}"),
+        }
+
+        assert!(
+            resolve_public_route(&app, "wrong.sora", "/app/v1/health").is_none(),
+            "host matching must stay authoritative for native services"
         );
     }
 

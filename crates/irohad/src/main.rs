@@ -4853,6 +4853,7 @@ impl Iroha {
             kura.clone(),
             config.common.peer.clone(),
             trusted_peers,
+            trusted.pops.clone(),
             network.clone(),
             Arc::clone(&state),
             block_sync_telemetry,

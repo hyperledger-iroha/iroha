@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: b066f95804af834930008b4a7c654778f32f6467bcecbdee47d09997cbd35122
-source_last_modified: "2025-11-09T11:46:26.108135+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 0541f1f5775744c518f4f102326e725d73043b1756bb62a979f8eed4cc9472e6
+source_last_modified: "2026-04-08T09:19:38.795296+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -22,7 +22,7 @@ source: examples/transfer/transfer.ko
 
 - Предварительно пополните Alice целевым активом (например через сниппет `register and mint` или потоки quickstart SDK).
 - Выполните точку входа `do_transfer`, чтобы перевести 10 единиц от Alice к Bob, удовлетворяя разрешению `AssetTransferRole`.
-- Проверьте балансы (`FindAccountAssets`, `iroha_cli ledger assets list`) или подпишитесь на события pipeline, чтобы наблюдать результат перевода.
+- Проверьте балансы (`FindAccountAssets`, `iroha ledger asset list all --verbose`) или подпишитесь на события pipeline, чтобы наблюдать результат перевода.
 
 ## Связанные руководства SDK
 

@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/getting-started.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8e153602cfb465bd5f65bab0cf97c44604bba982a7a7f1edc8d5af8fd67a9e29
-source_last_modified: "2026-01-22T16:26:46.504508+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 3754b8549f90a4f325bb58a6b4e24bc052ec65d46a6352995c13555a8d5544bf
+source_last_modified: "2026-04-08T09:18:21.504260+00:00"
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -22,7 +22,7 @@ translator: machine-google-reviewed
 2. 构建或下载支持的二进制文件：
    - `koto_compile` – 发出 IVM/Norito 字节码的 Kotodama 编译器
    - `ivm_run` 和 `ivm_tool` – 本地执行和检查实用程序
-   - `iroha_cli` – 用于通过 Torii 进行合约部署
+   - `iroha` – 用于通过 Torii 进行合约部署
 
    存储库 Makefile 需要 `PATH` 上的这些二进制文件。你可以
    下载预构建的工件或从源代码构建它们。如果你编译
@@ -34,7 +34,7 @@ translator: machine-google-reviewed
 
 3. 确保到达部署步骤时 Iroha 节点正在运行。的
    下面的示例假设 Torii 可通过您中配置的 URL 访问
-   `iroha_cli` 配置文件 (`~/.config/iroha/cli.toml`)。
+   `iroha` 配置文件 (`~/.config/iroha/cli.toml`)。
 
 ## 1.编译Kotodama合约
 
@@ -80,14 +80,14 @@ ivm_run target/examples/hello.to --args '{}'
 在发布之前迭代合约逻辑时，在本地运行非常有用
 它在链上。
 
-## 4. 通过 `iroha_cli` 部署
+## 4. 通过 `iroha` 部署
 
 当您对合同感到满意时，请使用 CLI 将其部署到节点。
 提供授权帐户、其签名密钥以及 `.to` 文件或
 Base64 有效负载：
 
 ```sh
-iroha_cli app contracts deploy \
+iroha app contracts deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -98,14 +98,13 @@ iroha_cli app contracts deploy \
 响应中显示的哈希可用于检索清单或列出实例：
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha app contracts manifest get --code-hash 0x<hash>
 ```
 
 ## 5. 运行 Torii
 
 注册字节码后，您可以通过提交指令来调用它
-引用存储的代码（例如，通过 `iroha_cli ledger transaction submit`
+引用存储的代码（例如，通过 `iroha app contracts call --contract-address <contract-address> --entrypoint main --wait`
 或您的应用程序客户端）。确保帐户权限允许所需的
 系统调用（`set_account_detail`、`transfer_asset` 等）。
 
@@ -118,7 +117,7 @@ iroha_cli app contracts instances --namespace apps --table
   两者都以 ABI v1 为目标（运行 `koto_compile --abi`，不带参数列出
   支持）。
 - CLI 接受十六进制或 Base64 签名密钥。为了进行测试，您可以使用
-  由 `iroha_cli tools crypto keypair` 发出的密钥。
+  由 `kagami keys --json` 发出的密钥。
 - 调试 Norito 有效负载时，`ivm_tool disassemble` 子命令有帮助
   将指令与 Kotodama 源关联起来。
 

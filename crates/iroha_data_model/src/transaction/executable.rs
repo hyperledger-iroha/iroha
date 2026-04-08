@@ -170,6 +170,11 @@ pub fn transaction_gas_limit_metadata_key() -> &'static Name {
 /// Parse the optional transaction `gas_limit` metadata entry.
 ///
 /// Returns `Ok(None)` when the metadata key is absent.
+///
+/// # Errors
+///
+/// Returns [`TransactionGasLimitError::Invalid`] when the metadata value cannot be decoded as
+/// `u64`, and [`TransactionGasLimitError::Zero`] when the decoded value is zero.
 pub fn parse_transaction_gas_limit(
     metadata: &Metadata,
 ) -> Result<Option<u64>, TransactionGasLimitError> {
@@ -187,6 +192,11 @@ pub fn parse_transaction_gas_limit(
 }
 
 /// Parse the required transaction `gas_limit` metadata entry.
+///
+/// # Errors
+///
+/// Returns [`TransactionGasLimitError::Missing`] when the metadata key is absent, plus the same
+/// decode and positivity errors returned by [`parse_transaction_gas_limit`].
 pub fn require_transaction_gas_limit(metadata: &Metadata) -> Result<u64, TransactionGasLimitError> {
     parse_transaction_gas_limit(metadata)?.ok_or(TransactionGasLimitError::Missing)
 }

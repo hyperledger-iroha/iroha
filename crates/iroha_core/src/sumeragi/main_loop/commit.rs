@@ -3652,6 +3652,38 @@ impl Actor {
         }
 
         let now = Instant::now();
+        if height == self.committed_height_snapshot().saturating_add(1) {
+            let stall_window = self.frontier_slot_lag_window();
+            let dwell_window = stall_window.checked_mul(2).unwrap_or(stall_window);
+            let request_stalled = self
+                .pending
+                .missing_commit_qc_requests
+                .get(&block_hash)
+                .is_some_and(|stats| {
+                    now.saturating_duration_since(stats.last_dependency_progress) >= stall_window
+                        || now.saturating_duration_since(stats.first_seen) >= dwell_window
+                });
+            if request_stalled || self.frontier_slot_lag_window_expired(height, now) {
+                let _ = self.handle_frontier_slot_event(
+                    now,
+                    super::FrontierSlotEvent::OnLagWindowExpired {
+                        reason: "frontier_stall_reset",
+                    },
+                );
+            }
+            if self.frontier_slot_allows_deep_catchup(height, "frontier_stall_reset") {
+                info!(
+                    height,
+                    view,
+                    block = %block_hash,
+                    request_stalled,
+                    trigger,
+                    "routing known-block commit-QC recovery through frontier stall-reset catch-up"
+                );
+                return true;
+            }
+        }
+
         let retry_window = self.missing_block_retry_window_with_rbc_progress(
             block_hash,
             height,

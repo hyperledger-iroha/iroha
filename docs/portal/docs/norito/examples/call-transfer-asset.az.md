@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: dcd8de175a7c5172158a03e1a25b254c90a11e62c173f95b8d9e4a387df6ba09
 source_last_modified: "2026-03-26T13:01:47.372931+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ Kotodama giriş nöqtəsinin daxili metadata yoxlaması ilə `transfer_asset` t�
 
 - Müqavilə orqanını (məsələn, müqavilə hesabı üçün `<i105-account-id>`) köçürəcəyi aktivlə maliyyələşdirin və səlahiyyətli orqana `CanTransfer` rolu və ya ekvivalent icazə verəcək.
 - Zəncirvari avtomatlaşdırmanın ev sahibi zənglərini əhatə edə bilməsini əks etdirərək, müqavilə hesabından 5 vahidi Boba (`<i105-account-id>`) köçürmək üçün `call_transfer_asset` giriş nöqtəsinə zəng edin.
-- `FindAccountAssets` və ya `iroha_cli ledger asset list --account <i105-account-id>` vasitəsilə balansları yoxlayın və köçürmə kontekstinə daxil edilmiş metadata qoruyucusunu təsdiqləmək üçün hadisələri yoxlayın.
+- `FindAccountAssets` və ya `iroha ledger asset list all --verbose` vasitəsilə balansları yoxlayın və köçürmə kontekstinə daxil edilmiş metadata qoruyucusunu təsdiqləmək üçün hadisələri yoxlayın.
 
 ## Əlaqədar SDK təlimatları
 

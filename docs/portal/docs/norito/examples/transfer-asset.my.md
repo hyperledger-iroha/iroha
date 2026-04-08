@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 479d552d0f641875518c62059be1084af6ddf99213662a753c73ea57512b8e5f
 source_last_modified: "2026-04-02T18:24:28.189405+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ SDK အမြန်စတင်မှုများနှင့် လယ်ဂ
 
 - ပစ်မှတ်ပိုင်ဆိုင်မှုဖြင့် Alice ကို ကြိုတင်ရန်ပုံငွေ (ဥပမာ "စာရင်းသွင်းခြင်းနှင့် mint" အတိုအထွာ သို့မဟုတ် SDK အမြန်စတင်စီးဆင်းမှုများမှတစ်ဆင့်)။
 - `AssetTransferRole` ခွင့်ပြုချက်ကို ကျေနပ်စေခြင်းဖြင့် Alice မှ Bob သို့ ယူနစ် 10 လုံးကို ရွှေ့ရန် `do_transfer` ဝင်ခွင့်အမှတ်ကို လုပ်ဆောင်ပါ။
-- Query balance (`FindAccountAssets`, `iroha_cli ledger asset list`) သို့မဟုတ် လွှဲပြောင်းမှုရလဒ်ကို စောင့်ကြည့်လေ့လာရန် ပိုက်လိုင်းဖြစ်ရပ်များသို့ စာရင်းသွင်းပါ။
+- Query balance (`FindAccountAssets`, `iroha ledger asset list all --verbose`) သို့မဟုတ် လွှဲပြောင်းမှုရလဒ်ကို စောင့်ကြည့်လေ့လာရန် ပိုက်လိုင်းဖြစ်ရပ်များသို့ စာရင်းသွင်းပါ။
 
 ## သက်ဆိုင်ရာ SDK လမ်းညွှန်များ
 

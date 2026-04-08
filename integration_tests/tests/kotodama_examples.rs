@@ -1,13 +1,13 @@
 #![allow(clippy::all, clippy::pedantic, clippy::nursery, clippy::restriction)]
-//! Kotodama + IVM example runner (ignored by default)
+//! Kotodama + IVM example runner with optional external tool coverage.
 //!
 //! This integration test attempts to compile and run the example in `examples/hello/hello.ko`
 //! if the external tools `koto_compile` and `ivm_run` are available on PATH (or specified via
-//! environment variables `KOTO_BIN` and `IVM_BIN`). It is ignored by default, so it won't fail CI
-//! when the tools are not present.
+//! environment variables `KOTO_BIN` and `IVM_BIN`). The tests self-skip when those tools are not
+//! present, so they do not fail CI on hosts without the local Kotodama toolchain.
 //!
 //! Run manually with:
-//!   cargo test -p `integration_tests` --test `kotodama_examples` -- --ignored --nocapture
+//!   cargo test -p `integration_tests` --test `nexus_and_streaming` `kotodama_examples::` -- --nocapture
 
 use std::{
     env, fs,

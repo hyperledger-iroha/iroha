@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 479d552d0f641875518c62059be1084af6ddf99213662a753c73ea57512b8e5f
 source_last_modified: "2026-04-02T18:24:28.189405+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: examples/transfer/transfer.ko
 
 - წინასწარ დააფინანსეთ Alice სამიზნე აქტივით (მაგალითად, „რეგისტრაცია და ზარაფხანა“ სნიპეტის ან SDK სწრაფი დაწყების ნაკადების მეშვეობით).
 - შეასრულეთ `do_transfer` შესასვლელი წერტილი, რომ გადაიტანოთ 10 ერთეული ალისიდან ბობში, რაც აკმაყოფილებს `AssetTransferRole` ნებართვას.
-- მოითხოვეთ ნაშთები (`FindAccountAssets`, `iroha_cli ledger asset list`) ან გამოიწერეთ მილსადენის ღონისძიებები გადაცემის შედეგზე დასაკვირვებლად.
+- მოითხოვეთ ნაშთები (`FindAccountAssets`, `iroha ledger asset list all --verbose`) ან გამოიწერეთ მილსადენის ღონისძიებები გადაცემის შედეგზე დასაკვირვებლად.
 
 ## დაკავშირებული SDK სახელმძღვანელო
 

@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/nft-flow.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 41a944c3e016d0dc96a0edb3559700670a7bd57b437751a777df8b35567b34fb
-source_last_modified: "2025-11-23T15:30:33.687691+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 7c00f9054efaa3e657b07033da99a6f6e700f7bad64325c2f1f6621b27469bef
+source_last_modified: "2026-04-08T09:19:38.795735+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -22,7 +22,7 @@ Percorre o ciclo de vida de um NFT do inicio ao fim: cunhagem para o dono, trans
 
 - Garanta que a definicao do NFT (por exemplo `n0#wonderland`) exista junto com as contas de dono/destinatario usadas no trecho (`<i105-account-id>`, `<i105-account-id>`).
 - Invoque o entrypoint `nft_issue_and_transfer` para cunhar o NFT, transferi-lo de Alice para Bob e anexar um sinal de metadados que descreva a emissao.
-- Inspecione o estado do livro razao de NFT com `iroha_cli ledger nfts list --account <id>` ou os equivalentes do SDK para verificar a transferencia, depois confirme que o ativo e removido quando a instrucao de queima roda.
+- Inspecione o estado do livro razao de NFT com `iroha ledger nft list all --verbose` ou os equivalentes do SDK para verificar a transferencia, depois confirme que o ativo e removido quando a instrucao de queima roda.
 
 ## Guias de SDK relacionados
 

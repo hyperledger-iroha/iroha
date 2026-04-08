@@ -10322,6 +10322,31 @@ mod tests {
         state::{State, World, WorldReadOnly},
     };
 
+    fn seed_domain_name_lease_tx(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        owner: &AccountId,
+        domain_id: &DomainId,
+    ) {
+        let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
+        let address =
+            iroha_data_model::account::AccountAddress::from_account_id(owner).expect("address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        state_transaction.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+    }
+
     fn state_with_soracloud_permission(kura: &Arc<Kura>) -> Result<State, eyre::Report> {
         let world = World::with([], [], []);
         let query_handle = LiveQueryStore::start_test();
@@ -10333,6 +10358,11 @@ mod tests {
         let mut state_transaction = state_block.transaction();
         let wonderland: iroha_data_model::domain::DomainId =
             DomainId::try_new("wonderland", "universal")?;
+        seed_domain_name_lease_tx(
+            &mut state_transaction,
+            &SAMPLE_GENESIS_ACCOUNT_ID,
+            &wonderland,
+        );
         Register::domain(Domain::new(wonderland.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         Register::account(Account::new(ALICE_ID.clone()))
@@ -13081,29 +13111,26 @@ mod tests {
     }
 
     #[test]
-    fn deploy_soracloud_service_rejects_native_process_runtime() -> Result<(), eyre::Report> {
+    fn deploy_soracloud_service_accepts_native_process_runtime() -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
         let mut bundle = sample_bundle("portal", "1.0.0", 0);
         bundle.container.runtime = SoraContainerRuntimeV1::NativeProcess;
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
         let mut stx = state_block.transaction();
 
-        let error = isi::DeploySoracloudService {
+        isi::DeploySoracloudService {
             bundle: bundle.clone(),
             initial_service_configs: BTreeMap::new(),
             initial_service_secrets: BTreeMap::new(),
             provenance: bundle_provenance(&bundle),
         }
         .execute(&ALICE_ID, &mut stx)
-        .expect_err("native-process deployment must be rejected");
-        assert!(
-            format!("{error}").contains("admits only `Ivm`"),
-            "unexpected error: {error:?}"
-        );
+        .expect("native-process deployment should be admitted");
         Ok(())
     }
 

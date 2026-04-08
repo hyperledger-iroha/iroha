@@ -21466,6 +21466,70 @@ async fn known_block_commit_qc_recovery_routes_frontier_fetch_through_exact_bloc
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn known_block_commit_qc_recovery_stall_enters_frontier_deep_catchup() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = insert_validated_pending(actor, block);
+    let targets = actor.effective_commit_topology();
+
+    assert!(
+        actor.maybe_request_known_block_commit_qc_recovery(
+            block_hash,
+            height,
+            view,
+            &targets,
+            None,
+            "test_known_block_exact_frontier_commit_qc_stall",
+        ),
+        "frontier known-block recovery should seed exact block-body repair before the stall window elapses"
+    );
+
+    let stale_at = Instant::now()
+        .checked_sub(
+            actor
+                .frontier_slot_lag_window()
+                .checked_mul(2)
+                .unwrap_or_else(|| actor.frontier_slot_lag_window())
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or_else(Instant::now);
+    actor
+        .pending
+        .missing_commit_qc_requests
+        .get_mut(&block_hash)
+        .expect("known-block commit-QC request retained")
+        .first_seen = stale_at;
+    actor
+        .pending
+        .missing_commit_qc_requests
+        .get_mut(&block_hash)
+        .expect("known-block commit-QC request retained")
+        .last_dependency_progress = Instant::now();
+
+    assert!(
+        actor.retry_known_block_commit_qc_requests(Instant::now(), None),
+        "stalled known-block commit-QC recovery should hand off to frontier catch-up once dwell expires"
+    );
+    assert!(
+        actor.frontier_slot.as_ref().is_some_and(|slot| {
+            matches!(
+                slot.mode,
+                super::FrontierSlotMode::DeepCatchup | super::FrontierSlotMode::PassiveCatchup
+            )
+        }),
+        "lag-window expiry should move known-block commit-QC recovery into exact-frontier catch-up mode"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_body_response_retains_same_height_known_block_commit_qc_repair_after_frontier_view_advances()
  {
     let mut harness = test_actor_harness(4).await;
@@ -60048,6 +60112,64 @@ fn new_view_tracker_returns_none_without_quorum() {
 }
 
 #[test]
+fn new_view_tracker_selects_highest_view_with_quorum_for_target_height() {
+    let mut tracker = NewViewTracker::default();
+    let qc = sample_qc_ref(7, 0);
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_d = PeerId::new(KeyPair::random().public_key().clone());
+
+    tracker.record(8, 0, peer_a.clone(), qc);
+    tracker.record(8, 0, peer_b.clone(), qc);
+    tracker.record(8, 2, peer_a.clone(), qc);
+    tracker.record(8, 2, peer_b.clone(), qc);
+    tracker.record(8, 2, peer_c.clone(), qc);
+    tracker.record(9, 0, peer_a.clone(), qc);
+    tracker.record(9, 0, peer_b.clone(), qc);
+    tracker.record(9, 0, peer_c.clone(), qc);
+
+    let roster = vec![
+        peer_a.clone(),
+        peer_b.clone(),
+        peer_c.clone(),
+        peer_d.clone(),
+    ];
+    let selection = tracker
+        .select_with_quorum_for_height(8, 3, Some(&peer_d), &roster)
+        .expect("quorum reached for target height");
+    assert_eq!(selection.key, (8, 2));
+    assert_eq!(selection.highest_qc.height, 7);
+    assert_eq!(selection.highest_qc.view, 0);
+    assert_eq!(selection.quorum, 4);
+}
+
+#[test]
+fn new_view_tracker_height_scoped_selection_ignores_other_height_quorums() {
+    let mut tracker = NewViewTracker::default();
+    let qc = sample_qc_ref(7, 0);
+    let peer_a = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_b = PeerId::new(KeyPair::random().public_key().clone());
+    let peer_c = PeerId::new(KeyPair::random().public_key().clone());
+
+    tracker.record(3, 400, peer_a.clone(), qc);
+    tracker.record(3, 400, peer_b.clone(), qc);
+    tracker.record(3, 400, peer_c.clone(), qc);
+    tracker.record(8, 0, peer_a.clone(), qc);
+    tracker.record(8, 0, peer_b.clone(), qc);
+    tracker.record(8, 0, peer_c.clone(), qc);
+    tracker.record(9, 1, peer_a.clone(), qc);
+    tracker.record(9, 1, peer_b.clone(), qc);
+    tracker.record(9, 1, peer_c.clone(), qc);
+
+    let roster = vec![peer_a, peer_b, peer_c];
+    let selection = tracker
+        .select_with_quorum_for_height(8, 3, None, &roster)
+        .expect("quorum reached at frontier height");
+    assert_eq!(selection.key, (8, 0));
+}
+
+#[test]
 fn new_view_tracker_ignores_senders_outside_roster() {
     let mut tracker = NewViewTracker::default();
     let qc = sample_qc_ref(4, 1);
@@ -87668,6 +87790,8 @@ async fn block_sync_block_created_retries_ready_after_existing_session_hydration
             false,
             false,
             false,
+            false,
+            None,
         )
         .expect("handle duplicate BlockCreated from block sync");
 
@@ -92187,9 +92311,180 @@ async fn commit_qc_from_validator_checkpoint_rejects_uncertified_sidecar() {
 
     assert!(
         actor
-            .commit_qc_from_validator_checkpoint(block_hash, height, view, &checkpoint)
+            .commit_qc_from_validator_checkpoint(block_hash, height, view, &checkpoint, None)
             .is_none(),
         "checkpoint-only QC synthesis must reject uncertified sidecars"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn commit_qc_from_validator_checkpoint_uses_provided_stake_snapshot() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Npos;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let signers: BTreeSet<ValidatorIndex> = [0_u32, 1_u32]
+        .into_iter()
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let aggregate = aggregate_signature_for_bitmap(
+        &actor.common_config.chain,
+        super::NPOS_TAG,
+        Phase::Commit,
+        block_hash,
+        height,
+        view,
+        epoch,
+        &signers_bitmap,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        view,
+        block_hash,
+        zero_state_root(),
+        zero_state_root(),
+        roster.clone(),
+        signers_bitmap,
+        aggregate.clone(),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+
+    assert!(
+        actor
+            .commit_qc_from_validator_checkpoint(block_hash, height, view, &checkpoint, None)
+            .is_none(),
+        "without the sender-provided stake snapshot this checkpoint should fail local stake quorum"
+    );
+
+    let provided_snapshot = super::stake_snapshot::CommitStakeSnapshot {
+        validator_set_hash: HashOf::new(&roster),
+        entries: vec![
+            super::stake_snapshot::CommitStakeSnapshotEntry {
+                peer_id: roster[0].clone(),
+                stake: iroha_primitives::numeric::Numeric::new(4, 0),
+            },
+            super::stake_snapshot::CommitStakeSnapshotEntry {
+                peer_id: roster[1].clone(),
+                stake: iroha_primitives::numeric::Numeric::new(1, 0),
+            },
+            super::stake_snapshot::CommitStakeSnapshotEntry {
+                peer_id: roster[2].clone(),
+                stake: iroha_primitives::numeric::Numeric::new(1, 0),
+            },
+            super::stake_snapshot::CommitStakeSnapshotEntry {
+                peer_id: roster[3].clone(),
+                stake: iroha_primitives::numeric::Numeric::new(1, 0),
+            },
+        ],
+    };
+
+    let qc = actor
+        .commit_qc_from_validator_checkpoint(
+            block_hash,
+            height,
+            view,
+            &checkpoint,
+            Some(&provided_snapshot),
+        )
+        .expect("provided stake snapshot should restore checkpoint-only QC synthesis");
+    assert_eq!(qc.subject_block_hash, block_hash);
+    assert_eq!(qc.height, height);
+    assert_eq!(qc.view, view);
+    assert_eq!(qc.epoch, epoch);
+    assert_eq!(qc.mode_tag, super::NPOS_TAG);
+    assert_eq!(qc.aggregate.bls_aggregate_signature, aggregate);
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_checkpoint_only_synthesizes_qc_without_missing_request() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let view = 0_u64;
+    let epoch = actor.epoch_for_height(height);
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+
+    assert!(
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
+        "test precondition: generic block-sync path should start without a missing-block request"
+    );
+
+    let roster = actor.effective_commit_topology();
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    let signers: BTreeSet<ValidatorIndex> = (0..required)
+        .map(|idx| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        view,
+        epoch,
+        signers_bitmap.clone(),
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let checkpoint = ValidatorSetCheckpoint::new(
+        height,
+        view,
+        block_hash,
+        qc.parent_state_root,
+        qc.post_state_root,
+        roster,
+        signers_bitmap,
+        qc.aggregate.bls_aggregate_signature.clone(),
+        VALIDATOR_SET_HASH_VERSION_V1,
+        None,
+    );
+
+    let mut update = super::message::BlockSyncUpdate::from(&block);
+    update.commit_qc = None;
+    update.validator_checkpoint = Some(checkpoint);
+    update.commit_votes.clear();
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("checkpoint-only block sync update");
+
+    assert!(
+        actor.block_known_locally(block_hash),
+        "checkpoint-only block sync update should materialize the block locally"
+    );
+    assert!(
+        actor
+            .qc_cache
+            .contains_key(&(Phase::Commit, block_hash, height, view, epoch)),
+        "checkpoint-only block sync update should synthesize and cache a commit QC on the generic path"
     );
 
     harness.shutdown.send();
@@ -92288,6 +92583,8 @@ async fn block_created_skips_pending_insert_while_processing() {
 
     let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
     let block_hash = block.hash();
+    let block_height = block.header().height().get();
+    let block_view = block.header().view_change_index();
     actor.pending.pending_processing.set(Some(block_hash));
     actor
         .pending
@@ -92307,6 +92604,96 @@ async fn block_created_skips_pending_insert_while_processing() {
     assert!(
         !actor.pending.pending_blocks.contains_key(&block_hash),
         "BlockCreated should not insert a pending entry while the block is being processed"
+    );
+    assert!(
+        actor
+            .deferred_block_sync_updates
+            .contains_key(&(block_height, block_view, block_hash)),
+        "BlockCreated should preserve the payload for replay while the block is being processed"
+    );
+    assert!(
+        actor.local_signed_block_for_hash(block_hash).is_some(),
+        "deferred BlockCreated payload should remain locally recoverable while processing is active"
+    );
+
+    actor.pending.pending_processing.set(None);
+    actor.pending.pending_processing_parent.set(None);
+
+    assert!(
+        actor.try_replay_deferred_block_sync_updates(),
+        "clearing pending processing should replay the deferred BlockCreated payload"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "replayed BlockCreated should restore the pending entry after processing completes"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_created_skips_pending_insert_while_commit_inflight() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, 1, 0, None);
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let pending = PendingBlock::new(block.clone(), payload_hash, 1, 0);
+    let mut lock = sample_qc_ref(1, 0);
+    lock.phase = Phase::Commit;
+    lock.subject_block_hash = block_hash;
+    let commit_topology = actor.effective_commit_topology();
+    actor.subsystems.commit.inflight = Some(CommitInFlight {
+        id: 1,
+        lock,
+        block_hash,
+        pending,
+        commit_topology: commit_topology.clone(),
+        signature_topology: commit_topology,
+        qc_signers: None,
+        commit_qc: None,
+        allow_quorum_bypass: false,
+        post_commit_qc: None,
+        enqueue_time: Instant::now(),
+    });
+
+    actor
+        .handle_block_created(
+            super::message::BlockCreated {
+                block: block.clone(),
+                frontier: None,
+            },
+            None,
+        )
+        .expect("handle BlockCreated");
+
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "BlockCreated should not insert a pending entry while commit is in flight"
+    );
+    assert!(
+        actor.deferred_block_sync_updates.contains_key(&(
+            block.header().height().get(),
+            block.header().view_change_index(),
+            block_hash
+        )),
+        "BlockCreated should preserve the payload for replay while commit is in flight"
+    );
+    assert!(
+        actor.block_payload_available_for_progress(block_hash),
+        "deferred BlockCreated payload should remain available for QC replay while commit is in flight"
+    );
+
+    actor.subsystems.commit.inflight = None;
+
+    assert!(
+        actor.try_replay_deferred_block_sync_updates(),
+        "clearing commit inflight should replay the deferred BlockCreated payload"
+    );
+    assert!(
+        actor.pending.pending_blocks.contains_key(&block_hash),
+        "replayed BlockCreated should restore the pending entry after commit inflight clears"
     );
 
     harness.shutdown.send();
@@ -110326,6 +110713,88 @@ async fn block_sync_update_keeps_aborted_next_height_payload_sparse_without_comm
     assert!(
         !actor.block_known_locally(block_hash),
         "aborted pending payload should remain unavailable for consensus progression without commit QC"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_revives_aborted_next_height_payload_with_commit_qc() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let view = actor.state.view();
+    let height = u64::try_from(view.height())
+        .unwrap_or(u64::MAX)
+        .saturating_add(1);
+    drop(view);
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, 0, Some(genesis_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    let mut pending = PendingBlock::new(block.clone(), payload_hash, height, 0);
+    pending.mark_aborted();
+    actor.pending.pending_blocks.insert(block_hash, pending);
+    actor.pending.missing_block_requests.remove(&block_hash);
+
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let signers: BTreeSet<ValidatorIndex> = topology
+        .as_ref()
+        .iter()
+        .enumerate()
+        .map(|(idx, _)| ValidatorIndex::try_from(idx).expect("validator index fits"))
+        .collect();
+    let signers_bitmap = super::build_signers_bitmap(&signers, topology.as_ref().len());
+    let epoch = actor.epoch_for_height(height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        height,
+        0,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+
+    let roster_cache =
+        roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
+    let mut update = super::block_sync_update_with_roster(
+        &block,
+        actor.state.as_ref(),
+        actor.kura.as_ref(),
+        ConsensusMode::Permissioned,
+        actor.common_config.trusted_peers.value(),
+        actor.common_config.peer.id(),
+        &roster_cache,
+    );
+    update.commit_qc = Some(qc);
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+    drain_known_block_qc_work(actor);
+
+    let pending_after = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending block should remain cached");
+    assert!(
+        !pending_after.aborted,
+        "authoritative block-sync recovery should revive an aborted next-height payload"
+    );
+    assert!(
+        pending_after.commit_qc_observed(),
+        "commit QC sidecar should remain attached to the revived payload"
+    );
+    assert!(
+        actor.block_known_locally(block_hash),
+        "revived payload should become known for consensus progression"
     );
 
     harness.shutdown.send();

@@ -1,6 +1,59 @@
 # Status
 
-Last updated: 2026-04-07
+Last updated: 2026-04-08
+
+## 2026-04-08 Follow-up: Kotodama hello example and CLI crate roles now match the actual raw-IVM entrypoint flow
+- `/Users/takemiyamakoto/dev/iroha/examples/hello/hello.ko` now declares a
+  public `main()` entrypoint that logs the greeting and calls
+  `write_detail()`, so `ivm_run` and `iroha transaction ivm` reach the same
+  state-writing path without requiring selector metadata.
+- `/Users/takemiyamakoto/dev/iroha/examples/README.md` and the Norito getting
+  started / quickstart docs now describe raw IVM execution as starting from the
+  compiled default entrypoint rather than implying that every declared function
+  runs automatically.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha/src/lib.rs`,
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha/README.md`, and
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/README.md` now spell out
+  that `iroha` is the reusable Rust client library while `iroha_cli` is the
+  crate that builds the `iroha` CLI binary.
+- `/Users/takemiyamakoto/dev/iroha/crates/kotodama_lang/src/compiler.rs` now
+  contains a focused regression test that locks in the current startup rule:
+  `main` is laid out ahead of `hajimari` when both are present, so raw VM
+  startup enters `main`.
+- The current Norito portal docs and snippet generator now use the real end-user
+  executable name `iroha` for deploy/call/list examples, keep crate/package
+  references such as `crates/iroha_cli` only where they are semantically
+  correct, and replace stale commands such as `iroha_cli app contracts
+  instances` with help-backed forms (`iroha app contracts manifest get`,
+  `iroha app contracts call`, `iroha ledger asset list all --verbose`, and
+  `iroha ledger nft list all --verbose`).
+- `docs/portal/scripts/norito-snippets-config.mjs` and the generated
+  `docs/portal/docs/norito/examples/*.md` pages are back in sync, and the
+  current translated Norito docs now carry refreshed source hashes / review
+  metadata alongside the same executable-name corrections.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/tests/kotodama_hello_entrypoint_apply.rs`
+  adds deterministic runtime coverage for the raw startup path by compiling the
+  real `examples/hello/hello.ko`, executing it through `IVM + CoreHost`,
+  applying the queued instruction into a test `State`, and asserting that the
+  authority account receives `example = {"hello":"world"}`.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/kotodama_examples.rs`
+  now documents the test as optional external-tool coverage and points manual
+  runs at the real `nexus_and_streaming` test target instead of the nonexistent
+  standalone `kotodama_examples` target.
+- `/Users/takemiyamakoto/dev/iroha/docs/portal/scripts/volunteer-brief-validator.mjs`
+  now falls back from `cargo xtask ...` to `cargo run -p xtask --bin xtask -- ...`
+  so portal prebuilds work on hosts that do not have a global `cargo-xtask`
+  subcommand installed.
+- Focused validation completed in this slice:
+  - `cargo test -p kotodama_lang main_entrypoint_is_compiled_first_before_hajimari -- --nocapture`
+  - `cargo test -p kotodama_lang trigger_callback_entrypoint_is_compiled_first_even_with_private_helpers -- --nocapture`
+  - `cargo test -p iroha_core raw_kotodama_hello_main_entrypoint_writes_expected_detail -- --nocapture` (pass; the new runtime regression printed `[IVM] Hello from Kotodama` and committed the expected detail write)
+  - `cd docs/portal && npm run sync-norito-snippets` (pass)
+  - `cd docs/portal && npm run test:norito-snippets` (pass)
+  - `cd docs/portal && DOCS_OAUTH_ALLOW_INSECURE=1 npm run build` (prebuild now passes through the xtask fallback; the Docusaurus build still fails later on pre-existing duplicate doc IDs in translated docs outside the Norito slice)
+  - `cargo test -p integration_tests --test kotodama_examples -- --nocapture` (fails immediately because `integration_tests` has `autotests = false`; the file is mounted under `--test nexus_and_streaming`)
+  - `cargo test -p integration_tests --test nexus_and_streaming compile_and_run_hello -- --nocapture` (pass; the test self-skips on this host because `koto_compile` is not on `PATH`)
+  - `cargo fmt --all`
 
 ## 2026-04-07 Follow-up: the grouped `core_api` harness is green on the patched tree
 - `/Users/takemiyamakoto/dev/iroha/crates/iroha_test_network/src/lib.rs`

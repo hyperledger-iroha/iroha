@@ -52,6 +52,7 @@ impl Actor {
         block_height: u64,
         block_view: u64,
         checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<&CommitStakeSnapshot>,
     ) -> Option<crate::sumeragi::consensus::Qc> {
         if checkpoint.block_hash != block_hash {
             warn!(
@@ -82,17 +83,29 @@ impl Actor {
         }
         let (consensus_mode, mode_tag, _prf_seed) = self.consensus_context_for_height(block_height);
         let expected_epoch = self.epoch_for_height(block_height);
-        let stake_snapshot = match consensus_mode {
+        let checkpoint_stake_snapshot = match consensus_mode {
             ConsensusMode::Permissioned => None,
             ConsensusMode::Npos => self
                 .roster_validation_cache
-                .stake_snapshot_for_roster(&checkpoint.validator_set),
+                .inputs_for_roster(&checkpoint.validator_set, consensus_mode, stake_snapshot)
+                .stake_snapshot
+                .or_else(|| {
+                    self.roster_validation_cache
+                        .stake_snapshot_for_roster(&checkpoint.validator_set)
+                }),
         };
-        let inputs = self.roster_validation_cache.inputs_for_roster(
-            &checkpoint.validator_set,
-            consensus_mode,
-            stake_snapshot.as_ref(),
-        );
+        let inputs = match consensus_mode {
+            ConsensusMode::Permissioned => self.roster_validation_cache.inputs_for_roster(
+                &checkpoint.validator_set,
+                consensus_mode,
+                None,
+            ),
+            ConsensusMode::Npos => self.roster_validation_cache.inputs_for_roster(
+                &checkpoint.validator_set,
+                consensus_mode,
+                checkpoint_stake_snapshot.as_ref(),
+            ),
+        };
         let allow_genesis_stub = block_height == 1 && block_view == 0;
         if let Err(err) = super::validate_checkpoint_roster_cached(
             &self.roster_validation_cache,
@@ -1533,6 +1546,7 @@ impl Actor {
                             block_height,
                             block_view,
                             checkpoint,
+                            stake_snapshot.as_ref(),
                         )
                     })
                 });
@@ -1634,6 +1648,11 @@ impl Actor {
                 incoming_qc.is_none() && validator_checkpoint.is_none(),
                 incoming_qc.is_some() || validator_checkpoint.is_some(),
                 has_commit_votes || incoming_qc.is_some() || validator_checkpoint.is_some(),
+                has_commit_votes || incoming_qc.is_some() || validator_checkpoint.is_some(),
+                incoming_qc
+                    .as_ref()
+                    .map(|qc| qc.epoch)
+                    .or_else(|| validator_checkpoint.as_ref().map(|_| expected_epoch)),
             );
             let payload_materialized = result.is_ok()
                 && self.materialize_frontier_block_sync_payload_for_qc_recovery(
@@ -1665,6 +1684,7 @@ impl Actor {
                             block_height,
                             block_view,
                             checkpoint,
+                            stake_snapshot.as_ref(),
                         )
                     })
                 })
@@ -2117,6 +2137,8 @@ impl Actor {
                 true,
                 false,
                 requested_missing_block,
+                false,
+                None,
             );
             let payload_materialized = creation_result.is_ok()
                 && self.materialize_frontier_block_sync_payload_for_qc_recovery(&block, None);
@@ -2483,7 +2505,24 @@ impl Actor {
             );
             process_commit_votes(self);
             // Known blocks may still be waiting on a commit QC (e.g., persisted before QC arrival).
-            if let Some(qc) = incoming_qc.take().or_else(|| selection.commit_qc.clone()) {
+            if let Some(qc) = incoming_qc
+                .take()
+                .or_else(|| selection.commit_qc.clone())
+                .or_else(|| {
+                    selection.checkpoint.as_ref().and_then(|checkpoint| {
+                        self.commit_qc_from_validator_checkpoint(
+                            block_hash,
+                            block_height,
+                            block_view,
+                            checkpoint,
+                            selection
+                                .stake_snapshot
+                                .as_ref()
+                                .or(stake_snapshot.as_ref()),
+                        )
+                    })
+                })
+            {
                 let qc_hash = HashOf::new(&qc);
                 let cached_qc_match = cached_qc_for(
                     &self.qc_cache,
@@ -2630,6 +2669,8 @@ impl Actor {
                             true,
                             false,
                             false,
+                            false,
+                            None,
                         );
                         return Ok(());
                     }
@@ -2675,6 +2716,20 @@ impl Actor {
             let world_view = self.state.world_view();
             incoming_qc
                 .or_else(|| selection.commit_qc.clone())
+                .or_else(|| {
+                    selection.checkpoint.as_ref().and_then(|checkpoint| {
+                        self.commit_qc_from_validator_checkpoint(
+                            block_hash,
+                            block_height,
+                            block_view,
+                            checkpoint,
+                            selection
+                                .stake_snapshot
+                                .as_ref()
+                                .or(stake_snapshot.as_ref()),
+                        )
+                    })
+                })
                 .or_else(|| {
                     crate::block_sync::BlockSynchronizer::block_sync_qc_for_world(
                         &world_view,
@@ -3236,6 +3291,11 @@ impl Actor {
             allow_frontier_owner_preserve_on_payload_mismatch,
             allow_authoritative_frontier_owner_supersede,
             has_commit_votes || incoming_qc_usable || commit_cert_present || checkpoint_present,
+            has_commit_votes || commit_cert_present || checkpoint_present,
+            incoming_qc
+                .as_ref()
+                .map(|qc| qc.epoch)
+                .or_else(|| checkpoint_present.then_some(expected_epoch)),
         );
         let block_apply_ms =
             u64::try_from(block_apply_start.elapsed().as_millis()).unwrap_or(u64::MAX);

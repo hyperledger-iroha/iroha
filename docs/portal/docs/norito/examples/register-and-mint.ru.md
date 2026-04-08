@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/register-and-mint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c30c710be94cd99f3c7a0484040155bf63ff4dc0d464d76237bddc8bf589ef26
-source_last_modified: "2025-11-07T11:59:47.168250+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 470eb5de8cd9a7f94275062d1e8c3a448a2d734bf86f650ce94a3971baa3527d
+source_last_modified: "2026-04-08T09:19:38.793794+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -22,7 +22,7 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 - Убедитесь, что аккаунт назначения (например `<i105-account-id>`) существует, повторяя фазу подготовки в каждом quickstart SDK.
 - Вызовите точку входа `register_and_mint`, чтобы создать определение актива ROSE и выпустить 250 единиц для Alice в одной транзакции.
-- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha_cli ledger assets list --account <i105-account-id>`, чтобы подтвердить успешный выпуск.
+- Проверьте балансы через `client.request(FindAccountAssets)` или `iroha ledger asset list all --verbose`, чтобы подтвердить успешный выпуск.
 
 ## Связанные руководства SDK
 

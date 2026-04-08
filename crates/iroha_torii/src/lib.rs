@@ -220,10 +220,12 @@ use iroha_core::{
     queue::{self, Queue, RoutingDecision},
     soracloud_runtime::{
         SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
-        SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1, SharedSoracloudRuntime,
+        SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1,
+        SORACLOUD_NATIVE_PROCESS_RUNTIME_STATE_FILE_V1, SharedSoracloudRuntime,
         SoracloudLocalReadProxyOutcomeV1, SoracloudLocalReadProxyRequestV1,
         SoracloudLocalReadProxyResponseV1, SoracloudLocalReadRequest,
-        SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
+        SoracloudNativeProcessRuntimeStateV1, SoracloudRuntimeExecutionError,
+        SoracloudRuntimeExecutionErrorKind,
     },
     state::{
         BlockProofError, State as CoreState, StateReadOnly, StateReadOnlyWithTransactions,
@@ -15203,6 +15205,151 @@ fn soracloud_local_read_error_response(
 }
 
 #[cfg(feature = "app_api")]
+fn soracloud_public_runtime_unavailable(message: impl Into<String>) -> Response {
+    Response::builder()
+        .status(StatusCode::SERVICE_UNAVAILABLE)
+        .body(Body::from(message.into()))
+        .unwrap_or_else(|_| StatusCode::SERVICE_UNAVAILABLE.into_response())
+}
+
+#[cfg(feature = "app_api")]
+fn load_native_process_runtime_state(
+    app: &SharedAppState,
+    route_match: &soracloud::NativeProcessRouteMatch,
+) -> Result<SoracloudNativeProcessRuntimeStateV1, SoracloudRuntimeExecutionError> {
+    let Some(runtime) = app.soracloud_runtime.as_ref() else {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            "Soracloud runtime is unavailable on this ingress node",
+        ));
+    };
+    let snapshot = runtime.snapshot();
+    let Some(plan) = snapshot
+        .services
+        .get(&route_match.service_name)
+        .and_then(|versions| versions.get(&route_match.service_version))
+    else {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "native Soracloud runtime plan for service `{}` revision `{}` is unavailable",
+                route_match.service_name, route_match.service_version
+            ),
+        ));
+    };
+    let state_path = PathBuf::from(&plan.materialization_dir)
+        .join(SORACLOUD_NATIVE_PROCESS_RUNTIME_STATE_FILE_V1);
+    let payload = fs::read(&state_path).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Unavailable,
+            format!(
+                "failed to read native Soracloud runtime state {}: {error}",
+                state_path.display()
+            ),
+        )
+    })?;
+    norito::json::from_slice::<SoracloudNativeProcessRuntimeStateV1>(&payload).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "failed to decode native Soracloud runtime state {}: {error}",
+                state_path.display()
+            ),
+        )
+    })
+}
+
+#[cfg(feature = "app_api")]
+async fn proxy_soracloud_public_native_process(
+    State(app): State<SharedAppState>,
+    method: axum::http::Method,
+    uri: axum::http::Uri,
+    headers: HeaderMap,
+    body: Bytes,
+    route_match: soracloud::NativeProcessRouteMatch,
+) -> Response {
+    let runtime_state = match load_native_process_runtime_state(&app, &route_match) {
+        Ok(state) => state,
+        Err(error) => return soracloud_local_read_error_response(error),
+    };
+    if runtime_state.health_status
+        != iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy
+    {
+        return soracloud_public_runtime_unavailable(format!(
+            "native Soracloud service `{}` is {:?}",
+            route_match.service_name, runtime_state.health_status
+        ));
+    }
+    let Some(listen_base_url) = runtime_state.listen_base_url.as_deref() else {
+        return soracloud_public_runtime_unavailable(format!(
+            "native Soracloud service `{}` has no active loopback listener",
+            route_match.service_name
+        ));
+    };
+
+    let reqwest_method = match reqwest::Method::from_bytes(method.as_str().as_bytes()) {
+        Ok(value) => value,
+        Err(error) => {
+            return Response::builder()
+                .status(StatusCode::BAD_REQUEST)
+                .body(Body::from(format!("unsupported request method: {error}")))
+                .unwrap_or_else(|_| StatusCode::BAD_REQUEST.into_response());
+        }
+    };
+    let mut upstream_url = match reqwest::Url::parse(listen_base_url) {
+        Ok(url) => url,
+        Err(error) => {
+            return Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from(format!("invalid native listener URL: {error}")))
+                .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
+        }
+    };
+    upstream_url.set_path(route_match.request_path.as_str());
+    upstream_url.set_query(uri.query());
+
+    let client = reqwest::Client::new();
+    let mut request_builder = client.request(reqwest_method, upstream_url.clone());
+    for (name, value) in &headers {
+        if name == &axum::http::header::HOST || name == &axum::http::header::CONTENT_LENGTH {
+            continue;
+        }
+        request_builder = request_builder.header(name, value);
+    }
+    let upstream_response = match request_builder.body(body).send().await {
+        Ok(response) => response,
+        Err(error) => {
+            return soracloud_public_runtime_unavailable(format!(
+                "native Soracloud service `{}` proxy failed: {error}",
+                route_match.service_name
+            ));
+        }
+    };
+
+    let status = upstream_response.status();
+    let response_headers = upstream_response.headers().clone();
+    let response_body = match upstream_response.bytes().await {
+        Ok(body) => body,
+        Err(error) => {
+            return soracloud_public_runtime_unavailable(format!(
+                "native Soracloud service `{}` returned an unreadable response body: {error}",
+                route_match.service_name
+            ));
+        }
+    };
+    let mut builder = Response::builder().status(status);
+    for (name, value) in &response_headers {
+        if name == axum::http::header::CONTENT_LENGTH {
+            continue;
+        }
+        builder = builder.header(name, value);
+    }
+    builder
+        .body(Body::from(response_body))
+        .unwrap_or_else(|_| StatusCode::BAD_GATEWAY.into_response())
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_soracloud_public_local_read(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
@@ -15238,9 +15385,22 @@ async fn handler_soracloud_public_local_read(
         .get(axum::http::header::HOST)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    let Some(route_match) = soracloud::resolve_public_local_read_route(&app, host, uri.path())
-    else {
+    let Some(route_match) = soracloud::resolve_public_route(&app, host, uri.path()) else {
         return StatusCode::NOT_FOUND.into_response();
+    };
+    let route_match = match route_match {
+        soracloud::PublicRouteMatch::NativeProcess(route_match) => {
+            return proxy_soracloud_public_native_process(
+                State(app),
+                method,
+                uri,
+                headers,
+                body,
+                route_match,
+            )
+            .await;
+        }
+        soracloud::PublicRouteMatch::LocalRead(route_match) => route_match,
     };
 
     let (observed_height, observed_block_hash) = {

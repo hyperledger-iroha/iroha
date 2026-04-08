@@ -15,6 +15,21 @@ pub fn iroha_program() -> eyre::Result<PathBuf> {
         .map_err(Into::into)
 }
 
+/// Resolve the `iroha` CLI binary, reusing an already-built binary when one can be found.
+///
+/// Unlike [`iroha_program`], this helper returns an existing compatible CLI binary immediately
+/// without forcing a freshness rebuild. When no reusable binary is available it falls back to the
+/// normal resolver so exact CLI tests remain self-contained on cold targets.
+pub fn iroha_program_reuse_existing_or_resolve() -> eyre::Result<PathBuf> {
+    prepare_iroha_cli_test_environment();
+    if let Some(path) = find_existing_cli_binary_path() {
+        return Ok(path);
+    }
+    iroha_test_network::Program::Iroha
+        .resolve()
+        .map_err(Into::into)
+}
+
 /// Prepare CLI integration tests to reuse already-built binaries when requested.
 pub fn prepare_iroha_cli_test_environment() {
     enable_reentrant_builds_for_tests();

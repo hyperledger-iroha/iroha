@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 54b6d543cff8df6e8fd50632cfed6265770edc33855f06912be603457c5b517e
 source_last_modified: "2026-04-02T18:31:54.074495+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -27,7 +27,7 @@ Fideicomiso de pagador único que acepta recargas hasta un monto objetivo exacto
 - Llame a `open_escrow(recipient, escrow_account, asset_definition, target_amount)` una vez para registrar el pagador, el destinatario, la cuenta de depósito en garantía, la definición de activo, el objetivo exacto y los indicadores de abierto/liberado/reembolsado en estado de contrato duradero.
 - Llamar a `deposit(amount)` desde el mismo pagador hasta `funded_amount_value == target_amount_value`; los depósitos deben permanecer positivos y se rechaza cualquier recarga que pudiera sobrefinanciar el depósito en garantía.
 - Llame a `release_if_ready()` para transferir los fondos en custodia al destinatario una vez que se cumpla el objetivo, o llame a `refund()` mientras el depósito en garantía aún está abierto para devolver el monto financiado al pagador.
-- Inspeccionar saldos con `FindAssetById` / `iroha_cli ledger asset list` e inspeccionar el estado del contrato con `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.
+- Inspeccionar saldos con `FindAssetById` / `iroha ledger asset list all --verbose` e inspeccionar el estado del contrato con `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.
 
 ## Guías de SDK relacionadas
 

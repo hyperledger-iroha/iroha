@@ -413,16 +413,6 @@ impl SoraContainerManifestV1 {
             });
         }
 
-        if self.runtime != SoraContainerRuntimeV1::Ivm {
-            return Err(SoraCloudManifestError::InvalidField {
-                manifest: "sora container manifest",
-                field: "runtime",
-                reason:
-                    "Soracloud runtime v1 currently admits only `Ivm`; `NativeProcess` is deferred"
-                        .to_string(),
-            });
-        }
-
         if self.bundle_path.trim().is_empty() {
             return Err(SoraCloudManifestError::EmptyField {
                 manifest: "sora container manifest",
@@ -10969,19 +10959,13 @@ mod tests {
     }
 
     #[test]
-    fn container_validate_rejects_native_process_runtime() {
+    fn container_validate_accepts_native_process_runtime() {
         let mut container = sample_container();
         container.runtime = SoraContainerRuntimeV1::NativeProcess;
-        let error = container
-            .validate()
-            .expect_err("native-process Soracloud manifests must be rejected in v1");
-        assert!(matches!(
-            error,
-            SoraCloudManifestError::InvalidField {
-                field: "runtime",
-                ..
-            }
-        ));
+        assert!(
+            container.validate().is_ok(),
+            "native-process Soracloud manifests should be admitted by the data model"
+        );
     }
 
     #[test]

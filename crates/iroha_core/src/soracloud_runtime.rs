@@ -549,6 +549,35 @@ pub struct SoracloudRuntimeApartmentPlan {
     pub revoked_policy_capability_count: u32,
 }
 
+/// Schema version for persisted native-process runtime state snapshots.
+pub const SORACLOUD_NATIVE_PROCESS_RUNTIME_STATE_VERSION_V1: u16 = 1;
+
+/// Canonical runtime-state filename written beside native service materializations.
+pub const SORACLOUD_NATIVE_PROCESS_RUNTIME_STATE_FILE_V1: &str = "native_process_runtime.json";
+
+/// Node-local state projected for a supervised native Soracloud service revision.
+#[derive(Clone, Debug, PartialEq, Eq, JsonSerialize, JsonDeserialize)]
+pub struct SoracloudNativeProcessRuntimeStateV1 {
+    /// Schema version for this runtime-state document.
+    pub schema_version: u16,
+    /// Service identifier.
+    pub service_name: String,
+    /// Materialized revision/version.
+    pub service_version: String,
+    /// Process generation currently hosted by the local runtime-manager.
+    pub process_generation: u64,
+    /// Projected health state of the child process.
+    pub health_status: SoraServiceHealthStatusV1,
+    /// Base URL for the loopback listener exposed by the child process.
+    pub listen_base_url: Option<String>,
+    /// Child process identifier while the process is running.
+    pub pid: Option<u32>,
+    /// Human-readable startup or healthcheck failure detail, when present.
+    pub last_error: Option<String>,
+    /// Timestamp when the state file was last refreshed.
+    pub updated_at_ms: u64,
+}
+
 /// Schema version for [`SoracloudApartmentAutonomyExecutionSummaryV1`].
 pub const SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1: u16 = 1;
 

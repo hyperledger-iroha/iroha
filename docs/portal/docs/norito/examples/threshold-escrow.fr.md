@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 54b6d543cff8df6e8fd50632cfed6265770edc33855f06912be603457c5b517e
 source_last_modified: "2026-04-02T18:31:54.074495+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -27,7 +27,7 @@ Un dépôt à payeur unique qui accepte les recharges jusqu'à un montant cible 
 - Appelez `open_escrow(recipient, escrow_account, asset_definition, target_amount)` une fois pour enregistrer le payeur, le destinataire, le compte séquestre, la définition de l'actif, la cible exacte et les indicateurs d'ouverture/libération/remboursement dans un état de contrat durable.
 - Appeler `deposit(amount)` du même payeur jusqu'à `funded_amount_value == target_amount_value` ; les dépôts doivent rester positifs et tout complément qui risquerait de surfinancer le séquestre est rejeté.
 - Appelez `release_if_ready()` pour transférer les fonds bloqués vers le destinataire une fois l'objectif atteint, ou appelez `refund()` pendant que le dépôt est toujours ouvert pour restituer le montant financé au payeur.
-- Inspecter les soldes avec `FindAssetById` / `iroha_cli ledger asset list` et inspecter l'état du contrat avec `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.
+- Inspecter les soldes avec `FindAssetById` / `iroha ledger asset list all --verbose` et inspecter l'état du contrat avec `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.
 
 ## Guides SDK associés
 

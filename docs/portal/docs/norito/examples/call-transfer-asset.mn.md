@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: dcd8de175a7c5172158a03e1a25b254c90a11e62c173f95b8d9e4a387df6ba09
 source_last_modified: "2026-03-26T13:01:47.372931+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ Kotodama нэвтрэх цэг нь `transfer_asset` зааварчилгааг 
 
 - Гэрээний байгууллагыг (жишээ нь гэрээний дансны хувьд `<i105-account-id>`) шилжүүлж, `CanTransfer` үүрэг эсвэл түүнтэй адилтгах зөвшөөрлийг олгох хөрөнгөөр санхүүжүүлнэ.
 - Гэрээний данснаас 5 нэгжийг Боб (`<i105-account-id>`) руу шилжүүлэхийн тулд `call_transfer_asset` нэвтрэх цэг рүү залгаж, сүлжээн дэх автоматжуулалт нь хост дуудлагыг ороож чадах арга замыг тусгана.
-- `FindAccountAssets` эсвэл `iroha_cli ledger asset list --account <i105-account-id>`-ээр дамжуулан үлдэгдлийг шалгаж, дамжуулалтын контекстийг бүртгэсэн мета өгөгдлийн хамгаалалтыг баталгаажуулахын тулд үйл явдлуудыг шалгана уу.
+- `FindAccountAssets` эсвэл `iroha ledger asset list all --verbose`-ээр дамжуулан үлдэгдлийг шалгаж, дамжуулалтын контекстийг бүртгэсэн мета өгөгдлийн хамгаалалтыг баталгаажуулахын тулд үйл явдлуудыг шалгана уу.
 
 ## Холбогдох SDK гарын авлага
 

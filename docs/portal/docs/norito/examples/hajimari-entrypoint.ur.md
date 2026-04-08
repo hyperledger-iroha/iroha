@@ -4,9 +4,9 @@ direction: rtl
 source: docs/portal/docs/norito/examples/hajimari-entrypoint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 759693341d48f72f6be07fce6adb49b1cc3fb46db2cf6c2a046d47c447247bd0
-source_last_modified: "2025-11-07T11:59:47.165125+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 93b3329a32d69ca67bd267256a57c40d6619d07e1e39b2ec912fba3621cec123
+source_last_modified: "2026-04-08T09:19:38.793123+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -22,7 +22,7 @@ source: crates/ivm/docs/examples/01_hajimari.ko
 
 - کنٹریکٹ کو `koto_compile --abi 1` کے ساتھ کمپائل کریں جیسا کہ [Norito Getting Started](/norito/getting-started#1-compile-a-kotodama-contract) میں دکھایا گیا ہے یا `cargo test -p ivm developer_portal_norito_snippets_compile` کے ذریعے۔
 - `ivm_run` / `developer_portal_norito_snippets_run` کے ساتھ لوکل طور پر بائٹ کوڈ کا smoke-test کریں تاکہ `info!` لاگ اور ابتدائی syscall کی تصدیق ہو سکے، نوڈ کو چھونے سے پہلے۔
-- `iroha_cli app contracts deploy` کے ذریعے آرٹیفیکٹ ڈیپلائے کریں اور [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha_cli) کے مراحل سے مینی فیسٹ کی تصدیق کریں۔
+- `iroha app contracts deploy` کے ذریعے آرٹیفیکٹ ڈیپلائے کریں اور [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha) کے مراحل سے مینی فیسٹ کی تصدیق کریں۔
 
 ## متعلقہ SDK گائیڈز
 

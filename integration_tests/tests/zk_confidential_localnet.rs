@@ -257,6 +257,12 @@ fn restart_progress_timeout(context: &str) -> Duration {
     }
 }
 
+fn restart_progress_hard_timeout(context: &str) -> Duration {
+    restart_progress_timeout(context)
+        .checked_mul(2)
+        .unwrap_or_else(|| restart_progress_timeout(context))
+}
+
 async fn restart_peer_and_wait_non_empty(
     network: &sandbox::SerializedNetwork,
     peer_index: usize,
@@ -336,22 +342,36 @@ async fn wait_for_peer_non_empty(
     })?;
     let restart_client = peer.client();
     let progress_timeout = restart_progress_timeout(context);
-    let deadline = tokio::time::Instant::now() + progress_timeout;
+    let hard_timeout = restart_progress_hard_timeout(context);
+    let started_at = tokio::time::Instant::now();
+    let mut last_progress_at = started_at;
+    let mut last_observed_height = None;
 
     loop {
         match restart_client.get_status() {
             Ok(status) if status.blocks_non_empty >= target_non_empty => return Ok(()),
-            Ok(_) => {}
+            Ok(status) => {
+                let height = status.blocks_non_empty;
+                if last_observed_height.is_none_or(|previous| height > previous) {
+                    last_progress_at = tokio::time::Instant::now();
+                }
+                last_observed_height = Some(height);
+            }
             Err(err) if is_transient_client_error(&err) => {}
             Err(err) => {
                 return Err(err).wrap_err_with(|| format!("{context}: query peer {peer_index}"));
             }
         }
 
-        if tokio::time::Instant::now() >= deadline {
+        let now = tokio::time::Instant::now();
+        if now.duration_since(last_progress_at) >= progress_timeout
+            || now.duration_since(started_at) >= hard_timeout
+        {
             return Err(eyre!(
-                "{context}: peer {peer_index} did not reach non-empty height {target_non_empty} within {:?}",
-                progress_timeout
+                "{context}: peer {peer_index} did not reach non-empty height {target_non_empty} within {:?} total wait (stalled for {:?}, last observed non-empty height {:?})",
+                now.duration_since(started_at),
+                now.duration_since(last_progress_at),
+                last_observed_height
             ));
         }
 
@@ -3551,6 +3571,28 @@ fn pressure_submitter_clients_applies_short_timeouts() {
     assert_eq!(
         pressure[0].transaction_status_timeout,
         PRESSURE_TRANSACTION_STATUS_TIMEOUT
+    );
+}
+
+#[test]
+fn restart_progress_hard_timeout_extends_combined_pressure_windows() {
+    assert_eq!(
+        restart_progress_hard_timeout("combined downtime+timeout restarted peer catch-up"),
+        COMBINED_PRESSURE_CATCH_UP_TIMEOUT
+            .checked_mul(2)
+            .expect("combined catch-up timeout should multiply"),
+    );
+    assert_eq!(
+        restart_progress_hard_timeout("combined downtime+timeout transfer failed"),
+        COMBINED_PRESSURE_RESTART_PROGRESS_TIMEOUT
+            .checked_mul(2)
+            .expect("combined restart timeout should multiply"),
+    );
+    assert_eq!(
+        restart_progress_hard_timeout("plain restart"),
+        RESTART_PROGRESS_TIMEOUT
+            .checked_mul(2)
+            .expect("default restart timeout should multiply"),
     );
 }
 

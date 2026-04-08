@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/streaming.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 10ba7b91d73d6723c4b66491951c3257c48557273ab5424d81119e01c8f2c6e3
-source_last_modified: "2025-12-09T06:48:00.858874+00:00"
-translation_last_reviewed: 2025-12-30
+source_hash: f9df713c3e078ac2ccbd74eb215b91bb80d08306d0ca455dc122fde535601ce8
+source_last_modified: "2026-03-26T09:58:12.198515+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 # Norito Streaming

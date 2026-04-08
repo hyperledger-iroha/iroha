@@ -2347,8 +2347,30 @@ fn default_irohad_bin_paths() -> (PathBuf, PathBuf) {
 fn write_scripts(out_dir: &Path, peers: u16, build_line: BuildLine, sora_mode: bool) -> Result<()> {
     let start = out_dir.join("start.sh");
     let stop = out_dir.join("stop.sh");
+    write_start_script(&start, peers, build_line, sora_mode)?;
+    write_stop_script(&stop)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(&start, PermissionsExt::from_mode(0o755))
+            .wrap_err_with(|| format!("failed to mark {} executable", start.display()))?;
+        fs::set_permissions(&stop, PermissionsExt::from_mode(0o755))
+            .wrap_err_with(|| format!("failed to mark {} executable", stop.display()))?;
+    }
+
+    Ok(())
+}
+
+fn write_start_script(
+    start: &Path,
+    peers: u16,
+    build_line: BuildLine,
+    sora_mode: bool,
+) -> Result<()> {
     let (default_irohad_debug, default_irohad_release) = default_irohad_bin_paths();
-    let mut start_file = BufWriter::new(File::create(&start)?);
+    let mut start_file = BufWriter::new(File::create(start)?);
     let sora_flag = if sora_mode { "--sora " } else { "" };
     writeln!(start_file, "#!/usr/bin/env bash")?;
     writeln!(start_file, "set -euo pipefail")?;
@@ -2420,9 +2442,11 @@ fn write_scripts(out_dir: &Path, peers: u16, build_line: BuildLine, sora_mode: b
     writeln!(start_file, "  echo $! > \"$PIDFILE\"")?;
     writeln!(start_file, "  echo \"peer$i pid $(cat \"$PIDFILE\")\"")?;
     writeln!(start_file, "done")?;
-    start_file.flush()?;
+    Ok(start_file.flush()?)
+}
 
-    let mut stop_file = BufWriter::new(File::create(&stop)?);
+fn write_stop_script(stop: &Path) -> Result<()> {
+    let mut stop_file = BufWriter::new(File::create(stop)?);
     writeln!(stop_file, "#!/usr/bin/env bash")?;
     writeln!(stop_file, "set -euo pipefail")?;
     writeln!(stop_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
@@ -2449,19 +2473,7 @@ fn write_scripts(out_dir: &Path, peers: u16, build_line: BuildLine, sora_mode: b
     writeln!(stop_file, "  fi")?;
     writeln!(stop_file, "  rm -f \"$pidfile\"")?;
     writeln!(stop_file, "done")?;
-    stop_file.flush()?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        fs::set_permissions(&start, PermissionsExt::from_mode(0o755))
-            .wrap_err_with(|| format!("failed to mark {} executable", start.display()))?;
-        fs::set_permissions(&stop, PermissionsExt::from_mode(0o755))
-            .wrap_err_with(|| format!("failed to mark {} executable", stop.display()))?;
-    }
-
-    Ok(())
+    Ok(stop_file.flush()?)
 }
 
 fn copy_rans_tables(out_dir: &Path) -> Result<()> {

@@ -4655,6 +4655,7 @@ impl NewViewTracker {
         None
     }
 
+    #[cfg(test)]
     fn select_with_quorum(
         &mut self,
         required: usize,
@@ -4674,6 +4675,30 @@ impl NewViewTracker {
                     quorum,
                 }
             })
+    }
+
+    fn select_with_quorum_for_height(
+        &mut self,
+        height: u64,
+        required: usize,
+        local: Option<&PeerId>,
+        roster: &[PeerId],
+    ) -> Option<NewViewSelection> {
+        if roster.is_empty() {
+            return None;
+        }
+        let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
+        self.highest_entry_mut(|entry_height, _, entry| {
+            entry_height == height && entry.count_in_roster(&roster_set, local) >= required
+        })
+        .map(|(key, entry)| {
+            let quorum = entry.count_in_roster(&roster_set, local);
+            NewViewSelection {
+                key,
+                highest_qc: entry.highest_qc,
+                quorum,
+            }
+        })
     }
 
     fn highest_quorum_view_for_height(
@@ -16188,6 +16213,7 @@ impl Actor {
         );
         let world = actor.state.world_view();
         actor.update_effective_timing_status_from_world(&world, actor.consensus_mode);
+        actor.frontier_block_sync_hint.set_initialized(true);
         actor.sync_external_hints();
         iroha_logger::info!(
             height = actor.state.committed_height(),
