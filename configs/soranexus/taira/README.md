@@ -400,13 +400,13 @@ From `../iroha2-block-explorer-web`:
      `/` or `/v1/` proxy rules.
    - do not special-case `/sorafs/cid/`; it should proxy through the normal
      Torii upstream just like the rest of the public API surface.
-   - keep `client_max_body_size 64m;` intact on both TLS server blocks; the
-     Polkaswap SoraFS publish path currently uploads about `24 MiB+` of JSON to
-     `/v1/sorafs/storage/pin`.
-   - keep `torii.max_content_len = 64_000_000` in `config.toml`; otherwise
-     Torii rejects the JSON body before the SoraFS storage handler sees it.
+   - keep `client_max_body_size 512m;` intact on both TLS server blocks; the
+     native Hayahi runtime publish path now uploads about `300 MiB+` of JSON to
+     `/v1/sorafs/storage/pin` once the payload is base64-encoded.
+   - keep `torii.max_content_len = 536_870_912` in `config.toml`; otherwise
+     Torii rejects the storage-pin JSON body before the SoraFS handler sees it.
    - after every local reset, confirm the served `dist/taira-localnet/peer*.toml`
-     copies still contain `max_content_len = 64000000`; the local bootstrap
+     copies still contain `max_content_len = 536870912`; the local bootstrap
      script patches them from `configs/soranexus/taira/config.toml`, but a
      stale bundle can still bring the old default back.
    - keep `[sorafs.quota] storage_pin_max_events = 64` in the Taira profile and

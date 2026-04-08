@@ -4884,7 +4884,7 @@ impl Actor {
             },
         );
         self.note_validated_qc_tally(&qc, tally.clone());
-        let block_known_for_commit =
+        let mut block_known_for_commit =
             self.pending
                 .pending_blocks
                 .get(&block_hash)
@@ -4901,6 +4901,9 @@ impl Actor {
                         inflight.block_hash == block_hash && !inflight.pending.aborted
                     })
                 || self.kura.get_block_height_by_hash(block_hash).is_some();
+        if block_known_for_commit {
+            block_known_for_commit = self.rehydrate_pending_from_kura_for_qc(&qc);
+        }
         let process_ok = self.process_precommit_qc(&qc, block_known_for_commit, true);
         if !process_ok {
             if self.block_sync_qc_is_stale_against_lock(&qc) {

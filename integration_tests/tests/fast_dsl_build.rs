@@ -11,6 +11,8 @@ fn workspace_builds_with_fast_dsl_feature() {
     let status = Command::new("cargo")
         .args(["check", "--workspace", "--features", "fast_dsl"])
         .current_dir(workspace_root)
+        // Nested cargo invocations must not reuse the outer test runner's target dir.
+        .env_remove("CARGO_TARGET_DIR")
         .status()
         .expect("failed to run cargo check with fast_dsl");
     assert!(status.success());

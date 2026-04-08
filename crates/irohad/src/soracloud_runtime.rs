@@ -2635,6 +2635,17 @@ impl SoracloudRuntimeManager {
                 bundle_root.display(),
             );
         };
+        let executable_path = fs::canonicalize(&executable_path).unwrap_or_else(|_| {
+            if executable_path.is_absolute() {
+                executable_path.clone()
+            } else {
+                materialization_dir.join(
+                    executable_path
+                        .strip_prefix(".")
+                        .unwrap_or(executable_path.as_path()),
+                )
+            }
+        });
 
         let port = next_native_process_loopback_port()
             .wrap_err("allocate loopback port for native Soracloud service")?;

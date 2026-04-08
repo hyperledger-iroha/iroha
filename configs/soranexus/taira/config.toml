@@ -30,7 +30,7 @@ max_frame_bytes_tx_gossip = 1048576
 [torii]
 address = "0.0.0.0:18080"
 public_address = "https://taira-validator-1.sora.org"
-max_content_len = 64_000_000
+max_content_len = 536_870_912
 
 [torii.mcp]
 enabled = true

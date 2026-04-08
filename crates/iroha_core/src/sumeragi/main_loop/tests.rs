@@ -274,16 +274,15 @@ fn insert_validated_pending(actor: &mut Actor, block: SignedBlock) -> HashOf<Blo
     block_hash
 }
 
-fn seed_near_quorum_commit_votes_for_block(
+fn seed_commit_votes_for_block(
     actor: &mut Actor,
     keypairs: &[KeyPair],
     block_hash: HashOf<BlockHeader>,
     height: u64,
     view_idx: u64,
+    count: usize,
 ) -> usize {
     let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
-    let required = topology.min_votes_for_commit().max(1);
-    assert!(required >= 2, "test requires at least two validators");
     let epoch = actor.epoch_for_height(height);
     let (_, mode_tag, prf_seed) = actor.consensus_context_for_height(height);
     let signature_topology =
@@ -292,7 +291,7 @@ fn seed_near_quorum_commit_votes_for_block(
     for peer in signature_topology
         .as_ref()
         .iter()
-        .take(required.saturating_sub(1))
+        .take(count.min(signature_topology.as_ref().len()))
     {
         let signer_idx = signature_topology
             .as_ref()
@@ -322,6 +321,28 @@ fn seed_near_quorum_commit_votes_for_block(
         actor.handle_vote(vote);
     }
 
+    count.min(signature_topology.as_ref().len())
+}
+
+fn seed_near_quorum_commit_votes_for_block(
+    actor: &mut Actor,
+    keypairs: &[KeyPair],
+    block_hash: HashOf<BlockHeader>,
+    height: u64,
+    view_idx: u64,
+) -> usize {
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let required = topology.min_votes_for_commit().max(1);
+    assert!(required >= 2, "test requires at least two validators");
+    let seeded = seed_commit_votes_for_block(
+        actor,
+        keypairs,
+        block_hash,
+        height,
+        view_idx,
+        required.saturating_sub(1),
+    );
+    assert_eq!(seeded, required.saturating_sub(1));
     required
 }
 
@@ -9400,6 +9421,86 @@ async fn block_sync_update_known_block_applies_commit_qc_to_pending() {
     assert!(
         inflight.is_some_and(|inflight| inflight.block_hash == block_hash) || !pending_present,
         "commit should start or pending should finalize for known block when QC arrives"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_known_kura_only_block_applies_commit_qc() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let committed_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let committed_height = actor.committed_height_snapshot();
+    let block_height = committed_height.saturating_add(1).max(1);
+    let view = 0_u64;
+    let block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        block_height,
+        view,
+        Some(committed_hash),
+    );
+    let block_hash = block.hash();
+    actor.kura.store_block(block.clone()).expect("store block");
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "test requires the restart-shaped known block to live only in Kura",
+    );
+
+    let roster = actor.effective_commit_topology();
+    assert!(!roster.is_empty(), "test requires commit roster");
+    let topology = super::network_topology::Topology::new(roster.clone());
+    let required = topology.min_votes_for_commit().max(1);
+    let mut signers = BTreeSet::new();
+    for idx in 0..required {
+        signers.insert(ValidatorIndex::try_from(idx).expect("signer index fits"));
+    }
+    let signers_bitmap = super::build_signers_bitmap(&signers, roster.len());
+    let epoch = actor.epoch_for_height(block_height);
+    let qc = qc_with_bitmap(
+        &actor.common_config.chain,
+        block_hash,
+        block_height,
+        view,
+        epoch,
+        signers_bitmap,
+        Phase::Commit,
+        &topology,
+        &harness.key_pairs,
+    );
+    let roster_cache =
+        roster_cache_for_state(actor.state.as_ref(), actor.config.npos.epoch_length_blocks);
+    let mut update = super::block_sync_update_with_roster(
+        &block,
+        actor.state.as_ref(),
+        actor.kura.as_ref(),
+        ConsensusMode::Permissioned,
+        actor.common_config.trusted_peers.value(),
+        actor.common_config.peer.id(),
+        &roster_cache,
+    );
+    update.commit_qc = Some(qc);
+    update.validator_checkpoint = None;
+    update.stake_snapshot = None;
+    update.commit_votes.clear();
+
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+    drain_known_block_qc_work(actor);
+
+    let pending = actor.pending.pending_blocks.get(&block_hash);
+    let inflight = actor.subsystems.commit.inflight.as_ref();
+    let committed_after = actor.committed_height_snapshot();
+    assert!(
+        pending.is_some_and(|pending| pending.commit_qc_observed())
+            || inflight.is_some_and(|inflight| inflight.block_hash == block_hash)
+            || committed_after >= block_height,
+        "restart-shaped known Kura block should rehydrate pending or advance commit when commit QC arrives: pending={}, inflight={}, committed_after={committed_after}, block_height={block_height}",
+        pending.is_some(),
+        inflight.is_some_and(|inflight| inflight.block_hash == block_hash),
     );
 
     harness.shutdown.send();
@@ -93320,7 +93421,7 @@ async fn validation_allows_near_tip_commit_votes_without_proposal_evidence() {
 }
 
 #[tokio::test(flavor = "current_thread")]
-async fn validation_dispatches_near_tip_commit_votes_to_workers_without_forcing_inline() {
+async fn validation_forces_inline_for_near_tip_commit_votes() {
     let mut harness = test_actor_harness(4).await;
     let actor = &mut harness.actor;
 
@@ -93346,8 +93447,65 @@ async fn validation_dispatches_near_tip_commit_votes_to_workers_without_forcing_
     let commit_topology = actor.effective_commit_topology();
     let outcome = actor.validate_pending_block_for_voting(block_hash, &commit_topology);
     assert!(
+        matches!(outcome, ValidationGateOutcome::Valid),
+        "near-tip vote-backed blocks should validate inline once the local vote can complete commit quorum"
+    );
+    assert!(
+        matches!(work_rx.try_recv(), Err(mpsc::TryRecvError::Empty)),
+        "near-quorum vote-backed validation should not stay queued behind workers"
+    );
+    assert!(
+        !actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&block_hash),
+        "inline validation should not leave a stale inflight worker marker"
+    );
+    let pending = actor
+        .pending
+        .pending_blocks
+        .get(&block_hash)
+        .expect("pending retained");
+    assert_eq!(pending.validation_status, ValidationStatus::Valid);
+    assert!(pending.parent_state_root.is_some());
+    assert!(pending.post_state_root.is_some());
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn validation_dispatches_non_near_quorum_commit_votes_to_workers() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let height = u64::try_from(actor.state.view().height())
+        .unwrap_or(0)
+        .saturating_add(1);
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = block.hash();
+    let payload_hash = Hash::new(super::proposals::block_payload_bytes(&block));
+    actor.pending.pending_blocks.insert(
+        block_hash,
+        PendingBlock::new(block, payload_hash, height, view),
+    );
+
+    let seeded =
+        seed_commit_votes_for_block(actor, &harness.key_pairs, block_hash, height, view, 1);
+    assert_eq!(seeded, 1, "test should seed a single remote commit vote");
+
+    let (work_tx, work_rx) = mpsc::sync_channel::<super::validation::ValidationWork>(1);
+    actor.subsystems.validation.work_txs = vec![work_tx];
+    actor.subsystems.validation.result_rx = None;
+
+    let commit_topology = actor.effective_commit_topology();
+    let outcome = actor.validate_pending_block_for_voting(block_hash, &commit_topology);
+    assert!(
         matches!(outcome, ValidationGateOutcome::Deferred),
-        "near-tip vote-backed blocks should dispatch to workers instead of forcing inline validation"
+        "non-near-quorum vote-backed blocks should still use async validation workers"
     );
     let queued_work = work_rx
         .try_recv()

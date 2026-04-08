@@ -4534,6 +4534,59 @@ pub mod message {
         fallback.filter(|_| fallback_valid)
     }
 
+    fn attach_share_block_sync_qc_candidate(
+        update: &mut crate::sumeragi::message::BlockSyncUpdate,
+        candidate_qc: Option<Qc>,
+        consensus_mode: ConsensusMode,
+        block_height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) {
+        let Some(qc) = candidate_qc else {
+            return;
+        };
+
+        let attach_qc = match consensus_mode {
+            ConsensusMode::Permissioned => true,
+            ConsensusMode::Npos => {
+                if let Some(snapshot) = update.stake_snapshot.as_ref() {
+                    if snapshot.matches_roster(&qc.validator_set) {
+                        true
+                    } else {
+                        warn!(
+                            height = block_height,
+                            block = %block_hash,
+                            "dropping block sync QC with mismatched stake snapshot"
+                        );
+                        false
+                    }
+                } else {
+                    warn!(
+                        height = block_height,
+                        block = %block_hash,
+                        "dropping block sync QC without stake snapshot"
+                    );
+                    false
+                }
+            }
+        };
+        if !attach_qc {
+            return;
+        }
+
+        if update
+            .commit_qc
+            .as_ref()
+            .is_some_and(|existing| existing != &qc)
+        {
+            debug!(
+                height = block_height,
+                block = %block_hash,
+                "replacing block sync roster commit certificate with sanitized QC candidate"
+            );
+        }
+        update.commit_qc = Some(qc);
+    }
+
     struct BlockSyncValidationContext {
         block_hash: HashOf<BlockHeader>,
         block_height: u64,
@@ -5631,37 +5684,13 @@ pub mod message {
                                 .clone_from(&metadata.validator_checkpoint);
                             msg.stake_snapshot.clone_from(&metadata.stake_snapshot);
                         }
-                        if msg.commit_qc.is_none() {
-                            if let Some(qc) = incoming_qc.or(derived_qc) {
-                                let attach_qc = match consensus_mode {
-                                    ConsensusMode::Permissioned => true,
-                                    ConsensusMode::Npos => {
-                                        if let Some(snapshot) = msg.stake_snapshot.as_ref() {
-                                            if snapshot.matches_roster(&qc.validator_set) {
-                                                true
-                                            } else {
-                                                warn!(
-                                                    height = block_height,
-                                                    block = %block_hash,
-                                                    "dropping block sync QC with mismatched stake snapshot"
-                                                );
-                                                false
-                                            }
-                                        } else {
-                                            warn!(
-                                                height = block_height,
-                                                block = %block_hash,
-                                                "dropping block sync QC without stake snapshot"
-                                            );
-                                            false
-                                        }
-                                    }
-                                };
-                                if attach_qc {
-                                    msg.commit_qc = Some(qc);
-                                }
-                            }
-                        }
+                        attach_share_block_sync_qc_candidate(
+                            &mut msg,
+                            incoming_qc.or(derived_qc),
+                            consensus_mode,
+                            block_height,
+                            block_hash,
+                        );
                         let update = crate::sumeragi::message::BlockMessage::BlockSyncUpdate(msg);
                         let sumeragi = block_sync.sumeragi.clone();
                         let enqueue = tokio::task::spawn_blocking(move || {
@@ -7708,6 +7737,62 @@ pub mod message {
             assert_eq!(filtered.len(), 1);
             assert_eq!(filtered[0].0.hash(), block.hash());
             assert!(filtered[0].1.is_some());
+        }
+
+        #[test]
+        fn share_blocks_prefers_sanitized_qc_over_conflicting_roster_metadata() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+            ]);
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
+            let state_view = state.view();
+            let (chain_id, mode_tag) = test_chain_config();
+
+            let mut block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(2_u64));
+            })
+            .into();
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let leader_candidates = [&kp_leader, &kp_validator];
+            let leader = leader_keypair(&signature_topology, &leader_candidates);
+            block = sign_block_for_topology(block, &signature_topology, &[leader]);
+
+            let good_qc = qc_from_signers_with_aggregate(
+                &chain_id,
+                &mode_tag,
+                block.hash(),
+                block.header().height().get(),
+                block.header().view_change_index(),
+                0,
+                signer_indices_for_topology(&signature_topology, &[&kp_leader, &kp_validator]),
+                &signature_topology,
+                &topology,
+                &[kp_leader.clone(), kp_validator.clone()],
+            );
+
+            let mut stale_qc = good_qc.clone();
+            stale_qc.aggregate.signers_bitmap = vec![0b0000_0001];
+
+            let mut update = crate::sumeragi::message::BlockSyncUpdate::from(&block);
+            update.commit_qc = Some(stale_qc);
+
+            super::attach_share_block_sync_qc_candidate(
+                &mut update,
+                Some(good_qc.clone()),
+                ConsensusMode::Permissioned,
+                block.header().height().get(),
+                block.hash(),
+            );
+
+            assert_eq!(
+                update.commit_qc,
+                Some(good_qc),
+                "sanitized incoming QC should override stale roster-sidecar commit metadata",
+            );
         }
 
         #[test]

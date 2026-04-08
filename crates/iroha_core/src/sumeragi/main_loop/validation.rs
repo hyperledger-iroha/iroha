@@ -297,20 +297,6 @@ impl Actor {
 
         let validation_priority_reason =
             self.pending_block_validation_priority_reason(hash, &pending);
-        let dispatch = if matches!(dispatch, ValidationDispatch::TryWorker)
-            && matches!(validation_priority_reason, Some("commit_qc" | "cached_qc"))
-        {
-            debug!(
-                height = pending.height,
-                view = pending.view,
-                block = %hash,
-                reason = validation_priority_reason,
-                "forcing inline validation for pending block with cached finality evidence"
-            );
-            ValidationDispatch::Inline
-        } else {
-            dispatch
-        };
         let has_commit_qc = pending.commit_qc_observed()
             || self.pending_block_has_commit_qc(hash, pending.height, pending.view);
         if !has_commit_qc
@@ -362,6 +348,32 @@ impl Actor {
             self.pending.pending_blocks.insert(hash, pending);
             return ValidationGateOutcome::Deferred;
         }
+
+        let near_quorum_commit_votes = matches!(validation_priority_reason, Some("commit_votes"))
+            && self
+                .pending_block_commit_votes_count(hash, pending.height, pending.view)
+                .saturating_add(1)
+                >= topology.min_votes_for_commit().max(1);
+        let dispatch = if matches!(dispatch, ValidationDispatch::TryWorker)
+            && (matches!(validation_priority_reason, Some("commit_qc" | "cached_qc"))
+                || near_quorum_commit_votes)
+        {
+            let reason = if near_quorum_commit_votes {
+                Some("commit_votes_near_quorum")
+            } else {
+                validation_priority_reason
+            };
+            debug!(
+                height = pending.height,
+                view = pending.view,
+                block = %hash,
+                reason,
+                "forcing inline validation for pending block with fast-finality evidence"
+            );
+            ValidationDispatch::Inline
+        } else {
+            dispatch
+        };
 
         let superseded_by_newer_view = self.pending.pending_blocks.values().any(|other| {
             other.height == pending.height

@@ -21535,3 +21535,21 @@ Last updated: 2026-04-08
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-gaslimit-it cargo test -p integration_tests --test core_api iroha_cli::tx_ivm_rejects_missing_gas_limit_without_hanging -- --exact --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-cli-gaslimit-it2 cargo test -p integration_tests --test core_api iroha_cli::tx_ivm_accepts_gas_limit_flag_and_skips_local_missing_metadata_error -- --exact --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-core-gaslimit cargo test -p iroha_core gas_limit_rejected_at_admission -- --nocapture`
+
+## 2026-04-08 Workspace Gap Closure For CLI Gas-Limit Follow-up
+- Closed the remaining verification and infrastructure gaps around the CLI gas-limit work.
+- Updated [`integration_tests/src/binary_resolver.rs`](/Users/takemiyamakoto/dev/iroha/integration_tests/src/binary_resolver.rs) and [`integration_tests/tests/iroha_cli.rs`](/Users/takemiyamakoto/dev/iroha/integration_tests/tests/iroha_cli.rs) so the fast CLI integration cases can reuse an already-built `iroha3` binary instead of always spawning a nested `cargo build`; this removes avoidable wall-clock and keeps the daemon sibling resolution explicit.
+- Fixed the stalled known-block commit-QC recovery path in [`crates/iroha_core/src/sumeragi/main_loop/commit.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/commit.rs): exact-frontier commit-QC repair now resets into frontier catch-up once the frontier dwell / lag window is exceeded, instead of spinning indefinitely on the same frontier body repair request. Added a regression in [`crates/iroha_core/src/sumeragi/main_loop/tests.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs) covering the stall-to-catch-up handoff.
+- Fixed the workspace compile break in [`crates/iroha_torii/src/lib.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs) by:
+  - replacing the previous `reqwest::Response::bytes_stream()` bridge with a `bytes().await` body handoff compatible with the current reqwest feature set;
+  - switching account-target iterable-query decoding to the stable [`iroha_data_model::prelude`](/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/src/query/mod.rs) query re-exports so `fast_dsl` builds and `--all-targets` test code no longer depend on narrower module preludes.
+- Fixed the last full-workspace test-runner collision in [`integration_tests/tests/fast_dsl_build.rs`](/Users/takemiyamakoto/dev/iroha/integration_tests/tests/fast_dsl_build.rs) by removing inherited `CARGO_TARGET_DIR` from the nested `cargo check --workspace --features fast_dsl` invocation. This stops the inner cargo process from sharing the outer test runner's target dir and deleting / replacing the active `core_api` test binary mid-suite.
+- Additional validation completed:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo clippy --workspace --all-targets -- -D warnings`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_torii --lib`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p iroha_core known_block_commit_qc_recovery_stall_enters_frontier_deep_catchup -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p integration_tests --test core_api fast_dsl_build::workspace_builds_with_fast_dsl_feature -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p integration_tests --test core_api`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test --workspace` was rerun through every suite up to `integration_tests/tests/core_api.rs`; after the nested-target-dir fix above, the remaining `core_api` suite passed in a separate rerun under the same outer `CARGO_TARGET_DIR`.
