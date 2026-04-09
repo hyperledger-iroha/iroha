@@ -29,14 +29,17 @@ use futures::StreamExt;
 use hex::{ToHex, encode};
 use http::header::{AGE, CACHE_CONTROL, HeaderName, RETRY_AFTER, WARNING};
 use hyper::body::Body as HyperBody;
-use iroha_core::state::StateReadOnly;
+use iroha_core::state::{StateReadOnly, WorldReadOnly};
 use iroha_crypto::HashOf;
 use iroha_data_model::{
     ChainId,
     block::BlockHeader,
     da::{ingest::DaStripeLayout, manifest::ChunkRole},
+    soracloud::SoraRouteVisibilityV1,
 };
 use iroha_logger::{debug, error, warn};
+use mv::storage::StorageReadOnly;
+use norito::derive::JsonDeserialize;
 use norito::json::{self, Map, Number, Value};
 use sorafs_car::{
     CarBuildPlan, CarChunk, CarWriter, FileEntry, FilePlan,
@@ -132,6 +135,8 @@ const HEADER_SORA_POTR_RECEIPT: &str = "sora-potr-receipt";
 const HEADER_SORA_POTR_STATUS: &str = "sora-potr-status";
 const HEADER_SORA_PERCEPTUAL_HASH: &str = "x-sorafs-perceptual-hash";
 const HEADER_SORA_PERCEPTUAL_EMBEDDING: &str = "x-sorafs-perceptual-embedding";
+const APP_STATIC_SITE_CONFIG_NAME: &str = "soracloud/app_static_site";
+const APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1: u16 = 1;
 const MIME_CAR: &str = "application/vnd.ipld.car";
 const MIME_OCTET_STREAM: &str = "application/octet-stream";
 const TELEMETRY_ENDPOINT_CAR_RANGE: &str = "/v1/sorafs/storage/car/range";
@@ -2877,6 +2882,132 @@ fn extract_cid_from_untrusted_host(
     Ok(None)
 }
 
+#[derive(Clone, Debug, JsonDeserialize)]
+struct AuthoritativeAppStaticSiteBindingV1 {
+    schema_version: u16,
+    hostname: String,
+    mount_path: String,
+    index_document: String,
+    spa_fallback: bool,
+    manifest_digest_hex: String,
+}
+
+fn resolve_site_host_from_authoritative_app(
+    state: &SharedAppState,
+    host: &str,
+) -> Result<Option<ResolvedSiteHost>, Response> {
+    let state_view = state.state.view();
+    let world = state_view.world();
+    let mut best_candidate = None;
+
+    for (service_id, deployment) in world.soracloud_service_deployments().iter() {
+        let service_name = service_id.to_string();
+        let Some(bundle) = world.soracloud_service_revisions().get(&(
+            service_name.clone(),
+            deployment.current_service_version.clone(),
+        )) else {
+            continue;
+        };
+        let Some(route) = bundle.service.route.as_ref() else {
+            continue;
+        };
+        if route.visibility != SoraRouteVisibilityV1::Public {
+            continue;
+        }
+        if !route.host.eq_ignore_ascii_case(host) {
+            continue;
+        }
+        let Some(config_entry) = deployment.service_configs.get(APP_STATIC_SITE_CONFIG_NAME) else {
+            continue;
+        };
+        let replace = best_candidate.as_ref().is_none_or(
+            |(best_sequence, best_service_name, _best_config): &(
+                u64,
+                String,
+                iroha_data_model::soracloud::SoraServiceConfigEntryV1,
+            )| {
+                config_entry.last_update_sequence > *best_sequence
+                    || (config_entry.last_update_sequence == *best_sequence
+                        && service_name < *best_service_name)
+            },
+        );
+        if replace {
+            best_candidate = Some((
+                config_entry.last_update_sequence,
+                service_name,
+                config_entry.clone(),
+            ));
+        }
+    }
+
+    let Some((_sequence, service_name, config_entry)) = best_candidate else {
+        return Ok(None);
+    };
+    let binding = config_entry
+        .value_json
+        .try_into_any_norito::<AuthoritativeAppStaticSiteBindingV1>()
+        .map_err(|err| {
+            json_error(
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!(
+                    "authoritative static site binding for service `{service_name}` could not be decoded: {err}"
+                ),
+            )
+        })?;
+    if binding.schema_version != APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1 {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "authoritative static site binding for service `{service_name}` has unsupported schema_version `{}`",
+                binding.schema_version
+            ),
+        ));
+    }
+    if !binding.hostname.eq_ignore_ascii_case(host) {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "authoritative static site binding for service `{service_name}` points at host `{}` but request host was `{host}`",
+                binding.hostname
+            ),
+        ));
+    }
+    if binding.mount_path != "/" {
+        return Err(json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "authoritative static site binding for service `{service_name}` uses unsupported mount_path `{}`",
+                binding.mount_path
+            ),
+        ));
+    }
+
+    let manifest_digest = parse_hex_fixed::<32>(
+        &binding.manifest_digest_hex,
+        "manifest_digest_hex",
+    )
+    .map_err(|err| {
+        json_error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!(
+                "authoritative static site binding for service `{service_name}` is invalid: {err}"
+            ),
+        )
+    })?;
+    let stored = state
+        .sorafs_node
+        .manifest_metadata_by_digest(&manifest_digest)
+        .map_err(node_storage_error_response)?;
+    enforce_site_denylist(state, &stored)?;
+
+    Ok(Some(ResolvedSiteHost {
+        hostname: binding.hostname,
+        index_document: binding.index_document,
+        spa_fallback: binding.spa_fallback,
+        stored,
+    }))
+}
+
 async fn resolve_site_host(
     state: &SharedAppState,
     headers: &HeaderMap,
@@ -2897,6 +3028,10 @@ async fn resolve_site_host(
             spa_fallback: true,
             stored,
         });
+    }
+
+    if let Some(resolved) = resolve_site_host_from_authoritative_app(state, &host)? {
+        return Ok(resolved);
     }
 
     let bindings = match load_site_bindings_from_env() {
@@ -9076,12 +9211,18 @@ mod advert_tests {
         query::store::LiveQueryStore,
         state::{State, World},
     };
-    use iroha_crypto::PublicKey;
+    use iroha_crypto::{Hash, PublicKey};
     use iroha_data_model::{
+        Encode,
         account::AccountId,
         block::BlockHeader,
         domain::DomainId,
         metadata::Metadata,
+        soracloud::{
+            SORA_DEPLOYMENT_BUNDLE_VERSION_V1, SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
+            SoraContainerManifestV1, SoraDeploymentBundleV1, SoraServiceConfigEntryV1,
+            SoraServiceDeploymentStateV1, SoraServiceManifestV1,
+        },
         sorafs::{
             capacity::{CapacityDeclarationRecord, ProviderId},
             pin_registry::{
@@ -9091,6 +9232,7 @@ mod advert_tests {
             },
         },
     };
+    use iroha_primitives::json::Json;
     use nonzero_ext::nonzero;
     use norito::to_bytes;
     use sorafs_manifest::{
@@ -9112,6 +9254,7 @@ mod advert_tests {
         proof_stream::ProofStreamTier,
     };
     use sorafs_node::config::StorageConfig;
+    use std::collections::BTreeMap;
     use tempfile::{NamedTempFile, TempDir};
     use tokio::net::TcpListener;
 
@@ -9122,6 +9265,7 @@ mod advert_tests {
             StreamTokenIssuer,
             registry::{RegistryCreditLedgerEntry, RegistryDeclaration, RegistryFeeLedgerEntry},
         },
+        tests_runtime_handlers::mk_app_state_for_tests_with_world,
         utils::extractors::JsonOnly,
     };
 
@@ -9778,6 +9922,38 @@ mod advert_tests {
             .data_dir(temp_dir.path().join("storage"))
             .build();
         (sorafs_node::NodeHandle::new(cfg), temp_dir)
+    }
+
+    fn workspace_fixture(path: &str) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("..")
+            .join("..")
+            .join(path)
+    }
+
+    fn load_fixture_json<T>(path: &str) -> T
+    where
+        T: norito::json::JsonDeserialize,
+    {
+        let bytes = fs::read(workspace_fixture(path)).expect("read fixture");
+        norito::json::from_slice(&bytes).expect("decode fixture")
+    }
+
+    fn fixture_public_service_bundle(version: &str, host: &str) -> SoraDeploymentBundleV1 {
+        let container: SoraContainerManifestV1 =
+            load_fixture_json("fixtures/soracloud/sora_container_manifest_v1.json");
+        let mut service: SoraServiceManifestV1 =
+            load_fixture_json("fixtures/soracloud/sora_service_manifest_v1.json");
+        service.service_version = version.to_owned();
+        if let Some(route) = service.route.as_mut() {
+            route.host = host.to_owned();
+        }
+        service.container.manifest_hash = Hash::new(Encode::encode(&container));
+        SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        }
     }
 
     struct SiteBindingsOverrideGuard;
@@ -11175,6 +11351,152 @@ mod advert_tests {
             Some(&HeaderValue::from_static(
                 "public, max-age=31536000, immutable"
             ))
+        );
+    }
+
+    #[tokio::test]
+    async fn site_binding_prefers_authoritative_soracloud_app_state() {
+        let (node, _dir) = sorafs_node_with_temp_storage();
+
+        let old_index_bytes = b"<!doctype html><title>Old</title>";
+        let (old_plan, old_payload) = CarBuildPlan::from_files_with_profile(
+            vec![FileEntry {
+                path: vec!["index.html".to_owned()],
+                data: old_index_bytes.to_vec(),
+            }],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("old directory plan");
+        let old_manifest = manifest_for_payload(0xD6, &old_payload);
+        let old_manifest_digest_hex = hex::encode(
+            old_manifest
+                .digest()
+                .expect("old manifest digest")
+                .as_bytes(),
+        );
+
+        let new_index_bytes = b"<!doctype html><title>Authoritative</title>";
+        let (new_plan, new_payload) = CarBuildPlan::from_files_with_profile(
+            vec![FileEntry {
+                path: vec!["index.html".to_owned()],
+                data: new_index_bytes.to_vec(),
+            }],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("new directory plan");
+        let new_manifest = manifest_for_payload(0xE6, &new_payload);
+        let new_content_cid = encode_content_cid(&new_manifest.root_cid);
+        let new_manifest_digest_hex = hex::encode(
+            new_manifest
+                .digest()
+                .expect("new manifest digest")
+                .as_bytes(),
+        );
+
+        let mut old_reader = old_payload.as_slice();
+        node.ingest_manifest(&old_manifest, &old_plan, &mut old_reader)
+            .expect("ingest old site payload");
+        let mut new_reader = new_payload.as_slice();
+        node.ingest_manifest(&new_manifest, &new_plan, &mut new_reader)
+            .expect("ingest new site payload");
+
+        let bindings_file = NamedTempFile::new().expect("site bindings file");
+        fs::write(
+            bindings_file.path(),
+            norito::json::to_vec(&crate::sorafs::site::SiteBindingsDocument {
+                version: Some(1),
+                sites: vec![crate::sorafs::site::SiteBinding {
+                    hostname: "taira.sora.org".to_owned(),
+                    manifest_digest_hex: old_manifest_digest_hex,
+                    index_document: None,
+                    spa_fallback: Some(true),
+                }],
+            })
+            .expect("encode site bindings"),
+        )
+        .expect("write site bindings");
+        let _env_guard = SiteBindingsOverrideGuard::set(bindings_file.path());
+
+        let mut world = World::new();
+        let bundle = fixture_public_service_bundle("2026.04.0", "taira.sora.org");
+        let service_name = bundle.service.service_name.clone();
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (
+                bundle.service.service_name.to_string(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        let config_value = norito::json!({
+            "schema_version": APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1,
+            "hostname": "taira.sora.org",
+            "mount_path": "/",
+            "index_document": "index.html",
+            "spa_fallback": true,
+            "manifest_digest_hex": new_manifest_digest_hex,
+        });
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                service_name.clone(),
+                SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name,
+                    current_service_version: bundle.service.service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                    config_generation: 1,
+                    secret_generation: 0,
+                    service_configs: BTreeMap::from([(
+                        APP_STATIC_SITE_CONFIG_NAME.to_owned(),
+                        SoraServiceConfigEntryV1 {
+                            schema_version: SORA_SERVICE_CONFIG_ENTRY_VERSION_V1,
+                            config_name: APP_STATIC_SITE_CONFIG_NAME.to_owned(),
+                            value_hash: Hash::new(
+                                norito::json::to_vec(&config_value)
+                                    .expect("config value should encode"),
+                            ),
+                            value_json: Json::from(config_value),
+                            last_update_sequence: 42,
+                        },
+                    )]),
+                    service_secrets: BTreeMap::new(),
+                },
+            );
+
+        let app = mk_app_state_for_tests_with_world(world);
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let mut root_headers = HeaderMap::new();
+        root_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let root_response = handle_get_sorafs_site_root(State(state.clone()), root_headers).await;
+        assert_eq!(root_response.status(), StatusCode::OK);
+        let root_body = body::to_bytes(root_response.into_body(), usize::MAX)
+            .await
+            .expect("read authoritative root body");
+        assert_eq!(root_body, &new_index_bytes[..]);
+
+        let mut manifest_headers = HeaderMap::new();
+        manifest_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let manifest_response =
+            handle_get_sorafs_site_manifest(State(state), manifest_headers).await;
+        assert_eq!(manifest_response.status(), StatusCode::OK);
+        let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
+            .await
+            .expect("read authoritative manifest body");
+        let manifest_value: Value =
+            norito::json::from_slice(&manifest_body).expect("decode manifest response");
+        assert_eq!(
+            manifest_value.get("content_cid").and_then(Value::as_str),
+            Some(new_content_cid.as_str())
         );
     }
 

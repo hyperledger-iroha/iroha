@@ -1428,14 +1428,8 @@ impl Actor {
         if crate::sumeragi::status::local_peer_removed() {
             debug!(
                 ?sender,
-                "dropping BlockSyncUpdate because local peer removed from world"
+                "allowing BlockSyncUpdate while local peer removed from world to permit catch-up"
             );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::BlockSyncUpdate,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::ModeMismatch,
-            );
-            return Ok(());
         }
         let super::message::BlockSyncUpdate {
             block,
@@ -2140,6 +2134,7 @@ impl Actor {
                 false,
                 None,
             );
+            let mut recovery_targets = Vec::new();
             let payload_materialized = creation_result.is_ok()
                 && self.materialize_frontier_block_sync_payload_for_qc_recovery(&block, None);
             if creation_result.is_ok() {
@@ -2155,9 +2150,11 @@ impl Actor {
                 if roster.is_empty() {
                     roster = self.trusted_topology();
                 }
+                recovery_targets = roster.clone();
                 self.cache_vote_roster(block_hash, block_height, block_view, roster);
             }
-            if payload_materialized || self.block_known_locally(block_hash) {
+            let block_known_after_creation = self.block_known_locally(block_hash);
+            if payload_materialized || block_known_after_creation {
                 let _ = self.try_replay_deferred_qcs();
                 let _ = self.try_replay_deferred_missing_payload_qcs(Instant::now());
                 self.request_commit_pipeline_for_pending(
@@ -2165,6 +2162,22 @@ impl Actor {
                     super::status::RoundEventCauseTrace::BlockSyncUpdated,
                     None,
                 );
+                if block_height == local_height.saturating_add(1) {
+                    let recovery_targets = self.known_block_commit_qc_recovery_targets(
+                        block_hash,
+                        block_height,
+                        block_view,
+                        &recovery_targets,
+                    );
+                    let _ = self.maybe_request_known_block_commit_qc_recovery(
+                        block_hash,
+                        block_height,
+                        block_view,
+                        &recovery_targets,
+                        None,
+                        "block_sync_update_payload_only_frontier_lane",
+                    );
+                }
             }
             return creation_result;
         }
@@ -3301,6 +3314,29 @@ impl Actor {
             u64::try_from(block_apply_start.elapsed().as_millis()).unwrap_or(u64::MAX);
         let block_known_after_creation = self.block_known_locally(block_hash);
         let creation_ok = creation_result.is_ok();
+        let recovered_sparse_next_height_payload = !block_known
+            && block_known_after_creation
+            && block_height == local_height.saturating_add(1)
+            && block_signer_count < commit_quorum
+            && !incoming_qc_usable
+            && !commit_cert_present
+            && !checkpoint_present;
+        if recovered_sparse_next_height_payload {
+            let recovery_targets = self.known_block_commit_qc_recovery_targets(
+                block_hash,
+                block_height,
+                block_view,
+                topology.as_ref(),
+            );
+            let _ = self.maybe_request_known_block_commit_qc_recovery(
+                block_hash,
+                block_height,
+                block_view,
+                &recovery_targets,
+                None,
+                "block_sync_update_sparse_next_height_payload",
+            );
+        }
         let ready_for_qc = block_sync_ready_for_qc(block_known_after_creation, &creation_result);
         if block_known_after_creation {
             if let Some((cert, checkpoint, stake_snapshot)) = commit_roster_record.as_ref() {
@@ -4371,6 +4407,13 @@ impl Actor {
                 },
             );
         } else {
+            if body_materialized && allow_same_height_repair {
+                self.request_commit_pipeline_for_pending(
+                    response.block_hash,
+                    super::status::RoundEventCauseTrace::BlockAvailable,
+                    None,
+                );
+            }
             self.release_block_payload_dedup(&dedup_key);
         }
         result

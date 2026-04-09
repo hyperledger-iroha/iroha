@@ -1700,7 +1700,9 @@ impl Actor {
         msg: super::message::BlockCreated,
         sender: Option<PeerId>,
     ) -> Result<()> {
-        self.handle_block_created_with_preserve_policy(msg, sender, true, false, false, false, None)
+        self.handle_block_created_with_preserve_policy(
+            msg, sender, false, true, false, false, false, None,
+        )
     }
 
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
@@ -1717,6 +1719,7 @@ impl Actor {
         self.handle_block_created_with_preserve_policy(
             msg,
             sender,
+            true,
             allow_frontier_owner_preserve_on_payload_mismatch,
             allow_authoritative_frontier_owner_supersede,
             allow_stale_recovery_without_request,
@@ -1753,13 +1756,14 @@ impl Actor {
         &mut self,
         msg: super::message::BlockCreated,
         sender: Option<PeerId>,
+        allow_when_local_removed: bool,
         allow_frontier_owner_preserve_on_payload_mismatch: bool,
         allow_authoritative_frontier_owner_supersede: bool,
         allow_stale_recovery_without_request: bool,
         allow_aborted_revival_without_local_commit_qc: bool,
         observed_commit_qc_epoch: Option<u64>,
     ) -> Result<()> {
-        if crate::sumeragi::status::local_peer_removed() {
+        if crate::sumeragi::status::local_peer_removed() && !allow_when_local_removed {
             debug!(
                 ?sender,
                 "dropping BlockCreated because local peer removed from world"

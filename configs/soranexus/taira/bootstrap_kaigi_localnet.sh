@@ -214,6 +214,7 @@ setopt null_glob
 
 DIR=\$(cd "\$(dirname "\$0")" && pwd)
 IROHAD_BIN="\${IROHAD_BIN:-$ROOT_DIR/target/release/irohad}"
+SITE_BINDINGS_FILE="\${IROHA_SORAFS_SITE_BINDINGS_FILE:-$ROOT_DIR/configs/soranexus/taira/sorafs_sites.json}"
 
 if [[ ! -x "\$IROHAD_BIN" ]]; then
   echo "irohad binary not executable: \$IROHAD_BIN" >&2
@@ -241,7 +242,11 @@ trap cleanup HUP INT TERM EXIT
 for i in 0 1 2 3; do
   snapshot_dir="\$DIR/storage/peer\${i}/snapshot"
   mkdir -p "\$snapshot_dir"
-  env SNAPSHOT_STORE_DIR="\$snapshot_dir" RUST_LOG="\${RUST_LOG:-info}" \\
+  launch_env=(SNAPSHOT_STORE_DIR="\$snapshot_dir" RUST_LOG="\${RUST_LOG:-info}")
+  if [[ -f "\$SITE_BINDINGS_FILE" ]]; then
+    launch_env+=(IROHA_SORAFS_SITE_BINDINGS_FILE="\$SITE_BINDINGS_FILE")
+  fi
+  env "\${launch_env[@]}" \\
     "\$IROHAD_BIN" --sora --config "\$DIR/peer\${i}.toml" >> "\$DIR/peer\${i}.log" 2>&1 &
   pid=\$!
   print -r -- "\$pid" > "\$DIR/peer\${i}.pid"

@@ -22,8 +22,35 @@ pub(super) type VoteLogKey = (
     crate::sumeragi::consensus::ValidatorIndex,
 );
 
+pub(super) type VoteIdentityKey = (
+    crate::sumeragi::consensus::Phase,
+    u64,
+    u64,
+    u64,
+    crate::sumeragi::consensus::ValidatorIndex,
+    PublicKey,
+);
+
 fn vote_key(vote: &crate::sumeragi::consensus::Vote) -> VoteLogKey {
     (vote.phase, vote.height, vote.view, vote.epoch, vote.signer)
+}
+
+fn vote_identity_key(
+    vote: &crate::sumeragi::consensus::Vote,
+    signer_public_key: &PublicKey,
+) -> VoteIdentityKey {
+    (
+        vote.phase,
+        vote.height,
+        vote.view,
+        vote.epoch,
+        vote.signer,
+        signer_public_key.clone(),
+    )
+}
+
+fn raw_vote_key_from_identity_key(key: &VoteIdentityKey) -> VoteLogKey {
+    (key.0, key.1, key.2, key.3, key.4)
 }
 
 fn vote_duplicate(
@@ -84,6 +111,70 @@ const VOTE_VERIFY_TOPOLOGY_CACHE_MAX: usize = 64;
 const VOTE_VERIFY_INLINE_ROSTER_MAX: usize = 8;
 
 impl Actor {
+    fn signer_public_key_from_signature_topology(
+        vote: &crate::sumeragi::consensus::Vote,
+        signature_topology: &super::network_topology::Topology,
+    ) -> Option<PublicKey> {
+        usize::try_from(vote.signer)
+            .ok()
+            .and_then(|idx| signature_topology.as_ref().get(idx))
+            .map(|peer| peer.public_key().clone())
+    }
+
+    fn vote_verify_key_for_context(
+        &self,
+        vote: &crate::sumeragi::consensus::Vote,
+        context: &VoteProcessingContext,
+    ) -> VoteVerifyKey {
+        VoteVerifyKey::from_vote_with_signer_public_key(
+            vote,
+            Self::signer_public_key_from_signature_topology(
+                vote,
+                context.signature_topology.as_ref(),
+            ),
+        )
+    }
+
+    pub(super) fn vote_identity_key_from_vote(
+        &self,
+        vote: &crate::sumeragi::consensus::Vote,
+    ) -> Option<VoteIdentityKey> {
+        self.vote_log_identities
+            .iter()
+            .find_map(|(key, stored)| (stored == vote).then_some(key.clone()))
+            .or_else(|| {
+                self.vote_signer_peer(vote)
+                    .map(|peer| vote_identity_key(vote, peer.public_key()))
+            })
+    }
+
+    pub(super) fn stored_votes<'a>(
+        &'a self,
+    ) -> Box<dyn Iterator<Item = &'a crate::sumeragi::consensus::Vote> + 'a> {
+        let represented_raw_keys: BTreeSet<_> = self
+            .vote_log_identities
+            .keys()
+            .map(raw_vote_key_from_identity_key)
+            .collect();
+        Box::new(
+            self.vote_log_identities.values().chain(
+                self.vote_log
+                    .iter()
+                    .filter(move |(key, _)| !represented_raw_keys.contains(key))
+                    .map(|(_, vote)| vote),
+            ),
+        )
+    }
+
+    pub(super) fn vote_validation_entry_for_vote(
+        &self,
+        vote: &crate::sumeragi::consensus::Vote,
+    ) -> Option<&VoteValidationCacheEntry> {
+        self.vote_identity_key_from_vote(vote)
+            .and_then(|key| self.vote_validation_cache_identities.get(&key))
+            .or_else(|| self.vote_validation_cache.get(&vote_key(vote)))
+    }
+
     fn should_fast_path_new_view_vote(&self, vote: &crate::sumeragi::consensus::Vote) -> bool {
         vote.phase == Phase::NewView
             && vote.height == self.committed_height_snapshot().saturating_add(1)
@@ -110,6 +201,48 @@ impl Actor {
                         .contains_key(&vote.block_hash)))
     }
 
+    fn local_frontier_vote_validation_roster(
+        &mut self,
+        vote: &crate::sumeragi::consensus::Vote,
+        committed_height: u64,
+        consensus_mode: ConsensusMode,
+        mode_tag: &'static str,
+        prf_seed: Option<[u8; 32]>,
+    ) -> Option<Vec<PeerId>> {
+        if matches!(vote.phase, Phase::NewView) || vote.height != committed_height.saturating_add(1)
+        {
+            return None;
+        }
+        let live_roster = self.roster_for_live_vote_with_mode(vote.height, consensus_mode);
+        if live_roster.is_empty() {
+            return None;
+        }
+        let live_topology = super::network_topology::Topology::new(live_roster.clone());
+        let live_roster_hash = iroha_crypto::HashOf::new(&live_roster);
+        let live_signature_topology = self.cached_signature_topology(
+            vote.height,
+            vote.view,
+            &live_roster_hash,
+            &live_topology,
+            mode_tag,
+            prf_seed,
+        );
+        let local_public_key = self.common_config.peer.id().public_key();
+        let signer_public_key =
+            Self::signer_public_key_from_signature_topology(vote, live_signature_topology.as_ref());
+        if signer_public_key.as_ref() != Some(local_public_key) {
+            return None;
+        }
+        super::vote_signature_check(
+            vote,
+            live_signature_topology.as_ref(),
+            &self.common_config.chain,
+            mode_tag,
+        )
+        .ok()
+        .map(|()| live_roster)
+    }
+
     fn vote_signer_peer_from_base_topology(
         &self,
         vote: &crate::sumeragi::consensus::Vote,
@@ -128,6 +261,13 @@ impl Actor {
         &self,
         vote: &crate::sumeragi::consensus::Vote,
     ) -> Option<PeerId> {
+        if let Some(identity_key) = self
+            .vote_log_identities
+            .iter()
+            .find_map(|(key, stored)| (stored == vote).then_some(key))
+        {
+            return Some(PeerId::from(identity_key.5.clone()));
+        }
         let (consensus_mode, mode_tag, prf_seed) = self.consensus_context_for_height(vote.height);
         let roster = if vote.phase != Phase::NewView {
             self.vote_roster_cache
@@ -175,7 +315,7 @@ impl Actor {
         ) {
             return None;
         }
-        self.vote_log.values().find_map(|existing| {
+        self.stored_votes().find_map(|existing| {
             if existing.phase != phase
                 || existing.height != height
                 || existing.epoch != epoch
@@ -195,12 +335,34 @@ impl Actor {
         epoch: u64,
     ) -> Option<crate::sumeragi::consensus::Vote> {
         let local_peer = self.common_config.peer.id();
-        self.vote_log.values().find_map(|existing| {
+        self.stored_votes().find_map(|existing| {
             if !matches!(
                 existing.phase,
                 crate::sumeragi::consensus::Phase::Prepare
                     | crate::sumeragi::consensus::Phase::Commit
             ) || existing.height != height
+                || existing.epoch != epoch
+            {
+                return None;
+            }
+            self.vote_signer_peer(existing)
+                .filter(|peer| peer == local_peer)
+                .map(|_| existing.clone())
+        })
+    }
+
+    pub(super) fn local_same_slot_vote(
+        &self,
+        phase: crate::sumeragi::consensus::Phase,
+        height: u64,
+        view: u64,
+        epoch: u64,
+    ) -> Option<crate::sumeragi::consensus::Vote> {
+        let local_peer = self.common_config.peer.id();
+        self.stored_votes().find_map(|existing| {
+            if existing.phase != phase
+                || existing.height != height
+                || existing.view != view
                 || existing.epoch != epoch
             {
                 return None;
@@ -481,56 +643,6 @@ impl Actor {
             );
             return;
         }
-        let key = super::VoteVerifyKey::from_vote(&vote);
-        if self
-            .subsystems
-            .vote_verify
-            .pending_validation
-            .contains_key(&key)
-            || self.subsystems.vote_verify.pending.contains_key(&key)
-            || self.subsystems.vote_verify.inflight.contains_key(&key)
-        {
-            debug!(
-                phase = ?vote.phase,
-                height = vote.height,
-                view = vote.view,
-                epoch = vote.epoch,
-                signer = vote.signer,
-                block_hash = %vote.block_hash,
-                "dropping duplicate vote while validation is queued"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::QcVote,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::Duplicate,
-            );
-            record_vote_drop_without_roster(
-                &vote,
-                super::status::VoteValidationDropReason::Duplicate,
-            );
-            return;
-        }
-        if vote_duplicate(&self.vote_log, &vote) {
-            debug!(
-                phase = ?vote.phase,
-                height = vote.height,
-                view = vote.view,
-                epoch = vote.epoch,
-                signer = vote.signer,
-                block_hash = %vote.block_hash,
-                "dropping duplicate vote already recorded"
-            );
-            self.record_consensus_message_handling(
-                super::status::ConsensusMessageKind::QcVote,
-                super::status::ConsensusMessageOutcome::Dropped,
-                super::status::ConsensusMessageReason::Duplicate,
-            );
-            record_vote_drop_without_roster(
-                &vote,
-                super::status::VoteValidationDropReason::Duplicate,
-            );
-            return;
-        }
         if self.should_fast_path_new_view_vote(&vote) || self.should_fast_path_commit_vote(&vote) {
             self.handle_vote(vote);
             return;
@@ -562,7 +674,7 @@ impl Actor {
         self.subsystems
             .vote_verify
             .pending_validation
-            .insert(key, vote);
+            .insert(super::VoteVerifyKey::from_vote(&vote), vote);
     }
 
     pub(super) fn process_pending_vote_validation(&mut self) -> bool {
@@ -643,6 +755,23 @@ impl Actor {
                 "vote_roster_lookup",
             )
         };
+        if let Some(live_roster) = self.local_frontier_vote_validation_roster(
+            &vote,
+            committed_height,
+            consensus_mode,
+            mode_tag,
+            prf_seed,
+        ) {
+            debug!(
+                phase = ?vote.phase,
+                height = vote.height,
+                view = vote.view,
+                signer = vote.signer,
+                block_hash = %vote.block_hash,
+                "using live roster for local frontier vote validation"
+            );
+            topology_peers = live_roster;
+        }
         if topology_peers.is_empty() && matches!(vote.phase, Phase::Commit) {
             let missing_request = self.missing_request_hash_has_actionable_dependency(
                 vote.block_hash,
@@ -710,7 +839,13 @@ impl Actor {
             stale_view,
             pops,
         };
-        let cache_key = super::VoteVerifyCacheKey::from_vote(&vote);
+        let cache_key = super::VoteVerifyCacheKey::from_vote_with_signer_public_key(
+            &vote,
+            Self::signer_public_key_from_signature_topology(
+                &vote,
+                context.signature_topology.as_ref(),
+            ),
+        );
         if self
             .subsystems
             .vote_verify
@@ -989,7 +1124,7 @@ impl Actor {
         if self.subsystems.vote_verify.work_txs.is_empty() {
             return false;
         }
-        let key = super::VoteVerifyKey::from_vote(vote);
+        let key = self.vote_verify_key_for_context(vote, context);
         if self.subsystems.vote_verify.inflight.contains_key(&key)
             || self.subsystems.vote_verify.pending.contains_key(&key)
         {
@@ -1049,10 +1184,9 @@ impl Actor {
         let active_height = anchor_height.saturating_add(1);
         let local_peer = self.common_config.peer.id();
         let preserved_local_active_votes: BTreeSet<_> = self
-            .vote_log
-            .iter()
-            .filter_map(|(key, vote)| {
-                let keep_local_active_vote = key.1 == active_height
+            .stored_votes()
+            .filter_map(|vote| {
+                let keep_local_active_vote = vote.height == active_height
                     && matches!(
                         vote.phase,
                         crate::sumeragi::consensus::Phase::Prepare
@@ -1062,7 +1196,7 @@ impl Actor {
                         .vote_signer_peer(vote)
                         .as_ref()
                         .is_some_and(|peer| peer == local_peer);
-                keep_local_active_vote.then_some(*key)
+                keep_local_active_vote.then_some(vote_key(vote))
             })
             .collect();
         let preserved_local_active_roster_hashes: BTreeSet<_> = preserved_local_active_votes
@@ -1073,12 +1207,37 @@ impl Actor {
         // catching up. Pruning them by the local view window drops the very quorum evidence needed
         // to advance, so keep same-height NEW_VIEW votes until the height itself moves on.
         let preserved_active_new_view_votes: BTreeSet<_> = self
-            .vote_log
+            .stored_votes()
+            .filter_map(|vote| {
+                let keep_active_new_view_vote = vote.height == active_height
+                    && matches!(vote.phase, crate::sumeragi::consensus::Phase::NewView);
+                keep_active_new_view_vote.then_some(vote_key(vote))
+            })
+            .collect();
+        let preserved_local_active_vote_identities: BTreeSet<_> = self
+            .vote_log_identities
             .iter()
             .filter_map(|(key, vote)| {
-                let keep_active_new_view_vote = key.1 == active_height
+                let keep_local_active_vote = vote.height == active_height
+                    && matches!(
+                        vote.phase,
+                        crate::sumeragi::consensus::Phase::Prepare
+                            | crate::sumeragi::consensus::Phase::Commit
+                    )
+                    && self
+                        .vote_signer_peer(vote)
+                        .as_ref()
+                        .is_some_and(|peer| peer == local_peer);
+                keep_local_active_vote.then_some(key.clone())
+            })
+            .collect();
+        let preserved_active_new_view_vote_identities: BTreeSet<_> = self
+            .vote_log_identities
+            .iter()
+            .filter_map(|(key, vote)| {
+                let keep_active_new_view_vote = vote.height == active_height
                     && matches!(vote.phase, crate::sumeragi::consensus::Phase::NewView);
-                keep_active_new_view_vote.then_some(*key)
+                keep_active_new_view_vote.then_some(key.clone())
             })
             .collect();
         let min_height = active_height.saturating_sub(super::VOTE_CACHE_HEIGHT_WINDOW);
@@ -1110,8 +1269,15 @@ impl Actor {
                 || preserved_active_new_view_votes.contains(key)
         };
         self.vote_log.retain(|key, _| should_keep_vote_key(key));
+        self.vote_log_identities.retain(|key, vote| {
+            should_keep(vote.height, vote.view)
+                || preserved_local_active_vote_identities.contains(key)
+                || preserved_active_new_view_vote_identities.contains(key)
+        });
         self.vote_validation_cache
             .retain(|key, _| should_keep_vote_key(key));
+        self.vote_validation_cache_identities
+            .retain(|key, _| self.vote_log_identities.contains_key(key));
         self.qc_cache
             .retain(|(_, _, height, view, _), _| should_keep(*height, *view));
         self.qc_signer_tally
@@ -2119,9 +2285,14 @@ impl Actor {
             consensus_mode,
         );
         let membership_hash = iroha_crypto::HashOf::new(&canonical_roster);
-        let peer_id = usize::try_from(vote.signer)
-            .ok()
-            .and_then(|idx| signature_topology.as_ref().get(idx).cloned());
+        let signer_public_key =
+            Self::signer_public_key_from_signature_topology(vote, signature_topology);
+        let peer_id = signer_public_key
+            .as_ref()
+            .map(|key| PeerId::from(key.clone()));
+        let identity_key = signer_public_key
+            .as_ref()
+            .map(|signer_public_key| vote_identity_key(vote, signer_public_key));
         let record_drop = |reason| {
             super::status::record_vote_validation_drop(super::status::VoteValidationDropRecord {
                 reason,
@@ -2143,7 +2314,20 @@ impl Actor {
                 mode_tag,
             );
         };
-        if vote_duplicate(&self.vote_log, vote) {
+        if identity_key
+            .as_ref()
+            .and_then(|key| self.vote_log_identities.get(key))
+            .is_some_and(|existing| existing.block_hash == vote.block_hash)
+            || identity_key.as_ref().is_some_and(|key| {
+                self.vote_log
+                    .get(&(key.0, key.1, key.2, key.3, key.4))
+                    .filter(|existing| {
+                        self.vote_identity_key_from_vote(existing).as_ref() == Some(key)
+                    })
+                    .is_some_and(|existing| existing.block_hash == vote.block_hash)
+            })
+            || (identity_key.is_none() && vote_duplicate(&self.vote_log, vote))
+        {
             iroha_logger::debug!(
                 phase = ?vote.phase,
                 height = vote.height,
@@ -2170,10 +2354,12 @@ impl Actor {
             )
         });
         if signature_result.is_ok() {
-            self.subsystems
-                .vote_verify
-                .verified_cache
-                .insert(super::VoteVerifyCacheKey::from_vote(vote));
+            self.subsystems.vote_verify.verified_cache.insert(
+                super::VoteVerifyCacheKey::from_vote_with_signer_public_key(
+                    vote,
+                    signer_public_key.clone(),
+                ),
+            );
         }
         match signature_result {
             Ok(()) => {}
@@ -2384,7 +2570,34 @@ impl Actor {
                 return false;
             }
         }
-        if let Some(existing) = self.vote_log.get(&key).cloned() {
+        if let Some(existing) = identity_key
+            .as_ref()
+            .and_then(|key| self.vote_log_identities.get(key))
+            .cloned()
+            .or_else(|| {
+                identity_key.as_ref().and_then(|identity_key| {
+                    self.vote_log
+                        .get(&(
+                            identity_key.0,
+                            identity_key.1,
+                            identity_key.2,
+                            identity_key.3,
+                            identity_key.4,
+                        ))
+                        .filter(|existing| {
+                            self.vote_identity_key_from_vote(existing).as_ref()
+                                == Some(identity_key)
+                        })
+                        .cloned()
+                })
+            })
+            .or_else(|| {
+                identity_key
+                    .is_none()
+                    .then(|| self.vote_log.get(&key).cloned())
+                    .flatten()
+            })
+        {
             if existing.block_hash == vote.block_hash {
                 iroha_logger::debug!(
                     phase = ?vote.phase,
@@ -2409,10 +2622,38 @@ impl Actor {
                 _ => None,
             };
             if let Some(phase) = cross_phase {
-                if let Some(previous) = self
-                    .vote_log
-                    .get(&(phase, vote.height, vote.view, vote.epoch, vote.signer))
-                    .cloned()
+                if let Some(previous) = signer_public_key
+                    .as_ref()
+                    .and_then(|signer_public_key| {
+                        self.vote_log_identities
+                            .get(&(
+                                phase,
+                                vote.height,
+                                vote.view,
+                                vote.epoch,
+                                vote.signer,
+                                signer_public_key.clone(),
+                            ))
+                            .cloned()
+                    })
+                    .or_else(|| {
+                        self.vote_log
+                            .get(&(phase, vote.height, vote.view, vote.epoch, vote.signer))
+                            .filter(|previous| {
+                                signer_public_key.as_ref().is_none_or(|signer_public_key| {
+                                    self.vote_identity_key_from_vote(previous).as_ref()
+                                        == Some(&(
+                                            phase,
+                                            vote.height,
+                                            vote.view,
+                                            vote.epoch,
+                                            vote.signer,
+                                            signer_public_key.clone(),
+                                        ))
+                                })
+                            })
+                            .cloned()
+                    })
                 {
                     self.note_double_vote(Some(&previous), vote, evidence_context);
                 }
@@ -2435,8 +2676,30 @@ impl Actor {
             record_drop(super::status::VoteValidationDropReason::ConflictingVote);
             return false;
         }
-        let previous = self.vote_log.insert(key, vote.clone());
-        self.vote_validation_cache.insert(key, cache_entry);
+        let previous = identity_key.as_ref().and_then(|key| {
+            let previous = self.vote_log_identities.insert(key.clone(), vote.clone());
+            self.vote_validation_cache_identities
+                .insert(key.clone(), cache_entry);
+            previous
+        });
+        let replace_raw_entry = signer_public_key.as_ref().is_some_and(|signer_public_key| {
+            self.vote_log.get(&key).is_some_and(|existing| {
+                self.vote_identity_key_from_vote(existing).as_ref()
+                    == Some(&vote_identity_key(vote, signer_public_key))
+            })
+        });
+        match self.vote_log.entry(key) {
+            Entry::Vacant(entry) => {
+                entry.insert(vote.clone());
+                self.vote_validation_cache.insert(key, cache_entry);
+            }
+            Entry::Occupied(mut entry) => {
+                if replace_raw_entry || identity_key.is_none() {
+                    entry.insert(vote.clone());
+                    self.vote_validation_cache.insert(key, cache_entry);
+                }
+            }
+        }
         iroha_logger::debug!(
             phase = ?vote.phase,
             height = vote.height,
@@ -2458,10 +2721,38 @@ impl Actor {
             _ => None,
         };
         if let Some(phase) = cross_phase {
-            if let Some(previous) = self
-                .vote_log
-                .get(&(phase, vote.height, vote.view, vote.epoch, vote.signer))
-                .cloned()
+            if let Some(previous) = signer_public_key
+                .as_ref()
+                .and_then(|signer_public_key| {
+                    self.vote_log_identities
+                        .get(&(
+                            phase,
+                            vote.height,
+                            vote.view,
+                            vote.epoch,
+                            vote.signer,
+                            signer_public_key.clone(),
+                        ))
+                        .cloned()
+                })
+                .or_else(|| {
+                    self.vote_log
+                        .get(&(phase, vote.height, vote.view, vote.epoch, vote.signer))
+                        .filter(|previous| {
+                            signer_public_key.as_ref().is_none_or(|signer_public_key| {
+                                self.vote_identity_key_from_vote(previous).as_ref()
+                                    == Some(&(
+                                        phase,
+                                        vote.height,
+                                        vote.view,
+                                        vote.epoch,
+                                        vote.signer,
+                                        signer_public_key.clone(),
+                                    ))
+                            })
+                        })
+                        .cloned()
+                })
             {
                 self.note_double_vote(Some(&previous), vote, evidence_context);
             }

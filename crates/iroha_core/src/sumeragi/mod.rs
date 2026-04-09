@@ -9826,6 +9826,11 @@ impl InboundBlockMessage {
         let elapsed_ms = u64::try_from(enqueued_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         Some((queue, elapsed_ms))
     }
+
+    #[cfg(test)]
+    pub(crate) fn message(&self) -> &BlockMessage {
+        &self.message
+    }
 }
 
 #[derive(Debug)]

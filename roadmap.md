@@ -1,6 +1,42 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-07
+Last updated: 2026-04-09
+
+Latest sync (2026-04-09 the remaining `connected_peers` vote-bookkeeping gap is closed on the patched tree):
+the previously fixed restart-catchup path is now backed by identity-safe vote
+bookkeeping all the way through deferred validation and QC source-vote
+selection. Same-slot votes that differ only because cached and live rosters map
+the raw signer index to different peers no longer overwrite one another in the
+verification queues, locally emitted frontier votes can validate against the
+live topology when the stale block roster would otherwise remap them, and later
+local-vote/QC lookups resolve stored vote identity from the authoritative
+identity map instead of recomputing it from the stale block-hash roster cache.
+That closes the last known correctness gap behind
+`extra_functional::connected_peers::{connected_peers_with_f_1_0_1,connected_peers_with_f_2_1_2}`.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/commit.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/votes.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/mod.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/block_sync.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo test -p iroha_core --lib pending_validation_preserves_same_slot_signature_collisions_until_identity_validation -- --nocapture`
+  - `cargo test -p iroha_core --lib maybe_emit_local_commit_vote_ignores_remote_same_index_vote_when_cached_roster_differs_from_live -- --nocapture`
+  - `cargo test -p iroha_core --lib precommit_vote_ignores_remote_same_height_vote_when_cached_roster_differs_from_live -- --nocapture`
+  - `cargo test -p integration_tests --test network_functional connected_peers_with_f_1_0_1 -- --nocapture`
+  - `cargo test -p integration_tests --test network_functional connected_peers_with_f_2_1_2 -- --nocapture`
+  - `cargo fmt --all`
+- open work after this slice:
+  - let the broader `cargo test --workspace --all-targets` validation boundary
+    catch up if repo-wide signoff is still required; and
+  - treat any later long-run consensus regression as a new issue rather than a
+    remaining gap in this now-green `connected_peers` cluster.
 
 Latest sync (2026-04-07 the grouped `core_api` harness is green on the patched tree):
 the remaining grouped-only `core_api` reds from this cluster are closed now. The

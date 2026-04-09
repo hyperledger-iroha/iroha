@@ -135,11 +135,13 @@ Torii now exposes three live SCCP bundle families:
     canonical SCCP statement context rather than from an embedded placeholder
     envelope.
 - `POST /v1/bridge/messages` accepts an inbound `message_bundle` targeted at SORA, records the corresponding transparent-ZK bridge proof, and emits a typed `BridgeReceipt` for `transfer` payloads.
+- `GET /v1/sccp/messages/recent` exposes newest-first committed SCCP message discovery with compact metadata, decoded payload projections when available, and direct links to the existing bundle / artifact / job endpoints.
 - `POST /v1/bridge/messages` now also accepts an optional `settlement` object:
   - it resolves a deployed contract target by `contract_address` or `contract_alias`;
   - it appends an ephemeral by-call trigger after proof verification so settlement can happen in the same submitted transaction; and
-  - when `payload` is omitted for a parameterized entrypoint, Torii auto-builds the `finalize_inbound(route, message_id, recipient, amount)` payload for `transfer` messages using the SCCP bundle plus the provided local `route`;
-  - when the SCCP transfer `route_id` already uses the logical-name codec (`route_id_codec == 1`), the local `route` can be omitted and Torii derives it directly from the bundle.
+  - when `payload` is omitted for `finalize_inbound`, Torii auto-builds `finalize_inbound(route, message_id, recipient, amount)` from the `transfer` message bundle and requires the proof-derived `route_id` to decode as a logical `Name`;
+  - when `payload` is omitted for `activate_route_governed`, Torii auto-builds `activate_route_governed(message_id, route, asset_key, remote_domain)` from the `route_activate` message bundle and requires both the proof-derived `route_id` and `asset_id` to decode as logical `Name`s;
+  - explicit `settlement.payload` is rejected for those proof-managed bridge entrypoints, so callers cannot bypass the proof-derived settlement inputs with raw custom payloads.
 - Automatic settlement is still opt-in per request. Cross-node policy for always-on contract dispatch remains a higher-level integration choice outside this endpoint.
 - The CLI now exposes read-only SCCP discovery helpers under the bridge feature:
   - `iroha ops bridge sccp capabilities`

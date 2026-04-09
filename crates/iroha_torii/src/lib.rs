@@ -15328,15 +15328,17 @@ async fn proxy_soracloud_public_native_process(
 
     let status = upstream_response.status();
     let response_headers = upstream_response.headers().clone();
-    let response_body = match upstream_response.bytes().await {
-        Ok(body) => body,
-        Err(error) => {
-            return soracloud_public_runtime_unavailable(format!(
-                "native Soracloud service `{}` returned an unreadable response body: {error}",
-                route_match.service_name
-            ));
-        }
-    };
+    let response_body = Body::from_stream(futures_util::stream::unfold(
+        Some(upstream_response),
+        |state| async move {
+            let mut response = state?;
+            match response.chunk().await {
+                Ok(Some(chunk)) => Some((Ok::<Bytes, std::io::Error>(chunk), Some(response))),
+                Ok(None) => None,
+                Err(error) => Some((Err(std::io::Error::other(error)), None)),
+            }
+        },
+    ));
     let mut builder = Response::builder().status(status);
     for (name, value) in &response_headers {
         if name == axum::http::header::CONTENT_LENGTH {
@@ -18195,6 +18197,50 @@ async fn handler_sccp_manifests(
     Ok(routing::handle_v1_sccp_manifests(accept)
         .await?
         .into_response())
+}
+
+async fn handler_sccp_messages_recent(
+    State(app): State<SharedAppState>,
+    window: crate::NoritoQuery<routing::HistoryWindowQuery>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "/v1/sccp/messages/recent",
+        app.api_token_enforced(),
+    );
+    rate_limit_requests(&app, &key).await?;
+    #[cfg(feature = "telemetry")]
+    if let Some(api_token) = token_hdr {
+        crate::telemetry::report_torii_api_hit(
+            &app.telemetry,
+            &api_token,
+            "v1/sccp/messages/recent",
+        );
+    }
+    let accept = headers.get(axum::http::header::ACCEPT).cloned();
+    Ok(
+        routing::handle_v1_sccp_messages_recent(app.state.as_ref(), window, accept)
+            .await?
+            .into_response(),
+    )
 }
 
 #[cfg(feature = "telemetry")]
@@ -24411,6 +24457,10 @@ impl Torii {
                 .route(
                     "/v1/sccp/jobs/message/{message_id}",
                     get(handler_sccp_message_job),
+                )
+                .route(
+                    "/v1/sccp/messages/recent",
+                    get(handler_sccp_messages_recent),
                 );
             let sumeragi = sumeragi.route("/v1/sccp/capabilities", get(handler_sccp_capabilities));
             let sumeragi = sumeragi.route("/v1/sccp/manifests", get(handler_sccp_manifests));
@@ -25613,7 +25663,12 @@ impl Torii {
     #[cfg(feature = "app_api")]
     fn add_soracloud_public_runtime_routes(&self, builder: &mut RouterBuilder) {
         let _ = self;
-        builder.apply(|router| router.fallback(any(handler_soracloud_public_local_read)));
+        builder.apply(|router| {
+            router
+                .route("/api", any(handler_soracloud_public_local_read))
+                .route("/api/{*tail}", any(handler_soracloud_public_local_read))
+                .fallback(any(handler_soracloud_public_local_read))
+        });
     }
 
     #[cfg(feature = "app_api")]
@@ -35279,6 +35334,197 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn soracloud_public_native_process_route_streams_sse_bodies() {
+        use futures_util::StreamExt as _;
+        use http_body_util::BodyExt as _;
+        use tower::ServiceExt as _;
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind upstream listener");
+        let addr = listener.local_addr().expect("upstream addr");
+        let upstream = axum::Router::new().route(
+            "/v1/search/search_1/events",
+            get(|| async {
+                let stream = futures_util::stream::once(async {
+                    Ok::<Bytes, Infallible>(Bytes::from_static(b"event: session\n"))
+                })
+                .chain(futures_util::stream::once(async {
+                    tokio::time::sleep(Duration::from_millis(800)).await;
+                    Ok::<Bytes, Infallible>(Bytes::from_static(b"data: {\"id\":\"search_1\"}\n\n"))
+                }));
+                Response::builder()
+                    .status(StatusCode::OK)
+                    .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
+                    .body(Body::from_stream(stream))
+                    .expect("streaming response")
+            }),
+        );
+        let upstream_task = tokio::spawn(async move {
+            axum::serve(listener, upstream.into_make_service())
+                .await
+                .expect("serve upstream");
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+
+        let temp = tempfile::tempdir().expect("tempdir");
+        let materialization_dir = temp.path().join("service");
+        fs::create_dir_all(&materialization_dir).expect("materialization dir");
+        let runtime_state = SoracloudNativeProcessRuntimeStateV1 {
+            schema_version:
+                iroha_core::soracloud_runtime::SORACLOUD_NATIVE_PROCESS_RUNTIME_STATE_VERSION_V1,
+            service_name: "web_portal".to_owned(),
+            service_version: "2026.02.0".to_owned(),
+            process_generation: 1,
+            health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+            listen_base_url: Some(format!("http://{addr}")),
+            pid: Some(1),
+            last_error: None,
+            updated_at_ms: 1,
+        };
+        fs::write(
+            materialization_dir.join(SORACLOUD_NATIVE_PROCESS_RUNTIME_STATE_FILE_V1),
+            norito::json::to_json(&runtime_state).expect("runtime state json"),
+        )
+        .expect("runtime state write");
+
+        let mut world = seed_public_soracloud_world();
+        let mut bundle = world
+            .view()
+            .soracloud_service_revisions()
+            .get(&("web_portal".to_owned(), "2026.02.0".to_owned()))
+            .cloned()
+            .expect("public service bundle");
+        bundle.container.runtime =
+            iroha_data_model::soracloud::SoraContainerRuntimeV1::NativeProcess;
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+        world
+            .soracloud_service_revisions_mut_for_testing()
+            .insert(("web_portal".to_owned(), "2026.02.0".to_owned()), bundle);
+
+        let mut snapshot = iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default();
+        snapshot.services.insert(
+            "web_portal".to_owned(),
+            BTreeMap::from([(
+                "2026.02.0".to_owned(),
+                iroha_core::soracloud_runtime::SoracloudRuntimeServicePlan {
+                    service_name: "web_portal".to_owned(),
+                    service_version: "2026.02.0".to_owned(),
+                    role: iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active,
+                    traffic_percent: 100,
+                    runtime: iroha_data_model::soracloud::SoraContainerRuntimeV1::NativeProcess,
+                    bundle_hash: Hash::new(b"native-public-bundle").to_string(),
+                    bundle_path: "/runtime/bin/launch.sh".to_owned(),
+                    entrypoint: "/runtime/bin/launch.sh".to_owned(),
+                    bundle_cache_path: temp.path().join("bundle.tar.gz").display().to_string(),
+                    bundle_available_locally: true,
+                    process_generation: Some(1),
+                    health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+                    load_factor_bps: 0,
+                    reported_pending_mailbox_messages: 0,
+                    authoritative_pending_mailbox_messages: 0,
+                    rollout_handle: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    config_entry_count: 0,
+                    secret_entry_count: 0,
+                    config_exports: Vec::new(),
+                    supports_host_read_config: true,
+                    supports_host_read_secret_envelope: true,
+                    supports_private_secret_payload_reads: false,
+                    materialization_dir: materialization_dir.display().to_string(),
+                    config_materialization_dir: materialization_dir
+                        .join("configs")
+                        .display()
+                        .to_string(),
+                    effective_env: BTreeMap::new(),
+                    effective_env_materialization_path: materialization_dir
+                        .join("effective_env.json")
+                        .display()
+                        .to_string(),
+                    config_exports_materialization_dir: materialization_dir
+                        .join("config_exports")
+                        .display()
+                        .to_string(),
+                    secret_envelopes_materialization_dir: materialization_dir
+                        .join("secret_envelopes")
+                        .display()
+                        .to_string(),
+                    secret_payload_materialization_dir: materialization_dir
+                        .join("secret_payloads")
+                        .display()
+                        .to_string(),
+                    mailboxes: Vec::new(),
+                    artifacts: Vec::new(),
+                },
+            )]),
+        );
+        let runtime = TestLocalReadRuntime {
+            snapshot,
+            state_dir: temp.path().to_path_buf(),
+            local_peer_id: None,
+            result: Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "native process proxy should bypass local-read execution",
+                ),
+            ),
+            captured_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+            captured_proxy_failures: Arc::new(std::sync::Mutex::new(Vec::new())),
+            captured_reconcile_requests: Arc::new(std::sync::Mutex::new(Vec::new())),
+        };
+        let mut app = mk_app_state_for_tests_with_world(world);
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(runtime));
+        let router = axum::Router::new()
+            .fallback(any(handler_soracloud_public_local_read))
+            .with_state(app);
+
+        let response = tokio::time::timeout(
+            Duration::from_millis(300),
+            router.oneshot(
+                axum::http::Request::builder()
+                    .uri("/app/v1/search/search_1/events")
+                    .header(axum::http::header::HOST, "portal.sora")
+                    .extension(crate::loopback_connect_info())
+                    .body(Body::empty())
+                    .expect("request"),
+            ),
+        )
+        .await
+        .expect("native proxy should not wait for the full SSE body")
+        .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("text/event-stream")
+        );
+
+        let mut body = response.into_body();
+        let first_frame = tokio::time::timeout(Duration::from_millis(300), body.frame())
+            .await
+            .expect("first SSE frame should be streamed promptly")
+            .expect("body frame")
+            .expect("streamed frame");
+        let first_chunk = first_frame.into_data().expect("data frame");
+        assert_eq!(first_chunk.as_ref(), b"event: session\n");
+
+        let second_frame = tokio::time::timeout(Duration::from_millis(1_200), body.frame())
+            .await
+            .expect("second SSE frame should arrive")
+            .expect("body frame")
+            .expect("streamed frame");
+        let second_chunk = second_frame.into_data().expect("data frame");
+        assert_eq!(second_chunk.as_ref(), b"data: {\"id\":\"search_1\"}\n\n");
+
+        upstream_task.abort();
     }
 
     fn sample_generated_hf_infer_request(

@@ -10,6 +10,7 @@ use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     fs,
+    io,
     io::Read as _,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
@@ -112,6 +113,12 @@ use reqwest::{
     header::{self, HeaderValue},
 };
 use sha2::{Digest as _, Sha256};
+use sorafs_car::{CarBuildPlan, CarChunk, CarWriter};
+use sorafs_manifest::{
+    ChunkingProfileV1, DagCodecId, GovernanceProofs, ManifestBuilder, PinPolicy,
+    StorageClass as ManifestStorageClass, chunker_registry,
+};
+use tiny_keccak::{Hasher as _, Sha3};
 
 #[cfg(test)]
 use iroha::data_model::soracloud::{
@@ -133,6 +140,9 @@ const HF_DEFAULT_RESOLVED_REVISION: &str = "main";
 const HF_REPO_ID_MAX_BYTES: usize = 256;
 const HF_REVISION_MAX_BYTES: usize = 160;
 const HF_MODEL_NAME_MAX_BYTES: usize = 128;
+const APP_STATIC_SITE_CONFIG_NAME: &str = "soracloud/app_static_site";
+const APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1: u16 = 1;
+const APP_STATIC_SITE_INDEX_DOCUMENT: &str = "index.html";
 const HEADER_IROHA_ACCOUNT: &str = "X-Iroha-Account";
 const HEADER_IROHA_TIMESTAMP_MS: &str = "X-Iroha-Timestamp-Ms";
 const HEADER_IROHA_NONCE: &str = "X-Iroha-Nonce";
@@ -736,33 +746,98 @@ impl AppDeployArgs {
             .to_path_buf();
         let manifest: SoracloudAppManifestV1 = load_json(&manifest_path)?;
         manifest.validate()?;
+        let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
 
         let mode_label = match mode {
             MutationMode::Deploy => "deploy",
             MutationMode::Upgrade => "upgrade",
         }
         .to_owned();
+        let static_site_publication = manifest
+            .static_site
+            .as_ref()
+            .map(|static_site| {
+                publish_app_static_site(
+                    &manifest,
+                    &manifest_dir,
+                    static_site,
+                    &torii_url,
+                    authority,
+                    key_pair,
+                    self.timeout_secs,
+                )
+            })
+            .transpose()?;
+        let static_site_binding_value = static_site_publication
+            .as_ref()
+            .map(|publication| {
+                build_app_static_site_binding_value(
+                    &manifest.app_name,
+                    &manifest.public_url,
+                    publication,
+                    manifest.static_site.as_ref().expect("static_site exists"),
+                )
+            })
+            .transpose()?;
 
+        let static_site_target_host = static_site_publication
+            .as_ref()
+            .map(|publication| publication.hostname.as_str());
+        let mut static_site_binding_attached = false;
         let mut services = Vec::with_capacity(manifest.services.len());
-        for service in &manifest.services {
+        for service in manifest.services.iter() {
             let container_manifest = resolve_manifest_path(&manifest_dir, &service.container_manifest);
             let service_manifest = resolve_manifest_path(&manifest_dir, &service.service_manifest);
-            let response = DeployArgs {
-                container: container_manifest.clone(),
-                service: service_manifest.clone(),
-                initial_configs: service
-                    .initial_configs
-                    .as_deref()
-                    .map(|path| resolve_manifest_path(&manifest_dir, path)),
-                initial_secrets: service
-                    .initial_secrets
-                    .as_deref()
-                    .map(|path| resolve_manifest_path(&manifest_dir, path)),
-                torii_url: self.torii_url.clone(),
-                api_token: self.api_token.clone(),
-                timeout_secs: self.timeout_secs,
+            let container: SoraContainerManifestV1 = load_json(&container_manifest)?;
+            let service_manifest_payload: SoraServiceManifestV1 = load_json(&service_manifest)?;
+            let route_matches_static_site = static_site_target_host.is_some_and(|hostname| {
+                service_manifest_payload
+                    .route
+                    .as_ref()
+                    .is_some_and(|route| {
+                        route.visibility == SoraRouteVisibilityV1::Public
+                            && route.host.eq_ignore_ascii_case(hostname)
+                    })
+            });
+            let bundle = SoraDeploymentBundleV1 {
+                schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+                container,
+                service: service_manifest_payload,
+            };
+            bundle.validate_for_admission()?;
+            let mut initial_service_configs =
+                load_initial_service_configs(service.initial_configs.as_deref().map(|path| {
+                    resolve_manifest_path(&manifest_dir, path)
+                }).as_deref())?;
+            if initial_service_configs.contains_key(APP_STATIC_SITE_CONFIG_NAME) {
+                return Err(eyre!(
+                    "app service `{}` initial configs may not set reserved config `{APP_STATIC_SITE_CONFIG_NAME}`",
+                    service.service_name
+                ));
             }
-            .run(mode, authority, key_pair)?;
+            if !static_site_binding_attached
+                && route_matches_static_site
+                && let Some(binding_value) = static_site_binding_value.as_ref()
+            {
+                initial_service_configs
+                    .insert(APP_STATIC_SITE_CONFIG_NAME.to_owned(), binding_value.clone());
+                static_site_binding_attached = true;
+            }
+            let initial_service_secrets =
+                load_initial_service_secrets(service.initial_secrets.as_deref().map(|path| {
+                    resolve_manifest_path(&manifest_dir, path)
+                }).as_deref())?;
+            let response = run_service_bundle_mutation(
+                mode,
+                bundle,
+                initial_service_configs,
+                initial_service_secrets,
+                &torii_url,
+                self.api_token.as_deref(),
+                self.timeout_secs,
+                authority,
+                key_pair,
+            )?;
             services.push(AppServiceMutationOutput {
                 service_name: service.service_name.clone(),
                 container_manifest: container_manifest.to_string_lossy().into_owned(),
@@ -771,11 +846,19 @@ impl AppDeployArgs {
             });
         }
 
+        if static_site_binding_value.is_some() && !static_site_binding_attached {
+            let expected_host = static_site_target_host.expect("static site target host exists");
+            return Err(eyre!(
+                "app static site host `{expected_host}` has no matching public service route in the app manifest"
+            ));
+        }
+
         Ok(AppMutationOutput {
             app_name: manifest.app_name,
             public_url: manifest.public_url,
             mode: mode_label,
             static_site: manifest.static_site,
+            published_static_site: static_site_publication,
             services,
         })
     }
@@ -878,46 +961,23 @@ impl DeployArgs {
             container,
             service,
         };
-        let service_name = bundle.service.service_name.to_string();
         bundle.validate_for_admission()?;
         let initial_service_configs =
             load_initial_service_configs(self.initial_configs.as_deref())?;
         let initial_service_secrets =
             load_initial_service_secrets(self.initial_secrets.as_deref())?;
 
-        let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let endpoint_path = match mode {
-            MutationMode::Deploy => "v1/soracloud/deploy",
-            MutationMode::Upgrade => "v1/soracloud/upgrade",
-        };
-        let request = signed_bundle_request(
+        let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
+        run_service_bundle_mutation(
+            mode,
             bundle,
             initial_service_configs,
             initial_service_secrets,
-            Some(authority),
+            &torii_url,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+            authority,
             key_pair,
-        )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            endpoint_path,
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
-        let (_, status_payload) = fetch_torii_soracloud_status(
-            torii_url,
-            Some(&service_name),
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
-        build_service_mutation_output(
-            payload,
-            &status_payload,
-            &service_name,
-            match mode {
-                MutationMode::Deploy => "Deploy",
-                MutationMode::Upgrade => "Upgrade",
-            },
         )
     }
 }
@@ -962,46 +1022,23 @@ impl UpgradeArgs {
             container,
             service,
         };
-        let service_name = bundle.service.service_name.to_string();
         bundle.validate_for_admission()?;
         let initial_service_configs =
             load_initial_service_configs(self.initial_configs.as_deref())?;
         let initial_service_secrets =
             load_initial_service_secrets(self.initial_secrets.as_deref())?;
 
-        let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let endpoint_path = match mode {
-            MutationMode::Deploy => "v1/soracloud/deploy",
-            MutationMode::Upgrade => "v1/soracloud/upgrade",
-        };
-        let request = signed_bundle_request(
+        let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
+        run_service_bundle_mutation(
+            mode,
             bundle,
             initial_service_configs,
             initial_service_secrets,
-            Some(authority),
+            &torii_url,
+            self.api_token.as_deref(),
+            self.timeout_secs,
+            authority,
             key_pair,
-        )?;
-        let (_, payload) = post_torii_soracloud_mutation(
-            torii_url,
-            endpoint_path,
-            &request,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
-        let (_, status_payload) = fetch_torii_soracloud_status(
-            torii_url,
-            Some(&service_name),
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
-        build_service_mutation_output(
-            payload,
-            &status_payload,
-            &service_name,
-            match mode {
-                MutationMode::Deploy => "Deploy",
-                MutationMode::Upgrade => "Upgrade",
-            },
         )
     }
 }
@@ -3815,6 +3852,9 @@ struct AppMutationOutput {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     static_site: Option<SoracloudAppStaticSiteV1>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    published_static_site: Option<AppStaticSitePublishOutput>,
     services: Vec<AppServiceMutationOutput>,
 }
 
@@ -3838,6 +3878,33 @@ struct AppStatusOutput {
     #[norito(skip_serializing_if = "Option::is_none")]
     static_site: Option<SoracloudAppStaticSiteV1>,
     services: Vec<norito::json::Value>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AppStaticSiteBindingV1 {
+    schema_version: u16,
+    app_name: String,
+    public_url: String,
+    hostname: String,
+    mount_path: String,
+    index_document: String,
+    spa_fallback: bool,
+    manifest_digest_hex: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    api_base_path: Option<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AppStaticSitePublishOutput {
+    hostname: String,
+    public_url: String,
+    cid_gateway_url: String,
+    content_cid: String,
+    manifest_digest_hex: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    manifest_id_hex: Option<String>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -4995,6 +5062,286 @@ impl norito::core::NoritoSerialize for UploadedModelBundleRootPayload<'_> {
         serialize_tuple_field(&mut writer, &self.decryption_policy_ref)?;
         Ok(())
     }
+}
+
+#[derive(Clone, Debug)]
+struct OwnedStorageFileEntry {
+    path: Vec<String>,
+    size: u64,
+}
+
+fn run_service_bundle_mutation(
+    mode: MutationMode,
+    bundle: SoraDeploymentBundleV1,
+    initial_service_configs: BTreeMap<String, Json>,
+    initial_service_secrets: BTreeMap<String, SecretEnvelopeV1>,
+    torii_url: &str,
+    api_token: Option<&str>,
+    timeout_secs: u64,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+) -> Result<norito::json::Value> {
+    let service_name = bundle.service.service_name.to_string();
+    let endpoint_path = match mode {
+        MutationMode::Deploy => "v1/soracloud/deploy",
+        MutationMode::Upgrade => "v1/soracloud/upgrade",
+    };
+    let request = signed_bundle_request(
+        bundle,
+        initial_service_configs,
+        initial_service_secrets,
+        Some(authority),
+        key_pair,
+    )?;
+    let (_, payload) =
+        post_torii_soracloud_mutation(torii_url, endpoint_path, &request, api_token, timeout_secs)?;
+    let (_, status_payload) =
+        fetch_torii_soracloud_status(torii_url, Some(&service_name), api_token, timeout_secs)?;
+    build_service_mutation_output(
+        payload,
+        &status_payload,
+        &service_name,
+        match mode {
+            MutationMode::Deploy => "Deploy",
+            MutationMode::Upgrade => "Upgrade",
+        },
+    )
+}
+
+fn build_app_static_site_binding_value(
+    app_name: &str,
+    _public_url: &str,
+    publication: &AppStaticSitePublishOutput,
+    static_site: &SoracloudAppStaticSiteV1,
+) -> Result<Json> {
+    let binding = AppStaticSiteBindingV1 {
+        schema_version: APP_STATIC_SITE_BINDING_SCHEMA_VERSION_V1,
+        app_name: app_name.to_owned(),
+        public_url: publication.public_url.clone(),
+        hostname: publication.hostname.clone(),
+        mount_path: static_site.mount_path.clone(),
+        index_document: APP_STATIC_SITE_INDEX_DOCUMENT.to_owned(),
+        spa_fallback: true,
+        manifest_digest_hex: publication.manifest_digest_hex.clone(),
+        api_base_path: static_site.api_base_path.clone(),
+    };
+    Ok(Json::from(
+        json::to_value(&binding).wrap_err("failed to encode app static site binding JSON")?,
+    ))
+}
+
+fn publish_app_static_site(
+    app_manifest: &SoracloudAppManifestV1,
+    manifest_dir: &Path,
+    static_site: &SoracloudAppStaticSiteV1,
+    torii_url: &str,
+    authority: &AccountId,
+    key_pair: &KeyPair,
+    timeout_secs: u64,
+) -> Result<AppStaticSitePublishOutput> {
+    if static_site.mount_path != "/" {
+        return Err(eyre!(
+            "app static site mount_path `{}` is not supported yet; only `/` can be bound to the root site host",
+            static_site.mount_path
+        ));
+    }
+
+    let mut public_url = reqwest::Url::parse(&app_manifest.public_url).wrap_err_with(|| {
+        format!(
+            "app manifest field `public_url` is not a valid URL: {}",
+            app_manifest.public_url
+        )
+    })?;
+    if public_url.path() != "/" {
+        return Err(eyre!(
+            "app manifest field `public_url` must target the host root when static_site is enabled; got path `{}`",
+            public_url.path()
+        ));
+    }
+    public_url.set_query(None);
+    public_url.set_fragment(None);
+    let hostname = public_url
+        .host_str()
+        .ok_or_else(|| eyre!("app manifest field `public_url` must include a hostname"))?
+        .trim()
+        .trim_end_matches('.')
+        .to_ascii_lowercase();
+    if hostname.is_empty() {
+        return Err(eyre!("app manifest field `public_url` resolved to an empty hostname"));
+    }
+
+    let dist_dir = resolve_manifest_path(manifest_dir, &static_site.dist_dir);
+    let metadata = fs::metadata(&dist_dir).wrap_err_with(|| {
+        format!(
+            "failed to access app static site dist_dir `{}`",
+            dist_dir.display()
+        )
+    })?;
+    if !metadata.is_dir() {
+        return Err(eyre!(
+            "app static site dist_dir `{}` must be a directory",
+            dist_dir.display()
+        ));
+    }
+
+    let descriptor = chunker_registry::default_descriptor();
+    let (plan, payload) = CarBuildPlan::from_directory_with_profile(&dist_dir, descriptor.profile)
+        .map_err(|err| eyre!("failed to package static site `{}`: {err}", dist_dir.display()))?;
+    let writer = CarWriter::new(&plan, &payload).wrap_err("failed to prepare site CAR writer")?;
+    let mut sink = io::sink();
+    let car_stats = writer
+        .write_to(&mut sink)
+        .wrap_err("failed to compute site CAR metadata")?;
+    let root_cid = car_stats
+        .root_cids
+        .first()
+        .cloned()
+        .ok_or_else(|| eyre!("site CAR planning produced no root CID"))?;
+    let mut car_payload_digest = [0u8; 32];
+    car_payload_digest.copy_from_slice(car_stats.car_payload_digest.as_bytes());
+    let manifest = ManifestBuilder::new()
+        .root_cid(root_cid)
+        .dag_codec(DagCodecId(car_stats.dag_codec))
+        .chunking_profile(ChunkingProfileV1::from_descriptor(descriptor))
+        .content_length(plan.content_length)
+        .car_digest(car_payload_digest)
+        .car_size(car_stats.car_size)
+        .pin_policy(PinPolicy {
+            min_replicas: 3,
+            storage_class: ManifestStorageClass::Hot,
+            retention_epoch: 0,
+        })
+        .governance(GovernanceProofs::default())
+        .build()
+        .wrap_err("failed to build app static site manifest")?;
+    let manifest_bytes = manifest
+        .encode()
+        .wrap_err("failed to encode app static site manifest")?;
+    let manifest_digest = manifest
+        .digest()
+        .wrap_err("failed to compute app static site manifest digest")?;
+    let manifest_digest_hex = hex::encode(manifest_digest.as_bytes());
+    let chunk_digest_sha3_256 = compute_chunk_digest_sha3(&plan.chunks);
+    let files = plan
+        .files
+        .iter()
+        .map(|file| OwnedStorageFileEntry {
+            path: file.path.clone(),
+            size: file.size,
+        })
+        .collect::<Vec<_>>();
+
+    let mut client_config = soracloud_submission_config()?;
+    client_config.torii_api_url = url::Url::parse(torii_url)
+        .wrap_err_with(|| format!("invalid --torii-url `{torii_url}`"))?;
+    client_config.torii_request_timeout = Duration::from_secs(timeout_secs.max(1));
+    client_config.account = authority.clone();
+    client_config.key_pair = key_pair.clone();
+    let client = Client::new(client_config);
+    client
+        .post_sorafs_pin_register(iroha::client::SorafsPinRegisterArgs {
+            authority,
+            private_key: key_pair.private_key(),
+            manifest: &manifest,
+            chunk_digest_sha3_256,
+            submitted_epoch: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs(),
+            alias: None,
+            successor_of: None,
+        })
+        .wrap_err("failed to register app static site manifest")?;
+    let borrowed_files = files
+        .iter()
+        .map(|entry| iroha::client::SorafsStorageFileEntry {
+            path: entry.path.as_slice(),
+            size: entry.size,
+        })
+        .collect::<Vec<_>>();
+    let storage_response = client
+        .post_sorafs_storage_pin(&manifest_bytes, &payload, Some(&borrowed_files))
+        .wrap_err("failed to upload app static site bundle into SoraFS storage")?;
+    let status = storage_response.status();
+    let body = storage_response.body().to_vec();
+    let already_stored = storage_pin_conflict_is_already_stored(status, &body);
+    if status != iroha::http::StatusCode::OK && !already_stored {
+        return Err(eyre!(
+            "failed to upload app static site bundle into SoraFS storage: {} {}",
+            status,
+            std::str::from_utf8(&body).unwrap_or("")
+        ));
+    }
+    let storage_value: norito::json::Value = if already_stored {
+        norito::json::Value::Null
+    } else {
+        json::from_slice(&body).wrap_err("failed to decode static site storage response")?
+    };
+    let manifest_id_hex = storage_value
+        .get("manifest_id_hex")
+        .and_then(norito::json::Value::as_str)
+        .map(ToOwned::to_owned);
+    let content_cid = encode_content_cid(&manifest.root_cid);
+    let mut cid_gateway_url = public_url.clone();
+    cid_gateway_url.set_path(&format!("/sorafs/cid/{content_cid}/"));
+
+    Ok(AppStaticSitePublishOutput {
+        hostname,
+        public_url: public_url.to_string(),
+        cid_gateway_url: cid_gateway_url.to_string(),
+        content_cid,
+        manifest_digest_hex,
+        manifest_id_hex,
+    })
+}
+
+fn storage_pin_conflict_is_already_stored(
+    status: iroha::http::StatusCode,
+    body: &[u8],
+) -> bool {
+    status == iroha::http::StatusCode::CONFLICT
+        && String::from_utf8_lossy(body).contains("already stored")
+}
+
+fn compute_chunk_digest_sha3(chunks: &[CarChunk]) -> [u8; 32] {
+    let mut hasher = Sha3::v256();
+    for chunk in chunks {
+        hasher.update(&chunk.offset.to_le_bytes());
+        hasher.update(&chunk.length.to_le_bytes());
+        hasher.update(&chunk.digest);
+    }
+    let mut digest = [0u8; 32];
+    hasher.finalize(&mut digest);
+    digest
+}
+
+fn encode_content_cid(bytes: &[u8]) -> String {
+    const ALPHABET: &[u8; 32] = b"abcdefghijklmnopqrstuvwxyz234567";
+    if bytes.is_empty() {
+        return "b".to_owned();
+    }
+
+    let mut acc = 0u32;
+    let mut bits = 0u32;
+    let mut out = Vec::with_capacity((bytes.len() * 8).div_ceil(5) + 1);
+    out.push(b'b');
+
+    for byte in bytes {
+        acc = (acc << 8) | (*byte as u32);
+        bits += 8;
+        while bits >= 5 {
+            let index = ((acc >> (bits - 5)) & 0x1f) as usize;
+            out.push(ALPHABET[index]);
+            bits -= 5;
+        }
+    }
+
+    if bits > 0 {
+        let index = ((acc << (5 - bits)) & 0x1f) as usize;
+        out.push(ALPHABET[index]);
+    }
+
+    String::from_utf8(out).expect("lowercase base32 CID should be valid UTF-8")
 }
 
 fn signed_bundle_request(
@@ -12829,6 +13176,22 @@ mod tests {
             norito::to_bytes(decoded_instruction).expect("encode decoded"),
             norito::to_bytes(&instruction).expect("encode expected"),
         );
+    }
+
+    #[test]
+    fn storage_pin_conflict_helper_accepts_already_stored_only() {
+        assert!(!storage_pin_conflict_is_already_stored(
+            iroha::http::StatusCode::OK,
+            br#"{"manifest_id_hex":"abc"}"#,
+        ));
+        assert!(storage_pin_conflict_is_already_stored(
+            iroha::http::StatusCode::CONFLICT,
+            br#"{"error":"manifest abc already stored"}"#,
+        ));
+        assert!(!storage_pin_conflict_is_already_stored(
+            iroha::http::StatusCode::CONFLICT,
+            br#"{"error":"different conflict"}"#,
+        ));
     }
 
     fn write_sample_uploaded_model_source(dir: &Path) {

@@ -1,4 +1,9 @@
 {
   "version": 1,
-  "sites": []
+  "sites": [
+    {
+      "hostname": "taira.sora.org",
+      "manifest_digest_hex": "774760e68d2bfdf18484459cb31965df32f52bb448245237689797fe26295663"
+    }
+  ]
 }

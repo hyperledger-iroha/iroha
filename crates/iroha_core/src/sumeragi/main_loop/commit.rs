@@ -1352,8 +1352,16 @@ impl Actor {
                     if let (Some(signers), Some(view_signers)) =
                         (qc_signers.as_ref(), view_signers.as_ref())
                     {
+                        let accepted_votes = self.accepted_votes_for_qc_slot(
+                            crate::sumeragi::consensus::Phase::Commit,
+                            block_hash,
+                            pending_height,
+                            pending_view,
+                            lock.epoch,
+                            &topology,
+                        );
                         let aggregate_signature = match super::aggregate_vote_signatures(
-                            &self.vote_log,
+                            &accepted_votes,
                             crate::sumeragi::consensus::Phase::Commit,
                             block_hash,
                             pending_height,
@@ -1980,13 +1988,21 @@ impl Actor {
                 );
 
                 if let Some(signers) = qc_signers.as_ref() {
+                    let accepted_votes = self.accepted_votes_for_qc_slot(
+                        crate::sumeragi::consensus::Phase::Commit,
+                        block_hash,
+                        pending_height,
+                        pending_view,
+                        lock.epoch,
+                        &topology,
+                    );
                     let aggregate_signature = committed_cached_qc_tail.as_ref().map_or_else(
                         || {
                             view_signers
                                 .as_ref()
                                 .and_then(|view_signers| {
                                     super::aggregate_vote_signatures(
-                                        &self.vote_log,
+                                        &accepted_votes,
                                         crate::sumeragi::consensus::Phase::Commit,
                                         block_hash,
                                         pending_height,
@@ -2461,8 +2477,16 @@ impl Actor {
             if let (Some(signers), Some(view_signers)) =
                 (quorum_signers.as_ref(), view_signers.as_ref())
             {
+                let accepted_votes = self.accepted_votes_for_qc_slot(
+                    crate::sumeragi::consensus::Phase::Commit,
+                    block_hash,
+                    pending_height,
+                    pending_view,
+                    lock.epoch,
+                    &topology,
+                );
                 let aggregate_signature = match super::aggregate_vote_signatures(
-                    &self.vote_log,
+                    &accepted_votes,
                     crate::sumeragi::consensus::Phase::Commit,
                     block_hash,
                     pending_height,
@@ -4031,15 +4055,34 @@ impl Actor {
         &self,
         vote: &crate::sumeragi::consensus::Vote,
     ) -> bool {
-        let key = (vote.phase, vote.height, vote.view, vote.epoch, vote.signer);
+        let local_public_key = self.common_config.peer.id().public_key().clone();
+        let identity_key = (
+            vote.phase,
+            vote.height,
+            vote.view,
+            vote.epoch,
+            vote.signer,
+            local_public_key.clone(),
+        );
         if self
-            .vote_log
-            .get(&key)
+            .vote_log_identities
+            .get(&identity_key)
             .is_some_and(|existing| existing.block_hash == vote.block_hash)
         {
             return true;
         }
-        let verify_key = super::VoteVerifyKey::from_vote(vote);
+        if self
+            .vote_log
+            .get(&(vote.phase, vote.height, vote.view, vote.epoch, vote.signer))
+            .filter(|existing| {
+                self.vote_identity_key_from_vote(existing).as_ref() == Some(&identity_key)
+            })
+            .is_some_and(|existing| existing.block_hash == vote.block_hash)
+        {
+            return true;
+        }
+        let verify_key =
+            super::VoteVerifyKey::from_vote_with_signer_public_key(vote, Some(local_public_key));
         self.subsystems
             .vote_verify
             .pending_validation
@@ -4117,14 +4160,15 @@ impl Actor {
             );
             return false;
         }
-        let sent_key = (
-            crate::sumeragi::consensus::Phase::Commit,
-            height,
-            view,
-            epoch,
-            local_idx,
-        );
-        if self.vote_log.contains_key(&sent_key) {
+        if self
+            .local_same_slot_vote(
+                crate::sumeragi::consensus::Phase::Commit,
+                height,
+                view,
+                epoch,
+            )
+            .is_some_and(|existing| existing.block_hash == block_hash)
+        {
             debug!(
                 height,
                 view,
@@ -4368,14 +4412,12 @@ impl Actor {
                 return false;
             }
         }
-        let sent_key = (
+        if let Some(existing) = self.local_same_slot_vote(
             crate::sumeragi::consensus::Phase::NewView,
             height,
             view,
             epoch,
-            local_idx,
-        );
-        if let Some(existing) = self.vote_log.get(&sent_key) {
+        ) {
             if existing.block_hash != highest_qc.subject_block_hash {
                 warn!(
                     height,
@@ -4522,7 +4564,7 @@ impl Actor {
     ) -> Option<u64> {
         let local_peer = self.common_config.peer.id();
         let mut highest: Option<u64> = None;
-        for vote in self.vote_log.values() {
+        for vote in self.stored_votes() {
             if vote.phase != crate::sumeragi::consensus::Phase::NewView {
                 continue;
             }
@@ -4578,15 +4620,24 @@ impl Actor {
             epoch,
             &signature_topology,
         );
+        let mut accepted_votes = self.accepted_votes_for_qc_slot(
+            crate::sumeragi::consensus::Phase::Commit,
+            block_hash,
+            height,
+            view,
+            epoch,
+            &signature_topology,
+        );
         if !signers.is_empty() {
             let (filtered, _groups) = super::qc::select_commit_root_signers(
-                &self.vote_log,
+                &accepted_votes,
                 block_hash,
                 height,
                 view,
                 epoch,
                 &signers,
             );
+            accepted_votes.retain(|signer, _| filtered.contains(signer));
             signers = filtered;
         }
         let vote_count = signers.len();
@@ -5525,15 +5576,24 @@ impl Actor {
             qc.epoch,
             &signature_topology,
         );
+        let mut accepted_votes = self.accepted_votes_for_qc_slot(
+            qc.phase,
+            qc.subject_block_hash,
+            qc.height,
+            qc.view,
+            qc.epoch,
+            &signature_topology,
+        );
         if matches!(qc.phase, crate::sumeragi::consensus::Phase::Commit) && !signers.is_empty() {
             let (filtered, _groups) = super::qc::select_commit_root_signers(
-                &self.vote_log,
+                &accepted_votes,
                 qc.subject_block_hash,
                 qc.height,
                 qc.view,
                 qc.epoch,
                 &signers,
             );
+            accepted_votes.retain(|signer, _| filtered.contains(signer));
             signers = filtered;
         }
         if signers.is_empty() {
@@ -5603,7 +5663,7 @@ impl Actor {
             return None;
         }
         let aggregate_signature = match super::aggregate_vote_signatures(
-            &self.vote_log,
+            &accepted_votes,
             qc.phase,
             qc.subject_block_hash,
             qc.height,
@@ -6649,7 +6709,9 @@ impl Actor {
         self.pending.pending_processing.set(None);
         self.pending.pending_processing_parent.set(None);
         self.vote_log.clear();
+        self.vote_log_identities.clear();
         self.vote_validation_cache.clear();
+        self.vote_validation_cache_identities.clear();
         self.deferred_votes.clear();
         self.consensus_recovery.clear();
         self.recovery_pending_baseline_restore.clear();

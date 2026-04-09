@@ -145,14 +145,16 @@ use iroha_sccp::{
     NexusParliamentSignatureSchemeV1, NexusParliamentSignatureV1, NexusSccpBurnProofV1,
     NexusSccpGovernanceProofV1, NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
     SccpCounterpartyProofJobV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
-    SccpPayloadV1, SccpProofManifestV1, build_nexus_sccp_message_transparent_proof,
+    SccpNormalizedCodecValueV1, SccpPayloadProjectionV1, SccpPayloadV1, SccpProofManifestV1,
+    build_nexus_sccp_message_transparent_proof,
     build_nexus_sccp_message_transparent_proof_with_signer,
     build_sccp_counterparty_proof_job_from_bundle,
     build_sccp_counterparty_proof_job_from_bundle_with_signer, burn_message_id,
     canonical_burn_payload_bytes, canonical_governance_payload_bytes, canonical_sccp_payload_bytes,
     commitment_leaf_hash, decode_nexus_bridge_finality_proof, parliament_certificate_hash,
     payload_hash, recover_nexus_sccp_message_transparent_proof, sccp_message_id, sccp_message_kind,
-    sccp_message_target_domain, verify_burn_bundle_structure, verify_governance_bundle_structure,
+    sccp_message_payload_kind_key, sccp_message_target_domain, sccp_payload_projection,
+    verify_burn_bundle_structure, verify_governance_bundle_structure,
     verify_message_bundle_structure,
 };
 #[cfg(feature = "telemetry")]
@@ -4662,6 +4664,8 @@ pub struct SccpCapabilitiesDto {
     pub message_proof_path: String,
     /// Generic SCCP normalized counterparty proof-job fetch path.
     pub message_job_path: String,
+    /// Newest-first SCCP message discovery path.
+    pub recent_messages_path: String,
     /// SCCP proof manifest discovery path.
     pub proof_manifest_path: String,
     /// Registry backend label used by legacy burn proofs.
@@ -4680,6 +4684,63 @@ pub struct SccpCapabilitiesDto {
     pub codecs: Vec<SccpCodecCapabilityDto>,
     /// Supported non-SORA counterparties for generic SCCP message proofs.
     pub counterparties: Vec<SccpCounterpartyCapabilityDto>,
+}
+
+#[derive(Clone, Debug, serde::Serialize, norito::derive::NoritoSerialize)]
+/// Existing bundle/artifact/job lookup paths for a recent SCCP message item.
+pub struct SccpRecentMessageLinksDto {
+    /// Canonical SCCP bundle lookup path.
+    pub bundle_path: String,
+    /// Canonical SCCP proof-artifact lookup path.
+    pub artifact_path: String,
+    /// Canonical SCCP proof-job lookup path.
+    pub job_path: String,
+}
+
+#[derive(Clone, Debug, serde::Serialize, norito::derive::NoritoSerialize)]
+/// Compact newest-first SCCP message discovery record.
+pub struct SccpRecentMessageDto {
+    /// Height of the finalized block that anchored the message.
+    pub height: u64,
+    /// Hex-encoded canonical SCCP message id.
+    pub message_id_hex: String,
+    /// Stable logical payload kind.
+    pub kind: String,
+    /// Numeric SCCP target domain.
+    pub target_domain: u32,
+    /// Numeric SCCP counterparty domain resolved from the payload.
+    pub counterparty_domain: u32,
+    /// Stable logical counterparty chain key.
+    pub counterparty_chain: String,
+    /// Decoded asset id when it is representable as text.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub asset_id: Option<String>,
+    /// Decoded route id when it is representable as text.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub route_id: Option<String>,
+    /// Decoded recipient when it is representable as text.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub recipient: Option<String>,
+    /// Decimal-string transfer amount, when present.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub amount: Option<String>,
+    /// Normalized decoded payload projection when available.
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub payload_projection: Option<SccpPayloadProjectionV1>,
+    /// Existing canonical bundle/artifact/job links for the message.
+    pub links: SccpRecentMessageLinksDto,
+}
+
+#[derive(Clone, Debug, serde::Serialize, norito::derive::NoritoSerialize)]
+/// Newest-first SCCP recent-message discovery response.
+pub struct SccpRecentMessagesDto {
+    /// Newest-first committed SCCP messages within the requested history window.
+    pub items: Vec<SccpRecentMessageDto>,
 }
 
 #[derive(
@@ -4777,6 +4838,7 @@ fn sccp_capabilities_snapshot() -> Result<SccpCapabilitiesDto> {
         message_bundle_path: "/v1/sccp/proofs/message/{message_id}".to_owned(),
         message_proof_path: "/v1/sccp/artifacts/message/{message_id}".to_owned(),
         message_job_path: "/v1/sccp/jobs/message/{message_id}".to_owned(),
+        recent_messages_path: "/v1/sccp/messages/recent".to_owned(),
         proof_manifest_path: "/v1/sccp/manifests".to_owned(),
         legacy_burn_registry_backend: "bridge/sccp/burn-v1".to_owned(),
         legacy_governance_registry_backend: "bridge/sccp/governance-v1".to_owned(),
@@ -5306,6 +5368,7 @@ mod sccp_message_backend_tests {
             snapshot.message_proof_path,
             "/v1/sccp/artifacts/message/{message_id}"
         );
+        assert_eq!(snapshot.recent_messages_path, "/v1/sccp/messages/recent");
         assert_eq!(snapshot.proof_manifest_path, "/v1/sccp/manifests");
         assert_eq!(
             snapshot.proof_submit_path.as_deref(),
@@ -5788,6 +5851,146 @@ fn reconstruct_sccp_message_bundle_from_committed_blocks(
     Ok(None)
 }
 
+fn projection_text_value(value: &SccpNormalizedCodecValueV1) -> Option<String> {
+    match value {
+        SccpNormalizedCodecValueV1::TextUtf8 { value } => Some(value.clone()),
+        _ => None,
+    }
+}
+
+fn recent_message_projection_asset_id(projection: &SccpPayloadProjectionV1) -> Option<String> {
+    match projection {
+        SccpPayloadProjectionV1::AssetRegister(item) => projection_text_value(&item.asset_id),
+        SccpPayloadProjectionV1::RouteActivate(item) => projection_text_value(&item.asset_id),
+        SccpPayloadProjectionV1::Transfer(item) => projection_text_value(&item.asset_id),
+    }
+}
+
+fn recent_message_projection_route_id(projection: &SccpPayloadProjectionV1) -> Option<String> {
+    match projection {
+        SccpPayloadProjectionV1::RouteActivate(item) => projection_text_value(&item.route_id),
+        SccpPayloadProjectionV1::Transfer(item) => projection_text_value(&item.route_id),
+        SccpPayloadProjectionV1::AssetRegister(_) => None,
+    }
+}
+
+fn recent_message_projection_recipient(projection: &SccpPayloadProjectionV1) -> Option<String> {
+    match projection {
+        SccpPayloadProjectionV1::Transfer(item) => projection_text_value(&item.recipient),
+        _ => None,
+    }
+}
+
+fn recent_message_projection_amount(projection: &SccpPayloadProjectionV1) -> Option<String> {
+    match projection {
+        SccpPayloadProjectionV1::Transfer(item) => Some(item.amount.to_string()),
+        _ => None,
+    }
+}
+
+fn recent_message_entry_from_bundle(
+    height: u64,
+    bundle: &NexusSccpMessageProofV1,
+) -> Result<SccpRecentMessageDto> {
+    let message_id_hex = hex::encode(bundle.commitment.message_id);
+    let (counterparty_domain, counterparty_chain) =
+        sccp_counterparty_for_message_payload(&bundle.payload)?;
+    let payload_projection = sccp_payload_projection(&bundle.payload);
+    let asset_id = payload_projection
+        .as_ref()
+        .and_then(recent_message_projection_asset_id);
+    let route_id = payload_projection
+        .as_ref()
+        .and_then(recent_message_projection_route_id);
+    let recipient = payload_projection
+        .as_ref()
+        .and_then(recent_message_projection_recipient);
+    let amount = payload_projection
+        .as_ref()
+        .and_then(recent_message_projection_amount);
+    Ok(SccpRecentMessageDto {
+        height,
+        message_id_hex: message_id_hex.clone(),
+        kind: sccp_message_payload_kind_key(&bundle.payload).to_owned(),
+        target_domain: bundle.commitment.target_domain,
+        counterparty_domain,
+        counterparty_chain: counterparty_chain.to_owned(),
+        asset_id,
+        route_id,
+        recipient,
+        amount,
+        payload_projection,
+        links: SccpRecentMessageLinksDto {
+            bundle_path: format!("/v1/sccp/proofs/message/{message_id_hex}"),
+            artifact_path: format!("/v1/sccp/artifacts/message/{message_id_hex}"),
+            job_path: format!("/v1/sccp/jobs/message/{message_id_hex}"),
+        },
+    })
+}
+
+fn collect_recent_sccp_messages(
+    state: &CoreState,
+    window: &HistoryWindowQuery,
+) -> Result<SccpRecentMessagesDto> {
+    const RECENT_SCCP_MESSAGES_CAP: usize = 50;
+
+    let max_height = state
+        .committed_height()
+        .max(state.view().kura().blocks_count());
+    let start_height = window
+        .from
+        .and_then(|height| usize::try_from(height).ok())
+        .map(|height| height.min(max_height))
+        .unwrap_or(max_height);
+    let limit = window
+        .limit
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(RECENT_SCCP_MESSAGES_CAP)
+        .min(RECENT_SCCP_MESSAGES_CAP);
+    if limit == 0 || start_height == 0 {
+        return Ok(SccpRecentMessagesDto { items: Vec::new() });
+    }
+
+    let mut items = Vec::new();
+    for height in (1..=start_height).rev() {
+        let Some(height_nz) = NonZeroUsize::new(height) else {
+            continue;
+        };
+        let Some(block) = state.block_by_height(height_nz) else {
+            continue;
+        };
+        let messages = iroha_core::bridge::collect_sccp_messages_from_signed_block(block.as_ref());
+        if messages.is_empty() {
+            continue;
+        }
+        let height_u64 = u64::try_from(height).unwrap_or(u64::MAX);
+        for message in messages.iter().rev() {
+            let commitment_root = iroha_core::bridge::sccp_commitment_root_from_messages(&messages)
+                .ok_or_else(|| {
+                    sccp_internal_error(format!(
+                        "failed to reconstruct SCCP commitment root for block {height_u64}"
+                    ))
+                })?;
+            let finality_proof = iroha_core::bridge::build_finality_proof(state, height_u64)
+                .map_err(map_bridge_finality_error)?;
+            let bundle = NexusSccpMessageProofV1 {
+                version: 1,
+                commitment_root,
+                commitment: message.commitment.clone(),
+                merkle_proof: SccpMerkleProofV1 { steps: Vec::new() },
+                payload: message.payload.clone(),
+                finality_proof: build_sccp_finality_proof_bytes(&finality_proof, commitment_root)?,
+            };
+            items.push(recent_message_entry_from_bundle(height_u64, &bundle)?);
+            if items.len() >= limit {
+                return Ok(SccpRecentMessagesDto { items });
+            }
+        }
+    }
+
+    Ok(SccpRecentMessagesDto { items })
+}
+
 fn min_votes_for_len(len: usize) -> u16 {
     if len > 3 {
         u16::try_from(((len.saturating_sub(1)) / 3) * 2 + 1).unwrap_or(u16::MAX)
@@ -6189,6 +6392,17 @@ pub async fn handle_v1_sccp_capabilities(
 #[iroha_futures::telemetry_future]
 pub async fn handle_v1_sccp_manifests(accept: Option<axum::http::HeaderValue>) -> Result<Response> {
     let snapshot = sccp_proof_manifest_snapshot()?;
+    sccp_bundle_response(&snapshot, accept.as_ref())
+}
+
+/// GET /v1/sccp/messages/recent — newest-first committed SCCP message discovery with compact metadata.
+#[iroha_futures::telemetry_future]
+pub async fn handle_v1_sccp_messages_recent(
+    state: &CoreState,
+    crate::NoritoQuery(window): crate::NoritoQuery<HistoryWindowQuery>,
+    accept: Option<axum::http::HeaderValue>,
+) -> Result<Response> {
+    let snapshot = collect_recent_sccp_messages(state, &window)?;
     sccp_bundle_response(&snapshot, accept.as_ref())
 }
 
@@ -11555,7 +11769,21 @@ fn parse_sora_settlement_recipient(
 }
 
 #[cfg(feature = "app_api")]
-fn default_bridge_settlement_payload(
+fn parse_bridge_name_from_utf8(codec: u8, bytes: &[u8], label: &str) -> Result<Name> {
+    if codec != iroha_sccp::SCCP_CODEC_TEXT_UTF8 {
+        return Err(conversion_error(format!(
+            "{label} must be encoded as UTF-8 text for the proof-driven bridge settlement path"
+        )));
+    }
+    let literal = std::str::from_utf8(bytes)
+        .map_err(|err| conversion_error(format!("{label} is not valid UTF-8: {err}")))?;
+    literal
+        .parse::<Name>()
+        .map_err(|err| conversion_error(format!("{label} `{literal}` is not a valid Name: {err}")))
+}
+
+#[cfg(feature = "app_api")]
+fn default_finalize_inbound_settlement_payload(
     bundle: &NexusSccpMessageProofV1,
     route: &Name,
 ) -> Result<IrohaJson> {
@@ -11584,33 +11812,62 @@ fn default_bridge_settlement_payload(
 }
 
 #[cfg(feature = "app_api")]
-fn derive_bridge_settlement_route(
+fn default_activate_route_governed_payload(
     bundle: &NexusSccpMessageProofV1,
-    configured_route: Option<&Name>,
-) -> Result<Name> {
-    if let Some(route) = configured_route {
-        return Ok(route.clone());
+    expected_route: Option<&Name>,
+) -> Result<(IrohaJson, Name)> {
+    let SccpPayloadV1::RouteActivate(payload) = &bundle.payload else {
+        return Err(conversion_error(
+            "automatic bridge route activation payload generation is only supported for route_activate messages"
+                .to_owned(),
+        ));
+    };
+    let route = parse_bridge_name_from_utf8(payload.route_id_codec, &payload.route_id, "route_id")?;
+    if let Some(expected_route) = expected_route {
+        if expected_route != &route {
+            return Err(conversion_error(format!(
+                "settlement route `{expected_route}` does not match the proof-derived route `{route}`"
+            )));
+        }
     }
+    let asset_key =
+        parse_bridge_name_from_utf8(payload.asset_id_codec, &payload.asset_id, "asset_id")?;
+    let mut object = Map::new();
+    object.insert(
+        "message_id".into(),
+        Value::from(hex::encode(bundle.commitment.message_id)),
+    );
+    object.insert("route".into(), Value::from(route.as_ref()));
+    object.insert("asset_key".into(), Value::from(asset_key.as_ref()));
+    object.insert("remote_domain".into(), Value::from(payload.source_domain));
+    Ok((IrohaJson::new(Value::Object(object)), route))
+}
 
+#[cfg(feature = "app_api")]
+fn derive_finalize_inbound_settlement_route(
+    bundle: &NexusSccpMessageProofV1,
+    expected_route: Option<&Name>,
+) -> Result<Name> {
     let SccpPayloadV1::Transfer(payload) = &bundle.payload else {
         return Err(conversion_error(
             "automatic bridge settlement route derivation is only supported for transfer messages"
                 .to_owned(),
         ));
     };
-    if payload.route_id_codec != iroha_sccp::SCCP_CODEC_TEXT_UTF8 {
-        return Err(conversion_error(
-            "settlement route is required when the SCCP transfer route_id is not encoded as a logical Name"
-                .to_owned(),
-        ));
+    let route = parse_bridge_name_from_utf8(payload.route_id_codec, &payload.route_id, "route_id")?;
+    if let Some(expected_route) = expected_route {
+        if expected_route != &route {
+            return Err(conversion_error(format!(
+                "settlement route `{expected_route}` does not match the proof-derived route `{route}`"
+            )));
+        }
     }
-    let route_literal = std::str::from_utf8(&payload.route_id)
-        .map_err(|err| conversion_error(format!("route_id is not valid UTF-8: {err}")))?;
-    route_literal.parse::<Name>().map_err(|err| {
-        conversion_error(format!(
-            "route_id `{route_literal}` is not a valid Name: {err}"
-        ))
-    })
+    Ok(route)
+}
+
+#[cfg(feature = "app_api")]
+fn bridge_settlement_entrypoint_requires_generated_payload(entrypoint: &str) -> bool {
+    matches!(entrypoint, "finalize_inbound" | "activate_route_governed")
 }
 
 #[cfg(feature = "app_api")]
@@ -11664,13 +11921,34 @@ fn prepare_bridge_message_settlement(
 
     let mut resolved_route = settlement.route.clone();
     let payload = if let Some(payload) = settlement.payload.as_ref() {
+        if bridge_settlement_entrypoint_requires_generated_payload(entrypoint) {
+            return Err(conversion_error(format!(
+                "settlement payload must be omitted for proof-driven bridge entrypoint `{entrypoint}`"
+            )));
+        }
         normalize_contract_payload(descriptor, Some(payload))?
     } else if descriptor.params.is_empty() {
         None
     } else {
-        let route = derive_bridge_settlement_route(bundle, settlement.route.as_ref())?;
-        let generated_payload = default_bridge_settlement_payload(bundle, &route)?;
-        resolved_route = Some(route);
+        let generated_payload = match entrypoint {
+            "finalize_inbound" => {
+                let route =
+                    derive_finalize_inbound_settlement_route(bundle, settlement.route.as_ref())?;
+                resolved_route = Some(route.clone());
+                default_finalize_inbound_settlement_payload(bundle, &route)?
+            }
+            "activate_route_governed" => {
+                let (generated_payload, route) =
+                    default_activate_route_governed_payload(bundle, settlement.route.as_ref())?;
+                resolved_route = Some(route);
+                generated_payload
+            }
+            _ => {
+                return Err(conversion_error(format!(
+                    "automatic bridge settlement payload generation is not supported for entrypoint `{entrypoint}`"
+                )));
+            }
+        };
         normalize_contract_payload(descriptor, Some(&generated_payload))?
     };
 

@@ -1,6 +1,58 @@
 # Status
 
-Last updated: 2026-04-08
+Last updated: 2026-04-09
+
+## 2026-04-09 Follow-up: the remaining cached-roster vote-bookkeeping collision is closed
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  now keeps deferred/inflight vote keys collision-safe by incorporating the
+  signature hash into `VoteVerifyKey`, so same-slot votes that differ only
+  because cached and live rosters map that slot to different peers no longer
+  overwrite each other while queued for validation.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/votes.rs`
+  now prefers the authoritative identity store when resolving a recorded vote's
+  signer peer, and local frontier prepare/commit votes may validate against the
+  live roster when that is the only topology that matches the local signature.
+  That closes the remaining hole where a locally emitted vote could still be
+  mis-recorded or mis-selected later because block-hash roster cache drift
+  remapped the raw signer index back to a remote peer.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  now proves both remaining invariants:
+  - deferred validation keeps same-slot colliding signatures distinct until
+    identity-aware validation runs; and
+  - QC source-vote selection keeps the live-roster local vote and the cached
+    remote vote as separate bookkeeping entries, then accepts only the
+    membership-matching local vote for commit QC assembly.
+- Focused validation completed in this slice:
+  - `cargo test -p iroha_core --lib pending_validation_preserves_same_slot_signature_collisions_until_identity_validation -- --nocapture`
+  - `cargo test -p iroha_core --lib maybe_emit_local_commit_vote_ignores_remote_same_index_vote_when_cached_roster_differs_from_live -- --nocapture`
+  - `cargo test -p iroha_core --lib precommit_vote_ignores_remote_same_height_vote_when_cached_roster_differs_from_live -- --nocapture`
+  - `cargo test -p integration_tests --test network_functional connected_peers_with_f_1_0_1 -- --nocapture`
+  - `cargo test -p integration_tests --test network_functional connected_peers_with_f_2_1_2 -- --nocapture`
+  - `cargo fmt --all`
+
+## 2026-04-08 Follow-up: `connected_peers` restart catch-up liveness is green again
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/commit.rs`
+  and `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/votes.rs`
+  now resolve "already voted" checks by peer identity for the local validator
+  instead of trusting the raw `(phase,height,view,epoch,signer)` slot alone.
+  That closes the cached-roster/live-roster drift where a remote vote could
+  reuse the local raw signer index, suppress the restarted peer's own precommit
+  or new-view vote, and stall commit at height 2.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`
+  and `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/proposal_handlers.rs`
+  keep the earlier block-sync catch-up path open even when the local peer has
+  already been removed from the stale world view, so restart recovery can still
+  hydrate the pending block/QC path needed for the live roster.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  now covers both sides of the fix: block-sync/block-created catch-up while the
+  local peer is removed from world state, and the signer-index collision where a
+  cached-roster remote vote must not block local precommit emission.
+- Focused validation completed in this slice:
+  - `cargo test -p iroha_core --lib maybe_emit_local_commit_vote_ignores_remote_same_index_vote_when_cached_roster_differs_from_live -- --nocapture`
+  - `cargo test -p iroha_core --lib precommit_vote_ignores_remote_same_height_vote_when_cached_roster_differs_from_live -- --nocapture`
+  - `cargo test -p integration_tests --test network_functional connected_peers_with_f_1_0_1 -- --nocapture`
+  - `cargo test -p integration_tests --test network_functional connected_peers_with_f_2_1_2 -- --nocapture`
+  - `cargo fmt --all`
 
 ## 2026-04-08 Follow-up: Kotodama hello example and CLI crate roles now match the actual raw-IVM entrypoint flow
 - `/Users/takemiyamakoto/dev/iroha/examples/hello/hello.ko` now declares a
