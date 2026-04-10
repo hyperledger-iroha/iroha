@@ -4,8 +4,12 @@ use clap::{Parser, Subcommand};
 use eyre::{Result, WrapErr as _, eyre};
 use iroha::{
     account_address::parse_account_address,
-    data_model::isi::{InstructionBox, decode_instruction_from_pair, governance::RegisterCitizen},
+    data_model::isi::{
+        InstructionBox, bridge::RecordSccpMessage, decode_instruction_from_pair,
+        governance::RegisterCitizen,
+    },
 };
+use iroha_sccp::{SccpPayloadV1, TransferPayloadV1, canonical_sccp_payload_bytes, sccp_message_id};
 
 #[derive(Parser, Debug)]
 struct Args {
@@ -30,6 +34,35 @@ enum Command {
         wire_id: String,
         #[arg(long)]
         payload_hex: String,
+    },
+    /// Encode a `RecordSccpMessage` instruction from an SCCP transfer payload.
+    RecordSccpTransfer {
+        #[arg(long)]
+        source_domain: u32,
+        #[arg(long)]
+        dest_domain: u32,
+        #[arg(long)]
+        nonce: u64,
+        #[arg(long)]
+        asset_home_domain: u32,
+        #[arg(long)]
+        asset_id_codec: u8,
+        #[arg(long)]
+        asset_id: String,
+        #[arg(long)]
+        amount: u128,
+        #[arg(long)]
+        sender_codec: u8,
+        #[arg(long)]
+        sender: String,
+        #[arg(long)]
+        recipient_codec: u8,
+        #[arg(long)]
+        recipient: String,
+        #[arg(long)]
+        route_id_codec: u8,
+        #[arg(long)]
+        route_id: String,
     },
 }
 
@@ -69,6 +102,44 @@ fn main() -> Result<()> {
             let encoded = norito::to_bytes(&instruction)
                 .wrap_err("failed to encode reconstructed instruction")?;
             print_tx_stdin_json(&encoded);
+        }
+        Command::RecordSccpTransfer {
+            source_domain,
+            dest_domain,
+            nonce,
+            asset_home_domain,
+            asset_id_codec,
+            asset_id,
+            amount,
+            sender_codec,
+            sender,
+            recipient_codec,
+            recipient,
+            route_id_codec,
+            route_id,
+        } => {
+            let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
+                version: 1,
+                source_domain,
+                dest_domain,
+                nonce,
+                asset_home_domain,
+                asset_id_codec,
+                asset_id: asset_id.into_bytes(),
+                amount,
+                sender_codec,
+                sender: sender.into_bytes(),
+                recipient_codec,
+                recipient: recipient.into_bytes(),
+                route_id_codec,
+                route_id: route_id.into_bytes(),
+            });
+            let message_id = hex::encode(sccp_message_id(&payload));
+            eprintln!("message_id={message_id}");
+            let payload_bytes = canonical_sccp_payload_bytes(&payload);
+            let instruction = InstructionBox::from(RecordSccpMessage::new(payload_bytes));
+            let bytes = norito::to_bytes(&instruction).wrap_err("failed to encode instruction")?;
+            print_tx_stdin_json(&bytes);
         }
     }
     Ok(())

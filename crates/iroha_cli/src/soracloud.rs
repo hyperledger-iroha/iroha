@@ -529,6 +529,8 @@ enum InitTemplate {
     Webapp,
     /// Generate a private PII app starter with consent + retention workflows.
     PiiApp,
+    /// Generate a Hayahi app starter with wallet sessions and Soracloud-backed state.
+    HayahiApp,
 }
 
 impl InitTemplate {
@@ -538,6 +540,7 @@ impl InitTemplate {
             Self::Site => "site",
             Self::Webapp => "webapp",
             Self::PiiApp => "pii-app",
+            Self::HayahiApp => "hayahi-app",
         }
     }
 }
@@ -10573,6 +10576,7 @@ fn apply_init_template_defaults(
             ]);
             container.capabilities.allow_wallet_signing = true;
             container.capabilities.allow_state_writes = true;
+            container.capabilities.allow_model_inference = false;
             container.capabilities.allow_model_training = false;
             container.lifecycle.healthcheck_path = Some("/api/healthz".to_owned());
 
@@ -10781,6 +10785,192 @@ fn apply_init_template_defaults(
             ];
             Ok(())
         }
+        InitTemplate::HayahiApp => {
+            container.runtime = SoraContainerRuntimeV1::Ivm;
+            container.bundle_path = "/bundles/hayahi-app-api.to".to_owned();
+            container.entrypoint = "main".to_owned();
+            container.args = vec!["--http".to_owned(), "--port=8787".to_owned()];
+            container
+                .env
+                .insert("SORACLOUD_TEMPLATE".to_owned(), "hayahi-app".to_owned());
+            container
+                .env
+                .insert("AUTH_MODE".to_owned(), "strict".to_owned());
+            container
+                .env
+                .insert("AUTH_SESSION_TTL_SECS".to_owned(), "900".to_owned());
+            container
+                .env
+                .insert("AUTH_CHALLENGE_TTL_SECS".to_owned(), "120".to_owned());
+            container
+                .env
+                .insert("AUTH_CAPABILITY_MAP_JSON".to_owned(), "{}".to_owned());
+            container
+                .env
+                .insert("PUBLIC_BASE_URL".to_owned(), format!("https://{host}"));
+            container.env.insert(
+                "HAYAHI_SHARED_STATE_NAMESPACE".to_owned(),
+                "hayahi.v1".to_owned(),
+            );
+            container.env.insert(
+                "HAYAHI_COLLECTOR_MODE".to_owned(),
+                "soracloud_workers".to_owned(),
+            );
+            container.capabilities.network = SoraNetworkPolicyV1::Allowlist(vec![
+                "torii.sora.internal".to_owned(),
+                "wallet.sora.internal".to_owned(),
+            ]);
+            container.capabilities.allow_wallet_signing = true;
+            container.capabilities.allow_state_writes = true;
+            container.capabilities.allow_model_training = false;
+            container.lifecycle.healthcheck_path = Some("/api/healthz".to_owned());
+
+            service.route = Some(SoraRouteTargetV1 {
+                host,
+                path_prefix: "/api".to_owned(),
+                service_port: NonZeroU16::new(8787).expect("nonzero literal"),
+                visibility: SoraRouteVisibilityV1::Public,
+                tls_mode: SoraTlsModeV1::Required,
+            });
+            service.replicas = NonZeroU16::new(3).expect("nonzero literal");
+            service.state_bindings = vec![
+                SoraStateBindingV1 {
+                    schema_version: SORA_STATE_BINDING_VERSION_V1,
+                    binding_name: "search_sessions"
+                        .parse()
+                        .expect("literal binding name is valid"),
+                    scope: SoraStateScopeV1::ServiceState,
+                    mutability: SoraStateMutabilityV1::ReadWrite,
+                    encryption: SoraStateEncryptionV1::ClientCiphertext,
+                    key_prefix: "/state/hayahi/search/sessions".to_owned(),
+                    max_item_bytes: NonZeroU64::new(131_072).expect("nonzero literal"),
+                    max_total_bytes: NonZeroU64::new(67_108_864).expect("nonzero literal"),
+                },
+                SoraStateBindingV1 {
+                    schema_version: SORA_STATE_BINDING_VERSION_V1,
+                    binding_name: "search_cache"
+                        .parse()
+                        .expect("literal binding name is valid"),
+                    scope: SoraStateScopeV1::ServiceState,
+                    mutability: SoraStateMutabilityV1::ReadWrite,
+                    encryption: SoraStateEncryptionV1::ClientCiphertext,
+                    key_prefix: "/state/hayahi/search/cache".to_owned(),
+                    max_item_bytes: NonZeroU64::new(524_288).expect("nonzero literal"),
+                    max_total_bytes: NonZeroU64::new(134_217_728).expect("nonzero literal"),
+                },
+                SoraStateBindingV1 {
+                    schema_version: SORA_STATE_BINDING_VERSION_V1,
+                    binding_name: "collector_jobs"
+                        .parse()
+                        .expect("literal binding name is valid"),
+                    scope: SoraStateScopeV1::ServiceState,
+                    mutability: SoraStateMutabilityV1::AppendOnly,
+                    encryption: SoraStateEncryptionV1::ClientCiphertext,
+                    key_prefix: "/state/hayahi/collectors/jobs".to_owned(),
+                    max_item_bytes: NonZeroU64::new(65_536).expect("nonzero literal"),
+                    max_total_bytes: NonZeroU64::new(33_554_432).expect("nonzero literal"),
+                },
+                SoraStateBindingV1 {
+                    schema_version: SORA_STATE_BINDING_VERSION_V1,
+                    binding_name: "collector_results"
+                        .parse()
+                        .expect("literal binding name is valid"),
+                    scope: SoraStateScopeV1::ServiceState,
+                    mutability: SoraStateMutabilityV1::AppendOnly,
+                    encryption: SoraStateEncryptionV1::ClientCiphertext,
+                    key_prefix: "/state/hayahi/collectors/results".to_owned(),
+                    max_item_bytes: NonZeroU64::new(262_144).expect("nonzero literal"),
+                    max_total_bytes: NonZeroU64::new(134_217_728).expect("nonzero literal"),
+                },
+                SoraStateBindingV1 {
+                    schema_version: SORA_STATE_BINDING_VERSION_V1,
+                    binding_name: "auth_challenges"
+                        .parse()
+                        .expect("literal binding name is valid"),
+                    scope: SoraStateScopeV1::ServiceState,
+                    mutability: SoraStateMutabilityV1::ReadWrite,
+                    encryption: SoraStateEncryptionV1::ClientCiphertext,
+                    key_prefix: "/state/auth/challenges".to_owned(),
+                    max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
+                    max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
+                },
+                SoraStateBindingV1 {
+                    schema_version: SORA_STATE_BINDING_VERSION_V1,
+                    binding_name: "auth_sessions"
+                        .parse()
+                        .expect("literal binding name is valid"),
+                    scope: SoraStateScopeV1::ServiceState,
+                    mutability: SoraStateMutabilityV1::ReadWrite,
+                    encryption: SoraStateEncryptionV1::ClientCiphertext,
+                    key_prefix: "/state/auth/sessions".to_owned(),
+                    max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
+                    max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
+                },
+                SoraStateBindingV1 {
+                    schema_version: SORA_STATE_BINDING_VERSION_V1,
+                    binding_name: "user_saved_searches"
+                        .parse()
+                        .expect("literal binding name is valid"),
+                    scope: SoraStateScopeV1::ConfidentialState,
+                    mutability: SoraStateMutabilityV1::ReadWrite,
+                    encryption: SoraStateEncryptionV1::FheCiphertext,
+                    key_prefix: "/state/hayahi/users/saved_searches".to_owned(),
+                    max_item_bytes: NonZeroU64::new(32_768).expect("nonzero literal"),
+                    max_total_bytes: NonZeroU64::new(8_388_608).expect("nonzero literal"),
+                },
+                SoraStateBindingV1 {
+                    schema_version: SORA_STATE_BINDING_VERSION_V1,
+                    binding_name: "user_preferences"
+                        .parse()
+                        .expect("literal binding name is valid"),
+                    scope: SoraStateScopeV1::ConfidentialState,
+                    mutability: SoraStateMutabilityV1::ReadWrite,
+                    encryption: SoraStateEncryptionV1::FheCiphertext,
+                    key_prefix: "/state/hayahi/users/preferences".to_owned(),
+                    max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
+                    max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
+                },
+            ];
+            service.handlers = vec![
+                service_handler(
+                    "query",
+                    SoraServiceHandlerClassV1::Query,
+                    "serve_query",
+                    Some("/query"),
+                    SoraCertifiedResponsePolicyV1::AuditReceipt,
+                    None,
+                ),
+                service_handler(
+                    "update",
+                    SoraServiceHandlerClassV1::Update,
+                    "apply_update",
+                    Some("/update"),
+                    SoraCertifiedResponsePolicyV1::None,
+                    Some(("search_updates", 1024, 131_072, 1_440)),
+                ),
+                service_handler(
+                    "private_update",
+                    SoraServiceHandlerClassV1::PrivateUpdate,
+                    "apply_private_update",
+                    Some("/private/update"),
+                    SoraCertifiedResponsePolicyV1::None,
+                    Some(("private_updates", 256, 131_072, 2_880)),
+                ),
+            ];
+            service.artifacts = vec![
+                service_artifact(
+                    SoraArtifactKindV1::Journal,
+                    "/journals/hayahi.journal",
+                    Some("update"),
+                ),
+                service_artifact(
+                    SoraArtifactKindV1::Checkpoint,
+                    "/checkpoints/hayahi.chk",
+                    Some("private_update"),
+                ),
+            ];
+            Ok(())
+        }
     }
 }
 
@@ -10795,6 +10985,9 @@ fn scaffold_init_template(
         InitTemplate::Site => scaffold_site_template(output_dir, service_name, overwrite),
         InitTemplate::Webapp => scaffold_webapp_template(output_dir, service_name, overwrite),
         InitTemplate::PiiApp => scaffold_pii_app_template(output_dir, service_name, overwrite),
+        InitTemplate::HayahiApp => {
+            scaffold_hayahi_app_template(output_dir, service_name, overwrite)
+        }
     }
 }
 
@@ -10938,6 +11131,58 @@ fn scaffold_pii_app_template(
     write_template_files(files, overwrite)
 }
 
+fn scaffold_hayahi_app_template(
+    output_dir: &Path,
+    service_name: &str,
+    overwrite: bool,
+) -> Result<Vec<String>> {
+    let project_dir = output_dir.join("hayahi-app");
+    let package_name = normalized_service_label(service_name);
+    let files = vec![
+        (
+            project_dir.join("package.json"),
+            hayahi_app_root_package_json(&package_name),
+        ),
+        (
+            project_dir.join("frontend/package.json"),
+            hayahi_app_frontend_package_json(&package_name),
+        ),
+        (
+            project_dir.join("frontend/tsconfig.json"),
+            site_tsconfig_json().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/vite.config.ts"),
+            webapp_frontend_vite_config().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/index.html"),
+            site_index_html().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/src/main.ts"),
+            site_main_ts().to_owned(),
+        ),
+        (
+            project_dir.join("frontend/src/App.vue"),
+            hayahi_app_frontend_app_vue(service_name),
+        ),
+        (
+            project_dir.join("api/server.mjs"),
+            hayahi_app_api_server_mjs(),
+        ),
+        (
+            project_dir.join(".gitignore"),
+            "node_modules/\nfrontend/node_modules/\nfrontend/dist/\n".to_owned(),
+        ),
+        (
+            project_dir.join("README.md"),
+            hayahi_app_readme(service_name),
+        ),
+    ];
+    write_template_files(files, overwrite)
+}
+
 fn write_template_files(files: Vec<(PathBuf, String)>, overwrite: bool) -> Result<Vec<String>> {
     let mut written = Vec::with_capacity(files.len());
     for (path, body) in files {
@@ -11067,6 +11312,48 @@ fn pii_app_frontend_package_json(package_name: &str) -> String {
     format!(
         r#"{{
   "name": "{package_name}-pii-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {{
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }},
+  "dependencies": {{
+    "vue": "^3.5.0"
+  }},
+  "devDependencies": {{
+    "@vitejs/plugin-vue": "^5.2.0",
+    "typescript": "^5.6.0",
+    "vite": "^5.4.0"
+  }}
+}}
+"#
+    )
+}
+
+fn hayahi_app_root_package_json(package_name: &str) -> String {
+    format!(
+        r#"{{
+  "name": "{package_name}-hayahi-app",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {{
+    "dev:frontend": "npm --prefix frontend run dev",
+    "dev:api": "node api/server.mjs",
+    "build": "npm --prefix frontend run build",
+    "start": "node api/server.mjs"
+  }}
+}}
+"#
+    )
+}
+
+fn hayahi_app_frontend_package_json(package_name: &str) -> String {
+    format!(
+        r#"{{
+  "name": "{package_name}-hayahi-frontend",
   "private": true,
   "version": "0.1.0",
   "type": "module",
@@ -11597,6 +11884,301 @@ async function listRetentionRuns() {
 .shell {
   font-family: "Avenir Next", "Segoe UI", sans-serif;
   max-width: 860px;
+  margin: 3rem auto;
+  padding: 0 1.25rem;
+}
+
+section {
+  margin: 1.5rem 0;
+  padding: 1rem;
+  border: 1px solid #dde4ec;
+  border-radius: 0.5rem;
+}
+
+form {
+  display: grid;
+  gap: 0.75rem;
+  margin-bottom: 0.75rem;
+}
+
+input,
+textarea {
+  width: 100%;
+  padding: 0.5rem;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+}
+
+button {
+  margin-right: 0.75rem;
+}
+
+pre {
+  overflow: auto;
+  padding: 0.75rem;
+  border: 1px solid #dde4ec;
+  border-radius: 0.5rem;
+  background: #f7fafc;
+}
+
+.error {
+  color: #b42318;
+}
+</style>
+"#
+    .replace("__SERVICE_NAME__", service_name)
+}
+
+fn hayahi_app_frontend_app_vue(service_name: &str) -> String {
+    r#"<template>
+  <main class="shell">
+    <h1>__SERVICE_NAME__ Soracloud Core</h1>
+    <p>Wallet-bound sessions protect the private Hayahi vault while shared search state lives in Soracloud service bindings.</p>
+
+    <section>
+      <h2>Auth</h2>
+      <form @submit.prevent="requestChallenge">
+        <label>
+          Public Key (32-byte hex)
+          <input v-model="publicKey" placeholder="ed25519 public key hex" />
+        </label>
+        <button type="submit">Request Challenge</button>
+      </form>
+      <textarea
+        v-if="challengeMessage"
+        rows="6"
+        readonly
+        :value="challengeMessage"
+      />
+      <form @submit.prevent="login">
+        <label>
+          Signature (64-byte hex)
+          <input v-model="signature" placeholder="ed25519 signature hex" />
+        </label>
+        <button type="submit">Login</button>
+      </form>
+      <button type="button" @click="loadMe">Refresh /api/auth/me</button>
+      <button type="button" @click="logout">Logout</button>
+      <p v-if="principal">principal: {{ principal }}</p>
+      <p v-if="capabilities.length > 0">capabilities: {{ capabilities.join(", ") }}</p>
+    </section>
+
+    <section>
+      <h2>Private Preferences</h2>
+      <form @submit.prevent="savePreferences">
+        <label>
+          Home airport
+          <input v-model="homeAirport" placeholder="HKG" />
+        </label>
+        <label>
+          Cabin preference
+          <input v-model="cabinPreference" placeholder="business" />
+        </label>
+        <button type="submit">Save Preferences</button>
+      </form>
+      <button type="button" @click="loadPreferences">Load Preferences</button>
+    </section>
+
+    <section>
+      <h2>Saved Searches</h2>
+      <form @submit.prevent="saveSearch">
+        <label>
+          Label
+          <input v-model="searchLabel" placeholder="Cathay HKG-LHR" />
+        </label>
+        <label>
+          Search request JSON
+          <textarea
+            v-model="searchRequestJson"
+            rows="8"
+          />
+        </label>
+        <button type="submit">Save Search</button>
+      </form>
+      <button type="button" @click="listSavedSearches">List Saved Searches</button>
+    </section>
+
+    <section>
+      <h2>Shared State</h2>
+      <button type="button" @click="loadStateOverview">Load /api/v1/state/overview</button>
+      <button type="button" @click="loadCollectorStatus">Load /api/v1/collector/status</button>
+    </section>
+
+    <pre v-if="details">{{ details }}</pre>
+    <p v-if="message">{{ message }}</p>
+    <p v-if="error" class="error">{{ error }}</p>
+  </main>
+</template>
+
+<script setup lang="ts">
+import { ref } from "vue";
+
+const publicKey = ref("");
+const challengeId = ref("");
+const challengeMessage = ref("");
+const signature = ref("");
+const principal = ref("");
+const capabilities = ref<string[]>([]);
+const homeAirport = ref("HKG");
+const cabinPreference = ref("business");
+const searchLabel = ref("Cathay HKG-LHR");
+const searchRequestJson = ref(JSON.stringify({
+  origin: "HKG",
+  destination: "LHR",
+  departure_date: "2026-08-01",
+  passengers: 1,
+  cabin_preference: "business",
+  search_mode: "cash"
+}, null, 2));
+const message = ref("");
+const error = ref("");
+const details = ref("");
+
+async function parseJson(response: Response) {
+  const text = await response.text();
+  if (!text) {
+    return {};
+  }
+  return JSON.parse(text);
+}
+
+async function get(path: string) {
+  error.value = "";
+  const response = await fetch(path);
+  const payload = await parseJson(response);
+  if (!response.ok) {
+    error.value = payload.error ?? "request failed";
+    return null;
+  }
+  details.value = JSON.stringify(payload, null, 2);
+  return payload;
+}
+
+async function post(path: string, body: Record<string, unknown>) {
+  error.value = "";
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const payload = await parseJson(response);
+  if (!response.ok) {
+    error.value = payload.error ?? "request failed";
+    return null;
+  }
+  details.value = JSON.stringify(payload, null, 2);
+  return payload;
+}
+
+async function put(path: string, body: Record<string, unknown>) {
+  error.value = "";
+  const response = await fetch(path, {
+    method: "PUT",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body)
+  });
+  const payload = await parseJson(response);
+  if (!response.ok) {
+    error.value = payload.error ?? "request failed";
+    return null;
+  }
+  details.value = JSON.stringify(payload, null, 2);
+  return payload;
+}
+
+async function requestChallenge() {
+  const payload = await post("/api/auth/challenge", { public_key: publicKey.value });
+  if (payload) {
+    challengeId.value = payload.challenge_id ?? "";
+    challengeMessage.value = payload.message ?? "";
+    message.value = "challenge issued";
+  }
+}
+
+async function login() {
+  const payload = await post("/api/auth/login", {
+    public_key: publicKey.value,
+    challenge_id: challengeId.value,
+    signature: signature.value
+  });
+  if (payload) {
+    principal.value = payload.principal ?? "";
+    capabilities.value = payload.capabilities ?? [];
+    message.value = "session established";
+  }
+}
+
+async function loadMe() {
+  const payload = await get("/api/auth/me");
+  if (payload) {
+    principal.value = payload.principal ?? "";
+    capabilities.value = payload.capabilities ?? [];
+  }
+}
+
+async function logout() {
+  await fetch("/api/auth/logout", { method: "POST" });
+  principal.value = "";
+  capabilities.value = [];
+  message.value = "session closed";
+}
+
+async function loadPreferences() {
+  const payload = await get("/api/v1/user/preferences");
+  if (payload?.preferences) {
+    homeAirport.value = payload.preferences.home_airport ?? homeAirport.value;
+    cabinPreference.value = payload.preferences.cabin_preference ?? cabinPreference.value;
+    message.value = "preferences loaded";
+  }
+}
+
+async function savePreferences() {
+  const payload = await put("/api/v1/user/preferences", {
+    preferences: {
+      home_airport: homeAirport.value,
+      cabin_preference: cabinPreference.value
+    }
+  });
+  if (payload) {
+    message.value = "preferences saved";
+  }
+}
+
+async function saveSearch() {
+  const payload = await post("/api/v1/user/saved-searches", {
+    label: searchLabel.value,
+    request: JSON.parse(searchRequestJson.value)
+  });
+  if (payload) {
+    message.value = `saved search ${payload.saved_search_id}`;
+  }
+}
+
+async function listSavedSearches() {
+  const payload = await get("/api/v1/user/saved-searches");
+  if (payload) {
+    message.value = `loaded ${payload.saved_searches?.length ?? 0} saved searches`;
+  }
+}
+
+async function loadStateOverview() {
+  const payload = await get("/api/v1/state/overview");
+  if (payload) {
+    message.value = "shared state overview loaded";
+  }
+}
+
+async function loadCollectorStatus() {
+  const payload = await get("/api/v1/collector/status");
+  if (payload) {
+    message.value = "collector status loaded";
+  }
+}
+</script>
+
+<style scoped>
+.shell {
+  font-family: "Avenir Next", "Segoe UI", sans-serif;
+  max-width: 900px;
   margin: 3rem auto;
   padding: 0 1.25rem;
 }
@@ -12658,6 +13240,254 @@ server.listen(port, "0.0.0.0", () => {
     script
 }
 
+fn hayahi_app_api_server_mjs() -> String {
+    let mut script = String::from(soracloud_auth_core_mjs());
+    script.push_str(
+        r#"
+import http from "node:http";
+
+const portArg = process.argv.find((value) => value.startsWith("--port="));
+const port = Number(portArg?.slice("--port=".length) ?? process.env.PORT ?? "8787");
+const CAPABILITY_MAP = parseCapabilityMap(process.env.AUTH_CAPABILITY_MAP_JSON ?? "", true);
+const SEARCH_SESSION_PREFIX = "/state/hayahi/search/sessions";
+const SEARCH_CACHE_PREFIX = "/state/hayahi/search/cache";
+const COLLECTOR_JOB_PREFIX = "/state/hayahi/collectors/jobs";
+const COLLECTOR_RESULT_PREFIX = "/state/hayahi/collectors/results";
+const USER_PREFERENCES_PREFIX = "/state/hayahi/users/preferences";
+const USER_SAVED_SEARCHES_PREFIX = "/state/hayahi/users/saved_searches";
+const USER_VAULT_SCHEMA_VERSION = "hayahi.user.vault.v1";
+
+function requirePlainObject(value, field) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${field} must be an object`);
+  }
+  return value;
+}
+
+function userPreferencesStateKey(principal) {
+  return `${USER_PREFERENCES_PREFIX}/${principal}`;
+}
+
+function userSavedSearchStateKey(principal, savedSearchId) {
+  return `${USER_SAVED_SEARCHES_PREFIX}/${principal}/${savedSearchId}`;
+}
+
+function listUserSavedSearches(principal) {
+  return stateEntries(`${USER_SAVED_SEARCHES_PREFIX}/${principal}/`)
+    .map(([, record]) => canonicalizeJsonValue(record))
+    .sort((left, right) =>
+      Number(right?.updated_at_unix_ms ?? 0) - Number(left?.updated_at_unix_ms ?? 0)
+    );
+}
+
+function summarizeState(prefix) {
+  const entries = stateEntries(prefix);
+  const newest = entries
+    .map(([, value]) => Number(value?.updated_at_unix_ms ?? value?.created_at_unix_ms ?? 0))
+    .filter((value) => Number.isFinite(value))
+    .sort((left, right) => right - left)[0] ?? null;
+  return {
+    count: entries.length,
+    latest_updated_at_unix_ms: newest
+  };
+}
+
+const server = http.createServer(async (req, res) => {
+  cleanupExpiredAuthRecords();
+
+  if (req.url === "/api/healthz" || req.url === "/api/v1/health") {
+    sendJson(res, 200, {
+      ok: true,
+      auth_mode: AUTH_MODE,
+      shared_state_required: AUTH_REQUIRE_EXTERNAL_SHARED_STATE,
+      state: {
+        collector_jobs: summarizeState(COLLECTOR_JOB_PREFIX),
+        collector_results: summarizeState(COLLECTOR_RESULT_PREFIX),
+        search_cache: summarizeState(SEARCH_CACHE_PREFIX),
+        search_sessions: summarizeState(SEARCH_SESSION_PREFIX)
+      }
+    });
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/auth/challenge") {
+    await handleAuthChallenge(req, res);
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/auth/login") {
+    await handleAuthLogin(req, res, CAPABILITY_MAP);
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/api/auth/me") {
+    handleAuthMe(req, res, CAPABILITY_MAP);
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/auth/logout") {
+    handleAuthLogout(req, res);
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/api/v1/state/overview") {
+    sendJson(res, 200, {
+      collector_jobs: summarizeState(COLLECTOR_JOB_PREFIX),
+      collector_results: summarizeState(COLLECTOR_RESULT_PREFIX),
+      search_cache: summarizeState(SEARCH_CACHE_PREFIX),
+      search_sessions: summarizeState(SEARCH_SESSION_PREFIX)
+    });
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/api/v1/collector/status") {
+    sendJson(res, 200, {
+      execution_model: "soracloud_workers",
+      shared_state_required: AUTH_REQUIRE_EXTERNAL_SHARED_STATE,
+      jobs: summarizeState(COLLECTOR_JOB_PREFIX),
+      results: summarizeState(COLLECTOR_RESULT_PREFIX)
+    });
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/api/v1/user/preferences") {
+    const session = requireAuthenticatedSession(
+      req,
+      res,
+      CAPABILITY_MAP,
+      "hayahi.user.preferences.read"
+    );
+    if (!session) {
+      return;
+    }
+    const record = stateGet(userPreferencesStateKey(session.principal));
+    sendJson(res, 200, {
+      preferences: record?.preferences ?? {},
+      principal: session.principal,
+      updated_at_unix_ms: record?.updated_at_unix_ms ?? null
+    });
+    return;
+  }
+
+  if (req.method === "PUT" && req.url === "/api/v1/user/preferences") {
+    try {
+      const session = requireAuthenticatedSession(
+        req,
+        res,
+        CAPABILITY_MAP,
+        "hayahi.user.preferences.write"
+      );
+      if (!session) {
+        return;
+      }
+      const body = await readJson(req);
+      const preferences = requirePlainObject(body.preferences ?? body, "preferences");
+      const record = {
+        schema_version: USER_VAULT_SCHEMA_VERSION,
+        principal: session.principal,
+        preferences: canonicalizeJsonValue(preferences),
+        updated_at_unix_ms: Date.now()
+      };
+      statePut(userPreferencesStateKey(session.principal), record);
+      sendJson(res, 200, record);
+    } catch (error) {
+      sendAuthError(res, 400, "INVALID_REQUEST", error.message);
+    }
+    return;
+  }
+
+  if (req.method === "GET" && req.url === "/api/v1/user/saved-searches") {
+    const session = requireAuthenticatedSession(
+      req,
+      res,
+      CAPABILITY_MAP,
+      "hayahi.user.saved_searches.read"
+    );
+    if (!session) {
+      return;
+    }
+    sendJson(res, 200, {
+      principal: session.principal,
+      saved_searches: listUserSavedSearches(session.principal)
+    });
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/v1/user/saved-searches") {
+    try {
+      const session = requireAuthenticatedSession(
+        req,
+        res,
+        CAPABILITY_MAP,
+        "hayahi.user.saved_searches.write"
+      );
+      if (!session) {
+        return;
+      }
+      const body = await readJson(req);
+      const label = requireTrimmedString(body.label, "label");
+      const request = requirePlainObject(body.request, "request");
+      const nowMs = Date.now();
+      const savedSearchId = crypto.randomUUID();
+      const record = {
+        schema_version: USER_VAULT_SCHEMA_VERSION,
+        saved_search_id: savedSearchId,
+        principal: session.principal,
+        label,
+        request: canonicalizeJsonValue(request),
+        created_at_unix_ms: nowMs,
+        updated_at_unix_ms: nowMs
+      };
+      statePut(userSavedSearchStateKey(session.principal, savedSearchId), record);
+      sendJson(res, 201, record);
+    } catch (error) {
+      sendAuthError(res, 400, "INVALID_REQUEST", error.message);
+    }
+    return;
+  }
+
+  if (req.method === "POST" && req.url === "/api/v1/user/saved-searches/delete") {
+    try {
+      const session = requireAuthenticatedSession(
+        req,
+        res,
+        CAPABILITY_MAP,
+        "hayahi.user.saved_searches.write"
+      );
+      if (!session) {
+        return;
+      }
+      const body = await readJson(req);
+      const savedSearchId = requireTrimmedString(body.saved_search_id, "saved_search_id");
+      const key = userSavedSearchStateKey(session.principal, savedSearchId);
+      const existing = stateGet(key);
+      if (!existing) {
+        sendAuthError(res, 404, "NOT_FOUND", "saved search not found");
+        return;
+      }
+      stateDelete(key);
+      sendJson(res, 200, {
+        deleted: true,
+        saved_search_id: savedSearchId
+      });
+    } catch (error) {
+      sendAuthError(res, 400, "INVALID_REQUEST", error.message);
+    }
+    return;
+  }
+
+  sendJson(res, 404, { code: "NOT_FOUND", error: "not found" });
+});
+
+server.listen(port, "0.0.0.0", () => {
+  // eslint-disable-next-line no-console
+  console.log(`hayahi app core listening on :${port}`);
+});
+"#,
+    );
+    script
+}
+
 fn pii_app_consent_policy_template() -> String {
     r#"{
   "schema_version": 1,
@@ -12882,6 +13712,78 @@ iroha app sorafs toolkit pack ./frontend/dist \
   --manifest-out ../sorafs/pii_frontend_manifest.to \
   --car-out ../sorafs/pii_frontend_payload.car \
   --json-out ../sorafs/pii_frontend_pack_report.json
+```
+"#
+    )
+}
+
+fn hayahi_app_readme(service_name: &str) -> String {
+    format!(
+        r#"# {service_name} Hayahi-App Template
+
+This template provides a Soracloud-native Hayahi app core:
+
+- `frontend/` Vue3 control panel for wallet challenge login and private vault actions.
+- `api/server.mjs` wallet-session API under `/api/*` with Soracloud shared-state adapter support.
+- Shared Soracloud state bindings for search sessions, shared cache, and collector job/result ledgers.
+- Confidential Soracloud state bindings for wallet-bound preferences and saved searches.
+- Soracloud manifests in the parent init directory (`container_manifest.json`, `service_manifest.json`).
+
+## Local dev
+
+```bash
+npm install
+npm --prefix frontend install
+export AUTH_MODE=dev
+export SESSION_HMAC_KEY='replace-with-at-least-32-random-characters'
+export AUTH_SESSION_TTL_SECS=900
+export AUTH_CHALLENGE_TTL_SECS=120
+export AUTH_CAPABILITY_MAP_JSON='{{"replace-with-ed25519-public-key-hex":["hayahi.user.preferences.read","hayahi.user.preferences.write","hayahi.user.saved_searches.read","hayahi.user.saved_searches.write"]}}'
+export AUTH_REQUIRE_EXTERNAL_SHARED_STATE=0
+export PUBLIC_BASE_URL='http://127.0.0.1:8787'
+npm run dev:api
+npm run dev:frontend
+```
+
+## Production required config
+
+- `SESSION_HMAC_KEY` (>= 32 characters) is mandatory in strict/production mode.
+- `AUTH_CAPABILITY_MAP_JSON` must map wallet principals to Hayahi capabilities.
+- `AUTH_REQUIRE_EXTERNAL_SHARED_STATE` defaults to enabled in strict/production
+  mode and fails closed unless `globalThis.__soracloudSharedStateAdapter` is
+  provided by the host runtime.
+- `PUBLIC_BASE_URL` controls secure cookie issuance and request-origin binding.
+
+## Exposed routes
+
+- `POST /api/auth/challenge`
+- `POST /api/auth/login`
+- `GET /api/auth/me`
+- `POST /api/auth/logout`
+- `GET /api/v1/health`
+- `GET /api/v1/state/overview`
+- `GET /api/v1/collector/status`
+- `GET|PUT /api/v1/user/preferences`
+- `GET|POST /api/v1/user/saved-searches`
+- `POST /api/v1/user/saved-searches/delete`
+
+## Deploy API service on Soracloud
+
+```bash
+iroha app soracloud deploy \
+  --container ../container_manifest.json \
+  --service ../service_manifest.json \
+  --torii-url http://127.0.0.1:8080
+```
+
+## Publish frontend bundle
+
+```bash
+npm run build
+iroha app sorafs toolkit pack ./frontend/dist \
+  --manifest-out ../sorafs/hayahi_frontend_manifest.to \
+  --car-out ../sorafs/hayahi_frontend_payload.car \
+  --json-out ../sorafs/hayahi_frontend_pack_report.json
 ```
 "#
     )
@@ -15461,6 +16363,111 @@ mod tests {
     }
 
     #[test]
+    fn init_hayahi_app_template_scaffolds_wallet_and_stateful_api() {
+        let dir = temp_dir("hayahi_app_template");
+        let output = InitArgs {
+            output_dir: dir.clone(),
+            service_name: "hayahi_api".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HayahiApp,
+            overwrite: false,
+        }
+        .run()
+        .expect("hayahi-app init should succeed");
+
+        assert_eq!(output.template, "hayahi-app");
+        assert!(dir.join("hayahi-app/frontend/package.json").exists());
+        assert!(dir.join("hayahi-app/api/server.mjs").exists());
+
+        let readme =
+            fs::read_to_string(dir.join("hayahi-app/README.md")).expect("read hayahi readme");
+        assert!(readme.contains("SESSION_HMAC_KEY"));
+        assert!(readme.contains("AUTH_CAPABILITY_MAP_JSON"));
+        assert!(readme.contains("/api/v1/user/preferences"));
+        assert!(readme.contains("/api/v1/user/saved-searches"));
+
+        let api =
+            fs::read_to_string(dir.join("hayahi-app/api/server.mjs")).expect("read hayahi api");
+        assert!(api.contains("/api/auth/challenge"));
+        assert!(api.contains("/api/auth/login"));
+        assert!(api.contains("/api/v1/health"));
+        assert!(api.contains("/api/v1/state/overview"));
+        assert!(api.contains("/api/v1/collector/status"));
+        assert!(api.contains("/api/v1/user/preferences"));
+        assert!(api.contains("/api/v1/user/saved-searches"));
+        assert!(api.contains("hayahi.user.preferences.read"));
+        assert!(api.contains("hayahi.user.saved_searches.write"));
+        assert!(
+            !api.contains("TODO"),
+            "placeholder TODO markers must be removed from hayahi-app scaffold"
+        );
+
+        let service: SoraServiceManifestV1 =
+            load_json(&dir.join("service_manifest.json")).expect("service manifest");
+        assert_eq!(
+            service
+                .route
+                .as_ref()
+                .map(|route| route.path_prefix.as_str()),
+            Some("/api")
+        );
+        assert!(
+            service
+                .state_bindings
+                .iter()
+                .any(|binding| binding.key_prefix == "/state/hayahi/search/sessions"),
+            "search session shared binding missing from hayahi-app template"
+        );
+        assert!(
+            service
+                .state_bindings
+                .iter()
+                .any(|binding| binding.key_prefix == "/state/hayahi/search/cache"),
+            "search cache shared binding missing from hayahi-app template"
+        );
+        assert!(
+            service
+                .state_bindings
+                .iter()
+                .any(|binding| binding.key_prefix == "/state/hayahi/collectors/jobs"),
+            "collector jobs shared binding missing from hayahi-app template"
+        );
+        assert!(
+            service.state_bindings.iter().any(|binding| {
+                binding.binding_name.as_ref() == "user_saved_searches"
+                    && binding.encryption == SoraStateEncryptionV1::FheCiphertext
+                    && binding.key_prefix == "/state/hayahi/users/saved_searches"
+            }),
+            "user_saved_searches private binding missing from hayahi-app template"
+        );
+        assert!(
+            service.state_bindings.iter().any(|binding| {
+                binding.binding_name.as_ref() == "user_preferences"
+                    && binding.encryption == SoraStateEncryptionV1::FheCiphertext
+                    && binding.key_prefix == "/state/hayahi/users/preferences"
+            }),
+            "user_preferences private binding missing from hayahi-app template"
+        );
+        assert_eq!(service.handlers.len(), 3);
+        assert_eq!(service.handlers[0].class, SoraServiceHandlerClassV1::Query);
+        assert_eq!(service.handlers[1].class, SoraServiceHandlerClassV1::Update);
+        assert_eq!(
+            service.handlers[1]
+                .mailbox
+                .as_ref()
+                .map(|mailbox| mailbox.queue_name.as_ref()),
+            Some("search_updates")
+        );
+        assert_eq!(
+            service.handlers[2].class,
+            SoraServiceHandlerClassV1::PrivateUpdate
+        );
+        assert_eq!(service.artifacts.len(), 2);
+        assert_eq!(service.artifacts[0].kind, SoraArtifactKindV1::Journal);
+        assert_eq!(service.artifacts[1].kind, SoraArtifactKindV1::Checkpoint);
+    }
+
+    #[test]
     fn generated_webapp_auth_module_contains_replay_and_signature_guards() {
         let dir = temp_dir("webapp_auth_markers");
         InitArgs {
@@ -15515,6 +16522,32 @@ mod tests {
         assert!(api.contains("/state/auth/sessions"));
         assert!(api.contains("AUTH_CHALLENGE_EXPIRED_PREFIX"));
         assert!(api.contains("AUTH_CHALLENGE_CONSUME_LOCK_PREFIX"));
+    }
+
+    #[test]
+    fn generated_hayahi_app_auth_module_contains_wallet_and_vault_routes() {
+        let dir = temp_dir("hayahi_auth_markers");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "hayahi_api".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HayahiApp,
+            overwrite: false,
+        }
+        .run()
+        .expect("hayahi-app init should succeed");
+
+        let api =
+            fs::read_to_string(dir.join("hayahi-app/api/server.mjs")).expect("read hayahi api");
+        assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
+        assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE"));
+        assert!(api.contains("__soracloudSharedStateAdapter"));
+        assert!(api.contains("/state/hayahi/search/sessions"));
+        assert!(api.contains("/state/hayahi/search/cache"));
+        assert!(api.contains("/state/hayahi/users/preferences"));
+        assert!(api.contains("/state/hayahi/users/saved_searches"));
+        assert!(api.contains("hayahi.user.preferences.write"));
+        assert!(api.contains("hayahi.user.saved_searches.write"));
     }
 
     #[test]
@@ -19105,5 +20138,8 @@ main().catch((error) => {
         let parsed_new =
             <InitTemplate as ValueEnum>::from_str("pii-app", true).expect("pii-app must parse");
         assert_eq!(parsed_new, InitTemplate::PiiApp);
+        let parsed_hayahi = <InitTemplate as ValueEnum>::from_str("hayahi-app", true)
+            .expect("hayahi-app must parse");
+        assert_eq!(parsed_hayahi, InitTemplate::HayahiApp);
     }
 }

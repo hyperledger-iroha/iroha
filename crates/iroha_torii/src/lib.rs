@@ -9803,6 +9803,58 @@ fn soracloud_local_read_request_commitment(request: &SoracloudLocalReadRequest) 
 }
 
 #[cfg(feature = "app_api")]
+fn soracloud_public_ordered_mailbox_request_commitment(
+    observed_height: u64,
+    observed_block_hash: Option<Hash>,
+    route_match: &soracloud::OrderedMailboxRouteMatch,
+    request_method: &str,
+    request_path: &str,
+    request_query: Option<&str>,
+    request_headers: &BTreeMap<String, String>,
+    request_body: &[u8],
+) -> Hash {
+    Hash::new(
+        norito::to_bytes(&(
+            observed_height,
+            observed_block_hash,
+            route_match.service_name.as_str(),
+            route_match.service_version.as_str(),
+            route_match.handler_name.as_str(),
+            route_match.handler_class,
+            request_method,
+            request_path,
+            route_match.handler_path.as_str(),
+            request_query,
+            request_headers.clone(),
+            request_body.to_vec(),
+        ))
+        .expect("Soracloud ordered mailbox request commitment encoding should be infallible"),
+    )
+}
+
+#[cfg(feature = "app_api")]
+fn authoritative_pending_public_mailbox_messages(
+    world: &impl WorldReadOnly,
+    service_name: &Name,
+) -> u32 {
+    let consumed: BTreeSet<Hash> = world
+        .soracloud_runtime_receipts()
+        .iter()
+        .filter_map(|(_receipt_id, receipt)| receipt.mailbox_message_id)
+        .collect();
+    u32::try_from(
+        world
+            .soracloud_mailbox_messages()
+            .iter()
+            .filter(|(message_id, message)| {
+                !consumed.contains(message_id) && message.to_service == *service_name
+            })
+            .count(),
+    )
+    .unwrap_or(u32::MAX)
+}
+
+#[cfg(feature = "app_api")]
 fn resolve_soracloud_local_read_proxy_target(
     app: &SharedAppState,
     request: &SoracloudLocalReadRequest,
@@ -15184,6 +15236,40 @@ fn soracloud_local_read_response(
 }
 
 #[cfg(feature = "app_api")]
+fn soracloud_ordered_mailbox_response(
+    response: iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionResult,
+) -> Response {
+    let mut builder = Response::builder().status(StatusCode::OK);
+    if let Some(content_type) = response.content_type.as_deref() {
+        builder = builder.header(axum::http::header::CONTENT_TYPE, content_type);
+    }
+    builder = builder
+        .header(axum::http::header::CACHE_CONTROL, "no-store")
+        .header("x-iroha-soracloud-certified-by", "none")
+        .header(
+            "x-iroha-soracloud-result-commitment",
+            response.runtime_receipt.result_commitment.to_string(),
+        )
+        .header(
+            "x-iroha-soracloud-receipt-id",
+            response.runtime_receipt.receipt_id.to_string(),
+        );
+    if let Ok(receipt_json) = norito::json::to_json(&response.runtime_receipt) {
+        let encoded = base64::engine::general_purpose::STANDARD.encode(receipt_json);
+        builder = builder.header("x-iroha-soracloud-receipt", encoded);
+    }
+    builder
+        .body(Body::from(response.response_bytes))
+        .unwrap_or_else(|error| {
+            iroha_logger::error!(?error, "failed to build Soracloud ordered-mailbox response");
+            Response::builder()
+                .status(StatusCode::INTERNAL_SERVER_ERROR)
+                .body(Body::from("failed to build Soracloud ordered-mailbox response"))
+                .expect("static response build succeeds")
+        })
+}
+
+#[cfg(feature = "app_api")]
 fn soracloud_local_read_error_response(
     error: iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
 ) -> Response {
@@ -15403,6 +15489,86 @@ async fn handler_soracloud_public_local_read(
             .await;
         }
         soracloud::PublicRouteMatch::LocalRead(route_match) => route_match,
+        soracloud::PublicRouteMatch::OrderedMailbox(route_match) => {
+            let (observed_height, observed_block_hash, runtime_state, authoritative_pending) = {
+                let state_view = app.state.view();
+                let pending = authoritative_pending_public_mailbox_messages(
+                    state_view.world(),
+                    &route_match.bundle.service.service_name,
+                );
+                (
+                    u64::try_from(state_view.height()).unwrap_or(u64::MAX),
+                    state_view.latest_block_hash().map(Hash::from),
+                    state_view
+                        .world()
+                        .soracloud_service_runtime()
+                        .get(&route_match.bundle.service.service_name)
+                        .cloned(),
+                    pending.saturating_add(1),
+                )
+            };
+            let request_headers = canonicalize_soracloud_local_read_headers(&headers);
+            let request_body = body.to_vec();
+            let execution_sequence = observed_height.max(1);
+            let request_commitment = soracloud_public_ordered_mailbox_request_commitment(
+                observed_height,
+                observed_block_hash,
+                &route_match,
+                method.as_str(),
+                uri.path(),
+                uri.query(),
+                &request_headers,
+                &request_body,
+            );
+            let message_id = Hash::new(
+                norito::to_bytes(&(
+                    "soracloud:public-mailbox:v1",
+                    route_match.service_name.as_str(),
+                    route_match.service_version.as_str(),
+                    route_match.handler_name.as_str(),
+                    request_commitment,
+                ))
+                .expect("public mailbox message id encoding should be infallible"),
+            );
+            let request = iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionRequest {
+                observed_height,
+                observed_block_hash,
+                execution_sequence,
+                deployment: route_match.deployment.clone(),
+                bundle: route_match.bundle.clone(),
+                handler: Some(route_match.handler.clone()),
+                mailbox_message: iroha_data_model::soracloud::SoraServiceMailboxMessageV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+                    message_id,
+                    from_service: route_match.bundle.service.service_name.clone(),
+                    from_handler: route_match.handler.handler_name.clone(),
+                    to_service: route_match.bundle.service.service_name.clone(),
+                    to_handler: route_match.handler.handler_name.clone(),
+                    payload_bytes: request_body,
+                    payload_commitment: request_commitment,
+                    enqueue_sequence: execution_sequence,
+                    available_after_sequence: execution_sequence,
+                    expires_at_sequence: None,
+                },
+                runtime_state,
+                authoritative_pending_mailbox_messages: authoritative_pending,
+            };
+            let execution = app
+                .soracloud_runtime
+                .as_ref()
+                .ok_or_else(|| {
+                    SoracloudRuntimeExecutionError::new(
+                        SoracloudRuntimeExecutionErrorKind::Unavailable,
+                        "Soracloud runtime is unavailable on this ingress node",
+                    )
+                })
+                .and_then(|runtime| runtime.execute_ordered_mailbox(request));
+            return match execution {
+                Ok(response) => soracloud_ordered_mailbox_response(response),
+                Err(error) => soracloud_local_read_error_response(error),
+            };
+        }
     };
 
     let (observed_height, observed_block_hash) = {
@@ -34787,6 +34953,94 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[derive(Clone)]
+    struct TestMailboxRuntime {
+        snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
+        state_dir: PathBuf,
+        local_peer_id: Option<String>,
+        result: Result<
+            iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionResult,
+            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+        >,
+        captured_requests:
+            Arc<std::sync::Mutex<Vec<iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionRequest>>>,
+    }
+
+    impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestMailboxRuntime {
+        fn snapshot(&self) -> iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot {
+            self.snapshot.clone()
+        }
+
+        fn state_dir(&self) -> PathBuf {
+            self.state_dir.clone()
+        }
+
+        fn local_peer_id(&self) -> Option<String> {
+            self.local_peer_id.clone()
+        }
+    }
+
+    impl iroha_core::soracloud_runtime::SoracloudRuntime for TestMailboxRuntime {
+        fn execute_local_read(
+            &self,
+            _request: SoracloudLocalReadRequest,
+        ) -> Result<
+            iroha_core::soracloud_runtime::SoracloudLocalReadResponse,
+            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+        > {
+            Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "test mailbox runtime does not implement local reads",
+                ),
+            )
+        }
+
+        fn execute_ordered_mailbox(
+            &self,
+            request: iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionRequest,
+        ) -> Result<
+            iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionResult,
+            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+        > {
+            self.captured_requests
+                .lock()
+                .expect("capture lock")
+                .push(request);
+            self.result.clone()
+        }
+
+        fn execute_apartment(
+            &self,
+            _request: iroha_core::soracloud_runtime::SoracloudApartmentExecutionRequest,
+        ) -> Result<
+            iroha_core::soracloud_runtime::SoracloudApartmentExecutionResult,
+            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+        > {
+            Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "test mailbox runtime does not implement apartment execution",
+                ),
+            )
+        }
+
+        fn execute_private_inference(
+            &self,
+            _request: iroha_core::soracloud_runtime::SoracloudPrivateInferenceExecutionRequest,
+        ) -> Result<
+            iroha_core::soracloud_runtime::SoracloudPrivateInferenceExecutionResult,
+            iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
+        > {
+            Err(
+                iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError::new(
+                    SoracloudRuntimeExecutionErrorKind::Unavailable,
+                    "test mailbox runtime does not implement private inference execution",
+                ),
+            )
+        }
+    }
+
+    #[derive(Clone)]
     struct TestSoracloudRuntimeHandle {
         snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot,
         state_dir: PathBuf,
@@ -34977,7 +35231,7 @@ pub(crate) mod tests_runtime_handlers {
                 capabilities: iroha_data_model::soracloud::SoraCapabilityPolicyV1 {
                     network: iroha_data_model::soracloud::SoraNetworkPolicyV1::Isolated,
                     allow_wallet_signing: false,
-                    allow_state_writes: false,
+                    allow_state_writes: true,
                     allow_model_inference: false,
                     allow_model_training: false,
                 },
@@ -35038,6 +35292,40 @@ pub(crate) mod tests_runtime_handlers {
                         certified_response:
                             iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::AuditReceipt,
                         mailbox: None,
+                    },
+                    iroha_data_model::soracloud::SoraServiceHandlerV1 {
+                        handler_name: "update".parse().expect("handler"),
+                        class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update,
+                        entrypoint: "apply_update".to_owned(),
+                        route_path: Some("/update".to_owned()),
+                        certified_response:
+                            iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
+                        mailbox: Some(iroha_data_model::soracloud::SoraMailboxContractV1 {
+                            queue_name: "public_updates".parse().expect("queue"),
+                            max_pending_messages: std::num::NonZeroU32::new(256)
+                                .expect("pending limit"),
+                            max_message_bytes: std::num::NonZeroU64::new(65_536)
+                                .expect("payload limit"),
+                            retention_blocks: std::num::NonZeroU32::new(32)
+                                .expect("retention"),
+                        }),
+                    },
+                    iroha_data_model::soracloud::SoraServiceHandlerV1 {
+                        handler_name: "private_update".parse().expect("handler"),
+                        class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::PrivateUpdate,
+                        entrypoint: "apply_private_update".to_owned(),
+                        route_path: Some("/private/update".to_owned()),
+                        certified_response:
+                            iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
+                        mailbox: Some(iroha_data_model::soracloud::SoraMailboxContractV1 {
+                            queue_name: "private_updates".parse().expect("queue"),
+                            max_pending_messages: std::num::NonZeroU32::new(128)
+                                .expect("pending limit"),
+                            max_message_bytes: std::num::NonZeroU64::new(65_536)
+                                .expect("payload limit"),
+                            retention_blocks: std::num::NonZeroU32::new(64)
+                                .expect("retention"),
+                        }),
                     },
                 ],
                 artifacts: Vec::new(),
@@ -35334,6 +35622,116 @@ pub(crate) mod tests_runtime_handlers {
             .await
             .expect("response");
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+
+    #[tokio::test]
+    async fn soracloud_public_ordered_mailbox_route_invokes_runtime_with_authoritative_context() {
+        use http_body_util::BodyExt as _;
+        use tower::ServiceExt as _;
+
+        let captured_requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let runtime = TestMailboxRuntime {
+            snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
+            state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
+            local_peer_id: None,
+            result: Ok(iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionResult {
+                state_mutations: Vec::new(),
+                outbound_mailbox_messages: Vec::new(),
+                response_bytes: br#"{"status":"queued"}"#.to_vec(),
+                content_type: Some("application/json".to_owned()),
+                runtime_state: None,
+                runtime_receipt: iroha_data_model::soracloud::SoraRuntimeReceiptV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
+                    receipt_id: Hash::new(b"public-mailbox-receipt"),
+                    service_name: "web_portal".parse().expect("service"),
+                    service_version: "2026.02.0".to_owned(),
+                    handler_name: "update".parse().expect("handler"),
+                    handler_class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update,
+                    request_commitment: Hash::new(b"public-mailbox-request"),
+                    result_commitment: Hash::new(b"public-mailbox-result"),
+                    certified_by:
+                        iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
+                    emitted_sequence: 1,
+                    mailbox_message_id: Some(Hash::new(b"public-mailbox-message")),
+                    journal_artifact_hash: None,
+                    checkpoint_artifact_hash: None,
+                    placement_id: None,
+                    selected_validator_account_id: None,
+                    selected_peer_id: None,
+                },
+            }),
+            captured_requests: Arc::clone(&captured_requests),
+        };
+        let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
+        Arc::get_mut(&mut app)
+            .expect("unique app state")
+            .soracloud_runtime = Some(Arc::new(runtime));
+        let router = axum::Router::new()
+            .fallback(any(handler_soracloud_public_local_read))
+            .with_state(app);
+
+        let response = router
+            .oneshot(
+                axum::http::Request::builder()
+                    .method("POST")
+                    .uri("/app/update/search?fresh=1")
+                    .header(axum::http::header::HOST, "portal.sora")
+                    .header(axum::http::header::CONTENT_TYPE, "application/json")
+                    .extension(crate::loopback_connect_info())
+                    .body(Body::from(br#"{"origin":"DXB","destination":"HIR"}"#.to_vec()))
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let expected_receipt_id = Hash::new(b"public-mailbox-receipt").to_string();
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::CONTENT_TYPE)
+                .and_then(|value| value.to_str().ok()),
+            Some("application/json")
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get("x-iroha-soracloud-receipt-id")
+                .and_then(|value| value.to_str().ok()),
+            Some(expected_receipt_id.as_str())
+        );
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        assert_eq!(body.as_ref(), br#"{"status":"queued"}"#);
+
+        let captured = captured_requests.lock().expect("capture lock");
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].deployment.service_name.as_ref(), "web_portal");
+        assert_eq!(
+            captured[0]
+                .handler
+                .as_ref()
+                .expect("handler")
+                .handler_name
+                .as_ref(),
+            "update"
+        );
+        assert_eq!(
+            captured[0]
+                .handler
+                .as_ref()
+                .expect("handler")
+                .class,
+            iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update
+        );
+        assert_eq!(captured[0].execution_sequence, 1);
+        assert_eq!(captured[0].mailbox_message.payload_bytes.as_slice(), br#"{"origin":"DXB","destination":"HIR"}"#);
+        assert_eq!(captured[0].mailbox_message.to_handler.as_ref(), "update");
+        assert_eq!(captured[0].authoritative_pending_mailbox_messages, 1);
     }
 
     #[tokio::test]

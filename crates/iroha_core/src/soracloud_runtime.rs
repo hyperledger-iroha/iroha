@@ -1048,6 +1048,10 @@ pub struct SoracloudOrderedMailboxExecutionResult {
     pub state_mutations: Vec<SoracloudDeterministicStateMutation>,
     /// Cross-service messages emitted by the execution.
     pub outbound_mailbox_messages: Vec<SoraServiceMailboxMessageV1>,
+    /// Optional response payload returned by the executed handler.
+    pub response_bytes: Vec<u8>,
+    /// MIME type associated with `response_bytes`, when known.
+    pub content_type: Option<String>,
     /// Runtime-state observation to persist after execution.
     pub runtime_state: Option<SoraServiceRuntimeStateV1>,
     /// Deterministic runtime receipt for the execution.

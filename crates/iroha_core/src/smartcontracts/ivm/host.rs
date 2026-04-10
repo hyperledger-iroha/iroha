@@ -2623,6 +2623,20 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
             });
     }
 
+    fn scoped_durable_state_path(&self, path: &Name) -> Result<Option<Name>, ivm::VMError> {
+        let Some(context) = self.current_contract_runtime_context.as_ref() else {
+            return Ok(None);
+        };
+
+        // Durable state belongs to one deployed contract instance. Alias bindings
+        // can move across redeploys, so the immutable contract address is the
+        // stable namespace key.
+        let scope_id = context.contract_address.to_string();
+        let digest = hex::encode(Hash::new(scope_id.as_bytes()).as_ref());
+        let scoped = format!("sc/{digest}/{}", path.as_ref());
+        scoped.parse().map(Some).map_err(|_| ivm::VMError::NoritoInvalid)
+    }
+
     fn decode_name_payload(payload: &[u8]) -> Result<Name, ivm::VMError> {
         match decode_from_bytes(payload) {
             Ok(name) => Ok(name),
@@ -6336,6 +6350,19 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let path_tlv = Self::expect_tlv(vm, path_ptr, PointerType::Name)?;
                 let path = Self::decode_name_payload(path_tlv.payload)?;
                 self.log_state_read_key(path.as_ref());
+                if let Some(scoped_path) = self.scoped_durable_state_path(&path)? {
+                    if let Some(entry) = self.durable_state_overlay.get(&scoped_path) {
+                        match entry {
+                            Some(stored) => Self::load_state_value(vm, stored)?,
+                            None => vm.set_register(10, 0),
+                        }
+                        return Ok(0);
+                    }
+                    if let Some(stored) = self.durable_state_base.get(&scoped_path) {
+                        Self::load_state_value(vm, stored)?;
+                        return Ok(0);
+                    }
+                }
                 if let Some(entry) = self.durable_state_overlay.get(&path) {
                     match entry {
                         Some(stored) => Self::load_state_value(vm, stored)?,
@@ -6366,7 +6393,10 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 stored.extend_from_slice(val_tlv.payload);
                 let h: [u8; Hash::LENGTH] = Hash::new(val_tlv.payload).into();
                 stored.extend_from_slice(&h);
-                self.durable_state_overlay.insert(path, Some(stored));
+                let key = self
+                    .scoped_durable_state_path(&path)?
+                    .unwrap_or_else(|| path.clone());
+                self.durable_state_overlay.insert(key, Some(stored));
                 Ok(0)
             }
             ivm::syscalls::SYSCALL_STATE_DEL => {
@@ -6374,6 +6404,9 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
                 let path_tlv = Self::expect_tlv(vm, path_ptr, PointerType::Name)?;
                 let path = Self::decode_name_payload(path_tlv.payload)?;
                 self.log_state_write_key(path.as_ref());
+                if let Some(scoped_path) = self.scoped_durable_state_path(&path)? {
+                    self.durable_state_overlay.insert(scoped_path, None);
+                }
                 self.durable_state_overlay.insert(path, None);
                 Ok(0)
             }
@@ -11279,6 +11312,126 @@ seiyaku Vault {
         assert_eq!(tlv.type_id, PointerType::NoritoBytes);
         let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode state value");
         assert_eq!(value, 1);
+    }
+
+    #[test]
+    fn state_syscall_isolates_paths_by_contract_runtime_context() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::new(authority.clone());
+        let mut vm = IVM::new(10_000);
+
+        let path: Name = "counter".parse().unwrap();
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+
+        let contract_a = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            41,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("derive contract A");
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_subject: contract_a.subject_id(),
+            contract_address: contract_a.clone(),
+            contract_alias: Some("fixture::shared".parse().expect("contract alias A")),
+            entrypoint: "write".to_owned(),
+        }));
+        let value_a_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito::to_bytes(&11_u64).expect("encode state value A"),
+        );
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_a_ptr);
+        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm), Ok(0));
+
+        let contract_b = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            42,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("derive contract B");
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_subject: contract_b.subject_id(),
+            contract_address: contract_b.clone(),
+            contract_alias: Some("fixture::shared".parse().expect("contract alias B")),
+            entrypoint: "write".to_owned(),
+        }));
+        let value_b_ptr = store_tlv(
+            &mut vm,
+            PointerType::NoritoBytes,
+            &norito::to_bytes(&22_u64).expect("encode state value B"),
+        );
+        vm.set_register(10, path_ptr);
+        vm.set_register(11, value_b_ptr);
+        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_SET, &mut vm), Ok(0));
+
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_subject: contract_a.subject_id(),
+            contract_address: contract_a,
+            contract_alias: Some("fixture::shared".parse().expect("contract alias A read")),
+            entrypoint: "read".to_owned(),
+        }));
+        vm.set_register(10, path_ptr);
+        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm), Ok(0));
+        let value_a_tlv = vm.memory.validate_tlv(vm.register(10)).expect("state get tlv A");
+        let value_a: u64 =
+            norito::decode_from_bytes(value_a_tlv.payload).expect("decode state value A");
+        assert_eq!(value_a, 11);
+
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_subject: contract_b.subject_id(),
+            contract_address: contract_b,
+            contract_alias: Some("fixture::shared".parse().expect("contract alias B read")),
+            entrypoint: "read".to_owned(),
+        }));
+        vm.set_register(10, path_ptr);
+        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm), Ok(0));
+        let value_b_tlv = vm.memory.validate_tlv(vm.register(10)).expect("state get tlv B");
+        let value_b: u64 =
+            norito::decode_from_bytes(value_b_tlv.payload).expect("decode state value B");
+        assert_eq!(value_b, 22);
+    }
+
+    #[test]
+    fn state_syscall_reads_legacy_raw_key_when_scoped_key_is_missing() {
+        crate::test_alias::ensure();
+        let mut world = World::new();
+        let path: Name = "counter".parse().unwrap();
+        let value_bytes = norito::to_bytes(&7_u64).expect("encode state value");
+        world
+            .smart_contract_state
+            .insert(path.clone(), value_bytes.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = State::new_for_testing(world, kura, query);
+        let authority: AccountId = fixture_account("alice");
+        let mut host = CoreHost::from_state(authority.clone(), &state);
+        let contract = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            43,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("derive contract");
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_subject: contract.subject_id(),
+            contract_address: contract,
+            contract_alias: Some("legacy::reader".parse().expect("contract alias")),
+            entrypoint: "read".to_owned(),
+        }));
+        let mut vm = IVM::new(10_000);
+        let path_ptr = store_tlv(&mut vm, PointerType::Name, &norito_blob(&path));
+        vm.set_register(10, path_ptr);
+        assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm), Ok(0));
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("legacy state get tlv");
+        let value: u64 = norito::decode_from_bytes(tlv.payload).expect("decode legacy state");
+        assert_eq!(value, 7);
     }
 
     #[test]

@@ -2671,6 +2671,8 @@ pub(crate) mod valid {
         SoracloudOrderedMailboxExecutionResult {
             state_mutations: Vec::new(),
             outbound_mailbox_messages: Vec::new(),
+            response_bytes: Vec::new(),
+            content_type: None,
             runtime_state: Some(runtime_state),
             runtime_receipt: iroha_data_model::soracloud::SoraRuntimeReceiptV1 {
                 schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
@@ -2819,6 +2821,8 @@ pub(crate) mod valid {
             let SoracloudOrderedMailboxExecutionResult {
                 state_mutations,
                 outbound_mailbox_messages,
+                response_bytes: _response_bytes,
+                content_type: _content_type,
                 runtime_state,
                 runtime_receipt,
             } = result;
@@ -9954,6 +9958,8 @@ pub(crate) mod valid {
                 Ok(SoracloudOrderedMailboxExecutionResult {
                     state_mutations: self.state_mutations.clone(),
                     outbound_mailbox_messages: Vec::new(),
+                    response_bytes: Vec::new(),
+                    content_type: None,
                     runtime_state: Some(SoraServiceRuntimeStateV1 {
                         schema_version:
                             iroha_data_model::soracloud::SORA_SERVICE_RUNTIME_STATE_VERSION_V1,

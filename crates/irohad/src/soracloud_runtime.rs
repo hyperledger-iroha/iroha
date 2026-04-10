@@ -6,9 +6,9 @@
 //! hydrated artifact cache. Soracloud runtime v1 runs IVM handlers directly
 //! and supervises `NativeProcess` revisions as loopback HTTP services.
 //!
-//! Ordered mailbox execution now runs admitted IVM bundles directly through
-//! the Soracloud host surface while local reads continue to resolve from the
-//! committed snapshot plus hydrated artifact cache.
+//! Ordered mailbox execution and public query local reads now run admitted IVM
+//! bundles directly through the Soracloud host surface while asset local reads
+//! still resolve from the committed snapshot plus hydrated artifact cache.
 
 use std::{
     cmp::Ordering,
@@ -853,6 +853,7 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                     &request,
                     &context,
                     self.state_dir.as_ref(),
+                    &self.config.egress,
                     &self.config.hf,
                     &self.hf_local_workers,
                     &self.host_violation_reporter,
@@ -990,6 +991,18 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                 SoraServiceHealthStatusV1::Degraded,
             ));
         }
+        let (response_bytes, content_type) = match decode_ordered_mailbox_vm_output(&vm, &request)
+        {
+            Ok(response) => response,
+            Err(error) => {
+                return Ok(deterministic_mailbox_failure_result_with_message(
+                    request,
+                    "invalid_response",
+                    error.message,
+                    SoraServiceHealthStatusV1::Degraded,
+                ));
+            }
+        };
         let Some(host) = vm
             .host_mut_any()
             .and_then(|host| host.downcast_mut::<SoracloudIvmHost>())
@@ -1009,7 +1022,7 @@ impl SoracloudRuntime for SoracloudRuntimeManagerHandle {
                 BTreeMap::new(),
             ),
         )
-        .into_execution_result()
+        .into_execution_result(response_bytes, content_type)
         {
             Ok(result) => Ok(result),
             Err(error) => Ok(deterministic_mailbox_failure_result_with_message(
@@ -1222,6 +1235,8 @@ struct SoracloudIvmHost {
     egress: iroha_config::parameters::actual::SoracloudRuntimeEgress,
     committed_entries: BTreeMap<(String, String), SoraServiceStateEntryV1>,
     binding_totals: BTreeMap<String, u64>,
+    observed_local_read_bindings:
+        BTreeMap<(String, String), iroha_core::soracloud_runtime::SoracloudLocalReadBinding>,
     staged_state_mutations: Vec<iroha_core::soracloud_runtime::SoracloudDeterministicStateMutation>,
     staged_outbound_mailbox_messages: Vec<SoraServiceMailboxMessageV1>,
     staged_journal: Option<StagedRuntimeArtifact>,
@@ -1250,6 +1265,7 @@ impl SoracloudIvmHost {
             egress,
             committed_entries,
             binding_totals,
+            observed_local_read_bindings: BTreeMap::new(),
             staged_state_mutations: Vec::new(),
             staged_outbound_mailbox_messages: Vec::new(),
             staged_journal: None,
@@ -1280,6 +1296,13 @@ impl SoracloudIvmHost {
             Ok(())
         } else {
             Err(VMError::NotImplemented { syscall })
+        }
+    }
+
+    fn require_mutating_runtime(&self, _syscall: u32) -> Result<(), VMError> {
+        match self.handler_class() {
+            SoraServiceHandlerClassV1::Update | SoraServiceHandlerClassV1::PrivateUpdate => Ok(()),
+            _ => Err(VMError::PermissionDenied),
         }
     }
 
@@ -1350,6 +1373,7 @@ impl SoracloudIvmHost {
         &mut self,
         request: SoracloudEmitStateMutationRequestV1,
     ) -> Result<SoracloudEmitStateMutationResponseV1, VMError> {
+        self.require_mutating_runtime(SYSCALL_SORACLOUD_EMIT_STATE_MUTATION)?;
         if !self
             .request
             .bundle
@@ -1474,7 +1498,8 @@ impl SoracloudIvmHost {
     fn stage_outbound_mailbox_message(
         &mut self,
         request: SoracloudEmitMailboxMessageRequestV1,
-    ) -> SoracloudEmitMailboxMessageResponseV1 {
+    ) -> Result<SoracloudEmitMailboxMessageResponseV1, VMError> {
+        self.require_mutating_runtime(SYSCALL_SORACLOUD_EMIT_MAILBOX_MESSAGE)?;
         let payload_commitment = Hash::new(&request.payload_bytes);
         let message_id = Hash::new(Encode::encode(&(
             "soracloud.host.mailbox.v1",
@@ -1504,10 +1529,10 @@ impl SoracloudIvmHost {
                     .max(self.request.execution_sequence),
                 expires_at_sequence: request.expires_at_sequence,
             });
-        SoracloudEmitMailboxMessageResponseV1 {
+        Ok(SoracloudEmitMailboxMessageResponseV1 {
             message_id,
             payload_commitment,
-        }
+        })
     }
 
     fn stage_artifact(
@@ -1663,6 +1688,8 @@ impl SoracloudIvmHost {
 
     fn into_execution_result(
         self,
+        response_bytes: Vec<u8>,
+        content_type: Option<String>,
     ) -> Result<SoracloudOrderedMailboxExecutionResult, SoracloudRuntimeExecutionError> {
         let handler_class = self.handler_class();
         let journal_artifact_hash = persist_staged_runtime_artifact(
@@ -1683,6 +1710,8 @@ impl SoracloudIvmHost {
             &self.request,
             &self.staged_state_mutations,
             &self.staged_outbound_mailbox_messages,
+            &response_bytes,
+            content_type.as_deref(),
             &runtime_state,
             journal_artifact_hash,
             checkpoint_artifact_hash,
@@ -1699,6 +1728,8 @@ impl SoracloudIvmHost {
         Ok(SoracloudOrderedMailboxExecutionResult {
             state_mutations: self.staged_state_mutations,
             outbound_mailbox_messages: self.staged_outbound_mailbox_messages,
+            response_bytes,
+            content_type,
             runtime_state: Some(runtime_state),
             runtime_receipt: SoraRuntimeReceiptV1 {
                 schema_version: SORA_RUNTIME_RECEIPT_VERSION_V1,
@@ -1719,6 +1750,22 @@ impl SoracloudIvmHost {
                 selected_peer_id: None,
             },
         })
+    }
+
+    fn local_read_bindings(
+        &self,
+    ) -> Vec<iroha_core::soracloud_runtime::SoracloudLocalReadBinding> {
+        self.observed_local_read_bindings
+            .values()
+            .cloned()
+            .collect::<Vec<_>>()
+    }
+
+    fn has_local_read_side_effects(&self) -> bool {
+        !self.staged_state_mutations.is_empty()
+            || !self.staged_outbound_mailbox_messages.is_empty()
+            || self.staged_journal.is_some()
+            || self.staged_checkpoint.is_some()
     }
 }
 
@@ -1742,6 +1789,12 @@ impl IVMHost for SoracloudIvmHost {
                         &request.state_key,
                     ))
                     .cloned();
+                if let Some(entry) = entry.as_ref() {
+                    self.observed_local_read_bindings.insert(
+                        Self::state_entry_key(&request.binding_name, &request.state_key),
+                        state_entry_binding(entry),
+                    );
+                }
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::ReadCommittedState,
@@ -1779,7 +1832,7 @@ impl IVMHost for SoracloudIvmHost {
                 else {
                     return Err(VMError::NoritoInvalid);
                 };
-                let response = self.stage_outbound_mailbox_message(request);
+                let response = self.stage_outbound_mailbox_message(request)?;
                 self.write_response(
                     vm,
                     SoracloudHostOperationV1::EmitMailboxMessage,
@@ -1793,6 +1846,7 @@ impl IVMHost for SoracloudIvmHost {
                 else {
                     return Err(VMError::NoritoInvalid);
                 };
+                self.require_mutating_runtime(number)?;
                 let artifact_hash = Self::stage_artifact(
                     &mut self.staged_journal,
                     request.artifact_path,
@@ -1817,6 +1871,7 @@ impl IVMHost for SoracloudIvmHost {
                 else {
                     return Err(VMError::NoritoInvalid);
                 };
+                self.require_mutating_runtime(number)?;
                 let artifact_hash = Self::stage_artifact(
                     &mut self.staged_checkpoint,
                     request.artifact_path,
@@ -1942,34 +1997,6 @@ struct ResolvedHfPlacementExecutionHost {
     peer_id: String,
     role: SoraHfPlacementHostRoleV1,
     status: SoraHfPlacementHostStatusV1,
-}
-
-#[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
-)]
-struct LocalQueryResponse {
-    schema_version: u16,
-    service_name: String,
-    service_version: String,
-    handler_name: String,
-    observed_height: u64,
-    observed_block_hash: Option<String>,
-    entries: Vec<LocalQueryEntry>,
-}
-
-#[derive(
-    Clone, Debug, PartialEq, Eq, norito::derive::JsonSerialize, norito::derive::JsonDeserialize,
-)]
-struct LocalQueryEntry {
-    binding_name: String,
-    state_key: String,
-    service_version: String,
-    encryption: iroha_data_model::soracloud::SoraStateEncryptionV1,
-    payload_bytes: u64,
-    payload_commitment: Hash,
-    last_update_sequence: u64,
-    governance_tx_hash: Hash,
-    source_action: SoraServiceLifecycleActionV1,
 }
 
 const HF_LOCAL_IMPORT_SCHEMA_VERSION_V1: u16 = 1;
@@ -4309,6 +4336,7 @@ fn execute_query_local_read(
     request: &SoracloudLocalReadRequest,
     context: &ResolvedLocalReadContext,
     state_dir: &Path,
+    egress: &iroha_config::parameters::actual::SoracloudRuntimeEgress,
     hf_config: &iroha_config::parameters::actual::SoracloudRuntimeHuggingFace,
     hf_local_workers: &SharedHfLocalRunnerWorkers,
     host_violation_reporter: &Arc<SoracloudModelHostViolationReporter>,
@@ -4328,67 +4356,150 @@ fn execute_query_local_read(
         );
     }
 
-    let filters = parse_query_params(request.request_query.as_deref());
-    let binding_filter = filters.get("binding").map(String::as_str);
-    let key_filter = filters.get("key").map(String::as_str);
-    let prefix_filter = filters.get("prefix").map(String::as_str);
-    let limit = filters
-        .get("limit")
-        .and_then(|limit| limit.parse::<usize>().ok())
-        .unwrap_or(256)
-        .max(1);
-
-    let mut rows = view
-        .world()
-        .soracloud_service_state_entries()
+    let bundle_cache_path = state_dir
+        .join("artifacts")
+        .join(hash_cache_name(context.bundle.container.bundle_hash));
+    let bundle_bytes = read_and_verify_cached_artifact(
+        &bundle_cache_path,
+        context.bundle.container.bundle_hash,
+    )?;
+    let verified = verify_contract_artifact(&bundle_bytes).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "verify Soracloud query bundle for service `{}` revision `{}`: {error}",
+                request.service_name, request.service_version,
+            ),
+        )
+    })?;
+    let Some(entrypoint) = verified
+        .contract_interface
+        .entrypoints
         .iter()
-        .filter(|((_service_name, binding_name, state_key), entry)| {
-            entry.service_name.as_ref() == request.service_name
-                && binding_filter.is_none_or(|filter| filter == binding_name.as_str())
-                && key_filter.is_none_or(|filter| filter == state_key.as_str())
-                && prefix_filter.is_none_or(|filter| state_key.starts_with(filter))
-        })
-        .map(|((_service_name, _binding_name, _state_key), entry)| entry.clone())
-        .collect::<Vec<_>>();
-    rows.sort_by(|left, right| {
-        left.binding_name
-            .cmp(&right.binding_name)
-            .then_with(|| left.state_key.cmp(&right.state_key))
-    });
-    rows.truncate(limit);
-
-    let entries = rows
-        .iter()
-        .map(|entry| LocalQueryEntry {
-            binding_name: entry.binding_name.to_string(),
-            state_key: entry.state_key.clone(),
-            service_version: entry.service_version.clone(),
-            encryption: entry.encryption,
-            payload_bytes: entry.payload_bytes.get(),
-            payload_commitment: entry.payload_commitment,
-            last_update_sequence: entry.last_update_sequence,
-            governance_tx_hash: entry.governance_tx_hash,
-            source_action: entry.source_action,
-        })
-        .collect::<Vec<_>>();
-    let response = LocalQueryResponse {
-        schema_version: 1,
-        service_name: request.service_name.clone(),
-        service_version: context.deployment.current_service_version.clone(),
-        handler_name: context.handler.handler_name.to_string(),
-        observed_height: request.observed_height,
-        observed_block_hash: request.observed_block_hash.map(|hash| hash.to_string()),
-        entries,
+        .find(|entrypoint| entrypoint.name == context.handler.entrypoint)
+    else {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "query handler `{}` on service `{}` revision `{}` is missing entrypoint `{}`",
+                context.handler.handler_name,
+                request.service_name,
+                request.service_version,
+                context.handler.entrypoint,
+            ),
+        ));
     };
-    let response_bytes = norito::json::to_json(&response)
-        .map(|json| json.into_bytes())
-        .map_err(|error| {
-            SoracloudRuntimeExecutionError::new(
-                SoracloudRuntimeExecutionErrorKind::Internal,
-                format!("serialize Soracloud query response: {error}"),
-            )
-        })?;
-    let bindings = rows.iter().map(state_entry_binding).collect::<Vec<_>>();
+
+    let committed_entries =
+        collect_committed_service_state_entries(view, request.service_name.as_str());
+    let host = SoracloudIvmHost::new(
+        local_read_execution_request(request, context),
+        state_dir.to_path_buf(),
+        egress.clone(),
+        committed_entries,
+    );
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(host);
+    vm.load_program(&bundle_bytes).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "load Soracloud query bundle for service `{}` revision `{}`: {}",
+                request.service_name,
+                request.service_version,
+                vm_error_label(&error),
+            ),
+        )
+    })?;
+    let entry_pc = u64::try_from(verified.code_offset.saturating_sub(verified.header_len))
+        .unwrap_or(u64::MAX)
+        .saturating_add(entrypoint.entry_pc);
+    vm.set_program_counter(entry_pc).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "position Soracloud query bundle entrypoint `{}` for service `{}` revision `{}`: {}",
+                context.handler.entrypoint,
+                request.service_name,
+                request.service_version,
+                vm_error_label(&error),
+            ),
+        )
+    })?;
+
+    let body_tlv = local_read_request_body_tlv_bytes(request).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::InvalidRequest,
+            format!(
+                "encode Soracloud query body for service `{}` handler `{}`: {}",
+                request.service_name,
+                request.handler_name,
+                vm_error_label(&error),
+            ),
+        )
+    })?;
+    let body_ptr = vm.alloc_input_tlv(&body_tlv).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "stage Soracloud query body for service `{}` handler `{}`: {}",
+                request.service_name,
+                request.handler_name,
+                vm_error_label(&error),
+            ),
+        )
+    })?;
+    let metadata_tlv = local_read_request_metadata_tlv_bytes(request)?;
+    let metadata_ptr = vm.alloc_input_tlv(&metadata_tlv).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "stage Soracloud query metadata for service `{}` handler `{}`: {}",
+                request.service_name,
+                request.handler_name,
+                vm_error_label(&error),
+            ),
+        )
+    })?;
+    vm.set_register(10, body_ptr);
+    vm.set_register(11, metadata_ptr);
+    vm.set_register(12, request.observed_height);
+    vm.run().map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "execute Soracloud query handler `{}` on service `{}` revision `{}`: {}",
+                context.handler.handler_name,
+                request.service_name,
+                request.service_version,
+                vm_error_label(&error),
+            ),
+        )
+    })?;
+
+    let (response_bytes, content_type) = decode_local_read_vm_output(&vm, request, context)?;
+    let Some(host) = vm
+        .host_mut_any()
+        .and_then(|host| host.downcast_mut::<SoracloudIvmHost>())
+    else {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "local Soracloud query host for service `{}` handler `{}` is unavailable after execution",
+                request.service_name, request.handler_name
+            ),
+        ));
+    };
+    if host.has_local_read_side_effects() {
+        return Err(SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "query handler `{}` on service `{}` attempted to mutate Soracloud runtime state during a public local read",
+                context.handler.handler_name, request.service_name
+            ),
+        ));
+    }
+    let bindings = host.local_read_bindings();
     let result_commitment = Hash::new(&response_bytes);
     let runtime_receipt = match context.handler.certified_response {
         SoraCertifiedResponsePolicyV1::AuditReceipt => Some(local_read_receipt(
@@ -4414,7 +4525,7 @@ fn execute_query_local_read(
 
     Ok(SoracloudLocalReadResponse {
         response_bytes,
-        content_type: Some("application/json".to_owned()),
+        content_type,
         content_encoding: None,
         cache_control: Some("no-store".to_owned()),
         bindings,
@@ -4422,6 +4533,218 @@ fn execute_query_local_read(
         certified_by: context.handler.certified_response,
         runtime_receipt,
     })
+}
+
+fn local_read_execution_request(
+    request: &SoracloudLocalReadRequest,
+    context: &ResolvedLocalReadContext,
+) -> SoracloudOrderedMailboxExecutionRequest {
+    let execution_sequence = next_authoritative_observation_sequence_from_view(
+        request.service_name.as_str(),
+        request.observed_height,
+    );
+    let mailbox_message = SoraServiceMailboxMessageV1 {
+        schema_version: SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1,
+        message_id: Hash::new(Encode::encode(&(
+            "soracloud:local-read:v1",
+            request.service_name.as_str(),
+            request.service_version.as_str(),
+            request.handler_name.as_str(),
+            request.request_commitment,
+        ))),
+        from_service: context.deployment.service_name.clone(),
+        from_handler: context.handler.handler_name.clone(),
+        to_service: context.deployment.service_name.clone(),
+        to_handler: context.handler.handler_name.clone(),
+        payload_bytes: request.request_body.clone(),
+        payload_commitment: request.request_commitment,
+        enqueue_sequence: execution_sequence,
+        available_after_sequence: execution_sequence,
+        expires_at_sequence: None,
+    };
+    SoracloudOrderedMailboxExecutionRequest {
+        observed_height: request.observed_height,
+        observed_block_hash: request.observed_block_hash,
+        execution_sequence,
+        deployment: context.deployment.clone(),
+        bundle: context.bundle.clone(),
+        handler: Some(context.handler.clone()),
+        mailbox_message,
+        runtime_state: None,
+        authoritative_pending_mailbox_messages: 0,
+    }
+}
+
+fn local_read_request_body_tlv_bytes(
+    request: &SoracloudLocalReadRequest,
+) -> Result<Vec<u8>, VMError> {
+    mailbox_payload_tlv_bytes(&request.request_body)
+}
+
+fn local_read_request_metadata_tlv_bytes(
+    request: &SoracloudLocalReadRequest,
+) -> Result<Vec<u8>, SoracloudRuntimeExecutionError> {
+    let request_headers = request
+        .request_headers
+        .iter()
+        .map(|(key, value)| (key.clone(), norito::json::Value::from(value.clone())))
+        .collect::<norito::json::Map>();
+    let mut metadata = norito::json::Map::new();
+    metadata.insert(
+        "schema_version".to_owned(),
+        norito::json::Value::from(u64::from(1_u16)),
+    );
+    metadata.insert(
+        "observed_height".to_owned(),
+        norito::json::Value::from(request.observed_height),
+    );
+    metadata.insert(
+        "observed_block_hash".to_owned(),
+        request
+            .observed_block_hash
+            .map(|hash| norito::json::Value::from(hash.to_string()))
+            .unwrap_or(norito::json::Value::Null),
+    );
+    metadata.insert(
+        "service_name".to_owned(),
+        norito::json::Value::from(request.service_name.clone()),
+    );
+    metadata.insert(
+        "service_version".to_owned(),
+        norito::json::Value::from(request.service_version.clone()),
+    );
+    metadata.insert(
+        "handler_name".to_owned(),
+        norito::json::Value::from(request.handler_name.clone()),
+    );
+    metadata.insert(
+        "request_method".to_owned(),
+        norito::json::Value::from(request.request_method.clone()),
+    );
+    metadata.insert(
+        "request_path".to_owned(),
+        norito::json::Value::from(request.request_path.clone()),
+    );
+    metadata.insert(
+        "handler_path".to_owned(),
+        norito::json::Value::from(request.handler_path.clone()),
+    );
+    metadata.insert(
+        "request_query".to_owned(),
+        request
+            .request_query
+            .clone()
+            .map(norito::json::Value::from)
+            .unwrap_or(norito::json::Value::Null),
+    );
+    metadata.insert(
+        "request_headers".to_owned(),
+        norito::json::Value::Object(request_headers),
+    );
+    metadata.insert(
+        "request_commitment".to_owned(),
+        norito::json::Value::from(request.request_commitment.to_string()),
+    );
+    metadata.insert(
+        "request_body_bytes".to_owned(),
+        norito::json::Value::from(
+            u64::try_from(request.request_body.len()).unwrap_or(u64::MAX),
+        ),
+    );
+    metadata.insert(
+        "request_body_is_tlv".to_owned(),
+        norito::json::Value::from(ivm::pointer_abi::validate_tlv_bytes(&request.request_body).is_ok()),
+    );
+    let metadata_bytes = norito::json::to_vec(&norito::json::Value::Object(metadata)).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "serialize Soracloud query metadata for service `{}` handler `{}`: {error}",
+                request.service_name, request.handler_name
+            ),
+        )
+    })?;
+    Ok(make_pointer_tlv(PointerType::Json, &metadata_bytes))
+}
+
+fn decode_local_read_vm_output(
+    vm: &IVM,
+    request: &SoracloudLocalReadRequest,
+    context: &ResolvedLocalReadContext,
+) -> Result<(Vec<u8>, Option<String>), SoracloudRuntimeExecutionError> {
+    decode_vm_output(
+        vm,
+        "query",
+        context.handler.handler_name.as_ref(),
+        request.service_name.as_str(),
+        request.service_version.as_str(),
+    )
+}
+
+fn decode_ordered_mailbox_vm_output(
+    vm: &IVM,
+    request: &SoracloudOrderedMailboxExecutionRequest,
+) -> Result<(Vec<u8>, Option<String>), SoracloudRuntimeExecutionError> {
+    let handler_name = request
+        .handler
+        .as_ref()
+        .map(|handler| handler.handler_name.as_ref())
+        .unwrap_or_else(|| request.mailbox_message.to_handler.as_ref());
+    let execution_kind = match request
+        .handler
+        .as_ref()
+        .map(|handler| handler.class)
+        .unwrap_or(SoraServiceHandlerClassV1::Update)
+    {
+        SoraServiceHandlerClassV1::Update => "update",
+        SoraServiceHandlerClassV1::PrivateUpdate => "private update",
+        SoraServiceHandlerClassV1::Query => "query",
+        SoraServiceHandlerClassV1::Asset => "asset",
+    };
+    decode_vm_output(
+        vm,
+        execution_kind,
+        handler_name,
+        request.deployment.service_name.as_ref(),
+        request.deployment.current_service_version.as_str(),
+    )
+}
+
+fn decode_vm_output(
+    vm: &IVM,
+    execution_kind: &str,
+    handler_name: &str,
+    service_name: &str,
+    service_version: &str,
+) -> Result<(Vec<u8>, Option<String>), SoracloudRuntimeExecutionError> {
+    let response_ptr = vm.register(10);
+    if response_ptr == 0 {
+        return Ok((Vec::new(), None));
+    }
+    let tlv = vm.memory.validate_tlv(response_ptr).map_err(|error| {
+        SoracloudRuntimeExecutionError::new(
+            SoracloudRuntimeExecutionErrorKind::Internal,
+            format!(
+                "{execution_kind} handler `{handler_name}` on service `{service_name}` revision `{service_version}` returned an invalid pointer: {}",
+                vm_error_label(&error),
+            ),
+        )
+    })?;
+    let content_type = match tlv.type_id {
+        PointerType::Json => Some("application/json".to_owned()),
+        PointerType::Blob => Some("application/octet-stream".to_owned()),
+        PointerType::NoritoBytes => Some("application/x-norito".to_owned()),
+        other => {
+            return Err(SoracloudRuntimeExecutionError::new(
+                SoracloudRuntimeExecutionErrorKind::Internal,
+                format!(
+                    "{execution_kind} handler `{handler_name}` on service `{service_name}` revision `{service_version}` returned unsupported pointer type {:?}",
+                    other,
+                ),
+            ));
+        }
+    };
+    Ok((tlv.payload.to_vec(), content_type))
 }
 
 fn execute_generated_hf_local_read(
@@ -7159,22 +7482,6 @@ fn parse_snapshot_hash(
         })
 }
 
-fn parse_query_params(query: Option<&str>) -> BTreeMap<String, String> {
-    query
-        .unwrap_or_default()
-        .split('&')
-        .filter(|entry| !entry.is_empty())
-        .filter_map(|entry| {
-            let (key, value) = entry.split_once('=').unwrap_or((entry, ""));
-            let key = key.trim();
-            if key.is_empty() {
-                return None;
-            }
-            Some((key.to_owned(), value.trim().to_owned()))
-        })
-        .collect()
-}
-
 fn content_type_for_path(path: &str) -> &'static str {
     match Path::new(path)
         .extension()
@@ -7784,6 +8091,8 @@ fn deterministic_mailbox_failure_result_with_message(
     SoracloudOrderedMailboxExecutionResult {
         state_mutations: Vec::new(),
         outbound_mailbox_messages: Vec::new(),
+        response_bytes: Vec::new(),
+        content_type: None,
         runtime_state: Some(updated_runtime_state_with_outbound_mailbox(
             request.runtime_state.clone(),
             &request,
@@ -7888,6 +8197,8 @@ fn authoritative_mailbox_result_commitment(
     request: &SoracloudOrderedMailboxExecutionRequest,
     state_mutations: &[iroha_core::soracloud_runtime::SoracloudDeterministicStateMutation],
     outbound_mailbox_messages: &[SoraServiceMailboxMessageV1],
+    response_bytes: &[u8],
+    content_type: Option<&str>,
     runtime_state: &SoraServiceRuntimeStateV1,
     journal_artifact_hash: Option<Hash>,
     checkpoint_artifact_hash: Option<Hash>,
@@ -7920,6 +8231,13 @@ fn authoritative_mailbox_result_commitment(
             )
         })
         .collect::<Vec<_>>();
+    let response_fingerprint = (
+        content_type,
+        Hash::new(response_bytes),
+        runtime_state.clone(),
+        journal_artifact_hash,
+        checkpoint_artifact_hash,
+    );
     Hash::new(Encode::encode(&(
         "soracloud:runtime-result:v1",
         request.mailbox_message.message_id,
@@ -7929,9 +8247,7 @@ fn authoritative_mailbox_result_commitment(
         request.execution_sequence,
         mutation_fingerprints,
         outbound_fingerprints,
-        runtime_state.clone(),
-        journal_artifact_hash,
-        checkpoint_artifact_hash,
+        response_fingerprint,
     )))
 }
 
@@ -9316,7 +9632,7 @@ mod tests {
         }
     }
 
-    fn simple_soracloud_contract_artifact(entrypoints: &[&str]) -> Vec<u8> {
+    fn soracloud_contract_artifact_with_words(entrypoints: &[&str], code_words: &[u32]) -> Vec<u8> {
         let metadata = ivm::ProgramMetadata {
             version_major: 1,
             version_minor: 1,
@@ -9338,8 +9654,17 @@ mod tests {
         };
         let mut bytes = metadata.encode();
         bytes.extend_from_slice(&contract_interface.encode_section());
-        bytes.extend_from_slice(&ivm::encoding::wide::encode_halt().to_le_bytes());
+        for word in code_words {
+            bytes.extend_from_slice(&word.to_le_bytes());
+        }
         bytes
+    }
+
+    fn simple_soracloud_contract_artifact(entrypoints: &[&str]) -> Vec<u8> {
+        soracloud_contract_artifact_with_words(
+            entrypoints,
+            &[ivm::encoding::wide::encode_halt()],
+        )
     }
 
     fn bundle_handler(
@@ -14490,10 +14815,12 @@ mod tests {
     }
 
     #[test]
-    fn execute_local_read_returns_query_metadata_and_audit_receipt() -> Result<()> {
+    fn execute_local_read_runs_query_handler_from_admitted_ivm_bundle() -> Result<()> {
         let mut state = test_state()?;
         let mut bundle = load_deployment_bundle_fixture()?;
-        let bundle_bytes = b"ivm bundle bytes".to_vec();
+        let query_entrypoint = bundle_handler(&bundle, "query").entrypoint;
+        let query_body = make_pointer_tlv(PointerType::Json, br#"{"ok":true}"#);
+        let bundle_bytes = simple_soracloud_contract_artifact(&[query_entrypoint.as_str()]);
         bundle.container.bundle_hash = Hash::new(&bundle_bytes);
         let deployment = sample_deployment_state(&bundle);
         let runtime = sample_runtime_state(&bundle);
@@ -14563,26 +14890,111 @@ mod tests {
                 request_method: "GET".to_owned(),
                 request_path: "/app/query".to_owned(),
                 handler_path: "/".to_owned(),
-                request_query: Some("binding=session_store".to_owned()),
+                request_query: None,
                 request_headers: BTreeMap::new(),
-                request_body: Vec::new(),
+                request_body: query_body,
                 request_commitment: Hash::new(b"query-request"),
             })
             .map_err(|error| eyre::eyre!("{error:?}"))?;
 
-        let decoded: LocalQueryResponse = norito::json::from_slice(&response.response_bytes)?;
-        assert_eq!(decoded.entries.len(), 1);
-        assert_eq!(decoded.entries[0].binding_name, "session_store");
-        assert_eq!(decoded.entries[0].state_key, "/state/session/alice");
+        assert_eq!(response.response_bytes, br#"{"ok":true}"#);
+        assert_eq!(response.content_type.as_deref(), Some("application/json"));
         assert_eq!(
             response.certified_by,
             SoraCertifiedResponsePolicyV1::AuditReceipt
         );
         assert!(response.runtime_receipt.is_some());
-        assert_eq!(response.bindings.len(), 1);
+        assert!(response.bindings.is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn execute_local_read_passes_query_metadata_in_r11() -> Result<()> {
+        let mut state = test_state()?;
+        let mut bundle = load_deployment_bundle_fixture()?;
+        let query_entrypoint = bundle_handler(&bundle, "query").entrypoint;
+        let copy_metadata_to_r10 = ivm::encoding::wide::encode_ri(
+            ivm::instruction::wide::arithmetic::ADDI,
+            10,
+            11,
+            0,
+        );
+        let bundle_bytes = soracloud_contract_artifact_with_words(
+            &[query_entrypoint.as_str()],
+            &[copy_metadata_to_r10, ivm::encoding::wide::encode_halt()],
+        );
+        bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        let deployment = sample_deployment_state(&bundle);
+        let runtime = sample_runtime_state(&bundle);
+        let temp_dir = tempfile::tempdir()?;
+        let artifacts_root = temp_dir.path().join("artifacts");
+        fs::create_dir_all(&artifacts_root)?;
+        fs::write(
+            artifacts_root.join(hash_cache_name(bundle.container.bundle_hash)),
+            &bundle_bytes,
+        )?;
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(bundle.service.service_name.clone(), deployment);
+            world
+                .soracloud_service_runtime_mut_for_testing()
+                .insert(bundle.service.service_name.clone(), runtime);
+        }
+
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        );
+        manager.reconcile_once()?;
+        let handle = test_runtime_handle(&manager, Arc::clone(&state));
+
+        let response = handle
+            .execute_local_read(SoracloudLocalReadRequest {
+                observed_height: 0,
+                observed_block_hash: None,
+                service_name: bundle.service.service_name.to_string(),
+                service_version: bundle.service.service_version.clone(),
+                handler_name: "query".to_owned(),
+                handler_class: iroha_core::soracloud_runtime::SoracloudLocalReadKind::Query,
+                request_method: "POST".to_owned(),
+                request_path: "/app/query/profile".to_owned(),
+                handler_path: "/profile".to_owned(),
+                request_query: Some("verbose=1".to_owned()),
+                request_headers: BTreeMap::from([(
+                    "accept".to_owned(),
+                    "application/json".to_owned(),
+                )]),
+                request_body: br#"{"hello":"world"}"#.to_vec(),
+                request_commitment: Hash::new(b"query-request-r11"),
+            })
+            .map_err(|error| eyre::eyre!("{error:?}"))?;
+
+        assert_eq!(response.content_type.as_deref(), Some("application/json"));
+        let decoded: norito::json::Value = norito::json::from_slice(&response.response_bytes)?;
         assert_eq!(
-            response.bindings[0].state_key.as_deref(),
-            Some("/state/session/alice")
+            decoded.get("request_path").and_then(norito::json::Value::as_str),
+            Some("/app/query/profile")
+        );
+        assert_eq!(
+            decoded.get("handler_path").and_then(norito::json::Value::as_str),
+            Some("/profile")
+        );
+        assert_eq!(
+            decoded.get("request_query").and_then(norito::json::Value::as_str),
+            Some("verbose=1")
+        );
+        assert_eq!(
+            decoded.get("request_body_is_tlv").and_then(norito::json::Value::as_bool),
+            Some(false)
         );
         Ok(())
     }
@@ -14887,6 +15299,66 @@ mod tests {
 
         let response = public_host.read_service_secret_envelope("db/password");
         assert_eq!(response.envelope, Some(envelope));
+        Ok(())
+    }
+
+    #[test]
+    fn ivm_host_query_runtime_tracks_committed_state_read_bindings() -> Result<()> {
+        let bundle = load_deployment_bundle_fixture()?;
+        let temp_dir = tempfile::tempdir()?;
+        let query_request = sample_ordered_mailbox_request(
+            &bundle,
+            "query",
+            sample_mailbox_message(&bundle, "query", b"public-query".to_vec()),
+        );
+        let entry = SoraServiceStateEntryV1 {
+            schema_version: iroha_data_model::soracloud::SORA_SERVICE_STATE_ENTRY_VERSION_V1,
+            service_name: bundle.service.service_name.clone(),
+            service_version: bundle.service.service_version.clone(),
+            binding_name: "session_store".parse().expect("valid binding"),
+            state_key: "/state/session/alice".to_owned(),
+            encryption: iroha_data_model::soracloud::SoraStateEncryptionV1::ClientCiphertext,
+            payload_bytes: std::num::NonZeroU64::new(64).expect("non-zero"),
+            payload_commitment: Hash::new(b"alice-session"),
+            last_update_sequence: 4,
+            governance_tx_hash: Hash::new(b"gov-session"),
+            source_action: SoraServiceLifecycleActionV1::StateMutation,
+        };
+        let mut committed_entries = BTreeMap::new();
+        committed_entries.insert(
+            (
+                "session_store".to_owned(),
+                "/state/session/alice".to_owned(),
+            ),
+            entry.clone(),
+        );
+        let mut host = SoracloudIvmHost::new(
+            query_request,
+            temp_dir.path().to_path_buf(),
+            test_runtime_manager_config(temp_dir.path().to_path_buf()).egress,
+            committed_entries,
+        );
+        let request_envelope = SoracloudHostRequestEnvelopeV1 {
+            schema_version: iroha_data_model::soracloud::SORACLOUD_HOST_REQUEST_VERSION_V1,
+            operation: SoracloudHostOperationV1::ReadCommittedState,
+            payload: SoracloudHostRequestPayloadV1::ReadCommittedState(
+                iroha_data_model::soracloud::SoracloudReadCommittedStateRequestV1 {
+                    binding_name: "session_store".parse().expect("valid binding"),
+                    state_key: "/state/session/alice".to_owned(),
+                },
+            ),
+        };
+        let request_payload = norito::to_bytes(&request_envelope)?;
+        let request_tlv = make_pointer_tlv(PointerType::SoracloudRequest, &request_payload);
+        let mut vm = IVM::new(u64::MAX);
+        let request_ptr = vm.alloc_input_tlv(&request_tlv)?;
+        vm.set_register(10, request_ptr);
+
+        host.syscall(SYSCALL_SORACLOUD_READ_COMMITTED_STATE, &mut vm)?;
+
+        let bindings = host.local_read_bindings();
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0], state_entry_binding(&entry));
         Ok(())
     }
 

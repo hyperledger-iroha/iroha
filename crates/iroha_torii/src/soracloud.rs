@@ -1810,9 +1810,22 @@ pub(crate) struct NativeProcessRouteMatch {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct OrderedMailboxRouteMatch {
+    pub service_name: String,
+    pub service_version: String,
+    pub handler_name: String,
+    pub handler_class: SoraServiceHandlerClassV1,
+    pub handler_path: String,
+    pub deployment: SoraServiceDeploymentStateV1,
+    pub bundle: SoraDeploymentBundleV1,
+    pub handler: iroha_data_model::soracloud::SoraServiceHandlerV1,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PublicRouteMatch {
     LocalRead(LocalReadRouteMatch),
     NativeProcess(NativeProcessRouteMatch),
+    OrderedMailbox(OrderedMailboxRouteMatch),
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -9154,33 +9167,74 @@ pub(crate) fn resolve_public_route(
         }
 
         for handler in &bundle.service.handlers {
-            let handler_class = match handler.class {
+            let route_match = match handler.class {
                 iroha_data_model::soracloud::SoraServiceHandlerClassV1::Asset => {
-                    SoracloudLocalReadKind::Asset
+                    let full_route = join_public_route_paths(
+                        route.path_prefix.as_str(),
+                        handler.route_path.as_deref().unwrap_or("/"),
+                    );
+                    let Some(handler_path) =
+                        split_public_handler_path(normalized_path, &full_route)
+                    else {
+                        continue;
+                    };
+                    let route_len = full_route.len();
+                    let route_match = PublicRouteMatch::LocalRead(LocalReadRouteMatch {
+                        service_name: service_name.clone(),
+                        service_version: deployment.current_service_version.clone(),
+                        handler_name: handler.handler_name.to_string(),
+                        handler_class: SoracloudLocalReadKind::Asset,
+                        handler_path,
+                    });
+                    (route_len, route_match)
                 }
                 iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query => {
-                    SoracloudLocalReadKind::Query
+                    let full_route = join_public_route_paths(
+                        route.path_prefix.as_str(),
+                        handler.route_path.as_deref().unwrap_or("/"),
+                    );
+                    let Some(handler_path) =
+                        split_public_handler_path(normalized_path, &full_route)
+                    else {
+                        continue;
+                    };
+                    let route_len = full_route.len();
+                    let route_match = PublicRouteMatch::LocalRead(LocalReadRouteMatch {
+                        service_name: service_name.clone(),
+                        service_version: deployment.current_service_version.clone(),
+                        handler_name: handler.handler_name.to_string(),
+                        handler_class: SoracloudLocalReadKind::Query,
+                        handler_path,
+                    });
+                    (route_len, route_match)
                 }
                 iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update
                 | iroha_data_model::soracloud::SoraServiceHandlerClassV1::PrivateUpdate => {
-                    continue;
+                    let full_route = join_public_route_paths(
+                        route.path_prefix.as_str(),
+                        handler.route_path.as_deref().unwrap_or("/"),
+                    );
+                    let Some(handler_path) =
+                        split_public_handler_path(normalized_path, &full_route)
+                    else {
+                        continue;
+                    };
+                    let route_len = full_route.len();
+                    let route_match =
+                        PublicRouteMatch::OrderedMailbox(OrderedMailboxRouteMatch {
+                            service_name: service_name.clone(),
+                            service_version: deployment.current_service_version.clone(),
+                            handler_name: handler.handler_name.to_string(),
+                            handler_class: handler.class,
+                            handler_path,
+                            deployment: deployment.clone(),
+                            bundle: bundle.clone(),
+                            handler: handler.clone(),
+                        });
+                    (route_len, route_match)
                 }
             };
-            let full_route = join_public_route_paths(
-                route.path_prefix.as_str(),
-                handler.route_path.as_deref().unwrap_or("/"),
-            );
-            let Some(handler_path) = split_public_handler_path(normalized_path, &full_route) else {
-                continue;
-            };
-            let route_len = full_route.len();
-            let route_match = PublicRouteMatch::LocalRead(LocalReadRouteMatch {
-                service_name: service_name.clone(),
-                service_version: deployment.current_service_version.clone(),
-                handler_name: handler.handler_name.to_string(),
-                handler_class,
-                handler_path,
-            });
+            let (route_len, route_match) = route_match;
             let sort_key = (
                 service_name.clone(),
                 deployment.current_service_version.clone(),
@@ -14071,6 +14125,73 @@ mod tests {
             resolve_public_route(&app, "wrong.sora", "/app/v1/health").is_none(),
             "host matching must stay authoritative for native services"
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_public_route_projects_ordered_mailbox_handlers() {
+        use iroha_core::state::World;
+
+        let mut world = World::new();
+        let bundle = fixture_bundle("2026.02.0");
+        let service_name = bundle.service.service_name.clone();
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (
+                bundle.service.service_name.to_string(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                service_name,
+                SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name: bundle.service.service_name.clone(),
+                    current_service_version: bundle.service.service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    service_configs: BTreeMap::new(),
+                    service_secrets: BTreeMap::new(),
+                },
+            );
+        let app = mk_app_state_for_tests_with_world(world);
+
+        let route_match = resolve_public_route(&app, "portal.sora", "/app/update/search")
+            .expect("ordered mailbox route");
+        match route_match {
+            PublicRouteMatch::OrderedMailbox(route_match) => {
+                assert_eq!(route_match.service_name, "web_portal");
+                assert_eq!(route_match.service_version, "2026.02.0");
+                assert_eq!(route_match.handler_name, "update");
+                assert_eq!(route_match.handler_class, SoraServiceHandlerClassV1::Update);
+                assert_eq!(route_match.handler_path, "/search");
+            }
+            other => panic!("expected ordered-mailbox route, got {other:?}"),
+        }
+
+        let private_route =
+            resolve_public_route(&app, "portal.sora", "/app/private/update/vault")
+                .expect("private ordered mailbox route");
+        match private_route {
+            PublicRouteMatch::OrderedMailbox(route_match) => {
+                assert_eq!(route_match.handler_name, "private_update");
+                assert_eq!(
+                    route_match.handler_class,
+                    SoraServiceHandlerClassV1::PrivateUpdate
+                );
+                assert_eq!(route_match.handler_path, "/vault");
+            }
+            other => panic!("expected private ordered-mailbox route, got {other:?}"),
+        }
     }
 
     #[test]
