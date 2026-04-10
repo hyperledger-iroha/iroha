@@ -520,6 +520,10 @@ private_key = account.get("private_key")
 chain_discriminant = account.get("chain_discriminant")
 domain = account.get("domain", "wonderland.universal")
 basic_auth = source.get("basic_auth")
+transaction = source.get("transaction") or {}
+time_to_live_ms = transaction.get("time_to_live_ms", 120000)
+status_timeout_ms = transaction.get("status_timeout_ms", 120000)
+nonce = transaction.get("nonce", False)
 
 if not isinstance(chain, str) or not chain:
     raise SystemExit("write canary config is missing a top-level `chain` value")
@@ -531,6 +535,14 @@ if chain_discriminant is not None and not isinstance(chain_discriminant, int):
     raise SystemExit("write canary config `account.chain_discriminant` must be an integer")
 if not isinstance(domain, str) or not domain:
     domain = "wonderland.universal"
+elif "." not in domain:
+    domain = f"{domain}.universal"
+if not isinstance(time_to_live_ms, int):
+    raise SystemExit("write canary config `transaction.time_to_live_ms` must be an integer when present")
+if not isinstance(status_timeout_ms, int):
+    raise SystemExit("write canary config `transaction.status_timeout_ms` must be an integer when present")
+if not isinstance(nonce, bool):
+    raise SystemExit("write canary config `transaction.nonce` must be a boolean when present")
 
 lines = [
     f'chain = "{chain}"',
@@ -563,7 +575,16 @@ lines.extend(
 if isinstance(chain_discriminant, int):
     lines.append(f'chain_discriminant = {chain_discriminant}')
 
-lines.append("")
+lines.extend(
+    [
+        "",
+        "[transaction]",
+        f"time_to_live_ms = {time_to_live_ms}",
+        f"status_timeout_ms = {status_timeout_ms}",
+        f"nonce = {'true' if nonce else 'false'}",
+        "",
+    ]
+)
 
 with open(output_path, "w", encoding="utf-8") as handle:
     handle.write("\n".join(lines))

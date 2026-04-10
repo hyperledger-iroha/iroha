@@ -20365,9 +20365,14 @@ pub async fn handle_post_contract_deploy(
     let (dataspace_alias, dataspace_id) =
         resolve_public_contract_deploy_alias(&state, &contract_alias)?;
     let now_ms = current_time_millis();
-    let previous_contract_address = state
-        .world_view()
-        .contract_address_by_alias_at(&contract_alias, now_ms);
+    let (previous_contract_address, previous_contract_is_active) = {
+        let world = state.world_view();
+        let previous_contract_address = world.contract_address_by_alias_at(&contract_alias, now_ms);
+        let previous_contract_is_active = previous_contract_address
+            .as_ref()
+            .is_some_and(|candidate| world.contract_instances().get(candidate).is_some());
+        (previous_contract_address, previous_contract_is_active)
+    };
     let deploy_nonce = contract_deploy_nonce_for_authority(&state, &authority)?;
     let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
         iroha_data_model::account::address::chain_discriminant(),
@@ -20400,10 +20405,12 @@ pub async fn handle_post_contract_deploy(
         instructions.push(dm::InstructionBox::from(SetContractAlias::clear(
             previous_contract_address.clone(),
         )));
-        instructions.push(dm::InstructionBox::from(DeactivateContractInstance {
-            contract_address: previous_contract_address,
-            reason: Some("superseded by alias upgrade".to_owned()),
-        }));
+        if previous_contract_is_active {
+            instructions.push(dm::InstructionBox::from(DeactivateContractInstance {
+                contract_address: previous_contract_address,
+                reason: Some("superseded by alias upgrade".to_owned()),
+            }));
+        }
     }
     instructions.push(dm::InstructionBox::from(ActivateContractInstance {
         contract_address: contract_address.clone(),

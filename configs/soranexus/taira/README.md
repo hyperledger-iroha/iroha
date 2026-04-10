@@ -16,9 +16,9 @@ Torii URL of the node you are validating, for example:
 
 - `PUBLIC_TORII_ROOT=https://taira-validator-1.sora.org`
 
-`https://taira.sora.org` may still exist as a convenience endpoint or landing
-page, but it is not the canonical API target for rollout, canaries, or client
-defaults.
+`https://taira.sora.org` may still exist as a convenience endpoint, but it is
+the shared Torii origin, not an app website. Do not bind product frontends to
+that host root through `sorafs_sites.json`.
 
 ## Included artifacts
 
@@ -34,7 +34,7 @@ defaults.
 - `explorer.runtime-config.json`: runtime config example for the Explorer
   frontend; point it at the explicit public Torii base URL you want the UI to
   query.
-- `sorafs_sites.json`: host-to-manifest bindings for Torii-served static sites.
+- `sorafs_sites.json`: optional host-to-manifest bindings for Torii-served static sites. Keep `taira.sora.org` out of this file.
 - `sorafs_gateway_denylist.catalog.json`: default-on SoraFS denylist pack catalog.
 - `sorafs_gateway_denylist.global-core.json`: baseline governance-backed illegal-content pack.
 - `sorafs_gateway_denylist.global-emergency.json`: emergency-response denylist pack.
@@ -44,9 +44,16 @@ defaults.
   pointing the systemd unit at a rendered validator config.
 - `taira-canary-client.example.toml`: runtime-only example signer config for
   the signed rollout canary.
+- `build_taira_rollout_bundle.sh`: packages the exact checked-out `irohad` /
+  `iroha` build plus the checked-in Taira config bundle into one timestamped
+  rollout artifact and records the git revision in `rollout.manifest.json`.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
   checks used by the Taira Codex rollout, including the optional signed write
   canary for final public cutover.
+- `verify_soraswap_rollout.sh`: post-upgrade wrapper that runs the public MCP
+  canary, the SoraSwap nested-call probe, and then the optional
+  `deploy-testnet` / signed `smoke-testnet` / `release-checklist` chain in the
+  canonical order.
 - `bootstrap_kaigi_localnet.sh`: local-only relay bootstrap that re-signs the
   served `dist/taira-localnet` genesis with seeded Kaigi relay metadata,
   health samples, and the canonical Taira onboarding/faucet authority account,
@@ -130,9 +137,8 @@ allowlisting:
 
 - Every public validator should expose Torii directly on its own TLS hostname
   and advertise that URL through `[torii].public_address`.
-- `https://taira.sora.org` is optional convenience ingress only. Keep it if you
-  want a shared landing page or one extra public API endpoint, but do not treat
-  it as the canonical network API.
+- `https://taira.sora.org` is optional convenience ingress only. Keep it as a
+  shared Torii/API origin, but do not mount websites at its root.
 - `https://taira-explorer.sora.org` points to the Iroha 2 Explorer instance.
 - Shared nginx edge configs such as `taira-explorer.nginx.conf` are optional
   convenience infrastructure, not the primary public API design.
@@ -166,7 +172,9 @@ Gateway behavior:
   browsing can rehydrate from peer providers.
 
 Named host bindings in `sorafs_sites.json` remain available as an optional
-alias layer, but they are no longer the primary deployment path.
+alias layer, but they are no longer the primary deployment path. Reserve
+`taira.sora.org` for Torii itself and serve apps from `/sorafs/cid/<cid>/` or
+`<cid>.sorafs.taira.sora.org`.
 
 ### Default denylist packs
 
@@ -327,13 +335,22 @@ away from the shipped MCP-enabled config:
 
 1. Check out this repository on the validator host, for example at
    `/opt/iroha`.
-2. Render the per-validator config bundle from a user-local roster file, then
+2. Build a rollout bundle from the exact runtime revision you intend to ship:
+   - `bash configs/soranexus/taira/build_taira_rollout_bundle.sh`
+   - the script refuses a dirty worktree by default and writes
+     `dist/taira-rollout/<bundle>/rollout.manifest.json` plus
+     `sha256sums.txt`
+   - capture the emitted git revision and archive path in the rollout ticket;
+     that is the exact runtime candidate the later SoraSwap gate must approve
+3. Render the per-validator config bundle from a user-local roster file, then
    copy the correct validator config onto the host, for example:
    - `python3 scripts/render_taira_validator_bundle.py --roster configs/soranexus/taira/validator_roster.local.toml --secrets configs/soranexus/taira/validator_secrets.local.toml --output-dir dist/taira-validators`
    - `sudo install -d -o iroha -g iroha /etc/iroha/taira-validator-1`
    - `sudo cp dist/taira-validators/taira-validator-1/config.toml /etc/iroha/taira-validator-1/config.toml`
-3. Install the sample systemd unit from
+4. Install the newly built binaries plus the sample systemd unit from
    `configs/soranexus/taira/taira-irohad.service`:
+   - `sudo install -m 0755 dist/taira-rollout/<bundle>/bin/irohad /usr/local/bin/irohad`
+   - `sudo install -m 0755 dist/taira-rollout/<bundle>/bin/iroha /usr/local/bin/iroha`
    - `sudo cp configs/soranexus/taira/taira-irohad.service /etc/systemd/system/`
    - copy `configs/soranexus/taira/taira-irohad.env.example` to
      `/etc/default/taira-irohad` and adjust `IROHA_TAIRA_CONFIG=` if you want
@@ -344,33 +361,36 @@ away from the shipped MCP-enabled config:
    - if your repo checkout or binary path differs from `/opt/iroha` and
      `/usr/local/bin/irohad`, adjust `WorkingDirectory=` and `ExecStart=`
      before enabling the unit
-4. Reload systemd and restart the validator:
+5. Reload systemd and restart the validator:
    - `sudo systemctl daemon-reload`
    - `sudo systemctl enable --now taira-irohad.service`
    - `sudo systemctl restart taira-irohad.service`
-5. Capture the resolved config in the rollout ticket:
+6. Capture the resolved config in the rollout ticket:
    - `sudo journalctl -u taira-irohad.service -n 200 --no-pager`
    - `cd /opt/iroha && /usr/local/bin/irohad --sora --config "${IROHA_TAIRA_CONFIG:-configs/soranexus/taira/config.toml}" --genesis "${IROHA_TAIRA_GENESIS:-configs/soranexus/taira/genesis.json}" --trace-config | tee /tmp/taira-trace-config.txt`
    - verify `/tmp/taira-trace-config.txt` includes `nexus.fees.fee_asset_id = "xor#universal"`
-6. Prove the validator's loopback Torii endpoint exposes MCP and the expected
+7. Prove the validator's loopback Torii endpoint exposes MCP and the expected
    direct-ingress routes before any public cutover:
    - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --skip-write-canary`
    - for a full local write-path check, use a runtime-only canary signer:
      `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-public --local-root http://127.0.0.1:18080 --write-config /run/secrets/taira-canary-client.toml --write-target local`
-7. After the public node is back, prove the direct hostname is healthy before
+8. After the public node is back, prove the direct hostname is healthy before
    any convenience host or client cutover:
    - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
    - if contract deploy/view health still fails after the route checks pass,
      redeploy SoraSwap with the updated `../soraswap` `deploy-testnet` flow
      before blaming the frontend
-8. Before declaring public Codex/Torii rollout complete, require the signed
-   write canary on the direct node to pass:
-   - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
-   - the script now auto-discovers `${REPO_ROOT}/target/{debug,release}/iroha`
-     and falls back to `cargo run -p iroha_cli --bin iroha -- ...` if `iroha`
-     is not already installed on `PATH`
-   - if you only need a read-only check for debugging, opt into that mode
-     explicitly with `--skip-write-canary`
+9. Before declaring public Codex/Torii rollout complete, require the SoraSwap
+   gate to pass behind the same runtime candidate:
+   - probe-only:
+     `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml`
+   - full gate:
+     `bash configs/soranexus/taira/verify_soraswap_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml --soraswap-client-config /path/to/soraswap/config/testnet/taira.client.toml --run-release-checklist --allow-testnet-mutations`
+   - the wrapper runs `check_mcp_rollout.sh`, `make testnet-nested-call-probe`,
+     then the exact `deploy-testnet` / signed `smoke-testnet` /
+     `release-checklist` sequence when those deeper flags are enabled
+   - the script auto-discovers `${REPO_ROOT}/../soraswap` when the sibling repo
+     exists, but `--soraswap-root` is available for non-default layouts
 
 ## Explorer integration (sibling repo)
 

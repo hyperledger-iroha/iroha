@@ -2300,19 +2300,19 @@ pub mod isi {
                 )
                 .into());
             }
-            if state_transaction
-                .world
-                .contract_instances()
-                .get(&contract_address)
-                .is_none()
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!("contract {contract_address} is not deployed").into(),
-                )
-                .into());
-            }
-
             if let Some(alias) = alias {
+                if state_transaction
+                    .world
+                    .contract_instances()
+                    .get(&contract_address)
+                    .is_none()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!("contract {contract_address} is not deployed").into(),
+                    )
+                    .into());
+                }
+
                 let (_, _, alias_dataspace_id) = alias
                     .resolve_components(&state_transaction.nexus.dataspace_catalog)
                     .map_err(|err| {
@@ -6976,6 +6976,43 @@ mod tests {
         assert_eq!(
             binding.grace_until_ms,
             Some(11_000 + 369u64 * 60 * 60 * 1_000)
+        );
+    }
+
+    #[test]
+    fn set_contract_alias_clear_allows_stale_undeployed_binding() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        tx.world.bind_contract_alias(
+            &contract_address,
+            "router::universal".parse().expect("alias"),
+            None,
+            None,
+            10_000,
+        )
+        .expect("seed stale contract alias");
+
+        SetContractAlias::clear(contract_address.clone())
+            .execute(&authority, &mut tx)
+            .expect("clear should tolerate undeployed stale alias");
+
+        assert!(
+            tx.world.contract_alias_bindings.get(&contract_address).is_none(),
+            "binding index should be removed"
+        );
+        assert!(
+            tx.world
+                .contract_aliases
+                .get(&"router::universal".parse::<ContractAlias>().expect("alias"))
+                .is_none(),
+            "alias index should be removed"
         );
     }
 

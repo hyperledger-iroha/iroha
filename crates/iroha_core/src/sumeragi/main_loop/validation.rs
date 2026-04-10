@@ -147,6 +147,7 @@ impl Actor {
         hash: HashOf<BlockHeader>,
         height: u64,
         view: u64,
+        commit_topology: &[PeerId],
         source: &'static str,
     ) {
         if !self.block_known_for_lock(hash) {
@@ -173,6 +174,40 @@ impl Actor {
                 qc_view = qc.view,
                 source,
                 "replayed cached precommit QC after validation"
+            );
+        }
+        let commit_ready = self
+            .pending
+            .pending_blocks
+            .get(&hash)
+            .and_then(|pending| {
+                let state_height = self.state.committed_height();
+                let tip_hash = self.state.latest_block_hash_fast();
+                let parent = pending.block.header().prev_block_hash();
+                super::pending_extends_tip(pending.height, parent, state_height, tip_hash)
+                    .then_some(())
+            })
+            .is_some();
+        if commit_ready {
+            let _ = self.rehydrate_pending_from_kura_for_qc(&qc);
+            self.apply_commit_qc(&qc, commit_topology, hash, height, view);
+            debug!(
+                height,
+                view,
+                block = %hash,
+                qc_view = qc.view,
+                source,
+                "applied cached precommit QC after validation"
+            );
+        } else if let Some(pending) = self.pending.pending_blocks.get_mut(&hash) {
+            pending.note_commit_qc_observed(qc.epoch);
+            debug!(
+                height,
+                view,
+                block = %hash,
+                qc_view = qc.view,
+                source,
+                "retaining cached precommit QC after validation until block extends committed tip"
             );
         }
     }
@@ -597,6 +632,7 @@ impl Actor {
                     hash,
                     pending_height,
                     pending_view,
+                    commit_topology,
                     "validation_inline",
                 );
                 ValidationGateOutcome::Valid
@@ -640,6 +676,7 @@ impl Actor {
                         hash,
                         pending_height,
                         pending_view,
+                        commit_topology,
                         "validation_inline_signature_recovery",
                     );
                     return ValidationGateOutcome::Valid;
@@ -850,6 +887,7 @@ impl Actor {
                                 hash,
                                 height,
                                 view,
+                                &commit_topology,
                                 "validation_worker",
                             );
                             let _ = self.maybe_emit_local_commit_vote_for_pending_event(
@@ -908,6 +946,7 @@ impl Actor {
                                     hash,
                                     height,
                                     view,
+                                    &commit_topology,
                                     "validation_worker_signature_recovery",
                                 );
                                 let _ = self.maybe_emit_local_commit_vote_for_pending_event(

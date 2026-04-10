@@ -32,8 +32,9 @@ Operational note:
   under `configs/soranexus/taira/`, including `taira-irohad.service`,
   `taira-explorer.nginx.conf`, `validator_roster.example.toml`,
   `validator_secrets.example.toml`, `scripts/render_taira_validator_bundle.py`,
-  and `check_mcp_rollout.sh`, so the public `/v1/mcp` route is proven locally
-  before cutover.
+  `build_taira_rollout_bundle.sh`, `check_mcp_rollout.sh`, and
+  `verify_soraswap_rollout.sh`, so the public `/v1/mcp` route and the
+  downstream SoraSwap nested-call gate are both proven before cutover.
 
 Regenerate:
 - cargo xtask kagami-profiles --profile iroha3-taira

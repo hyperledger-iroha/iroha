@@ -95743,6 +95743,20 @@ async fn validation_inline_replays_cached_precommit_qc_after_block_becomes_valid
         Some(height),
         "replayed cached QC should advance highest QC to the validated block"
     );
+    assert_eq!(
+        u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX),
+        height,
+        "validation should finalize a tip-extending block when a cached commit QC is already present"
+    );
+    assert_eq!(
+        actor.state.latest_block_hash_fast(),
+        Some(block_hash),
+        "cached commit QC should commit the validated tip block"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "committed cached-QC block should leave pending storage"
+    );
 
     harness.shutdown.send();
     super::status::reset_commit_certs_for_tests();
@@ -95856,6 +95870,20 @@ async fn validation_worker_result_replays_cached_precommit_qc_after_block_become
         actor.highest_qc.map(|qc| qc.height),
         Some(height),
         "worker validation success should advance highest QC"
+    );
+    assert_eq!(
+        u64::try_from(actor.state.committed_height()).unwrap_or(u64::MAX),
+        height,
+        "worker validation should finalize a tip-extending block when a cached commit QC is already present"
+    );
+    assert_eq!(
+        actor.state.latest_block_hash_fast(),
+        Some(block_hash),
+        "cached commit QC should commit the worker-validated tip block"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&block_hash),
+        "committed cached-QC block should leave pending storage after worker validation"
     );
 
     harness.shutdown.send();
