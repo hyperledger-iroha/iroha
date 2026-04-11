@@ -106,6 +106,8 @@ At runtime the service receives, for each declared volume:
 - `SORACLOUD_LEASE_VOLUME_SEARCH_SESSIONS_MOUNT_PATH`
 - `SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_DIR`
 - `SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_MOUNT_PATH`
+- `SORACLOUD_LEASE_VOLUME_RUNTIME_CACHE_DIR`
+- `SORACLOUD_LEASE_VOLUME_RUNTIME_CACHE_MOUNT_PATH`
 
 The `_DIR` value is the materialized runtime path. The `_MOUNT_PATH` value is
 the logical mount path declared in the manifest.
@@ -131,7 +133,7 @@ Build the three app surfaces:
 ```bash
 cd .soracloud-hayahi/frontend
 npm install
-npm run build
+VITE_PUBLIC_API_BASE=/api VITE_DATA_MODE=live npm run build
 
 cd ../services/live
 ./build.sh

@@ -798,6 +798,7 @@ impl AppInitArgs {
             static_site: Some(SoracloudAppStaticSiteV1 {
                 dist_dir: "web/dist".to_owned(),
                 mount_path: "/".to_owned(),
+                publish_mode: APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING.to_owned(),
                 api_base_path: Some("/api".to_owned()),
                 publish_label: Some(format!("{app_name}-site")),
             }),
@@ -869,6 +870,7 @@ impl AppInitArgs {
             static_site: Some(SoracloudAppStaticSiteV1 {
                 dist_dir: "frontend/dist".to_owned(),
                 mount_path: "/".to_owned(),
+                publish_mode: APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY.to_owned(),
                 api_base_path: Some("/api".to_owned()),
                 publish_label: Some(format!("{app_name}-frontend")),
             }),
@@ -972,21 +974,26 @@ impl AppDeployArgs {
                 )
             })
             .transpose()?;
-        let static_site_binding_value = static_site_publication
-            .as_ref()
-            .map(|publication| {
-                build_app_static_site_binding_value(
+        let static_site_binding_value = match (
+            static_site_publication.as_ref(),
+            manifest.static_site.as_ref(),
+        ) {
+            (Some(publication), Some(static_site))
+                if static_site.publish_mode == APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING =>
+            {
+                Some(build_app_static_site_binding_value(
                     &manifest.app_name,
                     &manifest.public_url,
                     publication,
-                    manifest.static_site.as_ref().expect("static_site exists"),
-                )
-            })
-            .transpose()?;
-
-        let static_site_target_host = static_site_publication
+                    static_site,
+                )?)
+            }
+            _ => None,
+        };
+        let static_site_target_host = static_site_binding_value
             .as_ref()
-            .map(|publication| publication.hostname.as_str());
+            .zip(static_site_publication.as_ref())
+            .map(|(_, publication)| publication.hostname.as_str());
         let mut static_site_binding_attached = false;
         let mut services = Vec::with_capacity(manifest.services.len());
         for service in manifest.services.iter() {
@@ -4037,12 +4044,21 @@ impl SoracloudAppManifestV1 {
 struct SoracloudAppStaticSiteV1 {
     dist_dir: String,
     mount_path: String,
+    #[norito(default = "default_app_static_site_publish_mode")]
+    publish_mode: String,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     api_base_path: Option<String>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     publish_label: Option<String>,
+}
+
+const APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING: &str = "RootBinding";
+const APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY: &str = "CidOnly";
+
+fn default_app_static_site_publish_mode() -> String {
+    APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING.to_owned()
 }
 
 impl SoracloudAppStaticSiteV1 {
@@ -4053,6 +4069,13 @@ impl SoracloudAppStaticSiteV1 {
         if !self.mount_path.starts_with('/') {
             return Err(eyre!(
                 "app static site field `mount_path` must start with '/'"
+            ));
+        }
+        if self.publish_mode != APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING
+            && self.publish_mode != APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY
+        {
+            return Err(eyre!(
+                "app static site field `publish_mode` must be `{APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING}` or `{APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY}`"
             ));
         }
         if let Some(api_base_path) = self.api_base_path.as_deref()
@@ -5420,7 +5443,7 @@ fn publish_app_static_site(
 ) -> Result<AppStaticSitePublishOutput> {
     if static_site.mount_path != "/" {
         return Err(eyre!(
-            "app static site mount_path `{}` is not supported yet; only `/` can be bound to the root site host",
+            "app static site mount_path `{}` is not supported yet; only `/` is supported for published app static sites",
             static_site.mount_path
         ));
     }
@@ -5433,7 +5456,7 @@ fn publish_app_static_site(
     })?;
     if public_url.path() != "/" {
         return Err(eyre!(
-            "app manifest field `public_url` must target the host root when static_site is enabled; got path `{}`",
+            "app manifest field `public_url` must target the host origin when static_site is enabled; got path `{}`",
             public_url.path()
         ));
     }
@@ -10913,6 +10936,15 @@ fn build_split_app_live_service_bundle(
             mount_path: "/lease/collector-state".to_owned(),
             max_total_bytes: NonZeroU64::new(268_435_456).expect("nonzero literal"),
         },
+        SoraLeaseVolumeBindingV1 {
+            volume_name: "runtime_cache"
+                .parse()
+                .expect("literal volume name is valid"),
+            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/lease/runtime-cache".to_owned(),
+            max_total_bytes: NonZeroU64::new(268_435_456).expect("nonzero literal"),
+        },
     ];
     service.handlers.clear();
     service.artifacts.clear();
@@ -10972,7 +11004,7 @@ fn build_split_app_vault_service_bundle(
     container.capabilities.allow_state_writes = true;
     container.capabilities.allow_model_inference = false;
     container.capabilities.allow_model_training = false;
-    container.lifecycle.healthcheck_path = Some("/api/auth/health".to_owned());
+    container.lifecycle.healthcheck_path = Some("/api/auth/me".to_owned());
 
     service.service_name = service_name;
     service.service_version = app_version.to_owned();
@@ -11024,27 +11056,19 @@ fn build_split_app_vault_service_bundle(
         },
         SoraStateBindingV1 {
             schema_version: SORA_STATE_BINDING_VERSION_V1,
-            binding_name: "user_saved_items"
+            binding_name: "user_saved_searches"
                 .parse()
                 .expect("literal binding name is valid"),
             scope: SoraStateScopeV1::ConfidentialState,
             mutability: SoraStateMutabilityV1::ReadWrite,
             encryption: SoraStateEncryptionV1::FheCiphertext,
-            key_prefix: "/state/users/saved_items".to_owned(),
+            key_prefix: "/state/users/saved_searches".to_owned(),
             max_item_bytes: NonZeroU64::new(32_768).expect("nonzero literal"),
             max_total_bytes: NonZeroU64::new(8_388_608).expect("nonzero literal"),
         },
     ];
     service.lease_volumes.clear();
     service.handlers = vec![
-        service_handler(
-            "auth_health",
-            SoraServiceHandlerClassV1::Query,
-            "serve_auth_health",
-            Some("/auth/health"),
-            SoraCertifiedResponsePolicyV1::AuditReceipt,
-            None,
-        ),
         service_handler(
             "auth_me",
             SoraServiceHandlerClassV1::Query,
@@ -11062,10 +11086,10 @@ fn build_split_app_vault_service_bundle(
             None,
         ),
         service_handler(
-            "saved_items_list",
+            "saved_searches_list",
             SoraServiceHandlerClassV1::Query,
-            "serve_saved_items",
-            Some("/v1/user/saved-items"),
+            "serve_saved_searches",
+            Some("/v1/user/saved-searches"),
             SoraCertifiedResponsePolicyV1::AuditReceipt,
             None,
         ),
@@ -11102,10 +11126,10 @@ fn build_split_app_vault_service_bundle(
             Some(("private_updates", 256, 131_072, 2_880)),
         ),
         service_handler(
-            "saved_items_post",
+            "saved_searches_post",
             SoraServiceHandlerClassV1::PrivateUpdate,
-            "store_saved_item",
-            Some("/v1/user/saved-items"),
+            "store_saved_search",
+            Some("/v1/user/saved-searches"),
             SoraCertifiedResponsePolicyV1::None,
             Some(("private_updates", 256, 131_072, 2_880)),
         ),
@@ -11202,6 +11226,15 @@ fn apply_init_template_defaults(
                     kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
                     storage_class: StorageClass::Warm,
                     mount_path: "/lease/collector-state".to_owned(),
+                    max_total_bytes: NonZeroU64::new(268_435_456).expect("nonzero literal"),
+                },
+                SoraLeaseVolumeBindingV1 {
+                    volume_name: "runtime_cache"
+                        .parse()
+                        .expect("literal volume name is valid"),
+                    kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+                    storage_class: StorageClass::Warm,
+                    mount_path: "/lease/runtime-cache".to_owned(),
                     max_total_bytes: NonZeroU64::new(268_435_456).expect("nonzero literal"),
                 },
             ];
@@ -11979,6 +12012,10 @@ fn scaffold_split_app_template(
         (
             frontend_dir.join("vite.config.ts"),
             split_app_frontend_vite_config().to_owned(),
+        ),
+        (
+            frontend_dir.join("scripts/validate-production-env.mjs"),
+            split_app_frontend_validate_production_env_mjs().to_owned(),
         ),
         (
             frontend_dir.join("index.html"),
@@ -13993,8 +14030,9 @@ const PORT = Number.parseInt(process.env.PORT ?? process.env.SORACLOUD_HTTP_PORT
 const SHARED_CACHE_DIR = process.env.SORACLOUD_LEASE_VOLUME_SHARED_CACHE_DIR ?? path.join(process.cwd(), "tmp", "shared-cache");
 const SEARCH_SESSIONS_DIR = process.env.SORACLOUD_LEASE_VOLUME_SEARCH_SESSIONS_DIR ?? path.join(process.cwd(), "tmp", "search-sessions");
 const COLLECTOR_STATE_DIR = process.env.SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_DIR ?? path.join(process.cwd(), "tmp", "collector-state");
+const RUNTIME_CACHE_DIR = process.env.SORACLOUD_LEASE_VOLUME_RUNTIME_CACHE_DIR ?? path.join(process.cwd(), "tmp", "runtime-cache");
 
-for (const dir of [SHARED_CACHE_DIR, SEARCH_SESSIONS_DIR, COLLECTOR_STATE_DIR]) {{
+for (const dir of [SHARED_CACHE_DIR, SEARCH_SESSIONS_DIR, COLLECTOR_STATE_DIR, RUNTIME_CACHE_DIR]) {{
   fs.mkdirSync(dir, {{ recursive: true }});
 }}
 
@@ -14032,22 +14070,27 @@ function readJsonBody(req) {{
   }});
 }}
 
-function writeSession(sessionId, payload) {{
-  const file = path.join(SEARCH_SESSIONS_DIR, `${{sessionId}}.json`);
+function writeJsonFile(file, payload) {{
   fs.writeFileSync(file, JSON.stringify(payload, null, 2));
 }}
 
-function readSession(sessionId) {{
-  const file = path.join(SEARCH_SESSIONS_DIR, `${{sessionId}}.json`);
+function readJsonFile(file) {{
   if (!fs.existsSync(file)) {{
     return null;
   }}
   return JSON.parse(fs.readFileSync(file, "utf8"));
 }}
 
+function writeSession(sessionId, payload) {{
+  writeJsonFile(path.join(SEARCH_SESSIONS_DIR, `${{sessionId}}.json`), payload);
+}}
+
+function readSession(sessionId) {{
+  return readJsonFile(path.join(SEARCH_SESSIONS_DIR, `${{sessionId}}.json`));
+}}
+
 function cacheSearch(sessionId, payload) {{
-  const file = path.join(SHARED_CACHE_DIR, `${{sessionId}}.json`);
-  fs.writeFileSync(file, JSON.stringify(payload, null, 2));
+  writeJsonFile(path.join(SHARED_CACHE_DIR, `${{sessionId}}.json`), payload);
 }}
 
 function appendCollectorCheckpoint(sessionId, payload) {{
@@ -14055,16 +14098,84 @@ function appendCollectorCheckpoint(sessionId, payload) {{
   fs.appendFileSync(file, `${{new Date().toISOString()}} ${{JSON.stringify(payload)}}\n`);
 }}
 
-function buildSearchResult(sessionId, request) {{
+function writeRuntimeSnapshot(sessionId, payload) {{
+  writeJsonFile(path.join(RUNTIME_CACHE_DIR, `${{sessionId}}.json`), payload);
+}}
+
+function trustedStringField(field, value) {{
+  if (typeof value === "string" && value.trim().length > 0) {{
+    return {{
+      value: value.trim(),
+      status: "trusted_request",
+      provenance: [{{ source: "request", field }}]
+    }};
+  }}
+  return {{ value: null, status: "unknown", provenance: [] }};
+}}
+
+function trustedNumberField(field, value) {{
+  if (typeof value === "number" && Number.isFinite(value)) {{
+    return {{
+      value,
+      status: "trusted_request",
+      provenance: [{{ source: "request", field }}]
+    }};
+  }}
+  return {{ value: null, status: "unknown", provenance: [] }};
+}}
+
+function buildSearchRecord(sessionId, request) {{
+  const now = new Date().toISOString();
   return {{
     id: sessionId,
-    origin: request.origin ?? "BNE",
-    destination: request.destination ?? "HND",
-    cabin: request.cabin ?? "business",
+    service: SERVICE_NAME,
     status: "complete",
-    source: "hosted-http",
-    generated_at: new Date().toISOString()
+    mode: "starter_scaffold",
+    generated_at: now,
+    source: "hosted_http",
+    query: {{
+      origin: trustedStringField("origin", request.origin),
+      destination: trustedStringField("destination", request.destination),
+      departure_date: trustedStringField("departure_date", request.departure_date),
+      return_date: trustedStringField("return_date", request.return_date),
+      cabin: trustedStringField("cabin", request.cabin),
+      passengers: trustedNumberField("passengers", request.passengers)
+    }},
+    itineraries: [],
+    unresolved_fields: ["aircraft", "luxury_labels", "collector_results"],
+    collector_status: {{
+      status: "not_configured",
+      detail: "starter scaffold does not ship production collectors"
+    }},
+    provenance: [
+      {{ source: "request", detail: "caller supplied query fields" }},
+      {{ source: "starter_scaffold", detail: "no trusted upstream search sources configured" }}
+    ]
   }};
+}}
+
+function buildSearchEvents(sessionId, record) {{
+  return [
+    {{
+      event: "queued",
+      data: {{
+        search_id: sessionId,
+        status: "accepted",
+        source: "starter_scaffold"
+      }}
+    }},
+    {{
+      event: "snapshot",
+      data: record
+    }},
+    {{
+      event: "done",
+      data: {{
+        search_id: sessionId,
+        status: record.status
+      }}
+    }}
+  ];
 }}
 
 const server = http.createServer(async (req, res) => {{
@@ -14078,9 +14189,53 @@ const server = http.createServer(async (req, res) => {{
       lease_volumes: {{
         shared_cache: SHARED_CACHE_DIR,
         search_sessions: SEARCH_SESSIONS_DIR,
-        collector_state: COLLECTOR_STATE_DIR
+        collector_state: COLLECTOR_STATE_DIR,
+        runtime_cache: RUNTIME_CACHE_DIR
       }}
     }});
+    return;
+  }}
+
+  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/airports/search") {{
+    sendJson(res, 200, {{
+      query: url.searchParams.get("q") ?? "",
+      airports: [],
+      status: "not_configured",
+      provenance: []
+    }});
+    return;
+  }}
+
+  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/filters/metadata") {{
+    sendJson(res, 200, {{
+      filters: {{}},
+      status: "not_configured",
+      provenance: []
+    }});
+    return;
+  }}
+
+  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/luxury/catalog") {{
+    sendJson(res, 200, {{
+      items: [],
+      status: "not_configured",
+      provenance: []
+    }});
+    return;
+  }}
+
+  if (req.method === "POST" && pathname === "/links/resolve") {{
+    try {{
+      const body = await readJsonBody(req);
+      sendJson(res, 200, {{
+        links: [],
+        input: body,
+        status: "not_configured",
+        provenance: []
+      }});
+    }} catch (error) {{
+      sendJson(res, 400, {{ error: error?.message ?? String(error) }});
+    }}
     return;
   }}
 
@@ -14088,14 +14243,21 @@ const server = http.createServer(async (req, res) => {{
     try {{
       const body = await readJsonBody(req);
       const sessionId = randomUUID();
-      const result = buildSearchResult(sessionId, body);
-      writeSession(sessionId, {{ request: body, result }});
+      const result = buildSearchRecord(sessionId, body);
+      const events = buildSearchEvents(sessionId, result);
+      const session = {{ request: body, result, events }};
+      writeSession(sessionId, session);
       cacheSearch(sessionId, result);
+      writeRuntimeSnapshot(sessionId, {{
+        search_id: sessionId,
+        status: result.status,
+        updated_at: result.generated_at
+      }});
       appendCollectorCheckpoint(sessionId, {{ stage: "queued", request: body }});
       appendCollectorCheckpoint(sessionId, {{ stage: "complete", result }});
       sendJson(res, 202, {{
         search_id: sessionId,
-        status: result.status,
+        status: "accepted",
         result
       }});
     }} catch (error) {{
@@ -14116,10 +14278,10 @@ const server = http.createServer(async (req, res) => {{
       "cache-control": "no-cache, no-transform",
       connection: "keep-alive"
     }});
-    res.write(`event: snapshot\n`);
-    res.write(`data: ${{JSON.stringify(session)}}\n\n`);
-    res.write(`event: done\n`);
-    res.write(`data: ${{JSON.stringify({{ search_id: eventMatch[1], status: "complete" }})}}\n\n`);
+    for (const event of session.events ?? []) {{
+      res.write(`event: ${{event.event}}\n`);
+      res.write(`data: ${{JSON.stringify(event.data)}}\n\n`);
+    }}
     res.end();
     return;
   }}
@@ -14182,6 +14344,8 @@ The generated service expects these runtime environment variables:
 - `SORACLOUD_LEASE_VOLUME_SEARCH_SESSIONS_MOUNT_PATH`
 - `SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_DIR`
 - `SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_MOUNT_PATH`
+- `SORACLOUD_LEASE_VOLUME_RUNTIME_CACHE_DIR`
+- `SORACLOUD_LEASE_VOLUME_RUNTIME_CACHE_MOUNT_PATH`
 
 The generic runtime contract is `SORACLOUD_LEASE_VOLUME_<NAME>_DIR` and
 `SORACLOUD_LEASE_VOLUME_<NAME>_MOUNT_PATH`, where `<NAME>` is the uppercased
@@ -14210,7 +14374,7 @@ fn split_app_frontend_package_json(package_name: &str) -> String {
   "type": "module",
   "scripts": {{
     "dev": "vite",
-    "build": "vite build",
+    "build": "node ./scripts/validate-production-env.mjs && vite build",
     "preview": "vite preview"
   }},
   "dependencies": {{
@@ -14224,6 +14388,33 @@ fn split_app_frontend_package_json(package_name: &str) -> String {
 }}
 "#
     )
+}
+
+fn split_app_frontend_validate_production_env_mjs() -> &'static str {
+    r#"const apiBase = process.env.VITE_PUBLIC_API_BASE;
+const dataMode = process.env.VITE_DATA_MODE;
+
+function fail(message) {
+  console.error(`split-app frontend build validation failed: ${message}`);
+  process.exit(1);
+}
+
+if (apiBase !== "/api") {
+  fail("VITE_PUBLIC_API_BASE must be exactly '/api' for production builds.");
+}
+
+if (typeof apiBase === "string" && /^(https?:)?\/\//i.test(apiBase)) {
+  fail("VITE_PUBLIC_API_BASE must stay same-host and must not be an absolute URL.");
+}
+
+if (dataMode !== "live") {
+  fail("VITE_DATA_MODE must be exactly 'live' for production builds.");
+}
+
+if (typeof dataMode === "string" && /demo|static/i.test(dataMode)) {
+  fail("VITE_DATA_MODE must not point at demo or static data.");
+}
+"#
 }
 
 fn split_app_frontend_vite_config() -> &'static str {
@@ -14244,13 +14435,31 @@ fn split_app_frontend_app_vue(app_name: &str) -> String {
         r#"<script setup lang="ts">
 import {{ onMounted, ref }} from "vue";
 
+const apiBase = import.meta.env.VITE_PUBLIC_API_BASE ?? "/api";
+const dataMode = import.meta.env.VITE_DATA_MODE ?? "local";
 const me = ref("loading");
 const searchStatus = ref("idle");
 const lastSearch = ref<any>(null);
-const preferences = ref({{ home_airport: "BNE", cabin_preference: "business" }});
+const preferences = ref({{ home_airport: "", cabin_preference: "" }});
+const searchForm = ref({{ origin: "", destination: "", cabin: "" }});
+
+function withApiBase(path: string) {{
+  return `${{apiBase}}${{path}}`;
+}}
+
+function compactRecord(input: Record<string, unknown>) {{
+  return Object.fromEntries(
+    Object.entries(input).filter(([, value]) => {{
+      if (typeof value === "string") {{
+        return value.trim().length > 0;
+      }}
+      return value !== null && value !== undefined;
+    }})
+  );
+}}
 
 async function requestJson(path: string, init?: RequestInit) {{
-  const response = await fetch(path, {{
+  const response = await fetch(withApiBase(path), {{
     ...init,
     headers: {{
       "content-type": "application/json",
@@ -14265,7 +14474,7 @@ async function requestJson(path: string, init?: RequestInit) {{
 
 async function refreshMe() {{
   try {{
-    const payload = await requestJson("/api/auth/me");
+    const payload = await requestJson("/auth/me");
     me.value = JSON.stringify(payload, null, 2);
   }} catch (error: any) {{
     me.value = error?.message ?? String(error);
@@ -14276,13 +14485,9 @@ async function runSearch() {{
   searchStatus.value = "requesting";
   lastSearch.value = null;
   try {{
-    const payload = await requestJson("/api/v1/search", {{
+    const payload = await requestJson("/v1/search", {{
       method: "POST",
-      body: JSON.stringify({{
-        origin: preferences.value.home_airport,
-        destination: "HND",
-        cabin: preferences.value.cabin_preference
-      }})
+      body: JSON.stringify(compactRecord(searchForm.value))
     }});
     searchStatus.value = payload.status ?? "accepted";
     lastSearch.value = payload;
@@ -14292,9 +14497,9 @@ async function runSearch() {{
 }}
 
 async function savePreferences() {{
-  await requestJson("/api/v1/user/preferences", {{
+  await requestJson("/v1/user/preferences", {{
     method: "PUT",
-    body: JSON.stringify({{ preferences: preferences.value }})
+    body: JSON.stringify({{ preferences: compactRecord(preferences.value) }})
   }});
   await refreshMe();
 }}
@@ -14313,6 +14518,7 @@ onMounted(async () => {{
         Static frontend on SoraFS, a hosted live API on Inrou, and a deterministic
         wallet vault on IVM, all sharing the same `/api` surface.
       </p>
+      <p class="eyebrow">Build mode: {{{{ dataMode }}}} | API base: {{{{ apiBase }}}}</p>
       <div class="actions">
         <button @click="runSearch">Run Live Search</button>
         <button class="secondary" @click="savePreferences">Save Preferences</button>
@@ -14324,11 +14530,12 @@ onMounted(async () => {{
         <h2>Vault</h2>
         <label>
           Home airport
-          <input v-model="preferences.home_airport" />
+          <input v-model="preferences.home_airport" placeholder="e.g. BNE" />
         </label>
         <label>
           Cabin
           <select v-model="preferences.cabin_preference">
+            <option value="">Unknown</option>
             <option value="business">Business</option>
             <option value="first">First</option>
             <option value="premium-economy">Premium Economy</option>
@@ -14338,6 +14545,23 @@ onMounted(async () => {{
 
       <article class="panel">
         <h2>Live Search</h2>
+        <label>
+          Origin
+          <input v-model="searchForm.origin" placeholder="e.g. BNE" />
+        </label>
+        <label>
+          Destination
+          <input v-model="searchForm.destination" placeholder="e.g. HND" />
+        </label>
+        <label>
+          Requested cabin
+          <select v-model="searchForm.cabin">
+            <option value="">Unknown</option>
+            <option value="business">Business</option>
+            <option value="first">First</option>
+            <option value="premium-economy">Premium Economy</option>
+          </select>
+        </label>
         <p>Status: <strong>{{ searchStatus }}</strong></p>
         <pre>{{ lastSearch ? JSON.stringify(lastSearch, null, 2) : "No search submitted yet." }}</pre>
       </article>
@@ -14486,23 +14710,6 @@ fn split_app_vault_contract_ko(app_name: &str) -> String {
         r#"kotoba 1;
 
 kaisho {app_name}_vault_api {{
-  kotoage fn json(route: str, method: str, body: Json) -> Json {{
-    return {{
-      schema_version: 1,
-      route: route,
-      method: method,
-      body: body
-    }};
-  }}
-
-  kotoage fn serve_auth_health(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {{
-    return {{
-      ok: true,
-      service: "{app_name}_vault",
-      observed_height: observed_height
-    }};
-  }}
-
   kotoage fn serve_auth_me(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {{
     return {{
       authenticated: false,
@@ -14513,17 +14720,14 @@ kaisho {app_name}_vault_api {{
 
   kotoage fn serve_user_preferences(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {{
     return {{
-      preferences: {{
-        home_airport: "BNE",
-        cabin_preference: "business"
-      }},
+      preferences: {{}},
       observed_height: observed_height
     }};
   }}
 
-  kotoage fn serve_saved_items(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {{
+  kotoage fn serve_saved_searches(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {{
     return {{
-      items: [],
+      saved_searches: [],
       observed_height: observed_height
     }};
   }}
@@ -14563,10 +14767,10 @@ kaisho {app_name}_vault_api {{
     }};
   }}
 
-  kotoage fn store_saved_item(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
+  kotoage fn store_saved_search(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
     return {{
       accepted: true,
-      action: "store_saved_item",
+      action: "store_saved_search",
       sequence: execution_sequence,
       observed_height: observed_height
     }};
@@ -14581,6 +14785,19 @@ fn split_app_live_readme(app_name: &str) -> String {
         r#"# {app_name} Live API
 
 This service is the hosted HTTP plane for the split app.
+
+The starter server owns:
+
+- `GET /api/v1/health`
+- `POST /api/v1/search`
+- `GET /api/v1/search/:id/events`
+- `GET /api/v1/airports/search`
+- `GET /api/v1/filters/metadata`
+- `GET /api/v1/luxury/catalog`
+- `POST /api/v1/links/resolve`
+
+Mutable live-search state is written to lease-backed directories exposed through
+`SORACLOUD_LEASE_VOLUME_*`.
 
 Build:
 
@@ -14636,7 +14853,7 @@ This template provides:
 ```bash
 cd frontend
 npm install
-npm run build
+VITE_PUBLIC_API_BASE=/api VITE_DATA_MODE=live npm run build
 cd ../services/live
 ./build.sh
 cd ../vault
@@ -14662,12 +14879,13 @@ iroha app soracloud app deploy \
   --torii-url http://127.0.0.1:8080
 ```
 
-`app deploy` publishes the static frontend to SoraFS, binds it through the app
-static-site config, and deploys both services from the same manifest without
-manual pin registration or SSH-only steps.
+`app deploy` publishes the static frontend to SoraFS and deploys both services
+from the same manifest without manual pin registration or SSH-only steps.
 
-The generated public URL is `https://{package_name}.sora`, with the frontend at
-the root and both services sharing `/api`.
+The generated API origin is `https://{package_name}.sora`, and the frontend is
+served from the published `cid_gateway_url` under
+`https://{package_name}.sora/sorafs/cid/...` while both services continue to
+share `/api` on the host origin.
 "#
     )
 }
@@ -17336,6 +17554,26 @@ mod tests {
             .expect("read http-service readme");
         assert!(readme.contains("runtime = Inrou"));
         assert!(readme.contains("SORACLOUD_LEASE_VOLUME_SHARED_CACHE_DIR"));
+        assert!(readme.contains("SORACLOUD_LEASE_VOLUME_RUNTIME_CACHE_DIR"));
+
+        let server = fs::read_to_string(dir.join("http-service/app/server.mjs"))
+            .expect("read http-service server");
+        assert!(server.contains("/airports/search"));
+        assert!(server.contains("/filters/metadata"));
+        assert!(server.contains("/luxury/catalog"));
+        assert!(server.contains("/links/resolve"));
+        assert!(
+            !server.contains("\"BNE\""),
+            "http-service scaffold must not fabricate airport defaults"
+        );
+        assert!(
+            !server.contains("\"HND\""),
+            "http-service scaffold must not fabricate destination defaults"
+        );
+        assert!(
+            !server.contains("\"business\""),
+            "http-service scaffold must not fabricate cabin defaults"
+        );
 
         let container: SoraContainerManifestV1 =
             load_json(&dir.join("container_manifest.json")).expect("container manifest");
@@ -17356,7 +17594,7 @@ mod tests {
             Some("/api/v1")
         );
         assert!(service.handlers.is_empty());
-        assert_eq!(service.lease_volumes.len(), 3);
+        assert_eq!(service.lease_volumes.len(), 4);
     }
 
     #[test]
@@ -17628,6 +17866,13 @@ mod tests {
                 .map(|site| site.dist_dir.as_str()),
             Some("frontend/dist")
         );
+        assert_eq!(
+            manifest
+                .static_site
+                .as_ref()
+                .map(|site| site.publish_mode.as_str()),
+            Some(APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY)
+        );
         assert_eq!(manifest.services.len(), 2);
         assert!(
             manifest
@@ -17660,7 +17905,26 @@ mod tests {
                 .map(|route| route.path_prefix.as_str()),
             Some("/api/v1")
         );
-        assert_eq!(live_service.lease_volumes.len(), 3);
+        assert_eq!(live_service.lease_volumes.len(), 4);
+
+        let live_server =
+            fs::read_to_string(dir.join("services/live/app/server.mjs")).expect("read live server");
+        assert!(live_server.contains("/airports/search"));
+        assert!(live_server.contains("/filters/metadata"));
+        assert!(live_server.contains("/luxury/catalog"));
+        assert!(live_server.contains("/links/resolve"));
+        assert!(
+            !live_server.contains("\"BNE\""),
+            "split-app live scaffold must not fabricate airport defaults"
+        );
+        assert!(
+            !live_server.contains("\"HND\""),
+            "split-app live scaffold must not fabricate destination defaults"
+        );
+        assert!(
+            !live_server.contains("\"business\""),
+            "split-app live scaffold must not fabricate cabin defaults"
+        );
 
         let vault_container: SoraContainerManifestV1 =
             load_json(&dir.join("services/vault/container_manifest.json"))
@@ -17680,9 +17944,88 @@ mod tests {
         );
         assert!(
             vault_service
+                .state_bindings
+                .iter()
+                .any(|binding| binding.key_prefix == "/state/users/saved_searches")
+        );
+        assert!(
+            vault_service
                 .handlers
                 .iter()
                 .any(|handler| handler.route_path.as_deref() == Some("/auth/login"))
+        );
+        assert!(
+            vault_service
+                .handlers
+                .iter()
+                .any(|handler| handler.route_path.as_deref() == Some("/auth/me"))
+        );
+        assert!(
+            vault_service
+                .handlers
+                .iter()
+                .any(|handler| handler.route_path.as_deref() == Some("/v1/user/saved-searches"))
+        );
+        assert!(
+            !vault_service
+                .handlers
+                .iter()
+                .any(|handler| handler.route_path.as_deref() == Some("/auth/health"))
+        );
+
+        let vault_contract = fs::read_to_string(dir.join("services/vault/contract/vault_api.ko"))
+            .expect("read vault contract");
+        assert!(vault_contract.contains("serve_saved_searches"));
+        assert!(vault_contract.contains("store_saved_search"));
+        assert!(!vault_contract.contains("serve_auth_health"));
+        assert!(!vault_contract.contains("saved_items"));
+
+        let frontend_package =
+            fs::read_to_string(dir.join("frontend/package.json")).expect("read frontend package");
+        assert!(frontend_package.contains("validate-production-env.mjs"));
+        let frontend_guard =
+            fs::read_to_string(dir.join("frontend/scripts/validate-production-env.mjs"))
+                .expect("read frontend build guard");
+        assert!(frontend_guard.contains("VITE_PUBLIC_API_BASE must be exactly '/api'"));
+        assert!(frontend_guard.contains("VITE_DATA_MODE must be exactly 'live'"));
+        let frontend_app =
+            fs::read_to_string(dir.join("frontend/src/App.vue")).expect("read frontend app");
+        assert!(
+            frontend_app
+                .contains("const apiBase = import.meta.env.VITE_PUBLIC_API_BASE ?? \"/api\";")
+        );
+        assert!(!frontend_app.contains("destination: \"HND\""));
+    }
+
+    #[test]
+    fn app_manifest_static_site_publish_mode_defaults_to_root_binding() {
+        let manifest = json::from_str::<SoracloudAppManifestV1>(
+            r#"{
+              "schema_version": 1,
+              "app_name": "legacy_docs",
+              "public_url": "https://legacy-docs.sora",
+              "static_site": {
+                "dist_dir": "site/dist",
+                "mount_path": "/",
+                "api_base_path": "/api"
+              },
+              "services": [
+                {
+                  "service_name": "legacy_docs_api",
+                  "container_manifest": "container_manifest.json",
+                  "service_manifest": "service_manifest.json"
+                }
+              ]
+            }"#,
+        )
+        .expect("legacy manifest should parse");
+
+        assert_eq!(
+            manifest
+                .static_site
+                .as_ref()
+                .map(|site| site.publish_mode.as_str()),
+            Some(APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING)
         );
     }
 
@@ -17979,6 +18322,7 @@ mod tests {
             static_site: Some(SoracloudAppStaticSiteV1 {
                 dist_dir: "frontend/dist".to_owned(),
                 mount_path: "/".to_owned(),
+                publish_mode: APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY.to_owned(),
                 api_base_path: Some("/api".to_owned()),
                 publish_label: None,
             }),

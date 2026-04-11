@@ -74,7 +74,7 @@ Split app:
 ```bash
 cd .soracloud-hayahi/frontend
 npm install
-npm run build
+VITE_PUBLIC_API_BASE=/api VITE_DATA_MODE=live npm run build
 
 cd ../services/live
 ./build.sh
@@ -158,7 +158,7 @@ iroha app soracloud app deploy \
 The app deploy flow:
 
 - republishes the static frontend from `frontend/dist`
-- updates the app static-site binding
+- returns the published `cid_gateway_url` for CID-only frontends
 - deploys the hosted `services/live` API
 - deploys the deterministic `services/vault` API
 
