@@ -125,7 +125,7 @@ sorafs_manifest = { path = "../sorafs_manifest", default-features = false }
 blake3 = { workspace = true }
 
 [target.'cfg(unix)'.dependencies]
-rustix = { version = "1.1.4", features = ["fs"] }
+rustix = { version = "1.1.4", features = ["fs", "process"] }
 
 [build-dependencies]
 build-support = { path = "../build-support", default-features = false }

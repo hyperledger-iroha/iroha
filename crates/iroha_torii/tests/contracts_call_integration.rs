@@ -329,6 +329,37 @@ seiyaku ContractViewBytesTest {
         .expect("compile contract view bytes test program")
 }
 
+fn contract_view_account_id_program() -> Vec<u8> {
+    let src = r#"
+seiyaku ContractViewAccountIdTest {
+  meta { abi_version: 1; }
+
+  state AccountId Stored;
+
+  kotoage fn main() {}
+
+  kotoage fn bind(account_id: AccountId) {
+    Stored = account_id;
+  }
+
+  view fn literal() -> AccountId {
+    return authority();
+  }
+
+  view fn stored() -> AccountId {
+    return Stored;
+  }
+
+  view fn stored_tuple() -> (AccountId, int) {
+    return (Stored, 1);
+  }
+}
+"#;
+    ivm::KotodamaCompiler::new()
+        .compile_source(src)
+        .expect("compile contract view AccountId test program")
+}
+
 fn contract_test_app(
     state: Arc<State>,
     queue: Arc<Queue>,
@@ -1052,6 +1083,138 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
     assert_eq!(
         recorded_asset,
         AssetDefinitionId::parse_address_literal(asset_literal).expect("asset definition literal")
+    );
+}
+
+#[tokio::test]
+async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
+    if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
+        eprintln!(
+            "Skipping: contract call integration test gated. Set IROHA_RUN_IGNORED=1 to run."
+        );
+        return;
+    }
+
+    let creds = iroha_torii::test_utils::random_authority();
+    let world = iroha_torii::test_utils::world_with_authority(&creds.account);
+
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let state = Arc::new(State::new_for_testing(world, kura, query));
+    iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
+    let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
+    let queue_cfg = iroha_config::parameters::actual::Queue::default();
+    let queue = Arc::new(Queue::from_config(queue_cfg, events));
+    let chain_id: iroha_data_model::ChainId = "chain".parse().unwrap();
+    #[cfg(feature = "telemetry")]
+    let telemetry = iroha_torii::MaybeTelemetry::for_tests();
+    #[cfg(not(feature = "telemetry"))]
+    let telemetry = iroha_torii::MaybeTelemetry::disabled();
+
+    let app = contract_test_app(
+        state.clone(),
+        queue.clone(),
+        chain_id.clone(),
+        telemetry.clone(),
+    );
+
+    let program = contract_view_account_id_program();
+    let deploy_body = iroha_torii::test_utils::deploy_request_json(
+        &creds.account,
+        &creds.private_key,
+        &base64::engine::general_purpose::STANDARD.encode(&program),
+    );
+    let deploy_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/deploy")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(deploy_body))
+        .unwrap();
+    let deploy_resp = app.clone().oneshot(deploy_req).await.unwrap();
+    assert_eq!(deploy_resp.status(), http::StatusCode::OK);
+    let deploy_bytes = deploy_resp.into_body().collect().await.unwrap().to_bytes();
+    let deploy_json: json::Value = json::from_slice(&deploy_bytes).unwrap();
+    let contract_address = deployed_contract_address(&deploy_json);
+    let applied_deploy =
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 1);
+    assert_eq!(applied_deploy, 1);
+
+    let literal = run_contract_view(&app, &creds.account, &contract_address, "literal", None).await;
+    assert_eq!(
+        literal.get("result").and_then(json::Value::as_str),
+        Some(creds.account.to_string().as_str())
+    );
+
+    let bind_payload = iroha_torii::json_object(vec![iroha_torii::json_entry(
+        "account_id",
+        creds.account.to_string(),
+    )]);
+    let bind_body = iroha_torii::test_utils::contract_call_request_json(
+        &creds.account,
+        &creds.private_key,
+        contract_address.as_str(),
+        iroha_torii::test_utils::ContractCallOptions {
+            entrypoint: Some("bind"),
+            payload: Some(&bind_payload),
+            gas_asset_id: None,
+            gas_limit: 10_000,
+        },
+    );
+    let bind_req = http::Request::builder()
+        .method("POST")
+        .uri("/v1/contracts/call")
+        .header(http::header::CONTENT_TYPE, "application/json")
+        .body(axum::body::Body::from(bind_body))
+        .unwrap();
+    let bind_resp = app.clone().oneshot(bind_req).await.unwrap();
+    assert_eq!(bind_resp.status(), http::StatusCode::OK);
+    let applied_bind =
+        iroha_torii::test_utils::apply_queued_in_one_block(&state, &queue, &chain_id, 2);
+    assert_eq!(applied_bind, 1);
+
+    let parsed_contract_address: ContractAddress = contract_address
+        .parse()
+        .expect("parse deployed contract address");
+    let state_scope = hex::encode(
+        iroha_crypto::Hash::new(parsed_contract_address.to_string().as_bytes()).as_ref(),
+    );
+    let stored_path: Name = format!("sc/{state_scope}/Stored")
+        .parse()
+        .expect("scoped stored path");
+    let persisted_view = state.view();
+    let stored_bytes = persisted_view
+        .world
+        .smart_contract_state()
+        .get(&stored_path)
+        .expect("persisted scoped Stored state");
+    let outer = ivm::pointer_abi::validate_tlv_bytes(stored_bytes).expect("outer stored tlv");
+    assert_eq!(outer.type_id, ivm::PointerType::NoritoBytes);
+    let inner = ivm::pointer_abi::validate_tlv_bytes(outer.payload).expect("inner stored tlv");
+    assert_eq!(inner.type_id, ivm::PointerType::AccountId);
+    let persisted: iroha_data_model::account::AccountId =
+        norito::decode_from_bytes(inner.payload).expect("decode persisted account id");
+    assert_eq!(persisted, creds.account);
+
+    let stored = run_contract_view(&app, &creds.account, &contract_address, "stored", None).await;
+    assert_eq!(
+        stored.get("result").and_then(json::Value::as_str),
+        Some(creds.account.to_string().as_str())
+    );
+
+    let stored_tuple = run_contract_view(
+        &app,
+        &creds.account,
+        &contract_address,
+        "stored_tuple",
+        None,
+    )
+    .await;
+    assert_eq!(
+        stored_tuple.get("result"),
+        Some(&json::Value::Array(vec![
+            json::Value::String(creds.account.to_string()),
+            json::Value::from(1),
+        ]))
     );
 }
 

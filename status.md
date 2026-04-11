@@ -1,6 +1,146 @@
 # Status
 
-Last updated: 2026-04-09
+Last updated: 2026-04-11
+
+## 2026-04-11 Follow-up: direct helper syscall dispatch now matches the ABI surface again
+- `/Users/takemiyamakoto/dev/iroha/crates/ivm_abi/src/syscalls.rs`
+  now exposes `canonical_helper_syscall(...)`, which maps each direct
+  JSON/schema/numeric/path helper alias back to its canonical helper number for
+  shared handler logic without erasing the caller's original pointer-region
+  semantics.
+- `/Users/takemiyamakoto/dev/iroha/crates/ivm/src/core_host.rs` and
+  `/Users/takemiyamakoto/dev/iroha/crates/ivm/src/host.rs`
+  now decode direct helper arguments from INPUT, heap, and literal/code memory
+  before routing through the shared helper bodies, so the direct entry numbers
+  no longer fail at runtime just because the ABI/goldens list them.
+- `/Users/takemiyamakoto/dev/iroha/crates/ivm/src/mock_wsv.rs` and
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/smartcontracts/ivm/host.rs`
+  now dispatch the direct helper syscall numbers explicitly instead of treating
+  them as unknown, bringing the mock and production hosts back in line with the
+  ABI surface that Kotodama and the checked-in docs already advertise.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/src/soracloud.rs`,
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs`,
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/block.rs`,
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/soracloud_runtime.rs`,
+  and `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/state.rs`
+  now initialize the current hosted-service economics and deployment-state
+  fields explicitly, which clears the late clippy/test-target fallout
+  (`default_trait_access` plus the new `service_lease` /
+  `lease_volume_states` members) that showed up while proving the runtime fix
+  on a fresh strict lint pass.
+- Validation completed in this slice:
+  - `cargo fmt --all -- crates/ivm_abi/src/syscalls.rs crates/ivm/src/host.rs crates/ivm/src/core_host.rs crates/ivm/src/mock_wsv.rs crates/iroha_core/src/smartcontracts/ivm/host.rs crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs crates/iroha_core/src/block.rs crates/iroha_core/src/soracloud_runtime.rs crates/iroha_core/src/state.rs`
+  - `CARGO_TARGET_DIR=target/direct-syscall-checks cargo test -p ivm_abi canonical_helper_syscall_maps_direct_aliases -- --nocapture`
+  - `CARGO_TARGET_DIR=target/direct-syscall-checks cargo test -p ivm --test abi_syscall_list_golden --test abi_hash_versions -- --nocapture`
+  - `CARGO_TARGET_DIR=target/direct-syscall-checks cargo test -p ivm --test core_host_json_schema_syscalls -- --nocapture`
+  - `CARGO_TARGET_DIR=target/direct-syscall-checks cargo test -p ivm --test numeric_syscalls --test wsv_host_decode_syscalls -- --nocapture`
+  - `CARGO_TARGET_DIR=target/direct-syscall-targeted-clippy cargo clippy -p iroha_data_model --lib -- -D warnings`
+  - `CARGO_TARGET_DIR=target/direct-syscall-targeted-clippy cargo clippy -p iroha_data_model --tests -- -D warnings`
+  - `CARGO_TARGET_DIR=target/direct-syscall-targeted-clippy cargo clippy -p ivm_abi -p ivm -p iroha_core --all-targets -- -D warnings`
+  - `CARGO_TARGET_DIR=target/direct-syscall-targeted-clippy cargo clippy --workspace --all-targets -- -D warnings`
+
+## 2026-04-11 Follow-up: workspace clippy is green again on the current dirty tree
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/src/soracloud.rs`
+  now breaks the two long Soracloud manifest admission validators into smaller
+  private checks without changing validation order or error text, which clears
+  the `clippy::too_many_lines` failures in the data-model crate.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs`
+  now factors the large expected service fixture through small helper builders,
+  keeping the fixture content identical while bringing the test constructor back
+  under the same line-count lint.
+- `/Users/takemiyamakoto/dev/iroha/crates/ivm_abi/src/syscalls.rs`
+  now exports the direct JSON/schema/numeric/path helper syscall constants that
+  the current docs and test suite already reference, and the ABI syscall/name
+  tables include those entries again so the clippy test-target compile matches
+  the intended ABI surface.
+- Validation completed in this slice:
+  - `cargo clippy -p iroha_data_model --all-targets -- -D warnings`
+  - `cargo fmt --all -- crates/iroha_data_model/src/soracloud.rs crates/iroha_data_model/tests/soracloud_manifest_fixtures.rs crates/ivm_abi/src/syscalls.rs`
+  - `cargo clippy --workspace --all-targets -- -D warnings`
+
+## 2026-04-10 Follow-up: Kotodama now defaults to direct ABI v1 helpers and lighter local call frames
+- `/Users/takemiyamakoto/dev/iroha/crates/ivm_abi/src/syscalls.rs`
+  now expands the ABI v1 syscall surface with direct helper variants for JSON
+  get/set, schema encode/decode/info, path-key hashing, and numeric
+  conversion/arithmetic/compare helpers. The ABI hash and sorted syscall
+  surface now reflect those direct-entry numbers, and the checked-in ABI
+  goldens/docs were regenerated to match.
+- `/Users/takemiyamakoto/dev/iroha/crates/ivm/src/core_host.rs`,
+  `/Users/takemiyamakoto/dev/iroha/crates/ivm/src/host.rs`,
+  `/Users/takemiyamakoto/dev/iroha/crates/ivm/src/mock_wsv.rs`, and
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/smartcontracts/ivm/host.rs`
+  now resolve those direct helper syscalls without bouncing through
+  `INPUT_PUBLISH_TLV`. The shared decode path accepts validated TLV envelopes
+  from INPUT, heap, and literal/code memory, so the new direct syscalls behave
+  consistently across `DefaultHost`, `CoreHost`, `WsvHost`, and the production
+  `iroha_core` runtime host.
+- `/Users/takemiyamakoto/dev/iroha/crates/kotodama_lang/src/compiler.rs` and
+  `/Users/takemiyamakoto/dev/iroha/crates/kotodama_lang/src/regalloc.rs`
+  now lower JSON/schema/numeric/path helpers directly to the new ABI numbers,
+  stop stack-homing entry parameters, use caller-saved vs callee-saved
+  register pools based on call-crossing liveness, and save/restore `ra` only
+  for non-leaf local-call functions.
+- `/Users/takemiyamakoto/dev/iroha/crates/ivm/tests/common.rs` now provides an
+  `LTLB`-backed literal-section assembler for tests, and the new direct-pointer
+  coverage in
+  `/Users/takemiyamakoto/dev/iroha/crates/ivm/tests/core_host_json_schema_syscalls.rs`,
+  `/Users/takemiyamakoto/dev/iroha/crates/ivm/tests/numeric_syscalls.rs`, and
+  `/Users/takemiyamakoto/dev/iroha/crates/ivm/tests/wsv_host_decode_syscalls.rs`
+  now proves that direct helpers accept INPUT, heap, and literal pointers.
+- `/Users/takemiyamakoto/dev/iroha/examples/hello/hello.to` was regenerated
+  from the current compiler, and a local `hello.json` manifest was emitted
+  during validation, so the checked-in hello example now matches the current
+  `hello.ko` source and embeds the updated ABI hash.
+- Focused validation completed in this slice:
+  - `cargo fmt --all`
+  - `cargo test -p kotodama_lang get_numeric_emits_numeric_syscall -- --nocapture`
+  - `cargo test -p kotodama_lang get_asset_definition_id_emits_asset_definition_syscall -- --nocapture`
+  - `cargo test -p kotodama_lang schema_helpers_emit_direct_syscalls_without_publish -- --nocapture`
+  - `cargo test -p kotodama_lang leaf_functions_do_not_home_params_or_touch_stack -- --nocapture`
+  - `cargo test -p kotodama_lang spilled_leaf_functions_use_zero_based_stack_slots_without_ra_save -- --nocapture`
+  - `cargo test -p kotodama_lang call_crossing_temporaries_use_callee_saved_pool -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p ivm --test core_host_json_schema_syscalls -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p ivm --test numeric_syscalls -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-codex-cargo-home CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p ivm --test wsv_host_decode_syscalls -- --nocapture`
+  - `/tmp/iroha-codex-target/debug/gen_syscalls_doc --write`
+  - `/tmp/iroha-codex-target/debug/gen_syscalls_doc --check`
+  - `/tmp/iroha-codex-target/debug/gen_abi_hash_doc --write`
+  - `/tmp/iroha-codex-target/debug/gen_abi_hash_doc --check`
+  - `/tmp/iroha-codex-target/debug/koto_compile examples/hello/hello.ko --abi 1 --out examples/hello/hello.to --manifest-out examples/hello/hello.json`
+
+## 2026-04-10 Follow-up: Kotodama bytecode compaction removes redundant zero-arg entrypoint wrappers
+- `/Users/takemiyamakoto/dev/iroha/crates/kotodama_lang/src/ir.rs`
+  now elides wrapper generation for zero-argument public and `view`
+  entrypoints. Those entrypoints keep their manifest-facing names, but they now
+  point directly at the implementation body instead of materializing an
+  otherwise-empty `__entrypoint_impl__*` wrapper pair.
+- `/Users/takemiyamakoto/dev/iroha/crates/kotodama_lang/src/compiler.rs`
+  now tightens pointer literal materialization stubs to the actual base-`2^7`
+  worst-case bound for `u64`, initializes the shift scratch register in a
+  single instruction, and adds regressions that lock in three invariants:
+  - hello-style zero-arg public entrypoints compile to the same code size as
+    equivalent private functions;
+  - zero-arg `view` entrypoints compile to the same code size as equivalent
+    private functions; and
+  - `--strip-debug` removes only the `DBG1` prefix section, not `CNTR` or code
+    bytes.
+- A fresh local compile of `/Users/takemiyamakoto/dev/iroha/examples/hello/hello.ko`
+  with the current debug build shows the intended size drop:
+  - `target/debug/koto_compile ...` now emits `2821` bytes with debug and
+    `1681` bytes with `--strip-debug`;
+  - the emitted budget report contains only `main`, `hajimari`, and
+    `write_detail` for a total of `568` code bytes, confirming that the old
+    zero-arg wrapper bodies are gone.
+- Focused validation completed in this slice:
+  - `cargo test -p kotodama_lang pointer_literal_stub_ -- --nocapture`
+  - `cargo test -p kotodama_lang hello_style_zero_arg_public_entrypoints_match_private_code_size -- --nocapture`
+  - `cargo test -p kotodama_lang zero_arg_view_entrypoint_matches_private_code_size -- --nocapture`
+  - `cargo test -p kotodama_lang zero_arg_public_entrypoints_do_not_emit_wrapper_bodies -- --nocapture`
+  - `cargo test -p kotodama_lang parameterized_view_entrypoints_still_emit_wrappers -- --nocapture`
+  - `cargo test -p kotodama_lang stripping_debug_keeps_compacted_code_bytes_and_cntr -- --nocapture`
+  - `cargo test -p kotodama_lang main_entrypoint_is_compiled_first_before_hajimari -- --nocapture`
+  - `cargo test -p kotodama_lang trigger_callback_entrypoint_is_compiled_first_even_with_private_helpers -- --nocapture`
+  - `cargo fmt --all`
 
 ## 2026-04-09 Follow-up: the remaining cached-roster vote-bookkeeping collision is closed
 - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`

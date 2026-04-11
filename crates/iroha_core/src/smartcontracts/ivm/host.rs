@@ -1298,6 +1298,21 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         self.current_contract_runtime_context = contract_runtime_context;
     }
 
+    /// Bind the host to a deployed contract runtime identity for scoped state reads and writes.
+    pub fn bind_contract_runtime_context(
+        &mut self,
+        contract_address: iroha_data_model::smart_contract::ContractAddress,
+        contract_alias: Option<iroha_data_model::smart_contract::ContractAlias>,
+        entrypoint: String,
+    ) {
+        self.current_contract_runtime_context = Some(ContractRuntimeExecutionContext {
+            contract_subject: contract_address.subject_id(),
+            contract_address,
+            contract_alias,
+            entrypoint,
+        });
+    }
+
     /// Seed deployed contract records for nested c2c resolution when a live query view is unavailable.
     pub(crate) fn set_bound_contract_records_by_subject_snapshot(
         &mut self,
@@ -2634,7 +2649,10 @@ impl<QS: Default + QueryStateAccess> CoreHostImpl<QS> {
         let scope_id = context.contract_address.to_string();
         let digest = hex::encode(Hash::new(scope_id.as_bytes()).as_ref());
         let scoped = format!("sc/{digest}/{}", path.as_ref());
-        scoped.parse().map(Some).map_err(|_| ivm::VMError::NoritoInvalid)
+        scoped
+            .parse()
+            .map(Some)
+            .map_err(|_| ivm::VMError::NoritoInvalid)
     }
 
     fn decode_name_payload(payload: &[u8]) -> Result<Name, ivm::VMError> {
@@ -6413,42 +6431,69 @@ impl<QS: QueryStateAccess + Default> IVMHost for CoreHostImpl<QS> {
             // Norito serialization and numeric helpers delegate to the ivm core host shim.
             ivm::syscalls::SYSCALL_BUILD_PATH_MAP_KEY
             | ivm::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
+            | ivm::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT
             | ivm::syscalls::SYSCALL_ENCODE_INT
             | ivm::syscalls::SYSCALL_DECODE_INT
             | ivm::syscalls::SYSCALL_NUMERIC_FROM_INT
             | ivm::syscalls::SYSCALL_NUMERIC_TO_INT
+            | ivm::syscalls::SYSCALL_NUMERIC_TO_INT_DIRECT
             | ivm::syscalls::SYSCALL_NUMERIC_ADD
+            | ivm::syscalls::SYSCALL_NUMERIC_ADD_DIRECT
             | ivm::syscalls::SYSCALL_NUMERIC_SUB
+            | ivm::syscalls::SYSCALL_NUMERIC_SUB_DIRECT
             | ivm::syscalls::SYSCALL_NUMERIC_MUL
+            | ivm::syscalls::SYSCALL_NUMERIC_MUL_DIRECT
             | ivm::syscalls::SYSCALL_NUMERIC_DIV
+            | ivm::syscalls::SYSCALL_NUMERIC_DIV_DIRECT
             | ivm::syscalls::SYSCALL_NUMERIC_REM
+            | ivm::syscalls::SYSCALL_NUMERIC_REM_DIRECT
             | ivm::syscalls::SYSCALL_NUMERIC_NEG
+            | ivm::syscalls::SYSCALL_NUMERIC_NEG_DIRECT
             | ivm::syscalls::SYSCALL_NUMERIC_EQ
+            | ivm::syscalls::SYSCALL_NUMERIC_EQ_DIRECT
             | ivm::syscalls::SYSCALL_NUMERIC_NE
+            | ivm::syscalls::SYSCALL_NUMERIC_NE_DIRECT
             | ivm::syscalls::SYSCALL_NUMERIC_LT
+            | ivm::syscalls::SYSCALL_NUMERIC_LT_DIRECT
             | ivm::syscalls::SYSCALL_NUMERIC_LE
+            | ivm::syscalls::SYSCALL_NUMERIC_LE_DIRECT
             | ivm::syscalls::SYSCALL_NUMERIC_GT
+            | ivm::syscalls::SYSCALL_NUMERIC_GT_DIRECT
             | ivm::syscalls::SYSCALL_NUMERIC_GE
+            | ivm::syscalls::SYSCALL_NUMERIC_GE_DIRECT
             | ivm::syscalls::SYSCALL_JSON_ENCODE
             | ivm::syscalls::SYSCALL_JSON_DECODE
             | ivm::syscalls::SYSCALL_JSON_OBJECT
             | ivm::syscalls::SYSCALL_JSON_SET_I64
+            | ivm::syscalls::SYSCALL_JSON_SET_I64_DIRECT
             | ivm::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
+            | ivm::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT
             | ivm::syscalls::SYSCALL_TLV_LEN
             | ivm::syscalls::SYSCALL_JSON_GET_I64
+            | ivm::syscalls::SYSCALL_JSON_GET_I64_DIRECT
             | ivm::syscalls::SYSCALL_JSON_GET_JSON
+            | ivm::syscalls::SYSCALL_JSON_GET_JSON_DIRECT
             | ivm::syscalls::SYSCALL_JSON_GET_NAME
+            | ivm::syscalls::SYSCALL_JSON_GET_NAME_DIRECT
             | ivm::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID
+            | ivm::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT
             | ivm::syscalls::SYSCALL_JSON_GET_NFT_ID
+            | ivm::syscalls::SYSCALL_JSON_GET_NFT_ID_DIRECT
             | ivm::syscalls::SYSCALL_JSON_GET_BLOB_HEX
+            | ivm::syscalls::SYSCALL_JSON_GET_BLOB_HEX_DIRECT
             | ivm::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID
+            | ivm::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
             | ivm::syscalls::SYSCALL_JSON_GET_NUMERIC
+            | ivm::syscalls::SYSCALL_JSON_GET_NUMERIC_DIRECT
             | ivm::syscalls::SYSCALL_SCHEMA_ENCODE
+            | ivm::syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT
             | ivm::syscalls::SYSCALL_SCHEMA_DECODE
+            | ivm::syscalls::SYSCALL_SCHEMA_DECODE_DIRECT
             | ivm::syscalls::SYSCALL_POINTER_TO_NORITO
             | ivm::syscalls::SYSCALL_POINTER_FROM_NORITO
             | ivm::syscalls::SYSCALL_TLV_EQ
             | ivm::syscalls::SYSCALL_SCHEMA_INFO
+            | ivm::syscalls::SYSCALL_SCHEMA_INFO_DIRECT
             | ivm::syscalls::SYSCALL_NAME_DECODE => self.codec_host.syscall(number, vm),
             // Stateless helpers are safe to forward to DefaultHost.
             ivm::syscalls::SYSCALL_DEBUG_PRINT
@@ -10658,6 +10703,88 @@ seiyaku Callee {
     }
 
     #[test]
+    fn contract_view_of_persisted_account_state_returns_account_tlv() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let state = contract_test_state(&authority);
+        let source = r#"
+seiyaku StoredAccountView {
+  meta { abi_version: 1; }
+
+  state AccountId Stored;
+
+  #[access(read="*", write="*")]
+  kotoage fn bind(account_id: AccountId) {
+    Stored = account_id;
+  }
+
+  view fn stored() -> AccountId {
+    return Stored;
+  }
+}
+"#;
+        let contract = install_contract(&state, &authority, source, 0);
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let bind_payload = Json::from_str_norito(&format!(r#"{{"account_id":"{}"}}"#, authority))
+            .expect("bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(bind_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let (code, _manifest) = ivm::KotodamaCompiler::new()
+            .compile_source_with_manifest(source)
+            .expect("compile source with manifest");
+        let parsed = ivm::ProgramMetadata::parse(&code).expect("parse program metadata");
+        let prefix_len = parsed.prefix_len() as u64;
+        let descriptor = parsed
+            .contract_interface
+            .as_ref()
+            .expect("contract interface")
+            .entrypoints
+            .iter()
+            .find(|candidate| candidate.name == "stored")
+            .expect("stored view descriptor");
+        assert!(matches!(
+            descriptor.kind,
+            iroha_data_model::smart_contract::manifest::EntryPointKind::View
+        ));
+        let entry_pc = prefix_len + descriptor.entry_pc;
+
+        let view = state.view();
+        let mut host = CoreHostImpl::new(authority.clone());
+        host.set_query_state(&view);
+        host.set_durable_state_snapshot_from_world(view.world());
+        host.set_contract_runtime_context(Some(ContractRuntimeExecutionContext {
+            contract_subject: contract.subject_id(),
+            contract_address: contract,
+            contract_alias: None,
+            entrypoint: "stored".to_owned(),
+        }));
+        let mut vm = IVM::new(1_000_000);
+        vm.load_program(&code).expect("load program");
+        vm.set_register(1, vm.memory.code_len());
+        vm.set_program_counter(entry_pc).expect("seek stored view");
+        vm.run_with_host(&mut host).expect("run stored view");
+
+        let tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("stored view return tlv");
+        assert_eq!(tlv.type_id, PointerType::AccountId);
+        let returned: AccountId =
+            norito::decode_from_bytes(tlv.payload).expect("decode stored account");
+        assert_eq!(returned, authority);
+    }
+
+    #[test]
     fn call_contract_syscall_unit_return_survives_unaligned_requested_stack_limit() {
         struct StackLimitGuard {
             guest_limit: u64,
@@ -11058,6 +11185,199 @@ seiyaku Vault {
     }
 
     #[test]
+    fn contract_call_transaction_preserves_three_hop_transfer_authorities() {
+        crate::test_alias::ensure();
+        let authority: AccountId = fixture_account("alice");
+        let asset_def_id: AssetDefinitionId =
+            AssetDefinitionId::new(fixture_domain_id(), "rose".parse().expect("asset name"));
+        let domain = Domain::new(fixture_domain_id()).build(&authority);
+        let account = build_fixture_account(&authority, &authority);
+        let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&authority);
+        let source_asset_id = AssetId::of(asset_def_id.clone(), authority.clone());
+        let source_asset = Asset::new(source_asset_id.clone(), Numeric::new(5_u32, 0));
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let world = World::with_assets([domain], [account], [asset_def], [source_asset], []);
+        let state = State::new_with_chain(world, kura, query, ChainId::from("test-chain"));
+        let caller_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Caller {
+  state AccountId CallerAccount;
+  state bytes ForwarderContract;
+  state AssetDefinitionId SettlementAsset;
+
+  #[access(read="*", write="*")]
+  kotoage fn bind(caller_account: AccountId,
+                  forwarder_contract: bytes,
+                  settlement_asset: AssetDefinitionId) {
+    CallerAccount = caller_account;
+    ForwarderContract = forwarder_contract;
+    SettlementAsset = settlement_asset;
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn open(amount: int) -> int permission(AssetOps) {
+    transfer_asset(authority(), CallerAccount, SettlementAsset, amount);
+    let payload = json_object();
+    let payload = json_set_int(payload, name("amount"), amount);
+    return decode_int(call_contract(ForwarderContract, "forward", payload));
+  }
+}
+"#,
+            0,
+        );
+        let forwarder_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Forwarder {
+  state AccountId ForwarderAccount;
+  state bytes VaultContract;
+  state AssetDefinitionId SettlementAsset;
+
+  #[access(read="*", write="*")]
+  kotoage fn bind(forwarder_account: AccountId,
+                  vault_contract: bytes,
+                  settlement_asset: AssetDefinitionId) {
+    ForwarderAccount = forwarder_account;
+    VaultContract = vault_contract;
+    SettlementAsset = settlement_asset;
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn forward(amount: int) -> int permission(AssetOps) {
+    transfer_asset(authority(), ForwarderAccount, SettlementAsset, amount);
+    let payload = json_object();
+    let payload = json_set_int(payload, name("amount"), amount);
+    return decode_int(call_contract(VaultContract, "deposit", payload));
+  }
+}
+"#,
+            1,
+        );
+        let vault_contract = install_contract(
+            &state,
+            &authority,
+            r#"
+seiyaku Vault {
+  state AccountId VaultAccount;
+  state AssetDefinitionId SettlementAsset;
+
+  #[access(read="*", write="*")]
+  kotoage fn bind(vault_account: AccountId,
+                  settlement_asset: AssetDefinitionId) {
+    VaultAccount = vault_account;
+    SettlementAsset = settlement_asset;
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn deposit(amount: int) -> int permission(AssetOps) {
+    transfer_asset(authority(), VaultAccount, SettlementAsset, amount);
+    return amount;
+  }
+}
+"#,
+            2,
+        );
+
+        let mut ivm_cache = crate::smartcontracts::ivm::cache::IvmCache::new();
+        let vault_bind_payload = Json::from_str_norito(&format!(
+            r#"{{"vault_account":"{}","settlement_asset":"{}"}}"#,
+            vault_contract.subject_id(),
+            asset_def_id
+        ))
+        .expect("vault bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: vault_contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(vault_bind_payload),
+            },
+            &mut ivm_cache,
+        );
+        let forwarder_bind_payload = Json::from_str_norito(&format!(
+            r#"{{"forwarder_account":"{}","vault_contract":"{}","settlement_asset":"{}"}}"#,
+            forwarder_contract.subject_id(),
+            format!("0x{}", hex::encode(vault_contract.as_ref())),
+            asset_def_id
+        ))
+        .expect("forwarder bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: forwarder_contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(forwarder_bind_payload),
+            },
+            &mut ivm_cache,
+        );
+        let caller_bind_payload = Json::from_str_norito(&format!(
+            r#"{{"caller_account":"{}","forwarder_contract":"{}","settlement_asset":"{}"}}"#,
+            caller_contract.subject_id(),
+            format!("0x{}", hex::encode(forwarder_contract.as_ref())),
+            asset_def_id
+        ))
+        .expect("caller bind payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: caller_contract.clone(),
+                entrypoint: "bind".to_owned(),
+                payload: Some(caller_bind_payload),
+            },
+            &mut ivm_cache,
+        );
+        let open_payload = Json::from_str_norito(r#"{"amount":3}"#).expect("open payload");
+        execute_contract_call_transaction(
+            &state,
+            &authority,
+            &fixture_signing_keypair(&authority),
+            iroha_data_model::transaction::executable::ContractInvocation {
+                contract_address: caller_contract.clone(),
+                entrypoint: "open".to_owned(),
+                payload: Some(open_payload),
+            },
+            &mut ivm_cache,
+        );
+
+        let view = state.view();
+        let authority_balance = view
+            .world()
+            .asset(&source_asset_id)
+            .expect("authority asset remains")
+            .value()
+            .clone();
+        let caller_asset_id = AssetId::of(asset_def_id.clone(), caller_contract.subject_id());
+        let forwarder_asset_id = AssetId::of(asset_def_id.clone(), forwarder_contract.subject_id());
+        let vault_asset_id = AssetId::of(asset_def_id, vault_contract.subject_id());
+        let vault_balance = view
+            .world()
+            .asset(&vault_asset_id)
+            .expect("vault asset exists")
+            .value()
+            .clone();
+        assert_eq!(authority_balance.as_ref(), &Numeric::new(2_u32, 0));
+        assert!(
+            view.world().asset(&caller_asset_id).is_err(),
+            "fully drained caller balance should remove the caller asset entry",
+        );
+        assert!(
+            view.world().asset(&forwarder_asset_id).is_err(),
+            "fully drained forwarder balance should remove the forwarder asset entry",
+        );
+        assert_eq!(vault_balance.as_ref(), &Numeric::new(3_u32, 0));
+    }
+
+    #[test]
     fn host_execution_artifacts_apply_queued_uses_queued_authority_snapshot() {
         crate::test_alias::ensure();
         let outer_authority = fixture_account("alice");
@@ -11376,7 +11696,10 @@ seiyaku Vault {
         }));
         vm.set_register(10, path_ptr);
         assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm), Ok(0));
-        let value_a_tlv = vm.memory.validate_tlv(vm.register(10)).expect("state get tlv A");
+        let value_a_tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("state get tlv A");
         let value_a: u64 =
             norito::decode_from_bytes(value_a_tlv.payload).expect("decode state value A");
         assert_eq!(value_a, 11);
@@ -11389,7 +11712,10 @@ seiyaku Vault {
         }));
         vm.set_register(10, path_ptr);
         assert_eq!(host.syscall(ivm_sys::SYSCALL_STATE_GET, &mut vm), Ok(0));
-        let value_b_tlv = vm.memory.validate_tlv(vm.register(10)).expect("state get tlv B");
+        let value_b_tlv = vm
+            .memory
+            .validate_tlv(vm.register(10))
+            .expect("state get tlv B");
         let value_b: u64 =
             norito::decode_from_bytes(value_b_tlv.payload).expect("decode state value B");
         assert_eq!(value_b, 22);

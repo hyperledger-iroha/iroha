@@ -157,6 +157,7 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<soracloud::RecordSoracloudPrivateInferenceCheckpoint>,
     InstructionRegistry::register::<soracloud::AdvanceSoracloudRollout>,
     InstructionRegistry::register::<soracloud::SetSoracloudRuntimeState>,
+    InstructionRegistry::register::<soracloud::ReportSoracloudServiceLeaseUsage>,
     InstructionRegistry::register::<soracloud::RecordSoracloudMailboxMessage>,
     InstructionRegistry::register::<soracloud::RecordSoracloudRuntimeReceipt>,
     InstructionRegistry::register::<ExecuteTrigger>,
@@ -444,6 +445,9 @@ fn with_soracloud_stable_ids(mut registry: InstructionRegistry) -> InstructionRe
     );
     registry = registry.register_with_id::<soracloud::SetSoracloudRuntimeState>(
         "soracloud::SetSoracloudRuntimeState",
+    );
+    registry = registry.register_with_id::<soracloud::ReportSoracloudServiceLeaseUsage>(
+        "soracloud::ReportSoracloudServiceLeaseUsage",
     );
     registry = registry.register_with_id::<soracloud::RecordSoracloudMailboxMessage>(
         "soracloud::RecordSoracloudMailboxMessage",

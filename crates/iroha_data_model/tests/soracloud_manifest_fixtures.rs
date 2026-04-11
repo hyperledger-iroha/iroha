@@ -31,8 +31,9 @@ use iroha_data_model::{
         SoraContainerManifestRefV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
         SoraDeploymentBundleV1, SoraLifecycleHooksV1, SoraMailboxContractV1, SoraNetworkPolicyV1,
         SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
-        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1, SoraStateBindingV1,
-        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
+        SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+        SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
+        SoraStateScopeV1, SoraTlsModeV1,
     },
 };
 #[cfg(feature = "json")]
@@ -160,42 +161,50 @@ fn expected_container_manifest() -> SoraContainerManifestV1 {
     }
 }
 
+fn expected_service_route() -> SoraRouteTargetV1 {
+    SoraRouteTargetV1 {
+        host: "portal.sora".to_string(),
+        path_prefix: "/app".to_string(),
+        service_port: NonZeroU16::new(8080).expect("nonzero"),
+        visibility: SoraRouteVisibilityV1::Public,
+        tls_mode: SoraTlsModeV1::Required,
+    }
+}
+
+fn expected_patient_records_binding() -> SoraStateBindingV1 {
+    SoraStateBindingV1 {
+        schema_version: SORA_STATE_BINDING_VERSION_V1,
+        binding_name: "patient_records".parse().expect("valid name"),
+        scope: SoraStateScopeV1::ConfidentialState,
+        mutability: SoraStateMutabilityV1::AppendOnly,
+        encryption: SoraStateEncryptionV1::FheCiphertext,
+        key_prefix: "/state/health".to_string(),
+        max_item_bytes: NonZeroU64::new(16_384).expect("nonzero"),
+        max_total_bytes: NonZeroU64::new(16_777_216).expect("nonzero"),
+    }
+}
+
 fn expected_service_manifest() -> SoraServiceManifestV1 {
     SoraServiceManifestV1 {
         schema_version: SORA_SERVICE_MANIFEST_VERSION_V1,
         service_name: "web_portal".parse().expect("valid name"),
         service_version: "2026.02.0".to_string(),
+        execution_plane: SoraServiceExecutionPlaneV1::DeterministicService,
         container: SoraContainerManifestRefV1 {
             manifest_hash: sample_hash(17),
             expected_schema_version: SORA_CONTAINER_MANIFEST_VERSION_V1,
         },
         replicas: NonZeroU16::new(3).expect("nonzero"),
-        route: Some(SoraRouteTargetV1 {
-            host: "portal.sora".to_string(),
-            path_prefix: "/app".to_string(),
-            service_port: NonZeroU16::new(8080).expect("nonzero"),
-            visibility: SoraRouteVisibilityV1::Public,
-            tls_mode: SoraTlsModeV1::Required,
-        }),
+        route: Some(expected_service_route()),
         rollout: SoraRolloutPolicyV1 {
             canary_percent: 20,
             max_unavailable_replicas: 1,
             health_window_secs: NonZeroU32::new(45).expect("nonzero"),
             automatic_rollback_failures: NonZeroU32::new(3).expect("nonzero"),
         },
-        state_bindings: vec![
-            expected_state_binding(),
-            SoraStateBindingV1 {
-                schema_version: SORA_STATE_BINDING_VERSION_V1,
-                binding_name: "patient_records".parse().expect("valid name"),
-                scope: SoraStateScopeV1::ConfidentialState,
-                mutability: SoraStateMutabilityV1::AppendOnly,
-                encryption: SoraStateEncryptionV1::FheCiphertext,
-                key_prefix: "/state/health".to_string(),
-                max_item_bytes: NonZeroU64::new(16_384).expect("nonzero"),
-                max_total_bytes: NonZeroU64::new(16_777_216).expect("nonzero"),
-            },
-        ],
+        economics: iroha_data_model::soracloud::SoraHttpServiceEconomicsV1::default(),
+        state_bindings: vec![expected_state_binding(), expected_patient_records_binding()],
+        lease_volumes: Vec::new(),
         handlers: vec![
             SoraServiceHandlerV1 {
                 handler_name: "assets".parse().expect("valid name"),

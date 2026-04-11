@@ -78,6 +78,8 @@ Gas enforcement (CoreHost)
 - FASTPQ transfer batches are charged per entry (same as individual transfers).
 - ZK_VERIFY syscalls reuse the confidential verification gas schedule (base + proof size).
 - GET_PUBLIC_INPUT charges a base plus a per-byte cost based on the returned TLV length.
+- `JSON_OBJECT` helper — Gas: `G_json_object`.
+- `JSON_SET_I64`, `JSON_SET_ACCOUNT_ID`, and their direct variants — Gas: `G_json_set`.
 - SMARTCONTRACT_EXECUTE_QUERY charges base + per-item + per-byte; sorting multiplies per-item cost. Pagination offsets add an extra per-item penalty for unsorted queries; for sorted queries, the per-item charge is based on all items scanned before pagination (so offsets are already included). Query materialization aborts with OutOfGas when the per-item budget is exhausted, and responses that exceed the per-byte budget are rejected before encoding when exact Norito sizing is available (otherwise after encoding).
 
 Lifecycle / Utility
@@ -85,7 +87,7 @@ Lifecycle / Utility
 - 0x01 EXIT — Args: `r10=status:u64` → Return: `u64=status` — Gas: G_exit
 - 0x02 ABORT — Args: none → Return: `u64=0` — Gas: G_abort (halts and marks the run failed)
 - 0x03 DEBUG_LOG — Args: `r10=&Json|&Blob|&NoritoBytes` → Return: 0 — Gas: G_debug
-- 0xA8 CURRENT_TIME_MS — Args: none → Return: `u64=unix_time_ms` — Gas: G_read_time
+- 0xA8 CURRENT_TIME_MS — Args: none → Return: `u64=unix_time_ms` — Gas: -
 - 0xE0 INPUT_PUBLISH_TLV — Args: `r10=&Blob(TLV)` → Return: `ptr (r10)` — Gas: G_input_publish (rejects invalid TLV envelopes and disallowed pointer types)
 - 0x90 SM3_HASH — Args: `r10=&Blob(message)` → Return: `ptr (&Blob(digest))` — Gas: -
 - 0x91 SM2_VERIFY — Args: `r10=&Blob(msg)`, `r11=&Blob(sig)` (64-byte r∥s), `r12=&Blob(pubkey)` (SEC1), `r13=&Blob(distid)` *(optional, 0 for default)* → Return: `u64=0/1` — Gas: G_verify
@@ -324,9 +326,9 @@ but they must not change the host ABI.
 | 0x01 | EXIT | r10=status:u64 | u64=status | asset:gas/G_exit@ivm.core/v2 |
 | 0x02 | ABORT | - | u64=0 | asset:gas/G_abort@ivm.core/v2 |
 | 0x03 | DEBUG_LOG | r10=&Json | u64=0 | asset:gas/G_debug@ivm.core/v2 |
-| 0x10 | UNUSED | - | - | - |
-| 0x11 | UNUSED | - | - | - |
-| 0x12 | UNUSED | - | - | - |
+| 0x10 | REGISTER_DOMAIN | - | u64=0 | - |
+| 0x11 | UNREGISTER_DOMAIN | - | u64=0 | - |
+| 0x12 | TRANSFER_DOMAIN | - | u64=0 | - |
 | 0x13 | REGISTER_ACCOUNT | r10=&AccountId | u64=0 | asset:gas/G_reg_acct@ivm.core/v2 |
 | 0x14 | UNREGISTER_ACCOUNT | r10=&AccountId | u64=0 | asset:gas/G_unreg_acct@ivm.core/v2 |
 | 0x15 | REGISTER_PEER | r10=&Json | u64=0 | asset:gas/G_reg_peer@ivm.core/v2 |
@@ -385,7 +387,7 @@ but they must not change the host ABI.
 | 0x65 | ZK_VOTE_GET_TALLY | r10=&NoritoBytes(VoteGetTallyRequest) | ptr (NoritoBytes in INPUT) | asset:gas/G_vote_get@ivm.core/v2 |
 | 0x66 | VRF_VERIFY | r10=&NoritoBytes(VrfVerifyRequest) | r10=ptr (&Blob(32-byte output)), r11=status:u64 | asset:gas/G_verify@ivm.core/v2 |
 | 0x67 | VRF_VERIFY_BATCH | r10=&NoritoBytes(VrfVerifyBatchRequest) | r10=ptr (&NoritoBytes(Vec<[u8;32]>)), r11=status:u64, r12=fail_index?:u64 | asset:gas/G_verify@ivm.core/v2 |
-| 0x68 | ZK_VERIFY_BATCH | r10=&NoritoBytes(Vec<OpenVerifyEnvelope>) | host-dependent: `CoreHost` returns `r10=ptr (&NoritoBytes(Vec<u8> statuses))`, `r11=status:u64`; `DefaultHost` returns `r10=0`, `r11=ERR_DISABLED` | asset:gas/G_verify@ivm.core/v2 |
+| 0x68 | ZK_VERIFY_BATCH | r10=&NoritoBytes(Vec<OpenVerifyEnvelope>) | r10=ptr (&NoritoBytes(Vec<u8> statuses)), r11=status:u64 | asset:gas/G_verify@ivm.core/v2 |
 | 0x69 | NUMERIC_FROM_INT | r10=value:i64 | r10=ptr (&NoritoBytes(Numeric)) | - |
 | 0x6A | NUMERIC_TO_INT | r10=&NoritoBytes(Numeric) | r10=value:i64 | - |
 | 0x6B | NUMERIC_ADD | r10=&NoritoBytes(Numeric), r11=&NoritoBytes(Numeric) | r10=ptr (&NoritoBytes(Numeric)) | - |
@@ -410,6 +412,21 @@ but they must not change the host ABI.
 | 0x7E | VRF_EPOCH_SEED | r10=&NoritoBytes(VrfEpochSeedRequest) | r10=ptr (&NoritoBytes(VrfEpochSeedResponse)), r11=status:u64 | asset:gas/G_vote_get@ivm.core/v2 |
 | 0x7F | JSON_GET_NUMERIC | - | u64=0 | - |
 | 0x80 | JSON_GET_ASSET_DEFINITION_ID | - | u64=0 | - |
+| 0x81 | JSON_OBJECT | - | ptr (&Json({})) | asset:gas/G_json_object@ivm.core/v2 |
+| 0x82 | JSON_SET_I64 | r10=&Json(object), r11=&Name(key), r12=value:i64 | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 |
+| 0x83 | JSON_SET_ACCOUNT_ID | r10=&Json(object), r11=&Name(key), r12=&AccountId | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 |
+| 0x84 | JSON_GET_I64_DIRECT | - | u64=0 | - |
+| 0x85 | JSON_GET_JSON_DIRECT | - | u64=0 | - |
+| 0x86 | JSON_GET_NAME_DIRECT | - | u64=0 | - |
+| 0x87 | JSON_GET_ACCOUNT_ID_DIRECT | - | u64=0 | - |
+| 0x88 | JSON_GET_NFT_ID_DIRECT | - | u64=0 | - |
+| 0x89 | JSON_GET_BLOB_HEX_DIRECT | - | u64=0 | - |
+| 0x8A | JSON_GET_NUMERIC_DIRECT | - | u64=0 | - |
+| 0x8B | JSON_GET_ASSET_DEFINITION_ID_DIRECT | - | u64=0 | - |
+| 0x8C | JSON_SET_I64_DIRECT | r10=&Json(object), r11=&Name(key), r12=value:i64 | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 |
+| 0x8D | JSON_SET_ACCOUNT_ID_DIRECT | r10=&Json(object), r11=&Name(key), r12=&AccountId | ptr (&Json) | asset:gas/G_json_set@ivm.core/v2 |
+| 0x8E | BUILD_PATH_KEY_NORITO_DIRECT | - | u64=0 | - |
+| 0x8F | SCHEMA_INFO_DIRECT | r10=&Name(schema) | ptr (&Json{"id":...,"version":...}) | - |
 | 0x90 | SM3_HASH | r10=&Blob(message) | r10=ptr (&Blob(digest)) | - |
 | 0x91 | SM2_VERIFY | r10=&Blob(msg), r11=&Blob(sig), r12=&Blob(pubkey), r13=&Blob(distid)? | u64=0/1 | asset:gas/G_verify@ivm.core/v2 |
 | 0x92 | SM4_GCM_SEAL | r10=&Blob(key16), r11=&Blob(nonce12), r12=&Blob(aad)?, r13=&Blob(plaintext) | r10=ptr (&Blob(ciphertext || tag16)) | - |
@@ -427,6 +444,7 @@ but they must not change the host ABI.
 | 0xA6 | SUBSCRIPTION_RECORD_USAGE | - | u64=0 | asset:gas/G_sub_usage@ivm.core/v2 |
 | 0xA7 | RESOLVE_ACCOUNT_ALIAS | r10=&Blob(alias literal) | ptr (&AccountId in INPUT) | asset:gas/G_alias_resolve@ivm.core/v2 |
 | 0xA8 | CURRENT_TIME_MS | - | u64=0 | - |
+| 0xA9 | CALL_CONTRACT | - | u64=0 | - |
 | 0xB0 | AXT_BEGIN | r10=&AxtDescriptor | u64=0 | - |
 | 0xB1 | AXT_TOUCH | r10=&DataSpaceId, r11=&NoritoBytes(TouchManifest) or 0 | u64=0 | - |
 | 0xB2 | AXT_COMMIT | - | u64=0 | - |
@@ -442,6 +460,21 @@ but they must not change the host ABI.
 | 0xC7 | SORACLOUD_EGRESS_FETCH | r10=&SoracloudRequest(EgressFetch) | r10=&SoracloudResponse(EgressFetch) | - |
 | 0xC8 | SORACLOUD_READ_CONFIG | r10=&SoracloudRequest(ReadConfig) | r10=&SoracloudResponse(ReadConfig) | - |
 | 0xC9 | SORACLOUD_READ_SECRET_ENVELOPE | r10=&SoracloudRequest(ReadSecretEnvelope) | r10=&SoracloudResponse(ReadSecretEnvelope) | - |
+| 0xD0 | SCHEMA_ENCODE_DIRECT | r10=&Name(schema), r11=&Json | ptr (&NoritoBytes) | - |
+| 0xD1 | SCHEMA_DECODE_DIRECT | r10=&Name(schema), r11=&NoritoBytes | ptr (&Json) | - |
+| 0xD2 | NUMERIC_TO_INT_DIRECT | - | u64=0 | - |
+| 0xD3 | NUMERIC_ADD_DIRECT | - | u64=0 | - |
+| 0xD4 | NUMERIC_SUB_DIRECT | - | u64=0 | - |
+| 0xD5 | NUMERIC_MUL_DIRECT | - | u64=0 | - |
+| 0xD6 | NUMERIC_DIV_DIRECT | - | u64=0 | - |
+| 0xD7 | NUMERIC_REM_DIRECT | - | u64=0 | - |
+| 0xD8 | NUMERIC_NEG_DIRECT | - | u64=0 | - |
+| 0xD9 | NUMERIC_EQ_DIRECT | - | u64=0 | - |
+| 0xDA | NUMERIC_NE_DIRECT | - | u64=0 | - |
+| 0xDB | NUMERIC_LT_DIRECT | - | u64=0 | - |
+| 0xDC | NUMERIC_LE_DIRECT | - | u64=0 | - |
+| 0xDD | NUMERIC_GT_DIRECT | - | u64=0 | - |
+| 0xDE | NUMERIC_GE_DIRECT | - | u64=0 | - |
 | 0xE0 | INPUT_PUBLISH_TLV | r10=&Blob(TLV) | ptr (r10) | asset:gas/G_input_publish@ivm.core/v2 |
 | 0xF0 | ALLOC | r10=bytes:u64 | ptr (r10) | asset:gas/G_alloc@ivm.core/v2 + bytes |
 | 0xF1 | GET_PUBLIC_INPUT | r10=&Name | ptr (&Tlv) | asset:gas/G_get_pub@ivm.core/v2 + bytes |

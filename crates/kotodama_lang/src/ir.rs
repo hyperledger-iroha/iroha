@@ -1107,9 +1107,12 @@ fn entrypoint_impl_symbol(name: &str) -> String {
     format!("__entrypoint_impl__{name}")
 }
 
+// Zero-argument entrypoints can jump straight into the implementation body
+// because there is no payload-decoding work for a wrapper to perform.
 fn needs_entrypoint_wrapper(func: &TypedFunction) -> bool {
-    matches!(func.modifiers.kind, super::ast::FunctionKind::View)
-        || func.modifiers.visibility == super::ast::FunctionVisibility::Public
+    (matches!(func.modifiers.kind, super::ast::FunctionKind::View)
+        || func.modifiers.visibility == super::ast::FunctionVisibility::Public)
+        && !func.param_types.is_empty()
 }
 
 fn lower_function_named(

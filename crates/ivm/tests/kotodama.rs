@@ -2993,7 +2993,7 @@ fn vrf_and_pointer_syscalls_present() {
     assert!(has(syscalls::SYSCALL_VRF_VERIFY_BATCH as u8));
     assert!(has(syscalls::SYSCALL_POINTER_TO_NORITO as u8));
     assert!(has(syscalls::SYSCALL_POINTER_FROM_NORITO as u8));
-    assert!(has(syscalls::SYSCALL_SCHEMA_INFO as u8));
+    assert!(has(syscalls::SYSCALL_SCHEMA_INFO_DIRECT as u8));
 }
 
 #[test]

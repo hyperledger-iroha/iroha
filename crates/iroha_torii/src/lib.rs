@@ -15264,7 +15264,9 @@ fn soracloud_ordered_mailbox_response(
             iroha_logger::error!(?error, "failed to build Soracloud ordered-mailbox response");
             Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from("failed to build Soracloud ordered-mailbox response"))
+                .body(Body::from(
+                    "failed to build Soracloud ordered-mailbox response",
+                ))
                 .expect("static response build succeeds")
         })
 }
@@ -15299,9 +15301,9 @@ fn soracloud_public_runtime_unavailable(message: impl Into<String>) -> Response 
 }
 
 #[cfg(feature = "app_api")]
-fn load_native_process_runtime_state(
+fn load_hosted_http_runtime_state(
     app: &SharedAppState,
-    route_match: &soracloud::NativeProcessRouteMatch,
+    route_match: &soracloud::HostedHttpRouteMatch,
 ) -> Result<SoracloudNativeProcessRuntimeStateV1, SoracloudRuntimeExecutionError> {
     let Some(runtime) = app.soracloud_runtime.as_ref() else {
         return Err(SoracloudRuntimeExecutionError::new(
@@ -15318,7 +15320,7 @@ fn load_native_process_runtime_state(
         return Err(SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
-                "native Soracloud runtime plan for service `{}` revision `{}` is unavailable",
+                "hosted Soracloud runtime plan for service `{}` revision `{}` is unavailable",
                 route_match.service_name, route_match.service_version
             ),
         ));
@@ -15329,7 +15331,7 @@ fn load_native_process_runtime_state(
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Unavailable,
             format!(
-                "failed to read native Soracloud runtime state {}: {error}",
+                "failed to read hosted Soracloud runtime state {}: {error}",
                 state_path.display()
             ),
         )
@@ -15338,7 +15340,7 @@ fn load_native_process_runtime_state(
         SoracloudRuntimeExecutionError::new(
             SoracloudRuntimeExecutionErrorKind::Internal,
             format!(
-                "failed to decode native Soracloud runtime state {}: {error}",
+                "failed to decode hosted Soracloud runtime state {}: {error}",
                 state_path.display()
             ),
         )
@@ -15346,15 +15348,15 @@ fn load_native_process_runtime_state(
 }
 
 #[cfg(feature = "app_api")]
-async fn proxy_soracloud_public_native_process(
+async fn proxy_soracloud_public_hosted_http(
     State(app): State<SharedAppState>,
     method: axum::http::Method,
     uri: axum::http::Uri,
     headers: HeaderMap,
     body: Bytes,
-    route_match: soracloud::NativeProcessRouteMatch,
+    route_match: soracloud::HostedHttpRouteMatch,
 ) -> Response {
-    let runtime_state = match load_native_process_runtime_state(&app, &route_match) {
+    let runtime_state = match load_hosted_http_runtime_state(&app, &route_match) {
         Ok(state) => state,
         Err(error) => return soracloud_local_read_error_response(error),
     };
@@ -15362,13 +15364,13 @@ async fn proxy_soracloud_public_native_process(
         != iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy
     {
         return soracloud_public_runtime_unavailable(format!(
-            "native Soracloud service `{}` is {:?}",
+            "hosted Soracloud service `{}` is {:?}",
             route_match.service_name, runtime_state.health_status
         ));
     }
     let Some(listen_base_url) = runtime_state.listen_base_url.as_deref() else {
         return soracloud_public_runtime_unavailable(format!(
-            "native Soracloud service `{}` has no active loopback listener",
+            "hosted Soracloud service `{}` has no active loopback listener",
             route_match.service_name
         ));
     };
@@ -15387,7 +15389,7 @@ async fn proxy_soracloud_public_native_process(
         Err(error) => {
             return Response::builder()
                 .status(StatusCode::INTERNAL_SERVER_ERROR)
-                .body(Body::from(format!("invalid native listener URL: {error}")))
+                .body(Body::from(format!("invalid hosted listener URL: {error}")))
                 .unwrap_or_else(|_| StatusCode::INTERNAL_SERVER_ERROR.into_response());
         }
     };
@@ -15406,7 +15408,7 @@ async fn proxy_soracloud_public_native_process(
         Ok(response) => response,
         Err(error) => {
             return soracloud_public_runtime_unavailable(format!(
-                "native Soracloud service `{}` proxy failed: {error}",
+                "hosted Soracloud service `{}` proxy failed: {error}",
                 route_match.service_name
             ));
         }
@@ -15473,12 +15475,14 @@ async fn handler_soracloud_public_local_read(
         .get(axum::http::header::HOST)
         .and_then(|value| value.to_str().ok())
         .unwrap_or_default();
-    let Some(route_match) = soracloud::resolve_public_route(&app, host, uri.path()) else {
+    let Some(route_match) =
+        soracloud::resolve_public_route(&app, host, method.as_str(), uri.path())
+    else {
         return StatusCode::NOT_FOUND.into_response();
     };
     let route_match = match route_match {
-        soracloud::PublicRouteMatch::NativeProcess(route_match) => {
-            return proxy_soracloud_public_native_process(
+        soracloud::PublicRouteMatch::HostedHttp(route_match) => {
+            return proxy_soracloud_public_hosted_http(
                 State(app),
                 method,
                 uri,
@@ -34961,8 +34965,11 @@ pub(crate) mod tests_runtime_handlers {
             iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionResult,
             iroha_core::soracloud_runtime::SoracloudRuntimeExecutionError,
         >,
-        captured_requests:
-            Arc<std::sync::Mutex<Vec<iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionRequest>>>,
+        captured_requests: Arc<
+            std::sync::Mutex<
+                Vec<iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionRequest>,
+            >,
+        >,
     }
 
     impl iroha_core::soracloud_runtime::SoracloudRuntimeReadHandle for TestMailboxRuntime {
@@ -35136,6 +35143,8 @@ pub(crate) mod tests_runtime_handlers {
                     role: iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active,
                     traffic_percent: 100,
                     runtime: iroha_data_model::soracloud::SoraContainerRuntimeV1::Ivm,
+                    execution_plane:
+                        iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService,
                     bundle_hash: "hash:bundle".to_string(),
                     bundle_path: "service.to".to_string(),
                     entrypoint: "start".to_string(),
@@ -35150,6 +35159,10 @@ pub(crate) mod tests_runtime_handlers {
                     rollout_handle: None,
                     config_generation: 0,
                     secret_generation: 0,
+                    quota_class: None,
+                    service_lease_status: None,
+                    lease_expires_sequence: None,
+                    remaining_runtime_balance_nanos: None,
                     config_entry_count: 0,
                     secret_entry_count: 0,
                     config_exports: vec![],
@@ -35168,6 +35181,7 @@ pub(crate) mod tests_runtime_handlers {
                         "/tmp/soracloud/runtime/web_portal/1.0.0/secret_envelopes".to_string(),
                     secret_payload_materialization_dir:
                         "/tmp/soracloud/runtime/secrets/web_portal/1.0.0".to_string(),
+                    lease_volumes: Vec::new(),
                     mailboxes: vec![],
                     artifacts: vec![
                         iroha_core::soracloud_runtime::SoracloudRuntimeArtifactPlan {
@@ -35253,6 +35267,8 @@ pub(crate) mod tests_runtime_handlers {
                 schema_version: iroha_data_model::soracloud::SORA_SERVICE_MANIFEST_VERSION_V1,
                 service_name: service_name.clone(),
                 service_version: "2026.02.0".to_owned(),
+                execution_plane:
+                    iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService,
                 container: iroha_data_model::soracloud::SoraContainerManifestRefV1 {
                     manifest_hash: Hash::new(b"public-container-manifest"),
                     expected_schema_version:
@@ -35273,7 +35289,9 @@ pub(crate) mod tests_runtime_handlers {
                     automatic_rollback_failures: std::num::NonZeroU32::new(1)
                         .expect("rollback"),
                 },
+                economics: Default::default(),
                 state_bindings: Vec::new(),
+                lease_volumes: Vec::new(),
                 handlers: vec![
                     iroha_data_model::soracloud::SoraServiceHandlerV1 {
                         handler_name: "assets".parse().expect("handler"),
@@ -35358,6 +35376,8 @@ pub(crate) mod tests_runtime_handlers {
                     secret_generation: 0,
                     service_configs: std::collections::BTreeMap::new(),
                     service_secrets: std::collections::BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
                 },
             );
         world
@@ -35417,6 +35437,8 @@ pub(crate) mod tests_runtime_handlers {
                     secret_generation: 0,
                     service_configs: std::collections::BTreeMap::new(),
                     service_secrets: std::collections::BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
                 },
             );
         world
@@ -35634,33 +35656,36 @@ pub(crate) mod tests_runtime_handlers {
             snapshot: iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default(),
             state_dir: PathBuf::from("/tmp/test-soracloud-runtime"),
             local_peer_id: None,
-            result: Ok(iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionResult {
-                state_mutations: Vec::new(),
-                outbound_mailbox_messages: Vec::new(),
-                response_bytes: br#"{"status":"queued"}"#.to_vec(),
-                content_type: Some("application/json".to_owned()),
-                runtime_state: None,
-                runtime_receipt: iroha_data_model::soracloud::SoraRuntimeReceiptV1 {
-                    schema_version:
-                        iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
-                    receipt_id: Hash::new(b"public-mailbox-receipt"),
-                    service_name: "web_portal".parse().expect("service"),
-                    service_version: "2026.02.0".to_owned(),
-                    handler_name: "update".parse().expect("handler"),
-                    handler_class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update,
-                    request_commitment: Hash::new(b"public-mailbox-request"),
-                    result_commitment: Hash::new(b"public-mailbox-result"),
-                    certified_by:
-                        iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
-                    emitted_sequence: 1,
-                    mailbox_message_id: Some(Hash::new(b"public-mailbox-message")),
-                    journal_artifact_hash: None,
-                    checkpoint_artifact_hash: None,
-                    placement_id: None,
-                    selected_validator_account_id: None,
-                    selected_peer_id: None,
+            result: Ok(
+                iroha_core::soracloud_runtime::SoracloudOrderedMailboxExecutionResult {
+                    state_mutations: Vec::new(),
+                    outbound_mailbox_messages: Vec::new(),
+                    response_bytes: br#"{"status":"queued"}"#.to_vec(),
+                    content_type: Some("application/json".to_owned()),
+                    runtime_state: None,
+                    runtime_receipt: iroha_data_model::soracloud::SoraRuntimeReceiptV1 {
+                        schema_version:
+                            iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
+                        receipt_id: Hash::new(b"public-mailbox-receipt"),
+                        service_name: "web_portal".parse().expect("service"),
+                        service_version: "2026.02.0".to_owned(),
+                        handler_name: "update".parse().expect("handler"),
+                        handler_class:
+                            iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update,
+                        request_commitment: Hash::new(b"public-mailbox-request"),
+                        result_commitment: Hash::new(b"public-mailbox-result"),
+                        certified_by:
+                            iroha_data_model::soracloud::SoraCertifiedResponsePolicyV1::None,
+                        emitted_sequence: 1,
+                        mailbox_message_id: Some(Hash::new(b"public-mailbox-message")),
+                        journal_artifact_hash: None,
+                        checkpoint_artifact_hash: None,
+                        placement_id: None,
+                        selected_validator_account_id: None,
+                        selected_peer_id: None,
+                    },
                 },
-            }),
+            ),
             captured_requests: Arc::clone(&captured_requests),
         };
         let mut app = mk_app_state_for_tests_with_world(seed_public_soracloud_world());
@@ -35679,7 +35704,9 @@ pub(crate) mod tests_runtime_handlers {
                     .header(axum::http::header::HOST, "portal.sora")
                     .header(axum::http::header::CONTENT_TYPE, "application/json")
                     .extension(crate::loopback_connect_info())
-                    .body(Body::from(br#"{"origin":"DXB","destination":"HIR"}"#.to_vec()))
+                    .body(Body::from(
+                        br#"{"origin":"DXB","destination":"HIR"}"#.to_vec(),
+                    ))
                     .expect("request"),
             )
             .await
@@ -35721,15 +35748,14 @@ pub(crate) mod tests_runtime_handlers {
             "update"
         );
         assert_eq!(
-            captured[0]
-                .handler
-                .as_ref()
-                .expect("handler")
-                .class,
+            captured[0].handler.as_ref().expect("handler").class,
             iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update
         );
         assert_eq!(captured[0].execution_sequence, 1);
-        assert_eq!(captured[0].mailbox_message.payload_bytes.as_slice(), br#"{"origin":"DXB","destination":"HIR"}"#);
+        assert_eq!(
+            captured[0].mailbox_message.payload_bytes.as_slice(),
+            br#"{"origin":"DXB","destination":"HIR"}"#
+        );
         assert_eq!(captured[0].mailbox_message.to_handler.as_ref(), "update");
         assert_eq!(captured[0].authoritative_pending_mailbox_messages, 1);
     }
@@ -35748,17 +35774,17 @@ pub(crate) mod tests_runtime_handlers {
             "/v1/search/search_1/events",
             get(|| async {
                 let stream = futures_util::stream::once(async {
-                    Ok::<Bytes, Infallible>(Bytes::from_static(b"event: session\n"))
+                    Ok::<axum::response::sse::Event, Infallible>(
+                        axum::response::sse::Event::default().event("session"),
+                    )
                 })
                 .chain(futures_util::stream::once(async {
-                    tokio::time::sleep(Duration::from_millis(800)).await;
-                    Ok::<Bytes, Infallible>(Bytes::from_static(b"data: {\"id\":\"search_1\"}\n\n"))
+                    tokio::time::sleep(Duration::from_secs(5)).await;
+                    Ok::<axum::response::sse::Event, Infallible>(
+                        axum::response::sse::Event::default().data("{\"id\":\"search_1\"}"),
+                    )
                 }));
-                Response::builder()
-                    .status(StatusCode::OK)
-                    .header(axum::http::header::CONTENT_TYPE, "text/event-stream")
-                    .body(Body::from_stream(stream))
-                    .expect("streaming response")
+                axum::response::sse::Sse::new(stream)
             }),
         );
         let upstream_task = tokio::spawn(async move {
@@ -35780,6 +35806,7 @@ pub(crate) mod tests_runtime_handlers {
             health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
             listen_base_url: Some(format!("http://{addr}")),
             pid: Some(1),
+            accounted_egress_bytes: 0,
             last_error: None,
             updated_at_ms: 1,
         };
@@ -35796,12 +35823,55 @@ pub(crate) mod tests_runtime_handlers {
             .get(&("web_portal".to_owned(), "2026.02.0".to_owned()))
             .cloned()
             .expect("public service bundle");
-        bundle.container.runtime =
-            iroha_data_model::soracloud::SoraContainerRuntimeV1::NativeProcess;
+        bundle.container.runtime = iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou;
+        bundle.service.execution_plane =
+            iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+        bundle.service.state_bindings.clear();
+        bundle.service.handlers.clear();
         bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            ("web_portal".to_owned(), "2026.02.0".to_owned()),
+            bundle.clone(),
+        );
         world
-            .soracloud_service_revisions_mut_for_testing()
-            .insert(("web_portal".to_owned(), "2026.02.0".to_owned()), bundle);
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                "web_portal".parse().expect("service"),
+                iroha_data_model::soracloud::SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name: "web_portal".parse().expect("service"),
+                    current_service_version: "2026.02.0".to_owned(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    service_configs: BTreeMap::new(),
+                    service_secrets: BTreeMap::new(),
+                    service_lease: Some(iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
+                        schema_version:
+                            iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
+                        status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
+                        quota_class: "taira-open".to_owned(),
+                        deployment_deposit_nanos: 1_000_000_000,
+                        prepaid_runtime_balance_nanos: 50_000_000_000,
+                        runtime_nanos_per_sequence: 250_000,
+                        storage_nanos_per_gib_sequence: 25_000,
+                        egress_nanos_per_mib: 5_000,
+                        lease_started_sequence: 0,
+                        lease_expires_sequence: 100,
+                        last_billed_sequence: 0,
+                        accounted_egress_bytes: 0,
+                        last_status_reason: None,
+                    }),
+                    lease_volume_states: Vec::new(),
+                },
+            );
 
         let mut snapshot = iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default();
         snapshot.services.insert(
@@ -35813,7 +35883,9 @@ pub(crate) mod tests_runtime_handlers {
                     service_version: "2026.02.0".to_owned(),
                     role: iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active,
                     traffic_percent: 100,
-                    runtime: iroha_data_model::soracloud::SoraContainerRuntimeV1::NativeProcess,
+                    runtime: iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou,
+                    execution_plane:
+                        iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService,
                     bundle_hash: Hash::new(b"native-public-bundle").to_string(),
                     bundle_path: "/runtime/bin/launch.sh".to_owned(),
                     entrypoint: "/runtime/bin/launch.sh".to_owned(),
@@ -35827,6 +35899,12 @@ pub(crate) mod tests_runtime_handlers {
                     rollout_handle: None,
                     config_generation: 0,
                     secret_generation: 0,
+                    quota_class: Some("taira-open".to_owned()),
+                    service_lease_status: Some(
+                        iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
+                    ),
+                    lease_expires_sequence: Some(100),
+                    remaining_runtime_balance_nanos: Some(50_000_000_000),
                     config_entry_count: 0,
                     secret_entry_count: 0,
                     config_exports: Vec::new(),
@@ -35855,6 +35933,7 @@ pub(crate) mod tests_runtime_handlers {
                         .join("secret_payloads")
                         .display()
                         .to_string(),
+                    lease_volumes: Vec::new(),
                     mailboxes: Vec::new(),
                     artifacts: Vec::new(),
                 },
@@ -35883,7 +35962,7 @@ pub(crate) mod tests_runtime_handlers {
             .with_state(app);
 
         let response = tokio::time::timeout(
-            Duration::from_millis(300),
+            Duration::from_secs(3),
             router.oneshot(
                 axum::http::Request::builder()
                     .uri("/app/v1/search/search_1/events")
@@ -35912,9 +35991,9 @@ pub(crate) mod tests_runtime_handlers {
             .expect("body frame")
             .expect("streamed frame");
         let first_chunk = first_frame.into_data().expect("data frame");
-        assert_eq!(first_chunk.as_ref(), b"event: session\n");
+        assert_eq!(first_chunk.as_ref(), b"event: session\n\n");
 
-        let second_frame = tokio::time::timeout(Duration::from_millis(1_200), body.frame())
+        let second_frame = tokio::time::timeout(Duration::from_secs(6), body.frame())
             .await
             .expect("second SSE frame should arrive")
             .expect("body frame")

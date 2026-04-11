@@ -214,6 +214,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     >,
     dispatch_instruction::<iroha_data_model::isi::soracloud::AdvanceSoracloudRollout>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudRuntimeState>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ReportSoracloudServiceLeaseUsage>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudMailboxMessage>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudRuntimeReceipt>,
     dispatch_instruction::<iroha_data_model::isi::oracle::RegisterOracleFeed>,

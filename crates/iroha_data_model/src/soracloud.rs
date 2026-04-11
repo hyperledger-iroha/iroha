@@ -29,6 +29,8 @@ use crate::{
 pub const SORA_CONTAINER_MANIFEST_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceManifestV1`].
 pub const SORA_SERVICE_MANIFEST_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraHttpServiceEconomicsV1`].
+pub const SORA_HTTP_SERVICE_ECONOMICS_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraStateBindingV1`].
 pub const SORA_STATE_BINDING_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraDeploymentBundleV1`].
@@ -127,8 +129,45 @@ pub const SORACLOUD_HOST_RESPONSE_VERSION_V1: u16 = 1;
 pub const SORA_SERVICE_ROLLOUT_STATE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceDeploymentStateV1`].
 pub const SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraServiceLeaseStateV1`].
+pub const SORA_SERVICE_LEASE_STATE_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraServiceLeaseVolumeStateV1`].
+pub const SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceAuditEventV1`].
 pub const SORA_SERVICE_AUDIT_EVENT_VERSION_V1: u16 = 1;
+
+const SORA_STORAGE_BYTES_PER_GIB: u64 = 1024 * 1024 * 1024;
+const SORA_NETWORK_BYTES_PER_MIB: u64 = 1024 * 1024;
+const SORA_HTTP_SERVICE_QUOTA_CLASS_TAIRA_OPEN: &str = "taira-open";
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SoraHttpServiceQuotaClassPolicy {
+    max_replicas: u16,
+    max_cpu_millis: u32,
+    max_memory_bytes: u64,
+    max_ephemeral_storage_bytes: u64,
+    max_open_files: u32,
+    max_tasks: u16,
+    max_total_lease_volume_bytes: u64,
+}
+
+const TAIRA_OPEN_HTTP_SERVICE_QUOTA_POLICY: SoraHttpServiceQuotaClassPolicy =
+    SoraHttpServiceQuotaClassPolicy {
+        max_replicas: 4,
+        max_cpu_millis: 4_000,
+        max_memory_bytes: 8 * SORA_STORAGE_BYTES_PER_GIB,
+        max_ephemeral_storage_bytes: 16 * SORA_STORAGE_BYTES_PER_GIB,
+        max_open_files: 8_192,
+        max_tasks: 1_024,
+        max_total_lease_volume_bytes: 512 * SORA_STORAGE_BYTES_PER_GIB,
+    };
+
+fn http_service_quota_class_policy(quota_class: &str) -> Option<SoraHttpServiceQuotaClassPolicy> {
+    match quota_class {
+        SORA_HTTP_SERVICE_QUOTA_CLASS_TAIRA_OPEN => Some(TAIRA_OPEN_HTTP_SERVICE_QUOTA_POLICY),
+        _ => None,
+    }
+}
 
 /// Validation errors returned by `SoraCloud` manifest helpers.
 #[derive(Debug, Error, PartialEq, Eq)]
@@ -167,6 +206,12 @@ pub enum SoraCloudManifestError {
         /// Duplicate binding identifier.
         binding: Name,
     },
+    /// Service manifests cannot define duplicate lease-volume names.
+    #[error("sora service manifest includes duplicate lease volume `{volume}`")]
+    DuplicateLeaseVolume {
+        /// Duplicate lease-volume identifier.
+        volume: Name,
+    },
     /// Service manifests cannot define duplicate handler names.
     #[error("sora service manifest includes duplicate handler `{handler}`")]
     DuplicateHandler {
@@ -204,8 +249,24 @@ pub enum SoraContainerRuntimeV1 {
     /// Execute IVM bytecode entrypoints.
     #[default]
     Ivm,
-    /// Execute a deterministic native process hosted by SCR.
+    /// Legacy compatibility runtime for host-supervised HTTP processes on Taira.
     NativeProcess,
+    /// Execute a Soracloud Inrou workload for hosted HTTP services.
+    Inrou,
+}
+
+impl SoraContainerRuntimeV1 {
+    /// Returns `true` when the runtime is the deterministic IVM plane.
+    #[must_use]
+    pub const fn is_deterministic(self) -> bool {
+        matches!(self, Self::Ivm)
+    }
+
+    /// Returns `true` when the runtime targets the hosted HTTP service plane.
+    #[must_use]
+    pub const fn is_http_service_runtime(self) -> bool {
+        matches!(self, Self::NativeProcess | Self::Inrou)
+    }
 }
 
 /// Network egress policy for a service container.
@@ -216,6 +277,8 @@ pub enum SoraContainerRuntimeV1 {
 )]
 #[cfg_attr(feature = "json", norito(tag = "mode", content = "value"))]
 pub enum SoraNetworkPolicyV1 {
+    /// Open egress is allowed and must be metered by the runtime.
+    Open,
     /// No network egress is allowed.
     Isolated,
     /// Egress is allowed only to the listed hostnames.
@@ -596,6 +659,444 @@ pub struct SoraContainerManifestRefV1 {
     pub manifest_hash: Hash,
     /// Expected schema version for the referenced manifest.
     pub expected_schema_version: u16,
+}
+
+/// Execution plane selected by a service manifest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "execution_plane", content = "value"))]
+pub enum SoraServiceExecutionPlaneV1 {
+    /// Deterministic certified reads and ordered mailbox execution on IVM.
+    #[default]
+    DeterministicService,
+    /// Hosted HTTP service proxied through Torii/SoraDNS.
+    HttpService,
+}
+
+/// Lease-backed mutable storage kind attached to an HTTP service.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "lease_volume", content = "value"))]
+pub enum SoraLeaseVolumeKindV1 {
+    /// Rebuildable public-service state such as indexes and checkpoints.
+    ServiceLeaseVolume,
+    /// Confidential service state backed by encrypted or FHE payloads.
+    ConfidentialLeaseVolume,
+}
+
+/// Lease-backed mutable storage binding for one hosted HTTP service.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraLeaseVolumeBindingV1 {
+    /// Human-readable volume identifier.
+    pub volume_name: Name,
+    /// Lease-backed volume kind.
+    pub kind: SoraLeaseVolumeKindV1,
+    /// Storage class requested from the underlying Sorafs/Soranet stack.
+    pub storage_class: StorageClass,
+    /// Declared in-runtime mount path for this volume.
+    pub mount_path: String,
+    /// Maximum logical bytes retained for this volume.
+    pub max_total_bytes: NonZeroU64,
+}
+
+impl SoraLeaseVolumeBindingV1 {
+    /// Validate lease-volume binding invariants.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when the mount path is invalid.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.mount_path.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "sora lease volume binding",
+                field: "mount_path",
+            });
+        }
+
+        if !self.mount_path.starts_with('/') {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora lease volume binding",
+                field: "mount_path",
+                reason: "must start with '/'".to_string(),
+            });
+        }
+
+        if self.mount_path.chars().any(char::is_control) {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora lease volume binding",
+                field: "mount_path",
+                reason: "must not contain control characters".to_string(),
+            });
+        }
+
+        Ok(())
+    }
+}
+
+/// Economic policy required for hosted HTTP services.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraHttpServiceEconomicsV1 {
+    /// Schema version; must equal [`SORA_HTTP_SERVICE_ECONOMICS_VERSION_V1`].
+    pub schema_version: u16,
+    /// Scheduler/quota class resolved by the hosting control plane.
+    pub quota_class: String,
+    /// Anti-spam deployment deposit required to admit the service.
+    pub deployment_deposit_nanos: NonZeroU64,
+    /// Prepaid runtime balance used for fail-closed admission and routing.
+    pub prepaid_runtime_balance_nanos: NonZeroU64,
+    /// Lease duration, measured in Soracloud audit sequences.
+    pub lease_duration_sequences: NonZeroU64,
+    /// Runtime charge applied per active sequence.
+    pub runtime_nanos_per_sequence: NonZeroU64,
+    /// Storage charge applied per GiB and active sequence.
+    pub storage_nanos_per_gib_sequence: NonZeroU64,
+    /// Egress charge applied per MiB when runtime accounting reports traffic.
+    pub egress_nanos_per_mib: NonZeroU64,
+}
+
+impl Default for SoraHttpServiceEconomicsV1 {
+    fn default() -> Self {
+        Self {
+            schema_version: SORA_HTTP_SERVICE_ECONOMICS_VERSION_V1,
+            quota_class: "taira-open".to_owned(),
+            deployment_deposit_nanos: NonZeroU64::new(1_000_000_000)
+                .expect("non-zero deployment deposit"),
+            prepaid_runtime_balance_nanos: NonZeroU64::new(50_000_000_000)
+                .expect("non-zero prepaid runtime balance"),
+            lease_duration_sequences: NonZeroU64::new(86_400).expect("non-zero lease duration"),
+            runtime_nanos_per_sequence: NonZeroU64::new(250_000).expect("non-zero runtime price"),
+            storage_nanos_per_gib_sequence: NonZeroU64::new(25_000)
+                .expect("non-zero storage price"),
+            egress_nanos_per_mib: NonZeroU64::new(5_000).expect("non-zero egress price"),
+        }
+    }
+}
+
+impl SoraHttpServiceEconomicsV1 {
+    /// Validate hosted-service economic policy.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema version or required string
+    /// fields are invalid.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORA_HTTP_SERVICE_ECONOMICS_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "sora http service economics",
+                expected: SORA_HTTP_SERVICE_ECONOMICS_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.quota_class.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "sora http service economics",
+                field: "quota_class",
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Authoritative hosted-service lease status projected by the control plane.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "status", content = "value"))]
+pub enum SoraServiceLeaseStatusV1 {
+    /// Lease is active and the service may be routed/materialized.
+    #[default]
+    Active,
+    /// Lease expired at or before the observed sequence.
+    Expired,
+    /// Prepaid runtime balance is exhausted.
+    Exhausted,
+    /// Lease was suspended by policy and must fail closed.
+    Suspended,
+}
+
+/// Authoritative lease and accounting state for a hosted HTTP service.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraServiceLeaseStateV1 {
+    /// Schema version; must equal [`SORA_SERVICE_LEASE_STATE_VERSION_V1`].
+    pub schema_version: u16,
+    /// Current fail-closed status.
+    pub status: SoraServiceLeaseStatusV1,
+    /// Scheduler/quota class assigned to the service.
+    pub quota_class: String,
+    /// Anti-spam deployment deposit locked for the service.
+    pub deployment_deposit_nanos: u64,
+    /// Prepaid runtime balance available to the service.
+    pub prepaid_runtime_balance_nanos: u64,
+    /// Runtime charge applied per active sequence.
+    pub runtime_nanos_per_sequence: u64,
+    /// Storage charge applied per GiB and active sequence.
+    pub storage_nanos_per_gib_sequence: u64,
+    /// Egress charge applied per MiB when usage is reported.
+    pub egress_nanos_per_mib: u64,
+    /// Sequence when the lease became active.
+    pub lease_started_sequence: u64,
+    /// Sequence after which the lease must fail closed.
+    pub lease_expires_sequence: u64,
+    /// Most recent authoritative billing checkpoint.
+    pub last_billed_sequence: u64,
+    /// Authoritative egress bytes recorded by the runtime so far.
+    #[norito(default)]
+    pub accounted_egress_bytes: u64,
+    /// Human-readable reason when the lease is not active.
+    #[norito(default)]
+    pub last_status_reason: Option<String>,
+}
+
+impl SoraServiceLeaseStateV1 {
+    /// Validate lease-accounting invariants.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when required lifecycle or pricing
+    /// fields are invalid.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORA_SERVICE_LEASE_STATE_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "sora service lease state",
+                expected: SORA_SERVICE_LEASE_STATE_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.quota_class.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "sora service lease state",
+                field: "quota_class",
+            });
+        }
+        for (field, value) in [
+            ("deployment_deposit_nanos", self.deployment_deposit_nanos),
+            (
+                "runtime_nanos_per_sequence",
+                self.runtime_nanos_per_sequence,
+            ),
+            (
+                "storage_nanos_per_gib_sequence",
+                self.storage_nanos_per_gib_sequence,
+            ),
+            ("egress_nanos_per_mib", self.egress_nanos_per_mib),
+            ("lease_started_sequence", self.lease_started_sequence),
+            ("lease_expires_sequence", self.lease_expires_sequence),
+            ("last_billed_sequence", self.last_billed_sequence),
+        ] {
+            if value == 0 {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora service lease state",
+                    field,
+                    reason: "must be greater than zero".to_string(),
+                });
+            }
+        }
+        if self.lease_expires_sequence <= self.lease_started_sequence {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora service lease state",
+                field: "lease_expires_sequence",
+                reason: "must be greater than lease_started_sequence".to_string(),
+            });
+        }
+        if self.last_billed_sequence < self.lease_started_sequence
+            || self.last_billed_sequence > self.lease_expires_sequence
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora service lease state",
+                field: "last_billed_sequence",
+                reason: "must be within lease_started_sequence..=lease_expires_sequence"
+                    .to_string(),
+            });
+        }
+        if self
+            .last_status_reason
+            .as_ref()
+            .is_some_and(|reason| reason.trim().is_empty())
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora service lease state",
+                field: "last_status_reason",
+                reason: "must not be empty when provided".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Estimated accounting sequences elapsed under the current lease.
+    #[must_use]
+    pub fn billed_sequences_at(&self, current_sequence: u64) -> u64 {
+        current_sequence
+            .min(self.lease_expires_sequence)
+            .saturating_sub(self.lease_started_sequence)
+    }
+
+    /// Estimated remaining prepaid balance at the observed sequence.
+    #[must_use]
+    pub fn remaining_balance_nanos(
+        &self,
+        current_sequence: u64,
+        accounted_storage_bytes: u64,
+    ) -> u64 {
+        let billed_sequences = self.billed_sequences_at(current_sequence);
+        let runtime_cost = billed_sequences.saturating_mul(self.runtime_nanos_per_sequence);
+        let storage_gib = accounted_storage_bytes
+            .saturating_add(SORA_STORAGE_BYTES_PER_GIB.saturating_sub(1))
+            / SORA_STORAGE_BYTES_PER_GIB;
+        let storage_cost = billed_sequences
+            .saturating_mul(self.storage_nanos_per_gib_sequence)
+            .saturating_mul(storage_gib);
+        let egress_mib = self
+            .accounted_egress_bytes
+            .saturating_add(SORA_NETWORK_BYTES_PER_MIB.saturating_sub(1))
+            / SORA_NETWORK_BYTES_PER_MIB;
+        let egress_cost = egress_mib.saturating_mul(self.egress_nanos_per_mib);
+        self.prepaid_runtime_balance_nanos.saturating_sub(
+            runtime_cost
+                .saturating_add(storage_cost)
+                .saturating_add(egress_cost),
+        )
+    }
+
+    /// Effective lease status at the observed sequence.
+    #[must_use]
+    pub fn status_at(
+        &self,
+        current_sequence: u64,
+        accounted_storage_bytes: u64,
+    ) -> SoraServiceLeaseStatusV1 {
+        if self.status == SoraServiceLeaseStatusV1::Suspended {
+            return SoraServiceLeaseStatusV1::Suspended;
+        }
+        if current_sequence >= self.lease_expires_sequence {
+            return SoraServiceLeaseStatusV1::Expired;
+        }
+        if self.remaining_balance_nanos(current_sequence, accounted_storage_bytes) == 0 {
+            return SoraServiceLeaseStatusV1::Exhausted;
+        }
+        self.status
+    }
+
+    /// Returns `true` when the lease is still active at the observed sequence.
+    #[must_use]
+    pub fn is_active_at(&self, current_sequence: u64, accounted_storage_bytes: u64) -> bool {
+        self.status_at(current_sequence, accounted_storage_bytes)
+            == SoraServiceLeaseStatusV1::Active
+    }
+}
+
+/// Authoritative leased-volume state recorded by the hosting control plane.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraServiceLeaseVolumeStateV1 {
+    /// Schema version; must equal [`SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1`].
+    pub schema_version: u16,
+    /// Logical volume identifier.
+    pub volume_name: Name,
+    /// Lease-backed volume kind.
+    pub kind: SoraLeaseVolumeKindV1,
+    /// Storage class requested by the service manifest.
+    pub storage_class: StorageClass,
+    /// Declared in-runtime mount path.
+    pub mount_path: String,
+    /// Maximum logical bytes retained for this volume.
+    pub max_total_bytes: u64,
+    /// Sequence when the binding lease became active.
+    pub lease_started_sequence: u64,
+    /// Sequence when the binding lease expires.
+    pub lease_expires_sequence: u64,
+    /// Monotonic platform-side generation for the authoritative binding.
+    pub authoritative_generation: u64,
+    /// Latest sequence that materialized this binding on a host, when known.
+    #[norito(default)]
+    pub last_materialized_sequence: Option<u64>,
+}
+
+impl SoraServiceLeaseVolumeStateV1 {
+    /// Validate authoritative leased-volume metadata.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when lifecycle or mount invariants are
+    /// invalid.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "sora service lease volume state",
+                expected: SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.mount_path.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "sora service lease volume state",
+                field: "mount_path",
+            });
+        }
+        if !self.mount_path.starts_with('/') {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora service lease volume state",
+                field: "mount_path",
+                reason: "must start with '/'".to_string(),
+            });
+        }
+        for (field, value) in [
+            ("max_total_bytes", self.max_total_bytes),
+            ("lease_started_sequence", self.lease_started_sequence),
+            ("lease_expires_sequence", self.lease_expires_sequence),
+            ("authoritative_generation", self.authoritative_generation),
+        ] {
+            if value == 0 {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora service lease volume state",
+                    field,
+                    reason: "must be greater than zero".to_string(),
+                });
+            }
+        }
+        if self.lease_expires_sequence <= self.lease_started_sequence {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora service lease volume state",
+                field: "lease_expires_sequence",
+                reason: "must be greater than lease_started_sequence".to_string(),
+            });
+        }
+        if self
+            .last_materialized_sequence
+            .is_some_and(|sequence| sequence == 0)
+        {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora service lease volume state",
+                field: "last_materialized_sequence",
+                reason: "must be greater than zero when provided".to_string(),
+            });
+        }
+        Ok(())
+    }
+
+    /// Returns `true` when the volume lease is still active.
+    #[must_use]
+    pub fn is_active_at(&self, current_sequence: u64) -> bool {
+        current_sequence < self.lease_expires_sequence
+    }
 }
 
 /// State namespace addressed by a service binding.
@@ -982,6 +1483,9 @@ pub struct SoraServiceManifestV1 {
     pub service_name: Name,
     /// Human-readable service version label.
     pub service_version: String,
+    /// Execution plane selected by this service revision.
+    #[norito(default)]
+    pub execution_plane: SoraServiceExecutionPlaneV1,
     /// Reference to the executable container manifest.
     pub container: SoraContainerManifestRefV1,
     /// Desired replica count.
@@ -991,9 +1495,15 @@ pub struct SoraServiceManifestV1 {
     pub route: Option<SoraRouteTargetV1>,
     /// Rollout and rollback policy.
     pub rollout: SoraRolloutPolicyV1,
+    /// Hosted-service economics used for prepaid open deployment.
+    #[norito(default)]
+    pub economics: SoraHttpServiceEconomicsV1,
     /// State bindings exposed to the service.
     #[norito(default)]
     pub state_bindings: Vec<SoraStateBindingV1>,
+    /// Lease-backed mutable storage volumes exposed to hosted HTTP services.
+    #[norito(default)]
+    pub lease_volumes: Vec<SoraLeaseVolumeBindingV1>,
     /// Runtime handler contracts exposed by the revision.
     #[norito(default)]
     pub handlers: Vec<SoraServiceHandlerV1>,
@@ -1043,6 +1553,38 @@ impl SoraServiceManifestV1 {
             });
         }
 
+        self.validate_route()?;
+        self.economics.validate()?;
+
+        let mut seen = BTreeSet::new();
+        for binding in &self.state_bindings {
+            binding.validate()?;
+            if !seen.insert(binding.binding_name.clone()) {
+                return Err(SoraCloudManifestError::DuplicateStateBinding {
+                    binding: binding.binding_name.clone(),
+                });
+            }
+        }
+
+        self.validate_lease_volumes()?;
+
+        if self.execution_plane == SoraServiceExecutionPlaneV1::DeterministicService
+            && self.handlers.is_empty()
+        {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "sora service manifest",
+                field: "handlers",
+            });
+        }
+
+        let handler_names = self.validate_handlers()?;
+        self.validate_artifacts(&handler_names)?;
+        self.validate_execution_plane_requirements()?;
+
+        Ok(())
+    }
+
+    fn validate_route(&self) -> Result<(), SoraCloudManifestError> {
         if let Some(route) = self.route.as_ref() {
             if route.host.trim().is_empty() {
                 return Err(SoraCloudManifestError::EmptyField {
@@ -1060,23 +1602,24 @@ impl SoraServiceManifestV1 {
             }
         }
 
-        let mut seen = BTreeSet::new();
-        for binding in &self.state_bindings {
-            binding.validate()?;
-            if !seen.insert(binding.binding_name.clone()) {
-                return Err(SoraCloudManifestError::DuplicateStateBinding {
-                    binding: binding.binding_name.clone(),
+        Ok(())
+    }
+
+    fn validate_lease_volumes(&self) -> Result<(), SoraCloudManifestError> {
+        let mut seen_lease_volumes = BTreeSet::new();
+        for volume in &self.lease_volumes {
+            volume.validate()?;
+            if !seen_lease_volumes.insert(volume.volume_name.clone()) {
+                return Err(SoraCloudManifestError::DuplicateLeaseVolume {
+                    volume: volume.volume_name.clone(),
                 });
             }
         }
 
-        if self.handlers.is_empty() {
-            return Err(SoraCloudManifestError::EmptyField {
-                manifest: "sora service manifest",
-                field: "handlers",
-            });
-        }
+        Ok(())
+    }
 
+    fn validate_handlers(&self) -> Result<BTreeSet<Name>, SoraCloudManifestError> {
         let mut handler_names = BTreeSet::new();
         for handler in &self.handlers {
             handler.validate()?;
@@ -1087,6 +1630,13 @@ impl SoraServiceManifestV1 {
             }
         }
 
+        Ok(handler_names)
+    }
+
+    fn validate_artifacts(
+        &self,
+        handler_names: &BTreeSet<Name>,
+    ) -> Result<(), SoraCloudManifestError> {
         for artifact in &self.artifacts {
             artifact.validate()?;
             if let Some(handler_name) = artifact.handler_name.as_ref()
@@ -1101,6 +1651,74 @@ impl SoraServiceManifestV1 {
         }
 
         Ok(())
+    }
+
+    fn validate_execution_plane_requirements(&self) -> Result<(), SoraCloudManifestError> {
+        match self.execution_plane {
+            SoraServiceExecutionPlaneV1::DeterministicService => {
+                if !self.lease_volumes.is_empty() {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "sora service manifest",
+                        field: "lease_volumes",
+                        reason: "deterministic services must not declare lease-backed HTTP service volumes".to_string(),
+                    });
+                }
+            }
+            SoraServiceExecutionPlaneV1::HttpService => {
+                if self.route.is_none() {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "sora service manifest",
+                        field: "route",
+                        reason: "http services must declare a public or internal route".to_string(),
+                    });
+                }
+                if !self.state_bindings.is_empty() {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "sora service manifest",
+                        field: "state_bindings",
+                        reason: "http services must use lease-backed storage instead of deterministic state bindings".to_string(),
+                    });
+                }
+                if !self.handlers.is_empty() {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "sora service manifest",
+                        field: "handlers",
+                        reason: "http services must not declare deterministic handler contracts"
+                            .to_string(),
+                    });
+                }
+                let minimum_prepaid = self.minimum_hosted_runtime_prepaid_nanos();
+                if self.economics.prepaid_runtime_balance_nanos.get() < minimum_prepaid {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "sora service manifest",
+                        field: "economics.prepaid_runtime_balance_nanos",
+                        reason: format!(
+                            "must cover at least one billed runtime+storage sequence ({minimum_prepaid} nanos)"
+                        ),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn minimum_hosted_runtime_prepaid_nanos(&self) -> u64 {
+        let storage_bytes = self.lease_volumes.iter().fold(0_u64, |acc, volume| {
+            acc.saturating_add(volume.max_total_bytes.get())
+        });
+        let storage_gib = if storage_bytes == 0 {
+            0
+        } else {
+            storage_bytes.saturating_add(SORA_STORAGE_BYTES_PER_GIB.saturating_sub(1))
+                / SORA_STORAGE_BYTES_PER_GIB
+        };
+        self.economics
+            .runtime_nanos_per_sequence
+            .get()
+            .saturating_add(
+                storage_gib.saturating_mul(self.economics.storage_nanos_per_gib_sequence.get()),
+            )
     }
 }
 
@@ -3057,7 +3675,16 @@ impl SoraDeploymentBundleV1 {
 
         self.container.validate()?;
         self.service.validate()?;
+        self.validate_container_reference()?;
+        self.validate_state_write_requirements()?;
+        self.validate_runtime_requirements()?;
+        self.validate_public_route_healthcheck_requirement()?;
+        self.validate_http_service_quota_class()?;
 
+        Ok(())
+    }
+
+    fn validate_container_reference(&self) -> Result<(), SoraCloudManifestError> {
         if self.service.container.expected_schema_version != self.container.schema_version {
             return Err(SoraCloudManifestError::InvalidField {
                 manifest: "sora deployment bundle",
@@ -3081,36 +3708,84 @@ impl SoraDeploymentBundleV1 {
             });
         }
 
-        if !self.container.capabilities.allow_state_writes {
-            for binding in &self.service.state_bindings {
-                if binding.mutability != SoraStateMutabilityV1::ReadOnly {
+        Ok(())
+    }
+
+    fn validate_state_write_requirements(&self) -> Result<(), SoraCloudManifestError> {
+        if self.container.capabilities.allow_state_writes {
+            return Ok(());
+        }
+
+        for binding in &self.service.state_bindings {
+            if binding.mutability != SoraStateMutabilityV1::ReadOnly {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora deployment bundle",
+                    field: "container.capabilities.allow_state_writes",
+                    reason: format!(
+                        "binding `{}` requires mutable writes (`{:?}`)",
+                        binding.binding_name, binding.mutability
+                    ),
+                });
+            }
+        }
+        for handler in &self.service.handlers {
+            if matches!(
+                handler.class,
+                SoraServiceHandlerClassV1::Update | SoraServiceHandlerClassV1::PrivateUpdate
+            ) {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora deployment bundle",
+                    field: "container.capabilities.allow_state_writes",
+                    reason: format!(
+                        "handler `{}` requires ordered replicated writes",
+                        handler.handler_name
+                    ),
+                });
+            }
+        }
+
+        Ok(())
+    }
+
+    fn validate_runtime_requirements(&self) -> Result<(), SoraCloudManifestError> {
+        match self.service.execution_plane {
+            SoraServiceExecutionPlaneV1::DeterministicService => {
+                if !self.container.runtime.is_deterministic() {
                     return Err(SoraCloudManifestError::InvalidField {
                         manifest: "sora deployment bundle",
-                        field: "container.capabilities.allow_state_writes",
+                        field: "container.runtime",
                         reason: format!(
-                            "binding `{}` requires mutable writes (`{:?}`)",
-                            binding.binding_name, binding.mutability
+                            "deterministic services require `Ivm`, found `{:?}`",
+                            self.container.runtime
                         ),
                     });
                 }
             }
-            for handler in &self.service.handlers {
-                if matches!(
-                    handler.class,
-                    SoraServiceHandlerClassV1::Update | SoraServiceHandlerClassV1::PrivateUpdate
-                ) {
+            SoraServiceExecutionPlaneV1::HttpService => {
+                if !self.container.runtime.is_http_service_runtime() {
                     return Err(SoraCloudManifestError::InvalidField {
                         manifest: "sora deployment bundle",
-                        field: "container.capabilities.allow_state_writes",
+                        field: "container.runtime",
                         reason: format!(
-                            "handler `{}` requires ordered replicated writes",
-                            handler.handler_name
+                            "http services require `Inrou` or compatibility `NativeProcess`, found `{:?}`",
+                            self.container.runtime
                         ),
+                    });
+                }
+                if self.container.lifecycle.healthcheck_path.is_none() {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "sora deployment bundle",
+                        field: "container.lifecycle.healthcheck_path",
+                        reason: "http services require an explicit healthcheck path".to_string(),
                     });
                 }
             }
         }
 
+        Ok(())
+    }
+
+    fn validate_public_route_healthcheck_requirement(&self) -> Result<(), SoraCloudManifestError> {
         if matches!(
             self.service.route.as_ref().map(|route| route.visibility),
             Some(SoraRouteVisibilityV1::Public)
@@ -3120,6 +3795,93 @@ impl SoraDeploymentBundleV1 {
                 manifest: "sora deployment bundle",
                 field: "container.lifecycle.healthcheck_path",
                 reason: "public routes require an explicit healthcheck path".to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
+    fn validate_http_service_quota_class(&self) -> Result<(), SoraCloudManifestError> {
+        if self.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService {
+            return Ok(());
+        }
+
+        let quota_class = self.service.economics.quota_class.as_str();
+        let Some(policy) = http_service_quota_class_policy(quota_class) else {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora deployment bundle",
+                field: "service.economics.quota_class",
+                reason: format!(
+                    "unknown hosted-service quota class `{quota_class}`; supported classes: `{SORA_HTTP_SERVICE_QUOTA_CLASS_TAIRA_OPEN}`"
+                ),
+            });
+        };
+
+        if self.service.replicas.get() > policy.max_replicas {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora deployment bundle",
+                field: "service.replicas",
+                reason: format!(
+                    "quota class `{quota_class}` allows at most {} replicas",
+                    policy.max_replicas
+                ),
+            });
+        }
+
+        let resources = self.container.resources;
+        for (field, value, max_value) in [
+            (
+                "container.resources.cpu_millis",
+                u64::from(resources.cpu_millis.get()),
+                u64::from(policy.max_cpu_millis),
+            ),
+            (
+                "container.resources.memory_bytes",
+                resources.memory_bytes.get(),
+                policy.max_memory_bytes,
+            ),
+            (
+                "container.resources.ephemeral_storage_bytes",
+                resources.ephemeral_storage_bytes.get(),
+                policy.max_ephemeral_storage_bytes,
+            ),
+            (
+                "container.resources.max_open_files",
+                u64::from(resources.max_open_files.get()),
+                u64::from(policy.max_open_files),
+            ),
+            (
+                "container.resources.max_tasks",
+                u64::from(resources.max_tasks.get()),
+                u64::from(policy.max_tasks),
+            ),
+        ] {
+            if value > max_value {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora deployment bundle",
+                    field,
+                    reason: format!(
+                        "quota class `{quota_class}` allows at most {max_value}, found {value}"
+                    ),
+                });
+            }
+        }
+
+        let total_lease_volume_bytes = self
+            .service
+            .lease_volumes
+            .iter()
+            .fold(0_u64, |acc, volume| {
+                acc.saturating_add(volume.max_total_bytes.get())
+            });
+        if total_lease_volume_bytes > policy.max_total_lease_volume_bytes {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora deployment bundle",
+                field: "service.lease_volumes",
+                reason: format!(
+                    "quota class `{quota_class}` allows at most {} total lease-backed bytes, found {total_lease_volume_bytes}",
+                    policy.max_total_lease_volume_bytes
+                ),
             });
         }
 
@@ -3412,6 +4174,13 @@ pub struct SoraServiceDeploymentStateV1 {
     /// Most recent rollout observation for the service.
     #[norito(default)]
     pub last_rollout: Option<SoraServiceRolloutStateV1>,
+    /// Authoritative hosted-service lease and prepaid economics, when this
+    /// deployment targets the HTTP service plane.
+    #[norito(default)]
+    pub service_lease: Option<SoraServiceLeaseStateV1>,
+    /// Authoritative lease-backed storage bindings attached to the deployment.
+    #[norito(default)]
+    pub lease_volume_states: Vec<SoraServiceLeaseVolumeStateV1>,
 }
 
 impl SoraServiceDeploymentStateV1 {
@@ -3503,7 +4272,64 @@ impl SoraServiceDeploymentStateV1 {
             last_rollout.validate()?;
         }
 
+        if let Some(lease) = self.service_lease.as_ref() {
+            lease.validate()?;
+        }
+        let mut volume_names = BTreeSet::new();
+        for volume in &self.lease_volume_states {
+            volume.validate()?;
+            if !volume_names.insert(volume.volume_name.clone()) {
+                return Err(SoraCloudManifestError::DuplicateLeaseVolume {
+                    volume: volume.volume_name.clone(),
+                });
+            }
+        }
+        if self.service_lease.is_none() && !self.lease_volume_states.is_empty() {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora service deployment state",
+                field: "lease_volume_states",
+                reason: "lease-backed volume state requires an active hosted-service lease"
+                    .to_string(),
+            });
+        }
+
         Ok(())
+    }
+
+    /// Maximum authoritative leased-storage bytes retained by the deployment.
+    #[must_use]
+    pub fn accounted_storage_bytes(&self) -> u64 {
+        self.lease_volume_states.iter().fold(0_u64, |acc, volume| {
+            acc.saturating_add(volume.max_total_bytes)
+        })
+    }
+
+    /// Effective hosted-service lease status at the observed sequence.
+    #[must_use]
+    pub fn hosted_service_lease_status_at(
+        &self,
+        current_sequence: u64,
+    ) -> Option<SoraServiceLeaseStatusV1> {
+        self.service_lease
+            .as_ref()
+            .map(|lease| lease.status_at(current_sequence, self.accounted_storage_bytes()))
+    }
+
+    /// Effective remaining prepaid runtime balance at the observed sequence.
+    #[must_use]
+    pub fn hosted_service_remaining_balance_nanos(&self, current_sequence: u64) -> Option<u64> {
+        self.service_lease.as_ref().map(|lease| {
+            lease.remaining_balance_nanos(current_sequence, self.accounted_storage_bytes())
+        })
+    }
+
+    /// Returns `true` when the hosted-service plane may still be routed and
+    /// materialized at the observed sequence.
+    #[must_use]
+    pub fn hosted_service_lease_active_at(&self, current_sequence: u64) -> bool {
+        self.service_lease.as_ref().is_some_and(|lease| {
+            lease.is_active_at(current_sequence, self.accounted_storage_bytes())
+        })
     }
 }
 
@@ -10410,6 +11236,7 @@ mod tests {
             schema_version: SORA_SERVICE_MANIFEST_VERSION_V1,
             service_name: "portal".parse().expect("valid name"),
             service_version: "2026.1".to_string(),
+            execution_plane: SoraServiceExecutionPlaneV1::DeterministicService,
             container: SoraContainerManifestRefV1 {
                 manifest_hash: sample_hash(23),
                 expected_schema_version: SORA_CONTAINER_MANIFEST_VERSION_V1,
@@ -10428,7 +11255,9 @@ mod tests {
                 health_window_secs: NonZeroU32::new(60).expect("nonzero"),
                 automatic_rollback_failures: NonZeroU32::new(2).expect("nonzero"),
             },
+            economics: SoraHttpServiceEconomicsV1::default(),
             state_bindings,
+            lease_volumes: Vec::new(),
             handlers: sample_handlers(),
             artifacts: sample_artifacts(),
         }
@@ -10969,6 +11798,16 @@ mod tests {
     }
 
     #[test]
+    fn container_validate_accepts_inrou_runtime() {
+        let mut container = sample_container();
+        container.runtime = SoraContainerRuntimeV1::Inrou;
+        assert!(
+            container.validate().is_ok(),
+            "Inrou Soracloud manifests should be admitted by the data model"
+        );
+    }
+
+    #[test]
     fn container_validate_rejects_config_export_for_nonrequired_config() {
         let mut container = sample_container();
         container.config_exports = vec![SoraConfigExportV1 {
@@ -11043,6 +11882,7 @@ mod tests {
             schema_version: SORA_SERVICE_MANIFEST_VERSION_V1,
             service_name: "wallet".parse().expect("valid name"),
             service_version: "1.0.0".to_string(),
+            execution_plane: SoraServiceExecutionPlaneV1::DeterministicService,
             container: SoraContainerManifestRefV1 {
                 manifest_hash: sample_hash(13),
                 expected_schema_version: SORA_CONTAINER_MANIFEST_VERSION_V1,
@@ -11061,7 +11901,9 @@ mod tests {
                 health_window_secs: NonZeroU32::new(45).expect("nonzero"),
                 automatic_rollback_failures: NonZeroU32::new(3).expect("nonzero"),
             },
+            economics: SoraHttpServiceEconomicsV1::default(),
             state_bindings: vec![binding.clone(), binding],
+            lease_volumes: Vec::new(),
             handlers: sample_handlers(),
             artifacts: sample_artifacts(),
         };
@@ -11111,6 +11953,89 @@ mod tests {
             error,
             SoraCloudManifestError::InvalidField {
                 field: "mailbox",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn service_validate_accepts_http_service_with_lease_volumes() {
+        let mut manifest = sample_service(Vec::new());
+        manifest.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        manifest.state_bindings.clear();
+        manifest.handlers.clear();
+        manifest.artifacts.clear();
+        manifest.lease_volumes = vec![
+            SoraLeaseVolumeBindingV1 {
+                volume_name: "index_state".parse().expect("valid name"),
+                kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+                storage_class: StorageClass::Warm,
+                mount_path: "/var/lib/ton-indexer".to_string(),
+                max_total_bytes: NonZeroU64::new(50 * 1024 * 1024 * 1024).expect("nonzero"),
+            },
+            SoraLeaseVolumeBindingV1 {
+                volume_name: "sealed_state".parse().expect("valid name"),
+                kind: SoraLeaseVolumeKindV1::ConfidentialLeaseVolume,
+                storage_class: StorageClass::Hot,
+                mount_path: "/var/lib/ton-indexer/private".to_string(),
+                max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
+            },
+        ];
+
+        assert!(
+            manifest.validate().is_ok(),
+            "http services should validate with route + lease volumes and no deterministic handlers"
+        );
+    }
+
+    #[test]
+    fn service_validate_rejects_http_service_with_underfunded_prepaid_balance() {
+        let mut manifest = sample_service(Vec::new());
+        manifest.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        manifest.state_bindings.clear();
+        manifest.handlers.clear();
+        manifest.artifacts.clear();
+        manifest.lease_volumes = vec![SoraLeaseVolumeBindingV1 {
+            volume_name: "index_state".parse().expect("valid name"),
+            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/var/lib/ton-indexer".to_string(),
+            max_total_bytes: NonZeroU64::new(50 * 1024 * 1024 * 1024).expect("nonzero"),
+        }];
+        manifest.economics.prepaid_runtime_balance_nanos =
+            NonZeroU64::new(200_000).expect("nonzero");
+
+        let error = manifest
+            .validate()
+            .expect_err("hosted http services must reject obviously underfunded prepaid balances");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "economics.prepaid_runtime_balance_nanos",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn service_validate_rejects_http_service_with_deterministic_handlers() {
+        let mut manifest = sample_service(Vec::new());
+        manifest.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        manifest.lease_volumes = vec![SoraLeaseVolumeBindingV1 {
+            volume_name: "index_state".parse().expect("valid name"),
+            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/var/lib/ton-indexer".to_string(),
+            max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
+        }];
+
+        let error = manifest
+            .validate()
+            .expect_err("http services must not declare deterministic handlers");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "handlers",
                 ..
             }
         ));
@@ -11189,6 +12114,148 @@ mod tests {
             bundle.validate_for_admission().is_ok(),
             "consistent deployment bundle must pass"
         );
+    }
+
+    #[test]
+    fn deployment_bundle_validate_rejects_http_service_with_ivm_runtime() {
+        let container = sample_container();
+        let container_hash = Hash::new(Encode::encode(&container));
+        let mut service = sample_service(Vec::new());
+        service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        service.container.manifest_hash = container_hash;
+        service.state_bindings.clear();
+        service.handlers.clear();
+        service.artifacts.clear();
+        service.lease_volumes = vec![SoraLeaseVolumeBindingV1 {
+            volume_name: "index_state".parse().expect("valid name"),
+            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/var/lib/ton-indexer".to_string(),
+            max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
+        }];
+
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+        let error = bundle
+            .validate_for_admission()
+            .expect_err("http services must not use IVM runtime");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "container.runtime",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn deployment_bundle_validate_accepts_inrou_http_service() {
+        let mut container = sample_container();
+        container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.capabilities.network = SoraNetworkPolicyV1::Open;
+        let container_hash = Hash::new(Encode::encode(&container));
+        let mut service = sample_service(Vec::new());
+        service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        service.container.manifest_hash = container_hash;
+        service.state_bindings.clear();
+        service.handlers.clear();
+        service.artifacts.clear();
+        service.lease_volumes = vec![SoraLeaseVolumeBindingV1 {
+            volume_name: "index_state".parse().expect("valid name"),
+            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/var/lib/ton-indexer".to_string(),
+            max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
+        }];
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+
+        assert!(
+            bundle.validate_for_admission().is_ok(),
+            "Inrou http services should pass admission"
+        );
+    }
+
+    #[test]
+    fn deployment_bundle_validate_rejects_unknown_http_service_quota_class() {
+        let mut container = sample_container();
+        container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.capabilities.network = SoraNetworkPolicyV1::Open;
+        let container_hash = Hash::new(Encode::encode(&container));
+        let mut service = sample_service(Vec::new());
+        service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        service.container.manifest_hash = container_hash;
+        service.state_bindings.clear();
+        service.handlers.clear();
+        service.artifacts.clear();
+        service.economics.quota_class = "taira-unsupported".to_string();
+        service.lease_volumes = vec![SoraLeaseVolumeBindingV1 {
+            volume_name: "index_state".parse().expect("valid name"),
+            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/var/lib/ton-indexer".to_string(),
+            max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
+        }];
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+
+        let error = bundle
+            .validate_for_admission()
+            .expect_err("unknown hosted-service quota classes must fail admission");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "service.economics.quota_class",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn deployment_bundle_validate_rejects_http_service_resources_over_quota_class_cap() {
+        let mut container = sample_container();
+        container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.capabilities.network = SoraNetworkPolicyV1::Open;
+        container.resources.cpu_millis = NonZeroU32::new(5_000).expect("nonzero");
+        let container_hash = Hash::new(Encode::encode(&container));
+        let mut service = sample_service(Vec::new());
+        service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        service.container.manifest_hash = container_hash;
+        service.state_bindings.clear();
+        service.handlers.clear();
+        service.artifacts.clear();
+        service.lease_volumes = vec![SoraLeaseVolumeBindingV1 {
+            volume_name: "index_state".parse().expect("valid name"),
+            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/var/lib/ton-indexer".to_string(),
+            max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
+        }];
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+
+        let error = bundle
+            .validate_for_admission()
+            .expect_err("hosted HTTP services must stay within the selected quota class");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "container.resources.cpu_millis",
+                ..
+            }
+        ));
     }
 
     #[test]
@@ -11354,6 +12421,8 @@ mod tests {
             secret_generation: 0,
             service_configs: BTreeMap::new(),
             service_secrets: BTreeMap::new(),
+            service_lease: None,
+            lease_volume_states: Vec::new(),
         };
 
         let error = deployment

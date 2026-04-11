@@ -25,6 +25,7 @@ use iroha_data_model::{
         SORA_PRIVATE_COMPILE_PROFILE_VERSION_V1, SORA_PRIVATE_INFERENCE_CHECKPOINT_VERSION_V1,
         SORA_PRIVATE_INFERENCE_SESSION_VERSION_V1, SORA_SERVICE_AUDIT_EVENT_VERSION_V1,
         SORA_SERVICE_CONFIG_ENTRY_VERSION_V1, SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+        SORA_SERVICE_LEASE_STATE_VERSION_V1, SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1,
         SORA_SERVICE_ROLLOUT_STATE_VERSION_V1, SORA_SERVICE_SECRET_ENTRY_VERSION_V1,
         SORA_SERVICE_STATE_ENTRY_VERSION_V1, SORA_TRAINING_JOB_AUDIT_EVENT_VERSION_V1,
         SORA_TRAINING_JOB_RECORD_VERSION_V1, SORA_UPLOADED_MODEL_BUNDLE_VERSION_V1,
@@ -46,13 +47,14 @@ use iroha_data_model::{
         SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
         SoraPrivateInferenceSessionV1, SoraRolloutStageV1, SoraRuntimeReceiptV1,
         SoraServiceAuditEventV1, SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1,
-        SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1, SoraServiceRolloutStateV1,
-        SoraServiceRuntimeStateV1, SoraServiceSecretEntryV1, SoraServiceStateEntryV1,
-        SoraStateEncryptionV1, SoraStateMutationOperationV1, SoraTrainingJobActionV1,
-        SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1, SoraTrainingJobStatusV1,
-        SoraUploadedModelBindingStatusV1, SoraUploadedModelBindingV1, SoraUploadedModelBundleV1,
-        SoraUploadedModelChunkV1, derive_agent_autonomy_request_commitment,
-        encode_agent_artifact_allow_provenance_payload,
+        SoraServiceExecutionPlaneV1, SoraServiceLeaseStateV1, SoraServiceLeaseStatusV1,
+        SoraServiceLeaseVolumeStateV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
+        SoraServiceRolloutStateV1, SoraServiceRuntimeStateV1, SoraServiceSecretEntryV1,
+        SoraServiceStateEntryV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
+        SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
+        SoraTrainingJobStatusV1, SoraUploadedModelBindingStatusV1, SoraUploadedModelBindingV1,
+        SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
+        derive_agent_autonomy_request_commitment, encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
@@ -1908,6 +1910,67 @@ pub(crate) fn write_soracloud_runtime_state(
     Ok(())
 }
 
+pub(crate) fn write_soracloud_service_lease_usage(
+    state_transaction: &mut StateTransaction<'_, '_>,
+    service_name: Name,
+    active_service_version: String,
+    accounted_egress_bytes: u64,
+) -> Result<(), InstructionExecutionError> {
+    let mut deployment = state_transaction
+        .world
+        .soracloud_service_deployments
+        .get(&service_name)
+        .cloned()
+        .ok_or_else(|| {
+            InstructionExecutionError::InvariantViolation(
+                format!("service `{service_name}` is not deployed").into(),
+            )
+        })?;
+    if deployment.current_service_version != active_service_version {
+        return Err(InstructionExecutionError::InvariantViolation(
+            format!(
+                "service `{service_name}` lease usage version `{active_service_version}` does not match the active deployment `{}`",
+                deployment.current_service_version
+            )
+            .into(),
+        ));
+    }
+    let accounted_storage_bytes = deployment.accounted_storage_bytes();
+    let current_sequence = next_soracloud_audit_sequence(state_transaction);
+    let lease = deployment.service_lease.as_mut().ok_or_else(|| {
+        InstructionExecutionError::InvariantViolation(
+            format!("service `{service_name}` does not have an active hosted-service lease").into(),
+        )
+    })?;
+    if accounted_egress_bytes < lease.accounted_egress_bytes {
+        return Err(invalid_parameter(format!(
+            "service `{service_name}` lease usage must not decrease authoritative accounted egress bytes from {} to {accounted_egress_bytes}",
+            lease.accounted_egress_bytes
+        )));
+    }
+
+    lease.accounted_egress_bytes = accounted_egress_bytes;
+    match lease.status_at(current_sequence, accounted_storage_bytes) {
+        SoraServiceLeaseStatusV1::Active => {
+            lease.status = SoraServiceLeaseStatusV1::Active;
+            lease.last_status_reason = None;
+        }
+        SoraServiceLeaseStatusV1::Exhausted => {
+            lease.status = SoraServiceLeaseStatusV1::Exhausted;
+            lease.last_status_reason =
+                Some("prepaid runtime balance exhausted by accounted egress usage".to_string());
+        }
+        SoraServiceLeaseStatusV1::Expired => {
+            lease.status = SoraServiceLeaseStatusV1::Expired;
+            lease.last_status_reason =
+                Some("service lease expired before additional usage could be billed".to_string());
+        }
+        SoraServiceLeaseStatusV1::Suspended => {}
+    }
+
+    record_deployment_state(state_transaction, deployment)
+}
+
 pub(crate) fn write_soracloud_mailbox_message(
     state_transaction: &mut StateTransaction<'_, '_>,
     message: SoraServiceMailboxMessageV1,
@@ -2222,6 +2285,132 @@ fn record_deployment_state(
         .soracloud_service_deployments
         .insert(state.service_name.clone(), state);
     Ok(())
+}
+
+fn build_http_service_lease_state(
+    bundle: &SoraDeploymentBundleV1,
+    existing: Option<&SoraServiceDeploymentStateV1>,
+    sequence: u64,
+    extend_terms: bool,
+) -> Option<SoraServiceLeaseStateV1> {
+    if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService {
+        return None;
+    }
+
+    let economics = &bundle.service.economics;
+    let existing_lease = existing.and_then(|deployment| deployment.service_lease.as_ref());
+    let quota_class = economics.quota_class.clone();
+    let deployment_deposit_nanos =
+        existing_lease.map_or(economics.deployment_deposit_nanos.get(), |lease| {
+            lease
+                .deployment_deposit_nanos
+                .max(economics.deployment_deposit_nanos.get())
+        });
+    let prepaid_runtime_balance_nanos =
+        existing_lease.map_or(economics.prepaid_runtime_balance_nanos.get(), |lease| {
+            if extend_terms {
+                lease
+                    .prepaid_runtime_balance_nanos
+                    .saturating_add(economics.prepaid_runtime_balance_nanos.get())
+            } else {
+                lease.prepaid_runtime_balance_nanos
+            }
+        });
+    let lease_started_sequence =
+        existing_lease.map_or(sequence, |lease| lease.lease_started_sequence);
+    let lease_expires_sequence = existing_lease.map_or(
+        sequence.saturating_add(economics.lease_duration_sequences.get()),
+        |lease| {
+            if extend_terms {
+                lease
+                    .lease_expires_sequence
+                    .max(sequence)
+                    .saturating_add(economics.lease_duration_sequences.get())
+            } else {
+                lease.lease_expires_sequence
+            }
+        },
+    );
+    let existing_status =
+        existing_lease.map_or(SoraServiceLeaseStatusV1::Active, |lease| lease.status);
+    let status = if existing_status == SoraServiceLeaseStatusV1::Suspended {
+        SoraServiceLeaseStatusV1::Suspended
+    } else if sequence >= lease_expires_sequence {
+        SoraServiceLeaseStatusV1::Expired
+    } else {
+        SoraServiceLeaseStatusV1::Active
+    };
+
+    Some(SoraServiceLeaseStateV1 {
+        schema_version: SORA_SERVICE_LEASE_STATE_VERSION_V1,
+        status,
+        quota_class,
+        deployment_deposit_nanos,
+        prepaid_runtime_balance_nanos,
+        runtime_nanos_per_sequence: economics.runtime_nanos_per_sequence.get(),
+        storage_nanos_per_gib_sequence: economics.storage_nanos_per_gib_sequence.get(),
+        egress_nanos_per_mib: economics.egress_nanos_per_mib.get(),
+        lease_started_sequence,
+        lease_expires_sequence,
+        last_billed_sequence: existing_lease
+            .map_or(sequence, |lease| lease.last_billed_sequence)
+            .clamp(lease_started_sequence, lease_expires_sequence),
+        accounted_egress_bytes: existing_lease.map_or(0, |lease| lease.accounted_egress_bytes),
+        last_status_reason: existing_lease.and_then(|lease| lease.last_status_reason.clone()),
+    })
+}
+
+fn build_http_service_lease_volume_states(
+    bundle: &SoraDeploymentBundleV1,
+    lease_state: Option<&SoraServiceLeaseStateV1>,
+    existing: Option<&SoraServiceDeploymentStateV1>,
+) -> Vec<SoraServiceLeaseVolumeStateV1> {
+    if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::HttpService {
+        return Vec::new();
+    }
+
+    let Some(lease_state) = lease_state else {
+        return Vec::new();
+    };
+
+    bundle
+        .service
+        .lease_volumes
+        .iter()
+        .map(|volume| {
+            let existing_state = existing.and_then(|deployment| {
+                deployment
+                    .lease_volume_states
+                    .iter()
+                    .find(|state| state.volume_name == volume.volume_name)
+            });
+            let unchanged = existing_state.is_some_and(|state| {
+                state.kind == volume.kind
+                    && state.storage_class == volume.storage_class
+                    && state.mount_path == volume.mount_path
+                    && state.max_total_bytes == volume.max_total_bytes.get()
+            });
+            SoraServiceLeaseVolumeStateV1 {
+                schema_version: SORA_SERVICE_LEASE_VOLUME_STATE_VERSION_V1,
+                volume_name: volume.volume_name.clone(),
+                kind: volume.kind,
+                storage_class: volume.storage_class,
+                mount_path: volume.mount_path.clone(),
+                max_total_bytes: volume.max_total_bytes.get(),
+                lease_started_sequence: lease_state.lease_started_sequence,
+                lease_expires_sequence: lease_state.lease_expires_sequence,
+                authoritative_generation: existing_state.map_or(1, |state| {
+                    if unchanged {
+                        state.authoritative_generation
+                    } else {
+                        state.authoritative_generation.saturating_add(1)
+                    }
+                }),
+                last_materialized_sequence: existing_state
+                    .and_then(|state| state.last_materialized_sequence),
+            }
+        })
+        .collect()
 }
 
 fn apply_service_config_mutation(
@@ -4440,6 +4629,14 @@ fn admit_bundle(
     let active_rollout = last_rollout
         .clone()
         .filter(|rollout| rollout.stage == SoraRolloutStageV1::Canary);
+    let service_lease = build_http_service_lease_state(
+        &bundle,
+        existing.as_ref(),
+        sequence,
+        action == SoraServiceLifecycleActionV1::Upgrade,
+    );
+    let lease_volume_states =
+        build_http_service_lease_volume_states(&bundle, service_lease.as_ref(), existing.as_ref());
 
     record_deployment_state(
         state_transaction,
@@ -4458,6 +4655,8 @@ fn admit_bundle(
             service_secrets,
             active_rollout,
             last_rollout: last_rollout.clone(),
+            service_lease,
+            lease_volume_states,
         },
     )?;
 
@@ -4590,6 +4789,13 @@ impl Execute for isi::RollbackSoracloudService {
             )
             .map_err(|err| invalid_parameter(err.to_string()))?;
         let sequence = next_soracloud_audit_sequence(state_transaction);
+        let service_lease =
+            build_http_service_lease_state(&bundle, Some(&existing), sequence, false);
+        let lease_volume_states = build_http_service_lease_volume_states(
+            &bundle,
+            service_lease.as_ref(),
+            Some(&existing),
+        );
 
         record_deployment_state(
             state_transaction,
@@ -4608,6 +4814,8 @@ impl Execute for isi::RollbackSoracloudService {
                 service_secrets: existing.service_secrets,
                 active_rollout: None,
                 last_rollout: None,
+                service_lease,
+                lease_volume_states,
             },
         )?;
 
@@ -10247,6 +10455,27 @@ impl Execute for isi::SetSoracloudRuntimeState {
     }
 }
 
+impl Execute for isi::ReportSoracloudServiceLeaseUsage {
+    fn execute(
+        self,
+        authority: &AccountId,
+        state_transaction: &mut StateTransaction<'_, '_>,
+    ) -> Result<(), InstructionExecutionError> {
+        require_soracloud_permission(authority, state_transaction)?;
+        if self.active_service_version.trim().is_empty() {
+            return Err(invalid_parameter(
+                "active_service_version must not be empty".to_string(),
+            ));
+        }
+        write_soracloud_service_lease_usage(
+            state_transaction,
+            self.service_name,
+            self.active_service_version,
+            self.accounted_egress_bytes,
+        )
+    }
+}
+
 impl Execute for isi::RecordSoracloudMailboxMessage {
     fn execute(
         self,
@@ -10302,11 +10531,11 @@ mod tests {
             SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1,
             SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1, SoraHfPlacementStatusV1,
             SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
-            SoraLifecycleHooksV1, SoraModelHostCapabilityRecordV1, SoraNetworkPolicyV1,
-            SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
-            SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1,
-            SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
-            SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1,
+            SoraHttpServiceEconomicsV1, SoraLifecycleHooksV1, SoraModelHostCapabilityRecordV1,
+            SoraNetworkPolicyV1, SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1,
+            SoraRouteVisibilityV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+            SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
+            SoraStateMutabilityV1, SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1,
         },
     };
     use iroha_primitives::json::Json;
@@ -10512,6 +10741,8 @@ mod tests {
                 schema_version: iroha_data_model::soracloud::SORA_SERVICE_MANIFEST_VERSION_V1,
                 service_name: service_name.parse().expect("valid name"),
                 service_version: service_version.to_string(),
+                execution_plane:
+                    iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService,
                 container: SoraContainerManifestRefV1 {
                     manifest_hash: container_manifest_hash,
                     expected_schema_version:
@@ -10531,6 +10762,7 @@ mod tests {
                     health_window_secs: NonZeroU32::new(30).expect("nonzero"),
                     automatic_rollback_failures: NonZeroU32::new(2).expect("nonzero"),
                 },
+                economics: Default::default(),
                 state_bindings: vec![SoraStateBindingV1 {
                     schema_version: iroha_data_model::soracloud::SORA_STATE_BINDING_VERSION_V1,
                     binding_name: "session".parse().expect("valid name"),
@@ -10541,6 +10773,7 @@ mod tests {
                     max_item_bytes: NonZeroU64::new(1024).expect("nonzero"),
                     max_total_bytes: NonZeroU64::new(2048).expect("nonzero"),
                 }],
+                lease_volumes: Vec::new(),
                 handlers: vec![SoraServiceHandlerV1 {
                     handler_name: "query".parse().expect("valid name"),
                     class: SoraServiceHandlerClassV1::Query,
@@ -13116,6 +13349,10 @@ mod tests {
         let state = state_with_soracloud_permission(&kura)?;
         let mut bundle = sample_bundle("portal", "1.0.0", 0);
         bundle.container.runtime = SoraContainerRuntimeV1::NativeProcess;
+        bundle.service.execution_plane =
+            iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+        bundle.service.state_bindings.clear();
+        bundle.service.handlers.clear();
         bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
@@ -13131,6 +13368,68 @@ mod tests {
         }
         .execute(&ALICE_ID, &mut stx)
         .expect("native-process deployment should be admitted");
+        Ok(())
+    }
+
+    #[test]
+    fn report_soracloud_service_lease_usage_updates_authoritative_lease_state()
+    -> Result<(), eyre::Report> {
+        let kura = Kura::blank_kura_for_testing();
+        let state = state_with_soracloud_permission(&kura)?;
+        let mut bundle = sample_bundle("portal", "1.0.0", 0);
+        bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
+        bundle.container.capabilities.network = SoraNetworkPolicyV1::Open;
+        bundle.service.execution_plane =
+            iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+        bundle.service.economics = SoraHttpServiceEconomicsV1 {
+            schema_version: iroha_data_model::soracloud::SORA_HTTP_SERVICE_ECONOMICS_VERSION_V1,
+            quota_class: "taira-open".to_string(),
+            deployment_deposit_nanos: NonZeroU64::new(1_000_000_000).expect("nonzero"),
+            prepaid_runtime_balance_nanos: NonZeroU64::new(5_000).expect("nonzero"),
+            runtime_nanos_per_sequence: NonZeroU64::new(1).expect("nonzero"),
+            storage_nanos_per_gib_sequence: NonZeroU64::new(1).expect("nonzero"),
+            egress_nanos_per_mib: NonZeroU64::new(5_000).expect("nonzero"),
+            lease_duration_sequences: NonZeroU64::new(100).expect("nonzero"),
+        };
+        bundle.service.state_bindings.clear();
+        bundle.service.handlers.clear();
+        bundle.service.artifacts[0].handler_name = None;
+        bundle.service.container.manifest_hash = bundle.container_manifest_hash();
+        let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
+            .as_ref()
+            .header();
+        let mut state_block = state.block(block_header);
+        let mut stx = state_block.transaction();
+
+        isi::DeploySoracloudService {
+            bundle: bundle.clone(),
+            initial_service_configs: BTreeMap::new(),
+            initial_service_secrets: BTreeMap::new(),
+            provenance: bundle_provenance(&bundle),
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        isi::ReportSoracloudServiceLeaseUsage {
+            service_name: bundle.service.service_name.clone(),
+            active_service_version: bundle.service.service_version.clone(),
+            accounted_egress_bytes: 1024 * 1024,
+        }
+        .execute(&ALICE_ID, &mut stx)?;
+
+        let deployment = stx
+            .world
+            .soracloud_service_deployments
+            .get(&bundle.service.service_name)
+            .expect("deployment");
+        let lease = deployment.service_lease.as_ref().expect("lease");
+        assert_eq!(lease.accounted_egress_bytes, 1024 * 1024);
+        assert_eq!(lease.status, SoraServiceLeaseStatusV1::Exhausted);
+        assert!(
+            lease
+                .last_status_reason
+                .as_deref()
+                .is_some_and(|reason| { reason.contains("prepaid runtime balance exhausted") })
+        );
         Ok(())
     }
 

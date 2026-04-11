@@ -1,16 +1,21 @@
-# Soracloud Vue3 SPA + API Runbook
+# Soracloud Vue3 SPA and Split-App Runbook
 
-This runbook covers production-oriented deployment and operations for:
+This runbook covers three production-oriented frontend patterns:
 
-- a Vue3 static site (`--template site`); and
-- a Vue3 SPA + API service (`--template webapp`),
+- a static Vue3 site published to SoraFS with `--template site`
+- a hosted HTTP API with `--template http-service`
+- a mixed split app with `app init --template split-app`
 
-using Soracloud control-plane APIs on Iroha 3 with SCR/IVM assumptions (no
-WASM runtime dependency and no Docker dependency).
+The split-app path is the recommended production workflow for apps that need:
 
-## 1. Generate template projects
+- a static frontend served from SoraFS CID URLs
+- a hosted live API on `Inrou`
+- a deterministic IVM vault/auth API
+- one shared `/api` surface split by authoritative longest-prefix routing
 
-Static site scaffold:
+## 1. Generate the Scaffold
+
+Static site only:
 
 ```bash
 iroha app soracloud init \
@@ -20,23 +25,34 @@ iroha app soracloud init \
   --output-dir .soracloud-docs
 ```
 
-SPA + API scaffold:
+Hosted HTTP service only:
 
 ```bash
 iroha app soracloud init \
-  --template webapp \
-  --service-name agent_console \
+  --template http-service \
+  --service-name live_search \
   --service-version 1.0.0 \
-  --output-dir .soracloud-agent
+  --output-dir .soracloud-live
 ```
 
-Each output directory includes:
+Mixed split app:
 
-- `container_manifest.json`
-- `service_manifest.json`
-- template source files under `site/` or `webapp/`
+```bash
+iroha app soracloud app init \
+  --template split-app \
+  --app-name hayahi \
+  --app-version 1.0.0 \
+  --output-dir .soracloud-hayahi
+```
 
-## 2. Build application artifacts
+The split-app scaffold produces:
+
+- `app_manifest.json`
+- `frontend/`
+- `services/live/`
+- `services/vault/`
+
+## 2. Build Artifacts
 
 Static site:
 
@@ -46,129 +62,154 @@ npm install
 npm run build
 ```
 
-SPA frontend + API:
+Hosted HTTP service:
 
 ```bash
-cd .soracloud-agent/webapp
+cd .soracloud-live/http-service
+./build.sh
+```
+
+Split app:
+
+```bash
+cd .soracloud-hayahi/frontend
 npm install
-npm --prefix frontend install
-npm --prefix frontend run build
+npm run build
+
+cd ../services/live
+./build.sh
+
+cd ../vault
+./build.sh
+
+cd ../..
 ```
 
-## 3. Package and publish frontend assets
+Expected outputs:
 
-For static hosting via SoraFS:
+- static site: `site/dist/`
+- hosted HTTP service: `http-service/build/http-service.tgz`
+- split app frontend: `frontend/dist/`
+- split app live API: `services/live/build/live-api.tgz`
+- split app vault API: `services/vault/build/vault-api.to`
+
+## 3. Recompute Manifest Hashes
+
+Single hosted service:
 
 ```bash
-iroha app sorafs toolkit pack ./dist \
-  --manifest-out ../sorafs/site_manifest.to \
-  --car-out ../sorafs/site_payload.car \
-  --json-out ../sorafs/site_pack_report.json
+iroha app soracloud sync-manifests \
+  --container .soracloud-live/container_manifest.json \
+  --service .soracloud-live/service_manifest.json \
+  --bundle-file .soracloud-live/http-service/build/http-service.tgz
 ```
 
-For SPA frontend:
+Whole split app:
 
 ```bash
-iroha app sorafs toolkit pack ./frontend/dist \
-  --manifest-out ../sorafs/frontend_manifest.to \
-  --car-out ../sorafs/frontend_payload.car \
-  --json-out ../sorafs/frontend_pack_report.json
+iroha app soracloud sync-manifests \
+  --app-manifest .soracloud-hayahi/app_manifest.json
 ```
 
-## 4. Deploy to live Soracloud control plane
+App-wide sync is the recommended path for mixed deployments because each
+service reference can declare its own `bundle_file`, letting one command
+refresh every `bundle_hash` and referenced container manifest hash before
+deployment.
 
-Deploy static site service:
+## 4. Publish Frontend Assets
+
+For static site packaging through SoraFS:
+
+```bash
+iroha app sorafs toolkit pack .soracloud-docs/site/dist \
+  --manifest-out .soracloud-docs/sorafs/site_manifest.to \
+  --car-out .soracloud-docs/sorafs/site_payload.car \
+  --json-out .soracloud-docs/sorafs/site_pack_report.json
+```
+
+For a split app you normally do not need a separate manual packaging step.
+`iroha app soracloud app deploy` publishes the declared `static_site.dist_dir`
+from the app manifest as part of the app-wide deploy flow.
+
+In production on Taira, keep `https://taira.sora.org/` bound to Torii and use
+the SoraFS gateway path for frontend access:
+
+- `https://taira.sora.org/sorafs/cid/<cid>/`
+
+## 5. Deploy
+
+Single hosted HTTP service:
 
 ```bash
 iroha app soracloud deploy \
-  --container .soracloud-docs/container_manifest.json \
-  --service .soracloud-docs/service_manifest.json \
+  --container .soracloud-live/container_manifest.json \
+  --service .soracloud-live/service_manifest.json \
   --torii-url http://127.0.0.1:8080
 ```
 
-Deploy SPA + API service:
+Split app:
 
 ```bash
-iroha app soracloud deploy \
-  --container .soracloud-agent/container_manifest.json \
-  --service .soracloud-agent/service_manifest.json \
+iroha app soracloud app deploy \
+  --manifest .soracloud-hayahi/app_manifest.json \
   --torii-url http://127.0.0.1:8080
 ```
 
-Validate route binding and rollout state:
+The app deploy flow:
+
+- republishes the static frontend from `frontend/dist`
+- updates the app static-site binding
+- deploys the hosted `services/live` API
+- deploys the deterministic `services/vault` API
+
+## 6. Validate Routing and Runtime State
+
+Check service state:
 
 ```bash
 iroha app soracloud status --torii-url http://127.0.0.1:8080
 ```
 
-Expected control-plane checks:
-
-- `control_plane.services[].latest_revision.route_host` set
-- `control_plane.services[].latest_revision.route_path_prefix` set (`/` or `/api`)
-- `control_plane.services[].active_rollout` present immediately after upgrade
-
-## 5. Upgrade with health-gated rollout
-
-1. Bump `service_version` in the service manifest.
-2. Run upgrade:
+Check the app-scoped projection:
 
 ```bash
-iroha app soracloud upgrade \
-  --container container_manifest.json \
-  --service service_manifest.json \
+iroha app soracloud app status \
+  --manifest .soracloud-hayahi/app_manifest.json \
   --torii-url http://127.0.0.1:8080
 ```
 
-3. Promote rollout after health checks:
+Expected checks for a split app:
+
+- `/api/v1/search*` resolves to the hosted live API
+- `/api/auth*` resolves to the deterministic vault API
+- `/api/v1/user*` resolves to the deterministic vault API
+- the live service reports lease-backed volume mounts
+- the frontend loads from a SoraFS CID URL and still targets `/api`
+
+## 7. Upgrade and Redeploy
+
+After rebuilding artifacts, rerun:
 
 ```bash
-iroha app soracloud rollout \
-  --service-name docs_portal \
-  --rollout-handle <handle_from_upgrade_output> \
-  --health healthy \
-  --promote-to-percent 100 \
-  --governance-tx-hash <tx_hash> \
+iroha app soracloud sync-manifests \
+  --app-manifest .soracloud-hayahi/app_manifest.json
+
+iroha app soracloud app upgrade \
+  --manifest .soracloud-hayahi/app_manifest.json \
   --torii-url http://127.0.0.1:8080
 ```
 
-4. If health fails, report unhealthy:
+That keeps the frontend publication plus both services on one documented
+workflow, without SSH-only steps or manual CID pinning.
 
-```bash
-iroha app soracloud rollout \
-  --service-name docs_portal \
-  --rollout-handle <handle_from_upgrade_output> \
-  --health unhealthy \
-  --governance-tx-hash <tx_hash> \
-  --torii-url http://127.0.0.1:8080
-```
+## 8. Operations Checklist
 
-When unhealthy reports reach policy threshold, Soracloud automatically rolls
-back to baseline revision and records rollback audit events.
-
-## 6. Manual rollback and incident response
-
-Rollback to previous version:
-
-```bash
-iroha app soracloud rollback \
-  --service-name docs_portal \
-  --torii-url http://127.0.0.1:8080
-```
-
-Use status output to confirm:
-
-- `current_version` reverted
-- `audit_event_count` incremented
-- `active_rollout` cleared
-- `last_rollout.stage` is `RolledBack` for automatic rollbacks
-
-## 7. Operations checklist
-
-- Keep template-generated manifests under version control.
-- Record `governance_tx_hash` for each rollout step to preserve traceability.
-- Treat `service_health`, `routing`, `resource_pressure`, and
-  `failed_admissions` as rollout gate inputs.
-- Use canary percentages and explicit promotion rather than direct full-cut
-  upgrades for user-facing services.
-- Validate session/auth and signature-verification behavior in
-  `webapp/api/server.mjs` before production.
+- Keep generated manifests under version control.
+- Use `http-service` for hosted collectors, SSE, and shared caches.
+- Keep wallet auth and confidential user state on the IVM plane.
+- Persist hosted mutable state through declared `lease_volumes`, not ad hoc
+  local directories.
+- Fail frontend production builds if they point at demo/static data or the
+  wrong API base.
+- Treat Torii root as Torii-only; publish user-facing frontend assets to SoraFS
+  CID paths instead.

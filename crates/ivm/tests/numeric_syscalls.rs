@@ -4,6 +4,7 @@ use iroha_crypto::Hash;
 use iroha_primitives::numeric::Numeric;
 use ivm::host::IVMHost;
 use ivm::{CoreHost, IVM, PointerType, VMError, host::DefaultHost, syscalls};
+mod common;
 
 fn make_tlv(type_id: u16, payload: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(7 + payload.len() + 32);
@@ -25,6 +26,14 @@ fn decode_numeric(vm: &IVM, ptr: u64) -> Numeric {
     let tlv = vm.memory.validate_tlv(ptr).expect("validate tlv");
     assert_eq!(tlv.type_id, PointerType::NoritoBytes);
     norito::decode_from_bytes(tlv.payload).expect("decode numeric")
+}
+
+fn alloc_heap_tlv(vm: &mut IVM, bytes: &[u8]) -> u64 {
+    let addr = vm.memory.alloc(bytes.len() as u64).expect("alloc heap tlv");
+    vm.memory
+        .store_bytes(addr, bytes)
+        .expect("store heap numeric tlv");
+    addr
 }
 
 #[test]
@@ -79,6 +88,39 @@ fn numeric_to_int_rejects_negative() {
         .syscall(syscalls::SYSCALL_NUMERIC_TO_INT, &mut vm)
         .expect_err("negative numeric to int should fail");
     assert!(matches!(err, VMError::AssertionFailed));
+}
+
+#[test]
+fn numeric_to_int_direct_accepts_input_heap_and_literal_pointers() {
+    let mut host = DefaultHost::new();
+    let tlv = make_numeric_tlv(Numeric::new(42_i64, 0));
+
+    let mut vm = IVM::new(u64::MAX);
+    let ptr = vm.alloc_input_tlv(&tlv).expect("alloc input numeric");
+    vm.set_register(10, ptr);
+    host.syscall(syscalls::SYSCALL_NUMERIC_TO_INT_DIRECT, &mut vm)
+        .expect("numeric to int direct from input");
+    assert_eq!(vm.register(10) as i64, 42);
+
+    let mut vm = IVM::new(u64::MAX);
+    let ptr = alloc_heap_tlv(&mut vm, &tlv);
+    vm.set_register(10, ptr);
+    host.syscall(syscalls::SYSCALL_NUMERIC_TO_INT_DIRECT, &mut vm)
+        .expect("numeric to int direct from heap");
+    assert_eq!(vm.register(10) as i64, 42);
+
+    let (literal_prog, literal_ptrs) = common::assemble_syscalls_with_literal_section(
+        &[syscalls::SYSCALL_NUMERIC_TO_INT_DIRECT as u8],
+        &[tlv.as_slice()],
+    );
+    let ptr = literal_ptrs[0];
+    let mut vm = IVM::new(u64::MAX);
+    vm.load_program(&literal_prog)
+        .expect("load literal program");
+    vm.set_register(10, ptr);
+    host.syscall(syscalls::SYSCALL_NUMERIC_TO_INT_DIRECT, &mut vm)
+        .expect("numeric to int direct from literal");
+    assert_eq!(vm.register(10) as i64, 42);
 }
 
 #[test]

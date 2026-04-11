@@ -1296,6 +1296,29 @@ impl PartialOrd for SetSoracloudRuntimeState {
     }
 }
 
+/// Report authoritative leased-service usage observed by the runtime.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct ReportSoracloudServiceLeaseUsage {
+    /// Service whose hosted-service lease should be updated.
+    pub service_name: Name,
+    /// Active service revision observed by the runtime.
+    pub active_service_version: String,
+    /// Total egress bytes accounted for the active lease so far.
+    pub accounted_egress_bytes: u64,
+}
+
+impl crate::seal::Instruction for ReportSoracloudServiceLeaseUsage {}
+
+impl PartialOrd for ReportSoracloudServiceLeaseUsage {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(encoded_order(self, other))
+    }
+}
+
 /// Persist an ordered Soracloud mailbox message.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(

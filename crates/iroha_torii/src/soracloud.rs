@@ -52,20 +52,21 @@ use iroha_data_model::{
         SoraHfModelFormatV1, SoraHfPlacementRecordV1, SoraHfResourceProfileV1,
         SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1, SoraHfSharedLeaseMemberStatusV1,
         SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSharedLeaseStatusV1,
-        SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraModelArtifactActionV1,
-        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
-        SoraModelPrivacyModeV1, SoraModelProvenanceKindV1, SoraModelRegistryV1,
-        SoraModelWeightActionV1, SoraModelWeightAuditEventV1, SoraModelWeightVersionRecordV1,
-        SoraNetworkPolicyV1, SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
-        SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRolloutStageV1,
-        SoraRuntimeReceiptV1, SoraServiceAuditEventV1, SoraServiceConfigEntryV1,
-        SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceLifecycleActionV1,
-        SoraServiceRolloutStateV1, SoraServiceSecretEntryV1, SoraStateBindingV1,
-        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateMutationOperationV1,
-        SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1, SoraTrainingJobRecordV1,
-        SoraTrainingJobStatusV1, SoraUploadedModelBindingV1, SoraUploadedModelBundleV1,
-        SoraUploadedModelChunkV1, SoraUploadedModelEncryptionRecipientV1,
-        encode_agent_artifact_allow_provenance_payload,
+        SoraHfSourceRecordV1, SoraHfSourceStatusV1, SoraLeaseVolumeBindingV1,
+        SoraModelArtifactActionV1, SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1,
+        SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1, SoraModelProvenanceKindV1,
+        SoraModelRegistryV1, SoraModelWeightActionV1, SoraModelWeightAuditEventV1,
+        SoraModelWeightVersionRecordV1, SoraNetworkPolicyV1, SoraPrivateCompileProfileV1,
+        SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
+        SoraPrivateInferenceSessionV1, SoraRolloutStageV1, SoraRuntimeReceiptV1,
+        SoraServiceAuditEventV1, SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1,
+        SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceLeaseStatusV1,
+        SoraServiceLifecycleActionV1, SoraServiceRolloutStateV1, SoraServiceSecretEntryV1,
+        SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
+        SoraStateMutationOperationV1, SoraTrainingJobActionV1, SoraTrainingJobAuditEventV1,
+        SoraTrainingJobRecordV1, SoraTrainingJobStatusV1, SoraUploadedModelBindingV1,
+        SoraUploadedModelBundleV1, SoraUploadedModelChunkV1,
+        SoraUploadedModelEncryptionRecipientV1, encode_agent_artifact_allow_provenance_payload,
         encode_agent_autonomy_run_provenance_payload, encode_agent_deploy_provenance_payload,
         encode_agent_lease_renew_provenance_payload, encode_agent_message_ack_provenance_payload,
         encode_agent_message_send_provenance_payload,
@@ -1803,7 +1804,7 @@ pub(crate) struct LocalReadRouteMatch {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub(crate) struct NativeProcessRouteMatch {
+pub(crate) struct HostedHttpRouteMatch {
     pub service_name: String,
     pub service_version: String,
     pub request_path: String,
@@ -1824,7 +1825,7 @@ pub(crate) struct OrderedMailboxRouteMatch {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum PublicRouteMatch {
     LocalRead(LocalReadRouteMatch),
-    NativeProcess(NativeProcessRouteMatch),
+    HostedHttp(HostedHttpRouteMatch),
     OrderedMailbox(OrderedMailboxRouteMatch),
 }
 
@@ -1913,6 +1914,21 @@ pub(crate) struct ControlPlaneServiceSnapshot {
     #[norito(default)]
     pub secret_entry_count: u32,
     #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub quota_class: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub service_lease_status: Option<SoraServiceLeaseStatusV1>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub lease_expires_sequence: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub prepaid_runtime_balance_nanos: Option<u64>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub remaining_runtime_balance_nanos: Option<u64>,
+    #[norito(default)]
     pub latest_revision: Option<ControlPlaneServiceRevision>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -1949,6 +1965,7 @@ pub(crate) struct ControlPlaneServiceRevision {
     pub service_manifest_hash: Hash,
     pub container_manifest_hash: Hash,
     pub replicas: u16,
+    pub execution_plane: SoraServiceExecutionPlaneV1,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub route_host: Option<String>,
@@ -1958,6 +1975,8 @@ pub(crate) struct ControlPlaneServiceRevision {
     pub state_binding_count: u32,
     #[norito(default)]
     pub state_bindings: Vec<SoraStateBindingV1>,
+    #[norito(default)]
+    pub lease_volumes: Vec<SoraLeaseVolumeBindingV1>,
     #[norito(default)]
     pub allow_model_inference: bool,
     #[norito(default)]
@@ -8994,10 +9013,12 @@ fn deployment_bundle_to_control_plane_revision(
         service_manifest_hash: bundle.service_manifest_hash(),
         container_manifest_hash: bundle.container_manifest_hash(),
         replicas: bundle.service.replicas.get(),
+        execution_plane: bundle.service.execution_plane,
         route_host: route.map(|route| route.host.clone()),
         route_path_prefix: route.map(|route| route.path_prefix.clone()),
         state_binding_count: u32::try_from(bundle.service.state_bindings.len()).unwrap_or(u32::MAX),
         state_bindings: bundle.service.state_bindings.clone(),
+        lease_volumes: bundle.service.lease_volumes.clone(),
         allow_model_inference: bundle.container.capabilities.allow_model_inference,
         allow_model_training: bundle.container.capabilities.allow_model_training,
         runtime: bundle.container.runtime,
@@ -9046,6 +9067,11 @@ pub(crate) fn resolve_public_local_read_route(
         )) else {
             continue;
         };
+        if bundle.service.execution_plane != SoraServiceExecutionPlaneV1::DeterministicService
+            || !bundle.container.runtime.is_deterministic()
+        {
+            continue;
+        }
         let Some(route) = bundle.service.route.as_ref() else {
             continue;
         };
@@ -9106,9 +9132,29 @@ pub(crate) fn resolve_public_local_read_route(
     best_match.map(|(_route_len, route_match)| route_match)
 }
 
+fn public_method_supports_handler(
+    request_method: &str,
+    handler_class: iroha_data_model::soracloud::SoraServiceHandlerClassV1,
+) -> bool {
+    if request_method.eq_ignore_ascii_case("GET") || request_method.eq_ignore_ascii_case("HEAD") {
+        matches!(
+            handler_class,
+            iroha_data_model::soracloud::SoraServiceHandlerClassV1::Asset
+                | iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query
+        )
+    } else {
+        matches!(
+            handler_class,
+            iroha_data_model::soracloud::SoraServiceHandlerClassV1::Update
+                | iroha_data_model::soracloud::SoraServiceHandlerClassV1::PrivateUpdate
+        )
+    }
+}
+
 pub(crate) fn resolve_public_route(
     app: &SharedAppState,
     host: &str,
+    request_method: &str,
     request_path: &str,
 ) -> Option<PublicRouteMatch> {
     let normalized_host = normalize_public_route_host(host);
@@ -9118,6 +9164,7 @@ pub(crate) fn resolve_public_route(
     let normalized_path = normalize_public_route_path(request_path);
     let state_view = app.state.view();
     let world = state_view.world();
+    let current_sequence = current_soracloud_service_sequence(world);
     let mut best_match: Option<(usize, PublicRouteMatch, (String, String, String))> = None;
 
     for (service_id, deployment) in world.soracloud_service_deployments().iter() {
@@ -9138,14 +9185,25 @@ pub(crate) fn resolve_public_route(
             continue;
         }
 
-        if bundle.container.runtime == SoraContainerRuntimeV1::NativeProcess {
+        if bundle.service.execution_plane == SoraServiceExecutionPlaneV1::HttpService {
+            if !deployment.hosted_service_lease_active_at(current_sequence)
+                || deployment
+                    .lease_volume_states
+                    .iter()
+                    .any(|volume| !volume.is_active_at(current_sequence))
+            {
+                continue;
+            }
+            if !bundle.container.runtime.is_http_service_runtime() {
+                continue;
+            }
             let Some(request_path) =
                 split_public_handler_path(normalized_path, route.path_prefix.as_str())
             else {
                 continue;
             };
             let route_len = route.path_prefix.len();
-            let route_match = PublicRouteMatch::NativeProcess(NativeProcessRouteMatch {
+            let route_match = PublicRouteMatch::HostedHttp(HostedHttpRouteMatch {
                 service_name: service_name.clone(),
                 service_version: deployment.current_service_version.clone(),
                 request_path,
@@ -9166,7 +9224,14 @@ pub(crate) fn resolve_public_route(
             continue;
         }
 
+        if !bundle.container.runtime.is_deterministic() {
+            continue;
+        }
+
         for handler in &bundle.service.handlers {
+            if !public_method_supports_handler(request_method, handler.class) {
+                continue;
+            }
             let route_match = match handler.class {
                 iroha_data_model::soracloud::SoraServiceHandlerClassV1::Asset => {
                     let full_route = join_public_route_paths(
@@ -9220,17 +9285,16 @@ pub(crate) fn resolve_public_route(
                         continue;
                     };
                     let route_len = full_route.len();
-                    let route_match =
-                        PublicRouteMatch::OrderedMailbox(OrderedMailboxRouteMatch {
-                            service_name: service_name.clone(),
-                            service_version: deployment.current_service_version.clone(),
-                            handler_name: handler.handler_name.to_string(),
-                            handler_class: handler.class,
-                            handler_path,
-                            deployment: deployment.clone(),
-                            bundle: bundle.clone(),
-                            handler: handler.clone(),
-                        });
+                    let route_match = PublicRouteMatch::OrderedMailbox(OrderedMailboxRouteMatch {
+                        service_name: service_name.clone(),
+                        service_version: deployment.current_service_version.clone(),
+                        handler_name: handler.handler_name.to_string(),
+                        handler_class: handler.class,
+                        handler_path,
+                        deployment: deployment.clone(),
+                        bundle: bundle.clone(),
+                        handler: handler.clone(),
+                    });
                     (route_len, route_match)
                 }
             };
@@ -9296,6 +9360,15 @@ fn split_public_handler_path(request_path: &str, full_route: &str) -> Option<Str
     None
 }
 
+fn current_soracloud_service_sequence(world: &impl WorldReadOnly) -> u64 {
+    world
+        .soracloud_service_audit_events()
+        .iter()
+        .map(|(sequence, _event)| *sequence)
+        .max()
+        .unwrap_or(0)
+}
+
 pub(crate) fn control_plane_snapshot(
     app: &SharedAppState,
     service_name: Option<&str>,
@@ -9303,6 +9376,7 @@ pub(crate) fn control_plane_snapshot(
 ) -> ControlPlaneSnapshot {
     let state_view = app.state.view();
     let world = state_view.world();
+    let current_sequence = current_soracloud_service_sequence(world);
     let mut services = Vec::new();
 
     for (service_id, deployment) in world.soracloud_service_deployments().iter() {
@@ -9343,6 +9417,21 @@ pub(crate) fn control_plane_snapshot(
             secret_generation: deployment.secret_generation,
             config_entry_count: u32::try_from(deployment.service_configs.len()).unwrap_or(u32::MAX),
             secret_entry_count: u32::try_from(deployment.service_secrets.len()).unwrap_or(u32::MAX),
+            quota_class: deployment
+                .service_lease
+                .as_ref()
+                .map(|lease| lease.quota_class.clone()),
+            service_lease_status: deployment.hosted_service_lease_status_at(current_sequence),
+            lease_expires_sequence: deployment
+                .service_lease
+                .as_ref()
+                .map(|lease| lease.lease_expires_sequence),
+            prepaid_runtime_balance_nanos: deployment
+                .service_lease
+                .as_ref()
+                .map(|lease| lease.prepaid_runtime_balance_nanos),
+            remaining_runtime_balance_nanos: deployment
+                .hosted_service_remaining_balance_nanos(current_sequence),
             latest_revision: current_bundle.as_ref().map(|bundle| {
                 deployment_bundle_to_control_plane_revision(deployment, bundle, latest_audit)
             }),
@@ -13359,9 +13448,9 @@ mod tests {
             SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
             SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1,
             SoraServiceAuditEventV1, SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1,
-            SoraServiceLifecycleActionV1, SoraServiceManifestV1, SoraServiceSecretEntryV1,
-            SoraServiceStateEntryV1, SoraStateEncryptionV1, SoraUploadedModelBundleV1,
-            SoraUploadedModelChunkV1, SoraUploadedModelPricingPolicyV1,
+            SoraServiceHandlerV1, SoraServiceLifecycleActionV1, SoraServiceManifestV1,
+            SoraServiceSecretEntryV1, SoraServiceStateEntryV1, SoraStateEncryptionV1,
+            SoraUploadedModelBundleV1, SoraUploadedModelChunkV1, SoraUploadedModelPricingPolicyV1,
             SoraUploadedModelRuntimeFormatV1,
         },
         sorafs::pin_registry::StorageClass,
@@ -14042,6 +14131,8 @@ mod tests {
                     secret_generation: 0,
                     service_configs: BTreeMap::new(),
                     service_secrets: BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
                 },
             );
         let app = mk_app_state_for_tests_with_world(world);
@@ -14071,13 +14162,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn resolve_public_route_projects_native_process_services() {
+    async fn resolve_public_route_projects_http_service_inrous() {
         use iroha_core::state::World;
 
         let mut world = World::new();
         let mut bundle = fixture_bundle("2026.04.0");
-        bundle.container.runtime =
-            iroha_data_model::soracloud::SoraContainerRuntimeV1::NativeProcess;
+        bundle.container.runtime = iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou;
+        bundle.service.execution_plane =
+            iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+        bundle.service.state_bindings.clear();
+        bundle.service.handlers.clear();
         let service_name = bundle.service.service_name.clone();
         world.soracloud_service_revisions_mut_for_testing().insert(
             (
@@ -14106,24 +14200,107 @@ mod tests {
                     secret_generation: 0,
                     service_configs: BTreeMap::new(),
                     service_secrets: BTreeMap::new(),
+                    service_lease: Some(iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
+                        schema_version:
+                            iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
+                        status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
+                        quota_class: "taira-open".to_string(),
+                        deployment_deposit_nanos: 1_000_000_000,
+                        prepaid_runtime_balance_nanos: 50_000_000_000,
+                        runtime_nanos_per_sequence: 250_000,
+                        storage_nanos_per_gib_sequence: 25_000,
+                        egress_nanos_per_mib: 5_000,
+                        lease_started_sequence: 0,
+                        lease_expires_sequence: 100,
+                        last_billed_sequence: 0,
+                        accounted_egress_bytes: 0,
+                        last_status_reason: None,
+                    }),
+                    lease_volume_states: Vec::new(),
                 },
             );
         let app = mk_app_state_for_tests_with_world(world);
 
-        let route_match = resolve_public_route(&app, "portal.sora", "/app/v1/health")
-            .expect("native process route");
+        let route_match = resolve_public_route(&app, "portal.sora", "GET", "/app/v1/health")
+            .expect("http service route");
         match route_match {
-            PublicRouteMatch::NativeProcess(route_match) => {
+            PublicRouteMatch::HostedHttp(route_match) => {
                 assert_eq!(route_match.service_name, "web_portal");
                 assert_eq!(route_match.service_version, "2026.04.0");
                 assert_eq!(route_match.request_path, "/v1/health");
             }
-            other => panic!("expected native-process route, got {other:?}"),
+            other => panic!("expected hosted-http route, got {other:?}"),
         }
 
         assert!(
-            resolve_public_route(&app, "wrong.sora", "/app/v1/health").is_none(),
-            "host matching must stay authoritative for native services"
+            resolve_public_route(&app, "wrong.sora", "GET", "/app/v1/health").is_none(),
+            "host matching must stay authoritative for hosted http services"
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_public_route_rejects_http_service_with_expired_lease() {
+        use iroha_core::state::World;
+
+        let mut world = World::new();
+        let mut bundle = fixture_bundle("2026.04.1");
+        bundle.container.runtime = iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou;
+        bundle.service.execution_plane =
+            iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+        bundle.service.state_bindings.clear();
+        bundle.service.handlers.clear();
+        let service_name = bundle.service.service_name.clone();
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (
+                bundle.service.service_name.to_string(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                service_name,
+                SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name: bundle.service.service_name.clone(),
+                    current_service_version: bundle.service.service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    service_configs: BTreeMap::new(),
+                    service_secrets: BTreeMap::new(),
+                    service_lease: Some(iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
+                        schema_version:
+                            iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
+                        status: iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
+                        quota_class: "taira-open".to_string(),
+                        deployment_deposit_nanos: 1_000_000_000,
+                        prepaid_runtime_balance_nanos: 50_000_000_000,
+                        runtime_nanos_per_sequence: 250_000,
+                        storage_nanos_per_gib_sequence: 25_000,
+                        egress_nanos_per_mib: 5_000,
+                        lease_started_sequence: 0,
+                        lease_expires_sequence: 0,
+                        last_billed_sequence: 0,
+                        accounted_egress_bytes: 0,
+                        last_status_reason: None,
+                    }),
+                    lease_volume_states: Vec::new(),
+                },
+            );
+        let app = mk_app_state_for_tests_with_world(world);
+
+        assert!(
+            resolve_public_route(&app, "portal.sora", "GET", "/app/v1/health").is_none(),
+            "expired hosted leases must fail closed before proxy routing"
         );
     }
 
@@ -14161,11 +14338,13 @@ mod tests {
                     secret_generation: 0,
                     service_configs: BTreeMap::new(),
                     service_secrets: BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
                 },
             );
         let app = mk_app_state_for_tests_with_world(world);
 
-        let route_match = resolve_public_route(&app, "portal.sora", "/app/update/search")
+        let route_match = resolve_public_route(&app, "portal.sora", "POST", "/app/update/search")
             .expect("ordered mailbox route");
         match route_match {
             PublicRouteMatch::OrderedMailbox(route_match) => {
@@ -14179,7 +14358,7 @@ mod tests {
         }
 
         let private_route =
-            resolve_public_route(&app, "portal.sora", "/app/private/update/vault")
+            resolve_public_route(&app, "portal.sora", "POST", "/app/private/update/vault")
                 .expect("private ordered mailbox route");
         match private_route {
             PublicRouteMatch::OrderedMailbox(route_match) => {
@@ -14191,6 +14370,96 @@ mod tests {
                 assert_eq!(route_match.handler_path, "/vault");
             }
             other => panic!("expected private ordered-mailbox route, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn resolve_public_route_prefers_handler_class_for_http_method() {
+        use iroha_core::state::World;
+        use iroha_data_model::soracloud::SoraMailboxContractV1;
+
+        let mut world = World::new();
+        let mut bundle = fixture_bundle("2026.03.0");
+        bundle.service.handlers = vec![
+            SoraServiceHandlerV1 {
+                handler_name: "preferences_get".parse().expect("handler"),
+                class: SoraServiceHandlerClassV1::Query,
+                entrypoint: "serve_user_preferences".to_owned(),
+                route_path: Some("/v1/user/preferences".to_owned()),
+                certified_response: SoraCertifiedResponsePolicyV1::AuditReceipt,
+                mailbox: None,
+            },
+            SoraServiceHandlerV1 {
+                handler_name: "preferences_put".parse().expect("handler"),
+                class: SoraServiceHandlerClassV1::PrivateUpdate,
+                entrypoint: "store_user_preferences".to_owned(),
+                route_path: Some("/v1/user/preferences".to_owned()),
+                certified_response: SoraCertifiedResponsePolicyV1::None,
+                mailbox: Some(SoraMailboxContractV1 {
+                    queue_name: "private_updates".parse().expect("queue"),
+                    max_pending_messages: std::num::NonZeroU32::new(128).expect("pending"),
+                    max_message_bytes: std::num::NonZeroU64::new(131_072).expect("bytes"),
+                    retention_blocks: std::num::NonZeroU32::new(64).expect("retention"),
+                }),
+            },
+        ];
+        let service_name = bundle.service.service_name.clone();
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (
+                bundle.service.service_name.to_string(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                service_name,
+                SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name: bundle.service.service_name.clone(),
+                    current_service_version: bundle.service.service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    service_configs: BTreeMap::new(),
+                    service_secrets: BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
+                },
+            );
+        let app = mk_app_state_for_tests_with_world(world);
+
+        let get_route =
+            resolve_public_route(&app, "portal.sora", "GET", "/app/v1/user/preferences")
+                .expect("query route");
+        match get_route {
+            PublicRouteMatch::LocalRead(route_match) => {
+                assert_eq!(route_match.handler_name, "preferences_get");
+                assert_eq!(route_match.handler_class, SoracloudLocalReadKind::Query);
+            }
+            other => panic!("expected query route, got {other:?}"),
+        }
+
+        let put_route =
+            resolve_public_route(&app, "portal.sora", "PUT", "/app/v1/user/preferences")
+                .expect("private update route");
+        match put_route {
+            PublicRouteMatch::OrderedMailbox(route_match) => {
+                assert_eq!(route_match.handler_name, "preferences_put");
+                assert_eq!(
+                    route_match.handler_class,
+                    SoraServiceHandlerClassV1::PrivateUpdate
+                );
+            }
+            other => panic!("expected private update route, got {other:?}"),
         }
     }
 
@@ -14236,6 +14505,8 @@ mod tests {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        service_lease: None,
+                        lease_volume_states: Vec::new(),
                     },
                 );
             world
@@ -14359,6 +14630,8 @@ mod tests {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        service_lease: None,
+                        lease_volume_states: Vec::new(),
                     },
                 );
             for (sequence, state_key, break_glass, consent_evidence_hash) in [
@@ -14501,6 +14774,8 @@ mod tests {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        service_lease: None,
+                        lease_volume_states: Vec::new(),
                     },
                 );
             world.soracloud_training_jobs_mut_for_testing().insert(
@@ -14601,6 +14876,8 @@ mod tests {
                         },
                     )]),
                     service_secrets: BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
                 },
             );
 
@@ -14679,6 +14956,8 @@ mod tests {
                             last_update_sequence: 9,
                         },
                     )]),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
                 },
             );
 
@@ -14751,6 +15030,8 @@ mod tests {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        service_lease: None,
+                        lease_volume_states: Vec::new(),
                     },
                 );
             world.soracloud_model_registries_mut_for_testing().insert(
@@ -14852,6 +15133,8 @@ mod tests {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        service_lease: None,
+                        lease_volume_states: Vec::new(),
                     },
                 );
             world.soracloud_model_artifacts_mut_for_testing().insert(
@@ -16215,6 +16498,8 @@ mod tests {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        service_lease: None,
+                        lease_volume_states: Vec::new(),
                     },
                 );
             let app = mk_app_state_for_tests_with_world(world);
@@ -16412,6 +16697,8 @@ mod tests {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        service_lease: None,
+                        lease_volume_states: Vec::new(),
                     },
                 );
             let app = mk_app_state_for_tests_with_world(world);
@@ -16645,6 +16932,8 @@ mod tests {
             secret_generation: 0,
             service_configs: BTreeMap::new(),
             service_secrets: BTreeMap::new(),
+            service_lease: None,
+            lease_volume_states: Vec::new(),
         };
         let revision = deployment_bundle_to_control_plane_revision(&deployment, &bundle, None);
         assert!(revision.allow_model_inference);

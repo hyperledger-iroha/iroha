@@ -23,12 +23,12 @@ use crate::{
             RecordSoracloudRuntimeReceipt, RegisterSoracloudModelArtifact,
             RegisterSoracloudModelWeight, RegisterSoracloudUploadedModelBundle,
             RenewSoracloudAgentLease, RenewSoracloudHfSharedLease,
-            RequestSoracloudAgentWalletSpend, RestartSoracloudAgentApartment,
-            RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy, RollbackSoracloudModelWeight,
-            RollbackSoracloudService, RunSoracloudAgentAutonomy, RunSoracloudFheJob,
-            SetSoracloudRuntimeState, SetSoracloudServiceConfig, SetSoracloudServiceSecret,
-            StartSoracloudPrivateInference, StartSoracloudTrainingJob, UpgradeSoracloudService,
-            WithdrawSoracloudModelHost,
+            ReportSoracloudServiceLeaseUsage, RequestSoracloudAgentWalletSpend,
+            RestartSoracloudAgentApartment, RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy,
+            RollbackSoracloudModelWeight, RollbackSoracloudService, RunSoracloudAgentAutonomy,
+            RunSoracloudFheJob, SetSoracloudRuntimeState, SetSoracloudServiceConfig,
+            SetSoracloudServiceSecret, StartSoracloudPrivateInference, StartSoracloudTrainingJob,
+            UpgradeSoracloudService, WithdrawSoracloudModelHost,
         },
         staking::{
             ActivatePublicLaneValidator, ExitPublicLaneValidator, RebindPublicLaneValidatorPeer,
@@ -292,6 +292,11 @@ fn visit_soracloud_training_instruction<V: Visit + ?Sized>(
         visitor.visit_advance_soracloud_rollout(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<SetSoracloudRuntimeState>() {
         visitor.visit_set_soracloud_runtime_state(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<ReportSoracloudServiceLeaseUsage>()
+    {
+        visitor.visit_report_soracloud_service_lease_usage(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RecordSoracloudMailboxMessage>() {
         visitor.visit_record_soracloud_mailbox_message(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RecordSoracloudRuntimeReceipt>() {
@@ -511,6 +516,7 @@ macro_rules! instruction_visitors {
             visit_record_soracloud_private_inference_checkpoint(&RecordSoracloudPrivateInferenceCheckpoint),
             visit_advance_soracloud_rollout(&AdvanceSoracloudRollout),
             visit_set_soracloud_runtime_state(&SetSoracloudRuntimeState),
+            visit_report_soracloud_service_lease_usage(&ReportSoracloudServiceLeaseUsage),
             visit_record_soracloud_mailbox_message(&RecordSoracloudMailboxMessage),
             visit_record_soracloud_runtime_receipt(&RecordSoracloudRuntimeReceipt),
         }

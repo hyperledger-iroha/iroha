@@ -10071,6 +10071,8 @@ pub(crate) mod valid {
                     schema_version: iroha_data_model::soracloud::SORA_SERVICE_MANIFEST_VERSION_V1,
                     service_name: service_name.clone(),
                     service_version: service_version.clone(),
+                    execution_plane:
+                        iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService,
                     container: SoraContainerManifestRefV1 {
                         manifest_hash: Hash::new(b"container-manifest:portal"),
                         expected_schema_version:
@@ -10084,7 +10086,9 @@ pub(crate) mod valid {
                         health_window_secs: NonZeroU32::new(30).expect("nonzero health window"),
                         automatic_rollback_failures: NonZeroU32::new(1).expect("nonzero rollback"),
                     },
+                    economics: iroha_data_model::soracloud::SoraHttpServiceEconomicsV1::default(),
                     state_bindings,
+                    lease_volumes: Vec::new(),
                     handlers: vec![SoraServiceHandlerV1 {
                         handler_name: "update".parse().expect("valid handler name"),
                         class: SoraServiceHandlerClassV1::Update,
@@ -10127,6 +10131,8 @@ pub(crate) mod valid {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        service_lease: None,
+                        lease_volume_states: Vec::new(),
                     },
                 );
             world.soracloud_service_runtime_mut_for_testing().insert(

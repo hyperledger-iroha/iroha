@@ -11467,6 +11467,8 @@ mod advert_tests {
                         },
                     )]),
                     service_secrets: BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
                 },
             );
 

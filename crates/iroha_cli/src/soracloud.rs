@@ -9,8 +9,7 @@
 use std::{
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
-    fs,
-    io,
+    fs, io,
     io::Read as _,
     num::{NonZeroU16, NonZeroU32, NonZeroU64},
     path::{Path, PathBuf},
@@ -48,9 +47,10 @@ use iroha::{
             SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1,
             SoraCertifiedResponsePolicyV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
             SoraDeploymentBundleV1, SoraHfBackendFamilyV1, SoraHfModelFormatV1,
-            SoraMailboxContractV1, SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1,
-            SoraNetworkPolicyV1, SoraPrivateCompileProfileV1, SoraPrivateInferenceSessionV1,
-            SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceHandlerClassV1,
+            SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1, SoraMailboxContractV1,
+            SoraModelHostCapabilityRecordV1, SoraModelPrivacyModeV1, SoraNetworkPolicyV1,
+            SoraPrivateCompileProfileV1, SoraPrivateInferenceSessionV1, SoraRouteTargetV1,
+            SoraRouteVisibilityV1, SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1,
             SoraServiceHandlerV1, SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
             SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1, SoraUploadedModelBundleV1,
             SoraUploadedModelChunkV1, SoraUploadedModelEncryptionRecipientV1,
@@ -166,6 +166,8 @@ pub enum Command {
     App(AppCommand),
     /// Scaffold baseline container/service manifests.
     Init(InitArgs),
+    /// Recompute Soracloud manifest hashes after local edits or bundle rebuilds.
+    SyncManifests(SyncManifestsArgs),
     /// Validate manifests and register a new service deployment.
     Deploy(DeployArgs),
     /// Show authoritative Soracloud service state (all services or one service).
@@ -293,13 +295,19 @@ impl AppCommand {
         match self {
             Self::Init(args) => context.print_data(&args.run()?),
             Self::Deploy(args) => {
-                let output =
-                    args.run(MutationMode::Deploy, &context.config().account, &context.config().key_pair)?;
+                let output = args.run(
+                    MutationMode::Deploy,
+                    &context.config().account,
+                    &context.config().key_pair,
+                )?;
                 context.print_data(&output)
             }
             Self::Upgrade(args) => {
-                let output =
-                    args.run(MutationMode::Upgrade, &context.config().account, &context.config().key_pair)?;
+                let output = args.run(
+                    MutationMode::Upgrade,
+                    &context.config().account,
+                    &context.config().key_pair,
+                )?;
                 context.print_data(&output)
             }
             Self::Status(args) => context.print_data(&args.run()?),
@@ -315,6 +323,7 @@ impl Run for Command {
         match self {
             Command::App(command) => command.run(context),
             Command::Init(args) => context.print_data(&args.run()?),
+            Command::SyncManifests(args) => context.print_data(&args.run()?),
             Command::Deploy(args) => {
                 let output = args.run(
                     MutationMode::Deploy,
@@ -523,6 +532,8 @@ enum InitTemplate {
     /// Generate only Soracloud control-plane manifests.
     #[default]
     Baseline,
+    /// Generate a hosted HTTP Soracloud starter that targets Inrou.
+    HttpService,
     /// Generate a Vue3/Vite static SPA starter with SoraFS publish workflow.
     Site,
     /// Generate a Vue3 SPA + API starter with deterministic challenge-signature auth.
@@ -537,6 +548,7 @@ impl InitTemplate {
     fn as_str(self) -> &'static str {
         match self {
             Self::Baseline => "baseline",
+            Self::HttpService => "http-service",
             Self::Site => "site",
             Self::Webapp => "webapp",
             Self::PiiApp => "pii-app",
@@ -607,6 +619,71 @@ impl InitArgs {
     }
 }
 
+/// Arguments for `app soracloud sync-manifests`.
+#[derive(clap::Args, Debug)]
+pub struct SyncManifestsArgs {
+    /// Path to a `SoracloudAppManifestV1` JSON document. When set, every
+    /// referenced service manifest pair is synchronized.
+    #[arg(long, value_name = "PATH")]
+    app_manifest: Option<PathBuf>,
+    /// Path to a `SoraContainerManifestV1` JSON document.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_CONTAINER_MANIFEST)]
+    container: PathBuf,
+    /// Path to a `SoraServiceManifestV1` JSON document.
+    #[arg(long, value_name = "PATH", default_value = DEFAULT_SERVICE_MANIFEST)]
+    service: PathBuf,
+    /// Optional compiled IVM/native bundle file used to refresh `container.bundle_hash`.
+    #[arg(long, value_name = "PATH")]
+    bundle_file: Option<PathBuf>,
+}
+
+impl SyncManifestsArgs {
+    fn run(self) -> Result<SyncManifestsOutput> {
+        if let Some(app_manifest_path) = self.app_manifest.as_ref() {
+            let manifest: SoracloudAppManifestV1 = load_json(app_manifest_path)?;
+            manifest.validate()?;
+            let manifest_dir = app_manifest_path
+                .parent()
+                .unwrap_or_else(|| Path::new("."))
+                .to_path_buf();
+            let services =
+                sync_app_manifest_service_refs(&manifest, &manifest_dir).wrap_err_with(|| {
+                    format!(
+                        "failed to synchronize Soracloud app manifest {}",
+                        app_manifest_path.display()
+                    )
+                })?;
+            return Ok(SyncManifestsOutput {
+                app_manifest_path: Some(app_manifest_path.to_string_lossy().into_owned()),
+                container_manifest_path: None,
+                service_manifest_path: None,
+                container_manifest_hash: None,
+                service_manifest_hash: None,
+                bundle_file: None,
+                bundle_hash: None,
+                services,
+            });
+        }
+
+        let synced = sync_manifest_pair(
+            &self.container,
+            &self.service,
+            self.bundle_file.as_deref(),
+            None,
+        )?;
+        Ok(SyncManifestsOutput {
+            app_manifest_path: None,
+            container_manifest_path: Some(synced.container_manifest_path.clone()),
+            service_manifest_path: Some(synced.service_manifest_path.clone()),
+            container_manifest_hash: Some(synced.container_manifest_hash),
+            service_manifest_hash: Some(synced.service_manifest_hash),
+            bundle_file: synced.bundle_file.clone(),
+            bundle_hash: Some(synced.bundle_hash),
+            services: Vec::new(),
+        })
+    }
+}
+
 /// Arguments for `app soracloud app init`.
 #[derive(clap::Args, Debug)]
 pub struct AppInitArgs {
@@ -619,13 +696,41 @@ pub struct AppInitArgs {
     /// Version string used in the starter API service manifest.
     #[arg(long, value_name = "VERSION", default_value = "0.1.0")]
     app_version: String,
+    /// App template to scaffold.
+    #[arg(long, value_enum, default_value_t = AppInitTemplate::SingleApi)]
+    template: AppInitTemplate,
     /// Overwrite existing files in the output directory.
     #[arg(long)]
     overwrite: bool,
 }
 
+#[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum AppInitTemplate {
+    /// Generate one starter API service plus an app manifest.
+    #[default]
+    SingleApi,
+    /// Generate a split app with a static frontend, an Inrou live API, and an IVM vault API.
+    SplitApp,
+}
+
+impl AppInitTemplate {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::SingleApi => "single-api",
+            Self::SplitApp => "split-app",
+        }
+    }
+}
+
 impl AppInitArgs {
     fn run(self) -> Result<AppInitOutput> {
+        match self.template {
+            AppInitTemplate::SingleApi => self.run_single_api(),
+            AppInitTemplate::SplitApp => self.run_split_app(),
+        }
+    }
+
+    fn run_single_api(self) -> Result<AppInitOutput> {
         fs::create_dir_all(&self.output_dir).wrap_err_with(|| {
             format!(
                 "failed to create output directory {}",
@@ -700,6 +805,7 @@ impl AppInitArgs {
                 service_name: api_service_name.to_string(),
                 container_manifest: relative_path_string(&manifest_path, &container_path),
                 service_manifest: relative_path_string(&manifest_path, &service_path),
+                bundle_file: None,
                 initial_configs: None,
                 initial_secrets: None,
             }],
@@ -708,12 +814,105 @@ impl AppInitArgs {
         write_json(&manifest_path, &manifest)?;
 
         Ok(AppInitOutput {
+            template: self.template.as_str().to_owned(),
             manifest_path: manifest_path.to_string_lossy().into_owned(),
             public_url,
             service_manifest_paths: vec![
                 container_path.to_string_lossy().into_owned(),
                 service_path.to_string_lossy().into_owned(),
             ],
+            template_artifacts: Vec::new(),
+        })
+    }
+
+    fn run_split_app(self) -> Result<AppInitOutput> {
+        fs::create_dir_all(&self.output_dir).wrap_err_with(|| {
+            format!(
+                "failed to create output directory {}",
+                self.output_dir.display()
+            )
+        })?;
+
+        let app_name = normalized_service_label(&self.app_name);
+        let host = format!("{app_name}.sora");
+        let public_url = format!("https://{host}");
+        let manifest_path = self.output_dir.join("app_manifest.json");
+        ensure_can_write(&manifest_path, self.overwrite)?;
+
+        let live_bundle = build_split_app_live_service_bundle(&app_name, &host, &self.app_version)?;
+        let vault_bundle =
+            build_split_app_vault_service_bundle(&app_name, &host, &self.app_version)?;
+
+        let live_dir = self.output_dir.join("services").join("live");
+        let vault_dir = self.output_dir.join("services").join("vault");
+        let live_container_path = live_dir.join("container_manifest.json");
+        let live_service_path = live_dir.join("service_manifest.json");
+        let vault_container_path = vault_dir.join("container_manifest.json");
+        let vault_service_path = vault_dir.join("service_manifest.json");
+        for path in [
+            &live_container_path,
+            &live_service_path,
+            &vault_container_path,
+            &vault_service_path,
+        ] {
+            ensure_can_write(path, self.overwrite)?;
+        }
+        write_json(&live_container_path, &live_bundle.container)?;
+        write_json(&live_service_path, &live_bundle.service)?;
+        write_json(&vault_container_path, &vault_bundle.container)?;
+        write_json(&vault_service_path, &vault_bundle.service)?;
+
+        let manifest = SoracloudAppManifestV1 {
+            schema_version: SORACLOUD_APP_MANIFEST_VERSION_V1,
+            app_name: self.app_name.clone(),
+            public_url: public_url.clone(),
+            static_site: Some(SoracloudAppStaticSiteV1 {
+                dist_dir: "frontend/dist".to_owned(),
+                mount_path: "/".to_owned(),
+                api_base_path: Some("/api".to_owned()),
+                publish_label: Some(format!("{app_name}-frontend")),
+            }),
+            services: vec![
+                SoracloudAppServiceRefV1 {
+                    service_name: live_bundle.service.service_name.to_string(),
+                    container_manifest: relative_path_string(&manifest_path, &live_container_path),
+                    service_manifest: relative_path_string(&manifest_path, &live_service_path),
+                    bundle_file: Some(relative_path_string(
+                        &manifest_path,
+                        &live_dir.join("build/live-api.tgz"),
+                    )),
+                    initial_configs: None,
+                    initial_secrets: None,
+                },
+                SoracloudAppServiceRefV1 {
+                    service_name: vault_bundle.service.service_name.to_string(),
+                    container_manifest: relative_path_string(&manifest_path, &vault_container_path),
+                    service_manifest: relative_path_string(&manifest_path, &vault_service_path),
+                    bundle_file: Some(relative_path_string(
+                        &manifest_path,
+                        &vault_dir.join("build/vault-api.to"),
+                    )),
+                    initial_configs: None,
+                    initial_secrets: None,
+                },
+            ],
+        };
+        manifest.validate()?;
+        write_json(&manifest_path, &manifest)?;
+        let template_artifacts =
+            scaffold_split_app_template(&self.output_dir, &self.app_name, self.overwrite)?;
+
+        Ok(AppInitOutput {
+            template: self.template.as_str().to_owned(),
+            manifest_path: manifest_path.to_string_lossy().into_owned(),
+            public_url,
+            service_manifest_paths: vec![
+                live_container_path.to_string_lossy().into_owned(),
+                live_service_path.to_string_lossy().into_owned(),
+                vault_container_path.to_string_lossy().into_owned(),
+                vault_service_path.to_string_lossy().into_owned(),
+            ],
+            template_artifacts,
         })
     }
 }
@@ -749,6 +948,8 @@ impl AppDeployArgs {
             .to_path_buf();
         let manifest: SoracloudAppManifestV1 = load_json(&manifest_path)?;
         manifest.validate()?;
+        let synced_manifests = sync_app_manifest_service_refs(&manifest, &manifest_dir)
+            .wrap_err("failed to sync app service manifests before deployment")?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
 
         let mode_label = match mode {
@@ -789,7 +990,8 @@ impl AppDeployArgs {
         let mut static_site_binding_attached = false;
         let mut services = Vec::with_capacity(manifest.services.len());
         for service in manifest.services.iter() {
-            let container_manifest = resolve_manifest_path(&manifest_dir, &service.container_manifest);
+            let container_manifest =
+                resolve_manifest_path(&manifest_dir, &service.container_manifest);
             let service_manifest = resolve_manifest_path(&manifest_dir, &service.service_manifest);
             let container: SoraContainerManifestV1 = load_json(&container_manifest)?;
             let service_manifest_payload: SoraServiceManifestV1 = load_json(&service_manifest)?;
@@ -808,10 +1010,13 @@ impl AppDeployArgs {
                 service: service_manifest_payload,
             };
             bundle.validate_for_admission()?;
-            let mut initial_service_configs =
-                load_initial_service_configs(service.initial_configs.as_deref().map(|path| {
-                    resolve_manifest_path(&manifest_dir, path)
-                }).as_deref())?;
+            let mut initial_service_configs = load_initial_service_configs(
+                service
+                    .initial_configs
+                    .as_deref()
+                    .map(|path| resolve_manifest_path(&manifest_dir, path))
+                    .as_deref(),
+            )?;
             if initial_service_configs.contains_key(APP_STATIC_SITE_CONFIG_NAME) {
                 return Err(eyre!(
                     "app service `{}` initial configs may not set reserved config `{APP_STATIC_SITE_CONFIG_NAME}`",
@@ -822,14 +1027,19 @@ impl AppDeployArgs {
                 && route_matches_static_site
                 && let Some(binding_value) = static_site_binding_value.as_ref()
             {
-                initial_service_configs
-                    .insert(APP_STATIC_SITE_CONFIG_NAME.to_owned(), binding_value.clone());
+                initial_service_configs.insert(
+                    APP_STATIC_SITE_CONFIG_NAME.to_owned(),
+                    binding_value.clone(),
+                );
                 static_site_binding_attached = true;
             }
-            let initial_service_secrets =
-                load_initial_service_secrets(service.initial_secrets.as_deref().map(|path| {
-                    resolve_manifest_path(&manifest_dir, path)
-                }).as_deref())?;
+            let initial_service_secrets = load_initial_service_secrets(
+                service
+                    .initial_secrets
+                    .as_deref()
+                    .map(|path| resolve_manifest_path(&manifest_dir, path))
+                    .as_deref(),
+            )?;
             let response = run_service_bundle_mutation(
                 mode,
                 bundle,
@@ -862,6 +1072,7 @@ impl AppDeployArgs {
             mode: mode_label,
             static_site: manifest.static_site,
             published_static_site: static_site_publication,
+            synced_manifests,
             services,
         })
     }
@@ -905,7 +1116,12 @@ impl AppStatusArgs {
                         entry
                             .get("service_name")
                             .and_then(norito::json::Value::as_str)
-                            .map(|name| manifest.services.iter().any(|service| service.service_name == name))
+                            .map(|name| {
+                                manifest
+                                    .services
+                                    .iter()
+                                    .any(|service| service.service_name == name)
+                            })
                             .unwrap_or(false)
                     })
                     .cloned()
@@ -3675,6 +3891,46 @@ struct InitOutput {
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SyncManifestsOutput {
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    app_manifest_path: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    container_manifest_path: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    service_manifest_path: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    container_manifest_hash: Option<Hash>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    service_manifest_hash: Option<Hash>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    bundle_file: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    bundle_hash: Option<Hash>,
+    #[norito(default)]
+    services: Vec<SyncManifestEntryOutput>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct SyncManifestEntryOutput {
+    service_name: String,
+    container_manifest_path: String,
+    service_manifest_path: String,
+    container_manifest_hash: Hash,
+    service_manifest_hash: Hash,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    bundle_file: Option<String>,
+    bundle_hash: Hash,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct StatusOutput {
     source: String,
     #[norito(default)]
@@ -3795,12 +4051,16 @@ impl SoracloudAppStaticSiteV1 {
             return Err(eyre!("app static site field `dist_dir` must not be empty"));
         }
         if !self.mount_path.starts_with('/') {
-            return Err(eyre!("app static site field `mount_path` must start with '/'"));
+            return Err(eyre!(
+                "app static site field `mount_path` must start with '/'"
+            ));
         }
         if let Some(api_base_path) = self.api_base_path.as_deref()
             && !api_base_path.starts_with('/')
         {
-            return Err(eyre!("app static site field `api_base_path` must start with '/'"));
+            return Err(eyre!(
+                "app static site field `api_base_path` must start with '/'"
+            ));
         }
         Ok(())
     }
@@ -3811,6 +4071,9 @@ struct SoracloudAppServiceRefV1 {
     service_name: String,
     container_manifest: String,
     service_manifest: String,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    bundle_file: Option<String>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     initial_configs: Option<String>,
@@ -3836,15 +4099,26 @@ impl SoracloudAppServiceRefV1 {
                 self.service_name
             ));
         }
+        if let Some(bundle_file) = self.bundle_file.as_deref()
+            && bundle_file.trim().is_empty()
+        {
+            return Err(eyre!(
+                "app service `{}` field `bundle_file` must not be empty when provided",
+                self.service_name
+            ));
+        }
         Ok(())
     }
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppInitOutput {
+    template: String,
     manifest_path: String,
     public_url: String,
     service_manifest_paths: Vec<String>,
+    #[norito(default)]
+    template_artifacts: Vec<String>,
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
@@ -3858,6 +4132,8 @@ struct AppMutationOutput {
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     published_static_site: Option<AppStaticSitePublishOutput>,
+    #[norito(default)]
+    synced_manifests: Vec<SyncManifestEntryOutput>,
     services: Vec<AppServiceMutationOutput>,
 }
 
@@ -5128,9 +5404,9 @@ fn build_app_static_site_binding_value(
         manifest_digest_hex: publication.manifest_digest_hex.clone(),
         api_base_path: static_site.api_base_path.clone(),
     };
-    Ok(Json::from(
-        json::to_value(&binding).wrap_err("failed to encode app static site binding JSON")?,
-    ))
+    Ok(Json::from(json::to_value(&binding).wrap_err(
+        "failed to encode app static site binding JSON",
+    )?))
 }
 
 fn publish_app_static_site(
@@ -5170,7 +5446,9 @@ fn publish_app_static_site(
         .trim_end_matches('.')
         .to_ascii_lowercase();
     if hostname.is_empty() {
-        return Err(eyre!("app manifest field `public_url` resolved to an empty hostname"));
+        return Err(eyre!(
+            "app manifest field `public_url` resolved to an empty hostname"
+        ));
     }
 
     let dist_dir = resolve_manifest_path(manifest_dir, &static_site.dist_dir);
@@ -5189,7 +5467,12 @@ fn publish_app_static_site(
 
     let descriptor = chunker_registry::default_descriptor();
     let (plan, payload) = CarBuildPlan::from_directory_with_profile(&dist_dir, descriptor.profile)
-        .map_err(|err| eyre!("failed to package static site `{}`: {err}", dist_dir.display()))?;
+        .map_err(|err| {
+            eyre!(
+                "failed to package static site `{}`: {err}",
+                dist_dir.display()
+            )
+        })?;
     let writer = CarWriter::new(&plan, &payload).wrap_err("failed to prepare site CAR writer")?;
     let mut sink = io::sink();
     let car_stats = writer
@@ -5298,10 +5581,7 @@ fn publish_app_static_site(
     })
 }
 
-fn storage_pin_conflict_is_already_stored(
-    status: iroha::http::StatusCode,
-    body: &[u8],
-) -> bool {
+fn storage_pin_conflict_is_already_stored(status: iroha::http::StatusCode, body: &[u8]) -> bool {
     status == iroha::http::StatusCode::CONFLICT
         && String::from_utf8_lossy(body).contains("already stored")
 }
@@ -10417,6 +10697,71 @@ fn relative_path_string(from_file: &Path, to_path: &Path) -> String {
         .into_owned()
 }
 
+fn sync_manifest_pair(
+    container_path: &Path,
+    service_path: &Path,
+    bundle_file: Option<&Path>,
+    service_name_override: Option<&str>,
+) -> Result<SyncManifestEntryOutput> {
+    let mut container: SoraContainerManifestV1 = load_json(container_path)?;
+    let mut service: SoraServiceManifestV1 = load_json(service_path)?;
+    if let Some(bundle_file) = bundle_file {
+        let bundle_bytes = fs::read(bundle_file).wrap_err_with(|| {
+            format!(
+                "failed to read Soracloud bundle file {}",
+                bundle_file.display()
+            )
+        })?;
+        container.bundle_hash = Hash::new(&bundle_bytes);
+    }
+    service.container.manifest_hash = Hash::new(Encode::encode(&container));
+    service.container.expected_schema_version = container.schema_version;
+
+    let bundle = SoraDeploymentBundleV1 {
+        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        container: container.clone(),
+        service: service.clone(),
+    };
+    bundle.validate_for_admission()?;
+
+    write_json(container_path, &container)?;
+    write_json(service_path, &service)?;
+
+    Ok(SyncManifestEntryOutput {
+        service_name: service_name_override
+            .map(str::to_owned)
+            .unwrap_or_else(|| service.service_name.to_string()),
+        container_manifest_path: container_path.to_string_lossy().into_owned(),
+        service_manifest_path: service_path.to_string_lossy().into_owned(),
+        container_manifest_hash: bundle.container_manifest_hash(),
+        service_manifest_hash: bundle.service_manifest_hash(),
+        bundle_file: bundle_file.map(|path| path.to_string_lossy().into_owned()),
+        bundle_hash: container.bundle_hash,
+    })
+}
+
+fn sync_app_manifest_service_refs(
+    manifest: &SoracloudAppManifestV1,
+    manifest_dir: &Path,
+) -> Result<Vec<SyncManifestEntryOutput>> {
+    let mut outputs = Vec::with_capacity(manifest.services.len());
+    for service in &manifest.services {
+        let container_path = resolve_manifest_path(manifest_dir, &service.container_manifest);
+        let service_path = resolve_manifest_path(manifest_dir, &service.service_manifest);
+        let bundle_file = service
+            .bundle_file
+            .as_deref()
+            .map(|path| resolve_manifest_path(manifest_dir, path));
+        outputs.push(sync_manifest_pair(
+            &container_path,
+            &service_path,
+            bundle_file.as_deref(),
+            Some(&service.service_name),
+        )?);
+    }
+    Ok(outputs)
+}
+
 fn load_json<T>(path: &Path) -> Result<T>
 where
     T: JsonDeserialize,
@@ -10498,6 +10843,297 @@ fn service_artifact(
     }
 }
 
+fn build_split_app_live_service_bundle(
+    app_name: &str,
+    host: &str,
+    app_version: &str,
+) -> Result<SoraDeploymentBundleV1> {
+    let mut container =
+        load_json::<SoraContainerManifestV1>(&workspace_fixture(DEFAULT_CONTAINER_MANIFEST))?;
+    let mut service =
+        load_json::<SoraServiceManifestV1>(&workspace_fixture(DEFAULT_SERVICE_MANIFEST))?;
+    let service_name: Name = format!("{app_name}_live")
+        .parse()
+        .wrap_err("invalid split-app live service name")?;
+
+    container.runtime = SoraContainerRuntimeV1::Inrou;
+    container.bundle_path = "/app/server.mjs".to_owned();
+    container.entrypoint = "/app/server.mjs".to_owned();
+    container.args.clear();
+    container
+        .env
+        .insert("SORACLOUD_TEMPLATE".to_owned(), "split-app-live".to_owned());
+    container
+        .env
+        .insert("SORACLOUD_HTTP_PORT".to_owned(), "8787".to_owned());
+    container.capabilities.network = SoraNetworkPolicyV1::Open;
+    container.capabilities.allow_wallet_signing = false;
+    container.capabilities.allow_state_writes = false;
+    container.capabilities.allow_model_inference = false;
+    container.capabilities.allow_model_training = false;
+    container.lifecycle.healthcheck_path = Some("/health".to_owned());
+
+    service.service_name = service_name;
+    service.service_version = app_version.to_owned();
+    service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+    service.route = Some(SoraRouteTargetV1 {
+        host: host.to_owned(),
+        path_prefix: "/api/v1".to_owned(),
+        service_port: NonZeroU16::new(8787).expect("nonzero literal"),
+        visibility: SoraRouteVisibilityV1::Public,
+        tls_mode: SoraTlsModeV1::Required,
+    });
+    service.replicas = NonZeroU16::new(2).expect("nonzero literal");
+    service.state_bindings.clear();
+    service.lease_volumes = vec![
+        SoraLeaseVolumeBindingV1 {
+            volume_name: "shared_cache"
+                .parse()
+                .expect("literal volume name is valid"),
+            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: StorageClass::Hot,
+            mount_path: "/lease/shared-cache".to_owned(),
+            max_total_bytes: NonZeroU64::new(536_870_912).expect("nonzero literal"),
+        },
+        SoraLeaseVolumeBindingV1 {
+            volume_name: "search_sessions"
+                .parse()
+                .expect("literal volume name is valid"),
+            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/lease/search-sessions".to_owned(),
+            max_total_bytes: NonZeroU64::new(268_435_456).expect("nonzero literal"),
+        },
+        SoraLeaseVolumeBindingV1 {
+            volume_name: "collector_state"
+                .parse()
+                .expect("literal volume name is valid"),
+            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/lease/collector-state".to_owned(),
+            max_total_bytes: NonZeroU64::new(268_435_456).expect("nonzero literal"),
+        },
+    ];
+    service.handlers.clear();
+    service.artifacts.clear();
+    service.container.manifest_hash = Hash::new(Encode::encode(&container));
+    service.container.expected_schema_version = container.schema_version;
+
+    let bundle = SoraDeploymentBundleV1 {
+        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        container,
+        service,
+    };
+    bundle.validate_for_admission()?;
+    Ok(bundle)
+}
+
+fn build_split_app_vault_service_bundle(
+    app_name: &str,
+    host: &str,
+    app_version: &str,
+) -> Result<SoraDeploymentBundleV1> {
+    let mut container =
+        load_json::<SoraContainerManifestV1>(&workspace_fixture(DEFAULT_CONTAINER_MANIFEST))?;
+    let mut service =
+        load_json::<SoraServiceManifestV1>(&workspace_fixture(DEFAULT_SERVICE_MANIFEST))?;
+    let service_name: Name = format!("{app_name}_vault")
+        .parse()
+        .wrap_err("invalid split-app vault service name")?;
+
+    container.runtime = SoraContainerRuntimeV1::Ivm;
+    container.bundle_path = "/bundles/vault-api.to".to_owned();
+    container.entrypoint = "main".to_owned();
+    container.args = vec!["--http".to_owned(), "--port=8788".to_owned()];
+    container.env.insert(
+        "SORACLOUD_TEMPLATE".to_owned(),
+        "split-app-vault".to_owned(),
+    );
+    container
+        .env
+        .insert("AUTH_MODE".to_owned(), "strict".to_owned());
+    container
+        .env
+        .insert("AUTH_SESSION_TTL_SECS".to_owned(), "900".to_owned());
+    container
+        .env
+        .insert("AUTH_CHALLENGE_TTL_SECS".to_owned(), "120".to_owned());
+    container
+        .env
+        .insert("AUTH_CAPABILITY_MAP_JSON".to_owned(), "{}".to_owned());
+    container
+        .env
+        .insert("PUBLIC_BASE_URL".to_owned(), format!("https://{host}"));
+    container.capabilities.network = SoraNetworkPolicyV1::Allowlist(vec![
+        "torii.sora.internal".to_owned(),
+        "wallet.sora.internal".to_owned(),
+    ]);
+    container.capabilities.allow_wallet_signing = true;
+    container.capabilities.allow_state_writes = true;
+    container.capabilities.allow_model_inference = false;
+    container.capabilities.allow_model_training = false;
+    container.lifecycle.healthcheck_path = Some("/api/auth/health".to_owned());
+
+    service.service_name = service_name;
+    service.service_version = app_version.to_owned();
+    service.execution_plane = SoraServiceExecutionPlaneV1::DeterministicService;
+    service.route = Some(SoraRouteTargetV1 {
+        host: host.to_owned(),
+        path_prefix: "/api".to_owned(),
+        service_port: NonZeroU16::new(8788).expect("nonzero literal"),
+        visibility: SoraRouteVisibilityV1::Public,
+        tls_mode: SoraTlsModeV1::Required,
+    });
+    service.replicas = NonZeroU16::new(2).expect("nonzero literal");
+    service.state_bindings = vec![
+        SoraStateBindingV1 {
+            schema_version: SORA_STATE_BINDING_VERSION_V1,
+            binding_name: "auth_challenges"
+                .parse()
+                .expect("literal binding name is valid"),
+            scope: SoraStateScopeV1::ServiceState,
+            mutability: SoraStateMutabilityV1::ReadWrite,
+            encryption: SoraStateEncryptionV1::ClientCiphertext,
+            key_prefix: "/state/auth/challenges".to_owned(),
+            max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
+            max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
+        },
+        SoraStateBindingV1 {
+            schema_version: SORA_STATE_BINDING_VERSION_V1,
+            binding_name: "auth_sessions"
+                .parse()
+                .expect("literal binding name is valid"),
+            scope: SoraStateScopeV1::ServiceState,
+            mutability: SoraStateMutabilityV1::ReadWrite,
+            encryption: SoraStateEncryptionV1::ClientCiphertext,
+            key_prefix: "/state/auth/sessions".to_owned(),
+            max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
+            max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
+        },
+        SoraStateBindingV1 {
+            schema_version: SORA_STATE_BINDING_VERSION_V1,
+            binding_name: "user_preferences"
+                .parse()
+                .expect("literal binding name is valid"),
+            scope: SoraStateScopeV1::ConfidentialState,
+            mutability: SoraStateMutabilityV1::ReadWrite,
+            encryption: SoraStateEncryptionV1::FheCiphertext,
+            key_prefix: "/state/users/preferences".to_owned(),
+            max_item_bytes: NonZeroU64::new(8_192).expect("nonzero literal"),
+            max_total_bytes: NonZeroU64::new(4_194_304).expect("nonzero literal"),
+        },
+        SoraStateBindingV1 {
+            schema_version: SORA_STATE_BINDING_VERSION_V1,
+            binding_name: "user_saved_items"
+                .parse()
+                .expect("literal binding name is valid"),
+            scope: SoraStateScopeV1::ConfidentialState,
+            mutability: SoraStateMutabilityV1::ReadWrite,
+            encryption: SoraStateEncryptionV1::FheCiphertext,
+            key_prefix: "/state/users/saved_items".to_owned(),
+            max_item_bytes: NonZeroU64::new(32_768).expect("nonzero literal"),
+            max_total_bytes: NonZeroU64::new(8_388_608).expect("nonzero literal"),
+        },
+    ];
+    service.lease_volumes.clear();
+    service.handlers = vec![
+        service_handler(
+            "auth_health",
+            SoraServiceHandlerClassV1::Query,
+            "serve_auth_health",
+            Some("/auth/health"),
+            SoraCertifiedResponsePolicyV1::AuditReceipt,
+            None,
+        ),
+        service_handler(
+            "auth_me",
+            SoraServiceHandlerClassV1::Query,
+            "serve_auth_me",
+            Some("/auth/me"),
+            SoraCertifiedResponsePolicyV1::AuditReceipt,
+            None,
+        ),
+        service_handler(
+            "user_preferences_get",
+            SoraServiceHandlerClassV1::Query,
+            "serve_user_preferences",
+            Some("/v1/user/preferences"),
+            SoraCertifiedResponsePolicyV1::AuditReceipt,
+            None,
+        ),
+        service_handler(
+            "saved_items_list",
+            SoraServiceHandlerClassV1::Query,
+            "serve_saved_items",
+            Some("/v1/user/saved-items"),
+            SoraCertifiedResponsePolicyV1::AuditReceipt,
+            None,
+        ),
+        service_handler(
+            "auth_challenge",
+            SoraServiceHandlerClassV1::Update,
+            "issue_auth_challenge",
+            Some("/auth/challenge"),
+            SoraCertifiedResponsePolicyV1::None,
+            Some(("auth_updates", 512, 32_768, 1_440)),
+        ),
+        service_handler(
+            "auth_login",
+            SoraServiceHandlerClassV1::PrivateUpdate,
+            "complete_auth_login",
+            Some("/auth/login"),
+            SoraCertifiedResponsePolicyV1::None,
+            Some(("private_updates", 256, 131_072, 2_880)),
+        ),
+        service_handler(
+            "auth_logout",
+            SoraServiceHandlerClassV1::PrivateUpdate,
+            "close_auth_session",
+            Some("/auth/logout"),
+            SoraCertifiedResponsePolicyV1::None,
+            Some(("private_updates", 256, 131_072, 2_880)),
+        ),
+        service_handler(
+            "user_preferences_put",
+            SoraServiceHandlerClassV1::PrivateUpdate,
+            "store_user_preferences",
+            Some("/v1/user/preferences"),
+            SoraCertifiedResponsePolicyV1::None,
+            Some(("private_updates", 256, 131_072, 2_880)),
+        ),
+        service_handler(
+            "saved_items_post",
+            SoraServiceHandlerClassV1::PrivateUpdate,
+            "store_saved_item",
+            Some("/v1/user/saved-items"),
+            SoraCertifiedResponsePolicyV1::None,
+            Some(("private_updates", 256, 131_072, 2_880)),
+        ),
+    ];
+    service.artifacts = vec![
+        service_artifact(
+            SoraArtifactKindV1::Journal,
+            "/journals/vault-api.journal",
+            Some("auth_challenge"),
+        ),
+        service_artifact(
+            SoraArtifactKindV1::Checkpoint,
+            "/checkpoints/vault-api.chk",
+            Some("user_preferences_put"),
+        ),
+    ];
+    service.container.manifest_hash = Hash::new(Encode::encode(&container));
+    service.container.expected_schema_version = container.schema_version;
+
+    let bundle = SoraDeploymentBundleV1 {
+        schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+        container,
+        service,
+    };
+    bundle.validate_for_admission()?;
+    Ok(bundle)
+}
+
 fn apply_init_template_defaults(
     template: InitTemplate,
     service_name: &Name,
@@ -10508,6 +11144,71 @@ fn apply_init_template_defaults(
     let host = format!("{dns_label}.sora");
     match template {
         InitTemplate::Baseline => Ok(()),
+        InitTemplate::HttpService => {
+            container.runtime = SoraContainerRuntimeV1::Inrou;
+            container.bundle_path = "/app/server.mjs".to_owned();
+            container.entrypoint = "/app/server.mjs".to_owned();
+            container.args.clear();
+            container
+                .env
+                .insert("SORACLOUD_TEMPLATE".to_owned(), "http-service".to_owned());
+            container.env.insert(
+                "SORACLOUD_HTTP_SERVICE_NAME".to_owned(),
+                service_name.to_string(),
+            );
+            container
+                .env
+                .insert("SORACLOUD_HTTP_PORT".to_owned(), "8787".to_owned());
+            container.capabilities.network = SoraNetworkPolicyV1::Open;
+            container.capabilities.allow_wallet_signing = false;
+            container.capabilities.allow_state_writes = false;
+            container.capabilities.allow_model_inference = false;
+            container.capabilities.allow_model_training = false;
+            container.lifecycle.healthcheck_path = Some("/health".to_owned());
+
+            service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+            service.route = Some(SoraRouteTargetV1 {
+                host,
+                path_prefix: "/api/v1".to_owned(),
+                service_port: NonZeroU16::new(8787).expect("nonzero literal"),
+                visibility: SoraRouteVisibilityV1::Public,
+                tls_mode: SoraTlsModeV1::Required,
+            });
+            service.replicas = NonZeroU16::new(2).expect("nonzero literal");
+            service.state_bindings.clear();
+            service.lease_volumes = vec![
+                SoraLeaseVolumeBindingV1 {
+                    volume_name: "shared_cache"
+                        .parse()
+                        .expect("literal volume name is valid"),
+                    kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+                    storage_class: StorageClass::Hot,
+                    mount_path: "/lease/shared-cache".to_owned(),
+                    max_total_bytes: NonZeroU64::new(536_870_912).expect("nonzero literal"),
+                },
+                SoraLeaseVolumeBindingV1 {
+                    volume_name: "search_sessions"
+                        .parse()
+                        .expect("literal volume name is valid"),
+                    kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+                    storage_class: StorageClass::Warm,
+                    mount_path: "/lease/search-sessions".to_owned(),
+                    max_total_bytes: NonZeroU64::new(268_435_456).expect("nonzero literal"),
+                },
+                SoraLeaseVolumeBindingV1 {
+                    volume_name: "collector_state"
+                        .parse()
+                        .expect("literal volume name is valid"),
+                    kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+                    storage_class: StorageClass::Warm,
+                    mount_path: "/lease/collector-state".to_owned(),
+                    max_total_bytes: NonZeroU64::new(268_435_456).expect("nonzero literal"),
+                },
+            ];
+            service.handlers.clear();
+            service.artifacts.clear();
+            Ok(())
+        }
         InitTemplate::Site => {
             container.runtime = SoraContainerRuntimeV1::Ivm;
             container.bundle_path = "/bundles/site-static.to".to_owned();
@@ -10578,7 +11279,7 @@ fn apply_init_template_defaults(
             container.capabilities.allow_state_writes = true;
             container.capabilities.allow_model_inference = false;
             container.capabilities.allow_model_training = false;
-            container.lifecycle.healthcheck_path = Some("/api/healthz".to_owned());
+            container.lifecycle.healthcheck_path = Some("/api/v1/health".to_owned());
 
             service.route = Some(SoraRouteTargetV1 {
                 host,
@@ -10933,26 +11634,98 @@ fn apply_init_template_defaults(
             ];
             service.handlers = vec![
                 service_handler(
-                    "query",
+                    "health",
                     SoraServiceHandlerClassV1::Query,
-                    "serve_query",
-                    Some("/query"),
+                    "serve_health",
+                    Some("/v1/health"),
                     SoraCertifiedResponsePolicyV1::AuditReceipt,
                     None,
                 ),
                 service_handler(
-                    "update",
+                    "state_overview",
+                    SoraServiceHandlerClassV1::Query,
+                    "serve_state_overview",
+                    Some("/v1/state/overview"),
+                    SoraCertifiedResponsePolicyV1::AuditReceipt,
+                    None,
+                ),
+                service_handler(
+                    "collector_status",
+                    SoraServiceHandlerClassV1::Query,
+                    "serve_collector_status",
+                    Some("/v1/collector/status"),
+                    SoraCertifiedResponsePolicyV1::AuditReceipt,
+                    None,
+                ),
+                service_handler(
+                    "auth_me",
+                    SoraServiceHandlerClassV1::Query,
+                    "serve_auth_me",
+                    Some("/auth/me"),
+                    SoraCertifiedResponsePolicyV1::AuditReceipt,
+                    None,
+                ),
+                service_handler(
+                    "user_preferences_get",
+                    SoraServiceHandlerClassV1::Query,
+                    "serve_user_preferences",
+                    Some("/v1/user/preferences"),
+                    SoraCertifiedResponsePolicyV1::AuditReceipt,
+                    None,
+                ),
+                service_handler(
+                    "saved_searches_list",
+                    SoraServiceHandlerClassV1::Query,
+                    "serve_saved_searches",
+                    Some("/v1/user/saved-searches"),
+                    SoraCertifiedResponsePolicyV1::AuditReceipt,
+                    None,
+                ),
+                service_handler(
+                    "auth_challenge",
                     SoraServiceHandlerClassV1::Update,
-                    "apply_update",
-                    Some("/update"),
+                    "issue_auth_challenge",
+                    Some("/auth/challenge"),
+                    SoraCertifiedResponsePolicyV1::None,
+                    Some(("auth_updates", 512, 32_768, 1_440)),
+                ),
+                service_handler(
+                    "search_create",
+                    SoraServiceHandlerClassV1::Update,
+                    "enqueue_search_request",
+                    Some("/v1/search"),
                     SoraCertifiedResponsePolicyV1::None,
                     Some(("search_updates", 1024, 131_072, 1_440)),
                 ),
                 service_handler(
-                    "private_update",
+                    "auth_login",
                     SoraServiceHandlerClassV1::PrivateUpdate,
-                    "apply_private_update",
-                    Some("/private/update"),
+                    "complete_auth_login",
+                    Some("/auth/login"),
+                    SoraCertifiedResponsePolicyV1::None,
+                    Some(("private_updates", 256, 131_072, 2_880)),
+                ),
+                service_handler(
+                    "auth_logout",
+                    SoraServiceHandlerClassV1::PrivateUpdate,
+                    "close_auth_session",
+                    Some("/auth/logout"),
+                    SoraCertifiedResponsePolicyV1::None,
+                    Some(("private_updates", 256, 131_072, 2_880)),
+                ),
+                service_handler(
+                    "user_preferences_put",
+                    SoraServiceHandlerClassV1::PrivateUpdate,
+                    "store_user_preferences",
+                    Some("/v1/user/preferences"),
+                    SoraCertifiedResponsePolicyV1::None,
+                    Some(("private_updates", 256, 131_072, 2_880)),
+                ),
+                service_handler(
+                    "saved_searches_create",
+                    SoraServiceHandlerClassV1::PrivateUpdate,
+                    "store_saved_search",
+                    Some("/v1/user/saved-searches"),
                     SoraCertifiedResponsePolicyV1::None,
                     Some(("private_updates", 256, 131_072, 2_880)),
                 ),
@@ -10961,12 +11734,12 @@ fn apply_init_template_defaults(
                 service_artifact(
                     SoraArtifactKindV1::Journal,
                     "/journals/hayahi.journal",
-                    Some("update"),
+                    Some("search_create"),
                 ),
                 service_artifact(
                     SoraArtifactKindV1::Checkpoint,
                     "/checkpoints/hayahi.chk",
-                    Some("private_update"),
+                    Some("user_preferences_put"),
                 ),
             ];
             Ok(())
@@ -10982,6 +11755,9 @@ fn scaffold_init_template(
 ) -> Result<Vec<String>> {
     match template {
         InitTemplate::Baseline => Ok(Vec::new()),
+        InitTemplate::HttpService => {
+            scaffold_http_service_template(output_dir, service_name, overwrite)
+        }
         InitTemplate::Site => scaffold_site_template(output_dir, service_name, overwrite),
         InitTemplate::Webapp => scaffold_webapp_template(output_dir, service_name, overwrite),
         InitTemplate::PiiApp => scaffold_pii_app_template(output_dir, service_name, overwrite),
@@ -11022,6 +11798,31 @@ fn scaffold_site_template(
         (
             project_dir.join("README.md"),
             site_readme(service_name, &dns_host),
+        ),
+    ];
+    write_template_files(files, overwrite)
+}
+
+fn scaffold_http_service_template(
+    output_dir: &Path,
+    service_name: &str,
+    overwrite: bool,
+) -> Result<Vec<String>> {
+    let project_dir = output_dir.join("http-service");
+    let package_name = normalized_service_label(service_name);
+    let files = vec![
+        (
+            project_dir.join("app/server.mjs"),
+            http_service_server_mjs(service_name),
+        ),
+        (
+            project_dir.join("build.sh"),
+            http_service_build_sh("http-service.tgz"),
+        ),
+        (project_dir.join(".gitignore"), "build/\n".to_owned()),
+        (
+            project_dir.join("README.md"),
+            http_service_readme(service_name, &package_name),
         ),
     ];
     write_template_files(files, overwrite)
@@ -11144,40 +11945,78 @@ fn scaffold_hayahi_app_template(
             hayahi_app_root_package_json(&package_name),
         ),
         (
-            project_dir.join("frontend/package.json"),
-            hayahi_app_frontend_package_json(&package_name),
+            project_dir.join("contract/hayahi_api.ko"),
+            hayahi_app_contract_ko(service_name),
         ),
-        (
-            project_dir.join("frontend/tsconfig.json"),
-            site_tsconfig_json().to_owned(),
-        ),
-        (
-            project_dir.join("frontend/vite.config.ts"),
-            webapp_frontend_vite_config().to_owned(),
-        ),
-        (
-            project_dir.join("frontend/index.html"),
-            site_index_html().to_owned(),
-        ),
-        (
-            project_dir.join("frontend/src/main.ts"),
-            site_main_ts().to_owned(),
-        ),
-        (
-            project_dir.join("frontend/src/App.vue"),
-            hayahi_app_frontend_app_vue(service_name),
-        ),
-        (
-            project_dir.join("api/server.mjs"),
-            hayahi_app_api_server_mjs(),
-        ),
-        (
-            project_dir.join(".gitignore"),
-            "node_modules/\nfrontend/node_modules/\nfrontend/dist/\n".to_owned(),
-        ),
+        (project_dir.join("build.sh"), hayahi_app_build_sh()),
+        (project_dir.join(".gitignore"), "build/\n".to_owned()),
         (
             project_dir.join("README.md"),
             hayahi_app_readme(service_name),
+        ),
+    ];
+    write_template_files(files, overwrite)
+}
+
+fn scaffold_split_app_template(
+    output_dir: &Path,
+    app_name: &str,
+    overwrite: bool,
+) -> Result<Vec<String>> {
+    let frontend_dir = output_dir.join("frontend");
+    let live_dir = output_dir.join("services").join("live");
+    let vault_dir = output_dir.join("services").join("vault");
+    let package_name = normalized_service_label(app_name);
+    let files = vec![
+        (
+            frontend_dir.join("package.json"),
+            split_app_frontend_package_json(&package_name),
+        ),
+        (
+            frontend_dir.join("tsconfig.json"),
+            site_tsconfig_json().to_owned(),
+        ),
+        (
+            frontend_dir.join("vite.config.ts"),
+            split_app_frontend_vite_config().to_owned(),
+        ),
+        (
+            frontend_dir.join("index.html"),
+            site_index_html().to_owned(),
+        ),
+        (frontend_dir.join("src/main.ts"), site_main_ts().to_owned()),
+        (
+            frontend_dir.join("src/App.vue"),
+            split_app_frontend_app_vue(app_name),
+        ),
+        (
+            live_dir.join("app/server.mjs"),
+            http_service_server_mjs(&format!("{app_name} live")),
+        ),
+        (
+            live_dir.join("build.sh"),
+            http_service_build_sh("live-api.tgz"),
+        ),
+        (live_dir.join(".gitignore"), "build/\n".to_owned()),
+        (live_dir.join("README.md"), split_app_live_readme(app_name)),
+        (
+            vault_dir.join("contract/vault_api.ko"),
+            split_app_vault_contract_ko(app_name),
+        ),
+        (vault_dir.join("build.sh"), split_app_vault_build_sh()),
+        (vault_dir.join(".gitignore"), "build/\n".to_owned()),
+        (
+            vault_dir.join("README.md"),
+            split_app_vault_readme(app_name),
+        ),
+        (
+            output_dir.join(".gitignore"),
+            "frontend/node_modules/\nfrontend/dist/\nservices/live/build/\nservices/vault/build/\n"
+                .to_owned(),
+        ),
+        (
+            output_dir.join("README.md"),
+            split_app_readme(app_name, &package_name),
         ),
     ];
     write_template_files(files, overwrite)
@@ -11340,35 +12179,8 @@ fn hayahi_app_root_package_json(package_name: &str) -> String {
   "private": true,
   "version": "0.1.0",
   "scripts": {{
-    "dev:frontend": "npm --prefix frontend run dev",
-    "dev:api": "node api/server.mjs",
-    "build": "npm --prefix frontend run build",
-    "start": "node api/server.mjs"
-  }}
-}}
-"#
-    )
-}
-
-fn hayahi_app_frontend_package_json(package_name: &str) -> String {
-    format!(
-        r#"{{
-  "name": "{package_name}-hayahi-frontend",
-  "private": true,
-  "version": "0.1.0",
-  "type": "module",
-  "scripts": {{
-    "dev": "vite",
-    "build": "vite build",
-    "preview": "vite preview"
-  }},
-  "dependencies": {{
-    "vue": "^3.5.0"
-  }},
-  "devDependencies": {{
-    "@vitejs/plugin-vue": "^5.2.0",
-    "typescript": "^5.6.0",
-    "vite": "^5.4.0"
+    "build": "./build.sh",
+    "build:api": "./build.sh"
   }}
 }}
 "#
@@ -11928,298 +12740,141 @@ pre {
     .replace("__SERVICE_NAME__", service_name)
 }
 
-fn hayahi_app_frontend_app_vue(service_name: &str) -> String {
-    r#"<template>
-  <main class="shell">
-    <h1>__SERVICE_NAME__ Soracloud Core</h1>
-    <p>Wallet-bound sessions protect the private Hayahi vault while shared search state lives in Soracloud service bindings.</p>
+fn hayahi_app_contract_ko(service_name: &str) -> String {
+    r#"seiyaku __CONTRACT_NAME__ {
+  meta { abi_version: 1 }
 
-    <section>
-      <h2>Auth</h2>
-      <form @submit.prevent="requestChallenge">
-        <label>
-          Public Key (32-byte hex)
-          <input v-model="publicKey" placeholder="ed25519 public key hex" />
-        </label>
-        <button type="submit">Request Challenge</button>
-      </form>
-      <textarea
-        v-if="challengeMessage"
-        rows="6"
-        readonly
-        :value="challengeMessage"
-      />
-      <form @submit.prevent="login">
-        <label>
-          Signature (64-byte hex)
-          <input v-model="signature" placeholder="ed25519 signature hex" />
-        </label>
-        <button type="submit">Login</button>
-      </form>
-      <button type="button" @click="loadMe">Refresh /api/auth/me</button>
-      <button type="button" @click="logout">Logout</button>
-      <p v-if="principal">principal: {{ principal }}</p>
-      <p v-if="capabilities.length > 0">capabilities: {{ capabilities.join(", ") }}</p>
-    </section>
-
-    <section>
-      <h2>Private Preferences</h2>
-      <form @submit.prevent="savePreferences">
-        <label>
-          Home airport
-          <input v-model="homeAirport" placeholder="HKG" />
-        </label>
-        <label>
-          Cabin preference
-          <input v-model="cabinPreference" placeholder="business" />
-        </label>
-        <button type="submit">Save Preferences</button>
-      </form>
-      <button type="button" @click="loadPreferences">Load Preferences</button>
-    </section>
-
-    <section>
-      <h2>Saved Searches</h2>
-      <form @submit.prevent="saveSearch">
-        <label>
-          Label
-          <input v-model="searchLabel" placeholder="Cathay HKG-LHR" />
-        </label>
-        <label>
-          Search request JSON
-          <textarea
-            v-model="searchRequestJson"
-            rows="8"
-          />
-        </label>
-        <button type="submit">Save Search</button>
-      </form>
-      <button type="button" @click="listSavedSearches">List Saved Searches</button>
-    </section>
-
-    <section>
-      <h2>Shared State</h2>
-      <button type="button" @click="loadStateOverview">Load /api/v1/state/overview</button>
-      <button type="button" @click="loadCollectorStatus">Load /api/v1/collector/status</button>
-    </section>
-
-    <pre v-if="details">{{ details }}</pre>
-    <p v-if="message">{{ message }}</p>
-    <p v-if="error" class="error">{{ error }}</p>
-  </main>
-</template>
-
-<script setup lang="ts">
-import { ref } from "vue";
-
-const publicKey = ref("");
-const challengeId = ref("");
-const challengeMessage = ref("");
-const signature = ref("");
-const principal = ref("");
-const capabilities = ref<string[]>([]);
-const homeAirport = ref("HKG");
-const cabinPreference = ref("business");
-const searchLabel = ref("Cathay HKG-LHR");
-const searchRequestJson = ref(JSON.stringify({
-  origin: "HKG",
-  destination: "LHR",
-  departure_date: "2026-08-01",
-  passengers: 1,
-  cabin_preference: "business",
-  search_mode: "cash"
-}, null, 2));
-const message = ref("");
-const error = ref("");
-const details = ref("");
-
-async function parseJson(response: Response) {
-  const text = await response.text();
-  if (!text) {
-    return {};
+  kotoage fn with_observed_height(payload: Json, observed_height: int) -> Json {
+    return json_set_int(payload, name("observed_height"), observed_height);
   }
-  return JSON.parse(text);
-}
 
-async function get(path: string) {
-  error.value = "";
-  const response = await fetch(path);
-  const payload = await parseJson(response);
-  if (!response.ok) {
-    error.value = payload.error ?? "request failed";
-    return null;
+  kotoage fn with_execution_metadata(payload: Json, execution_sequence: int, observed_height: int) -> Json {
+    let payload = json_set_int(payload, name("execution_sequence"), execution_sequence);
+    return with_observed_height(payload, observed_height);
   }
-  details.value = JSON.stringify(payload, null, 2);
-  return payload;
-}
 
-async function post(path: string, body: Record<string, unknown>) {
-  error.value = "";
-  const response = await fetch(path, {
-    method: "POST",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  const payload = await parseJson(response);
-  if (!response.ok) {
-    error.value = payload.error ?? "request failed";
-    return null;
+  kotoage fn user_preferences_payload() -> Json {
+    let payload = json!{
+      route: "/api/v1/user/preferences",
+      service: "__SERVICE_NAME__",
+      storage_scope: "confidential_state"
+    };
+    return payload;
   }
-  details.value = JSON.stringify(payload, null, 2);
-  return payload;
-}
 
-async function put(path: string, body: Record<string, unknown>) {
-  error.value = "";
-  const response = await fetch(path, {
-    method: "PUT",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify(body)
-  });
-  const payload = await parseJson(response);
-  if (!response.ok) {
-    error.value = payload.error ?? "request failed";
-    return null;
+  kotoage fn saved_searches_payload() -> Json {
+    let payload = json!{
+      route: "/api/v1/user/saved-searches",
+      service: "__SERVICE_NAME__",
+      storage_scope: "confidential_state"
+    };
+    return payload;
   }
-  details.value = JSON.stringify(payload, null, 2);
-  return payload;
-}
 
-async function requestChallenge() {
-  const payload = await post("/api/auth/challenge", { public_key: publicKey.value });
-  if (payload) {
-    challengeId.value = payload.challenge_id ?? "";
-    challengeMessage.value = payload.message ?? "";
-    message.value = "challenge issued";
+  kotoage fn main() -> Json {
+    let payload = json!{
+      entrypoint: "main",
+      runtime: "soracloud_ivm",
+      service: "__SERVICE_NAME__",
+      status: "compiled"
+    };
+    return payload;
+  }
+
+  kotoage fn serve_health(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {
+    let payload = json!{
+      ok: true,
+      route: "/api/v1/health",
+      service: "__SERVICE_NAME__"
+    };
+    return with_observed_height(payload, observed_height);
+  }
+
+  kotoage fn serve_state_overview(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {
+    let payload = json!{
+      route: "/api/v1/state/overview",
+      service: "__SERVICE_NAME__",
+      storage: "service_manifest_state_bindings"
+    };
+    return with_observed_height(payload, observed_height);
+  }
+
+  kotoage fn serve_collector_status(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {
+    let payload = json!{
+      collectors: "validator_workers",
+      route: "/api/v1/collector/status",
+      service: "__SERVICE_NAME__"
+    };
+    return with_observed_height(payload, observed_height);
+  }
+
+  kotoage fn serve_auth_me(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {
+    let payload = json!{
+      auth_surface: "/api/auth/me",
+      service: "__SERVICE_NAME__",
+      wallet_session_mode: "planned"
+    };
+    return with_observed_height(payload, observed_height);
+  }
+
+  kotoage fn serve_user_preferences(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {
+    return with_observed_height(user_preferences_payload(), observed_height);
+  }
+
+  kotoage fn serve_saved_searches(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {
+    return with_observed_height(saved_searches_payload(), observed_height);
+  }
+
+  kotoage fn issue_auth_challenge(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {
+    let payload = json!{
+      route: "/api/auth/challenge",
+      service: "__SERVICE_NAME__"
+    };
+    return with_execution_metadata(payload, execution_sequence, observed_height);
+  }
+
+  kotoage fn enqueue_search_request(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {
+    let payload = json!{
+      route: "/api/v1/search",
+      service: "__SERVICE_NAME__"
+    };
+    return with_execution_metadata(payload, execution_sequence, observed_height);
+  }
+
+  kotoage fn complete_auth_login(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {
+    let payload = json!{
+      route: "/api/auth/login",
+      service: "__SERVICE_NAME__"
+    };
+    return with_execution_metadata(payload, execution_sequence, observed_height);
+  }
+
+  kotoage fn close_auth_session(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {
+    let payload = json!{
+      route: "/api/auth/logout",
+      service: "__SERVICE_NAME__"
+    };
+    return with_execution_metadata(payload, execution_sequence, observed_height);
+  }
+
+  kotoage fn store_user_preferences(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {
+    return with_execution_metadata(
+      user_preferences_payload(),
+      execution_sequence,
+      observed_height
+    );
+  }
+
+  kotoage fn store_saved_search(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {
+    return with_execution_metadata(
+      saved_searches_payload(),
+      execution_sequence,
+      observed_height
+    );
   }
 }
-
-async function login() {
-  const payload = await post("/api/auth/login", {
-    public_key: publicKey.value,
-    challenge_id: challengeId.value,
-    signature: signature.value
-  });
-  if (payload) {
-    principal.value = payload.principal ?? "";
-    capabilities.value = payload.capabilities ?? [];
-    message.value = "session established";
-  }
-}
-
-async function loadMe() {
-  const payload = await get("/api/auth/me");
-  if (payload) {
-    principal.value = payload.principal ?? "";
-    capabilities.value = payload.capabilities ?? [];
-  }
-}
-
-async function logout() {
-  await fetch("/api/auth/logout", { method: "POST" });
-  principal.value = "";
-  capabilities.value = [];
-  message.value = "session closed";
-}
-
-async function loadPreferences() {
-  const payload = await get("/api/v1/user/preferences");
-  if (payload?.preferences) {
-    homeAirport.value = payload.preferences.home_airport ?? homeAirport.value;
-    cabinPreference.value = payload.preferences.cabin_preference ?? cabinPreference.value;
-    message.value = "preferences loaded";
-  }
-}
-
-async function savePreferences() {
-  const payload = await put("/api/v1/user/preferences", {
-    preferences: {
-      home_airport: homeAirport.value,
-      cabin_preference: cabinPreference.value
-    }
-  });
-  if (payload) {
-    message.value = "preferences saved";
-  }
-}
-
-async function saveSearch() {
-  const payload = await post("/api/v1/user/saved-searches", {
-    label: searchLabel.value,
-    request: JSON.parse(searchRequestJson.value)
-  });
-  if (payload) {
-    message.value = `saved search ${payload.saved_search_id}`;
-  }
-}
-
-async function listSavedSearches() {
-  const payload = await get("/api/v1/user/saved-searches");
-  if (payload) {
-    message.value = `loaded ${payload.saved_searches?.length ?? 0} saved searches`;
-  }
-}
-
-async function loadStateOverview() {
-  const payload = await get("/api/v1/state/overview");
-  if (payload) {
-    message.value = "shared state overview loaded";
-  }
-}
-
-async function loadCollectorStatus() {
-  const payload = await get("/api/v1/collector/status");
-  if (payload) {
-    message.value = "collector status loaded";
-  }
-}
-</script>
-
-<style scoped>
-.shell {
-  font-family: "Avenir Next", "Segoe UI", sans-serif;
-  max-width: 900px;
-  margin: 3rem auto;
-  padding: 0 1.25rem;
-}
-
-section {
-  margin: 1.5rem 0;
-  padding: 1rem;
-  border: 1px solid #dde4ec;
-  border-radius: 0.5rem;
-}
-
-form {
-  display: grid;
-  gap: 0.75rem;
-  margin-bottom: 0.75rem;
-}
-
-input,
-textarea {
-  width: 100%;
-  padding: 0.5rem;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-}
-
-button {
-  margin-right: 0.75rem;
-}
-
-pre {
-  overflow: auto;
-  padding: 0.75rem;
-  border: 1px solid #dde4ec;
-  border-radius: 0.5rem;
-  background: #f7fafc;
-}
-
-.error {
-  color: #b42318;
-}
-</style>
 "#
+    .replace("__CONTRACT_NAME__", "HayahiSoracloudCore")
     .replace("__SERVICE_NAME__", service_name)
 }
 
@@ -13240,252 +13895,781 @@ server.listen(port, "0.0.0.0", () => {
     script
 }
 
-fn hayahi_app_api_server_mjs() -> String {
-    let mut script = String::from(soracloud_auth_core_mjs());
-    script.push_str(
-        r#"
+fn hayahi_app_build_sh() -> String {
+    r#"#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUTPUT_DIR="$SCRIPT_DIR/build"
+SOURCE_FILE="$SCRIPT_DIR/contract/hayahi_api.ko"
+BYTECODE_FILE="$OUTPUT_DIR/hayahi-app-api.to"
+CONTRACT_MANIFEST_FILE="$OUTPUT_DIR/hayahi-app-api.contract_manifest.json"
+
+mkdir -p "$OUTPUT_DIR"
+
+if [[ -n "${IROHA_MANIFEST_PATH:-}" ]]; then
+  IROHA_CARGO_MANIFEST="$IROHA_MANIFEST_PATH"
+elif [[ -f "$SCRIPT_DIR/../../../../../../iroha/Cargo.toml" ]]; then
+  IROHA_CARGO_MANIFEST="$SCRIPT_DIR/../../../../../../iroha/Cargo.toml"
+elif [[ -f "$SCRIPT_DIR/../../../Cargo.toml" ]]; then
+  IROHA_CARGO_MANIFEST="$SCRIPT_DIR/../../../Cargo.toml"
+else
+  echo "Unable to locate iroha/Cargo.toml. Set IROHA_MANIFEST_PATH to the sibling ../iroha checkout." >&2
+  exit 1
+fi
+
+IROHA_TARGET_DIR="$(cd "$(dirname "$IROHA_CARGO_MANIFEST")" && pwd)/target"
+
+if [[ -n "${KOTO_COMPILE_BIN:-}" && -x "${KOTO_COMPILE_BIN:-}" ]]; then
+  KOTO_COMPILE=("$KOTO_COMPILE_BIN")
+elif [[ -n "${CARGO_TARGET_DIR:-}" && -x "${CARGO_TARGET_DIR:-}/debug/koto_compile" ]]; then
+  KOTO_COMPILE=("${CARGO_TARGET_DIR:-}/debug/koto_compile")
+elif [[ -n "${CARGO_TARGET_DIR:-}" && -x "${CARGO_TARGET_DIR:-}/release/koto_compile" ]]; then
+  KOTO_COMPILE=("${CARGO_TARGET_DIR:-}/release/koto_compile")
+elif [[ -n "${CARGO_TARGET_DIR:-}" ]]; then
+  KOTO_COMPILE=(
+    cargo run
+    --manifest-path "$IROHA_CARGO_MANIFEST"
+    -p ivm
+    --bin koto_compile
+    --
+  )
+elif [[ -x "$IROHA_TARGET_DIR/debug/koto_compile" ]]; then
+  KOTO_COMPILE=("$IROHA_TARGET_DIR/debug/koto_compile")
+elif [[ -x "$IROHA_TARGET_DIR/release/koto_compile" ]]; then
+  KOTO_COMPILE=("$IROHA_TARGET_DIR/release/koto_compile")
+else
+  KOTO_COMPILE=(
+    cargo run
+    --manifest-path "$IROHA_CARGO_MANIFEST"
+    -p ivm
+    --bin koto_compile
+    --
+  )
+fi
+
+"${KOTO_COMPILE[@]}" "$SOURCE_FILE" \
+  --out "$BYTECODE_FILE" \
+  --manifest-out "$CONTRACT_MANIFEST_FILE" \
+  --abi 1 \
+  --max-cycles 0
+
+echo "built $BYTECODE_FILE"
+"#
+    .to_owned()
+}
+
+fn http_service_build_sh(bundle_name: &str) -> String {
+    format!(
+        r#"#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
+BUILD_DIR="$SCRIPT_DIR/build"
+STAGING_DIR="$BUILD_DIR/staging"
+BUNDLE_PATH="$BUILD_DIR/{bundle_name}"
+
+rm -rf "$STAGING_DIR"
+mkdir -p "$STAGING_DIR/app"
+cp "$SCRIPT_DIR/app/server.mjs" "$STAGING_DIR/app/server.mjs"
+chmod +x "$STAGING_DIR/app/server.mjs"
+tar -czf "$BUNDLE_PATH" -C "$STAGING_DIR" app
+
+echo "built $BUNDLE_PATH"
+"#
+    )
+}
+
+fn http_service_server_mjs(service_name: &str) -> String {
+    format!(
+        r#"#!/usr/bin/env node
 import http from "node:http";
+import fs from "node:fs";
+import path from "node:path";
+import {{ randomUUID }} from "node:crypto";
 
-const portArg = process.argv.find((value) => value.startsWith("--port="));
-const port = Number(portArg?.slice("--port=".length) ?? process.env.PORT ?? "8787");
-const CAPABILITY_MAP = parseCapabilityMap(process.env.AUTH_CAPABILITY_MAP_JSON ?? "", true);
-const SEARCH_SESSION_PREFIX = "/state/hayahi/search/sessions";
-const SEARCH_CACHE_PREFIX = "/state/hayahi/search/cache";
-const COLLECTOR_JOB_PREFIX = "/state/hayahi/collectors/jobs";
-const COLLECTOR_RESULT_PREFIX = "/state/hayahi/collectors/results";
-const USER_PREFERENCES_PREFIX = "/state/hayahi/users/preferences";
-const USER_SAVED_SEARCHES_PREFIX = "/state/hayahi/users/saved_searches";
-const USER_VAULT_SCHEMA_VERSION = "hayahi.user.vault.v1";
+const SERVICE_NAME = {service_name:?};
+const PORT = Number.parseInt(process.env.PORT ?? process.env.SORACLOUD_HTTP_PORT ?? "8787", 10);
+const SHARED_CACHE_DIR = process.env.SORACLOUD_LEASE_VOLUME_SHARED_CACHE_DIR ?? path.join(process.cwd(), "tmp", "shared-cache");
+const SEARCH_SESSIONS_DIR = process.env.SORACLOUD_LEASE_VOLUME_SEARCH_SESSIONS_DIR ?? path.join(process.cwd(), "tmp", "search-sessions");
+const COLLECTOR_STATE_DIR = process.env.SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_DIR ?? path.join(process.cwd(), "tmp", "collector-state");
 
-function requirePlainObject(value, field) {
-  if (!value || typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${field} must be an object`);
+for (const dir of [SHARED_CACHE_DIR, SEARCH_SESSIONS_DIR, COLLECTOR_STATE_DIR]) {{
+  fs.mkdirSync(dir, {{ recursive: true }});
+}}
+
+function sendJson(res, status, payload) {{
+  const body = JSON.stringify(payload, null, 2);
+  res.writeHead(status, {{
+    "content-type": "application/json; charset=utf-8",
+    "content-length": Buffer.byteLength(body)
+  }});
+  res.end(body);
+}}
+
+function readJsonBody(req) {{
+  return new Promise((resolve, reject) => {{
+    let raw = "";
+    req.setEncoding("utf8");
+    req.on("data", (chunk) => {{
+      raw += chunk;
+      if (raw.length > 1024 * 1024) {{
+        reject(new Error("request body exceeds 1 MiB"));
+      }}
+    }});
+    req.on("end", () => {{
+      if (raw.trim().length === 0) {{
+        resolve({{}});
+        return;
+      }}
+      try {{
+        resolve(JSON.parse(raw));
+      }} catch (error) {{
+        reject(error);
+      }}
+    }});
+    req.on("error", reject);
+  }});
+}}
+
+function writeSession(sessionId, payload) {{
+  const file = path.join(SEARCH_SESSIONS_DIR, `${{sessionId}}.json`);
+  fs.writeFileSync(file, JSON.stringify(payload, null, 2));
+}}
+
+function readSession(sessionId) {{
+  const file = path.join(SEARCH_SESSIONS_DIR, `${{sessionId}}.json`);
+  if (!fs.existsSync(file)) {{
+    return null;
+  }}
+  return JSON.parse(fs.readFileSync(file, "utf8"));
+}}
+
+function cacheSearch(sessionId, payload) {{
+  const file = path.join(SHARED_CACHE_DIR, `${{sessionId}}.json`);
+  fs.writeFileSync(file, JSON.stringify(payload, null, 2));
+}}
+
+function appendCollectorCheckpoint(sessionId, payload) {{
+  const file = path.join(COLLECTOR_STATE_DIR, `${{sessionId}}.log`);
+  fs.appendFileSync(file, `${{new Date().toISOString()}} ${{JSON.stringify(payload)}}\n`);
+}}
+
+function buildSearchResult(sessionId, request) {{
+  return {{
+    id: sessionId,
+    origin: request.origin ?? "BNE",
+    destination: request.destination ?? "HND",
+    cabin: request.cabin ?? "business",
+    status: "complete",
+    source: "hosted-http",
+    generated_at: new Date().toISOString()
+  }};
+}}
+
+const server = http.createServer(async (req, res) => {{
+  const url = new URL(req.url ?? "/", `http://${{req.headers.host ?? "127.0.0.1"}}`);
+  const pathname = url.pathname;
+
+  if ((req.method === "GET" || req.method === "HEAD") && pathname === "/health") {{
+    sendJson(res, 200, {{
+      service: SERVICE_NAME,
+      runtime: "Inrou",
+      lease_volumes: {{
+        shared_cache: SHARED_CACHE_DIR,
+        search_sessions: SEARCH_SESSIONS_DIR,
+        collector_state: COLLECTOR_STATE_DIR
+      }}
+    }});
+    return;
+  }}
+
+  if (req.method === "POST" && pathname === "/search") {{
+    try {{
+      const body = await readJsonBody(req);
+      const sessionId = randomUUID();
+      const result = buildSearchResult(sessionId, body);
+      writeSession(sessionId, {{ request: body, result }});
+      cacheSearch(sessionId, result);
+      appendCollectorCheckpoint(sessionId, {{ stage: "queued", request: body }});
+      appendCollectorCheckpoint(sessionId, {{ stage: "complete", result }});
+      sendJson(res, 202, {{
+        search_id: sessionId,
+        status: result.status,
+        result
+      }});
+    }} catch (error) {{
+      sendJson(res, 400, {{ error: error?.message ?? String(error) }});
+    }}
+    return;
+  }}
+
+  const eventMatch = pathname.match(/^\/search\/([^/]+)\/events$/);
+  if ((req.method === "GET" || req.method === "HEAD") && eventMatch) {{
+    const session = readSession(eventMatch[1]);
+    if (!session) {{
+      sendJson(res, 404, {{ error: "search session not found" }});
+      return;
+    }}
+    res.writeHead(200, {{
+      "content-type": "text/event-stream; charset=utf-8",
+      "cache-control": "no-cache, no-transform",
+      connection: "keep-alive"
+    }});
+    res.write(`event: snapshot\n`);
+    res.write(`data: ${{JSON.stringify(session)}}\n\n`);
+    res.write(`event: done\n`);
+    res.write(`data: ${{JSON.stringify({{ search_id: eventMatch[1], status: "complete" }})}}\n\n`);
+    res.end();
+    return;
+  }}
+
+  sendJson(res, 404, {{ error: "not found", path: pathname }});
+}});
+
+server.listen(PORT, "0.0.0.0", () => {{
+  console.log(`${{SERVICE_NAME}} listening on ${{PORT}}`);
+}});
+"#
+    )
+}
+
+fn http_service_readme(service_name: &str, package_name: &str) -> String {
+    format!(
+        r#"# {service_name} HTTP Service Template
+
+This template is generated by:
+
+```bash
+iroha app soracloud init --template http-service --service-name {service_name}
+```
+
+It targets the Soracloud hosted HTTP plane directly:
+
+- `execution_plane = HttpService`
+- `runtime = Inrou`
+- public route prefix `/api/v1`
+- lease-backed storage exposed via `SORACLOUD_LEASE_VOLUME_*_DIR` and
+  `SORACLOUD_LEASE_VOLUME_*_MOUNT_PATH`
+
+## Local build
+
+```bash
+cd http-service
+./build.sh
+```
+
+The build emits `build/http-service.tgz`, a tarball containing `app/server.mjs`
+with the executable bit preserved so the local runtime-manager can extract and
+launch it directly.
+
+## Keep manifest hashes aligned
+
+```bash
+iroha app soracloud sync-manifests \
+  --container ./container_manifest.json \
+  --service ./service_manifest.json \
+  --bundle-file ./http-service/build/http-service.tgz
+```
+
+## Lease volume contract
+
+The generated service expects these runtime environment variables:
+
+- `SORACLOUD_LEASE_VOLUME_SHARED_CACHE_DIR`
+- `SORACLOUD_LEASE_VOLUME_SHARED_CACHE_MOUNT_PATH`
+- `SORACLOUD_LEASE_VOLUME_SEARCH_SESSIONS_DIR`
+- `SORACLOUD_LEASE_VOLUME_SEARCH_SESSIONS_MOUNT_PATH`
+- `SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_DIR`
+- `SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_MOUNT_PATH`
+
+The generic runtime contract is `SORACLOUD_LEASE_VOLUME_<NAME>_DIR` and
+`SORACLOUD_LEASE_VOLUME_<NAME>_MOUNT_PATH`, where `<NAME>` is the uppercased
+volume name with punctuation normalized to underscores.
+
+## Deploy
+
+```bash
+iroha app soracloud deploy \
+  --container ./container_manifest.json \
+  --service ./service_manifest.json \
+  --torii-url http://127.0.0.1:8080
+```
+
+The generated service name will resolve under `https://{package_name}.sora/api/v1`.
+"#
+    )
+}
+
+fn split_app_frontend_package_json(package_name: &str) -> String {
+    format!(
+        r#"{{
+  "name": "{package_name}-frontend",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {{
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  }},
+  "dependencies": {{
+    "vue": "^3.5.13"
+  }},
+  "devDependencies": {{
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "^5.8.2",
+    "vite": "^6.2.0"
+  }}
+}}
+"#
+    )
+}
+
+fn split_app_frontend_vite_config() -> &'static str {
+    r#"import { defineConfig } from "vite";
+import vue from "@vitejs/plugin-vue";
+
+export default defineConfig({
+  plugins: [vue()],
+  server: {
+    port: 5173
   }
-  return value;
+});
+"#
 }
 
-function userPreferencesStateKey(principal) {
-  return `${USER_PREFERENCES_PREFIX}/${principal}`;
+fn split_app_frontend_app_vue(app_name: &str) -> String {
+    format!(
+        r#"<script setup lang="ts">
+import {{ onMounted, ref }} from "vue";
+
+const me = ref("loading");
+const searchStatus = ref("idle");
+const lastSearch = ref<any>(null);
+const preferences = ref({{ home_airport: "BNE", cabin_preference: "business" }});
+
+async function requestJson(path: string, init?: RequestInit) {{
+  const response = await fetch(path, {{
+    ...init,
+    headers: {{
+      "content-type": "application/json",
+      ...(init?.headers ?? {{}})
+    }}
+  }});
+  if (!response.ok) {{
+    throw new Error(`${{path}} returned ${{response.status}}`);
+  }}
+  return response.json();
+}}
+
+async function refreshMe() {{
+  try {{
+    const payload = await requestJson("/api/auth/me");
+    me.value = JSON.stringify(payload, null, 2);
+  }} catch (error: any) {{
+    me.value = error?.message ?? String(error);
+  }}
+}}
+
+async function runSearch() {{
+  searchStatus.value = "requesting";
+  lastSearch.value = null;
+  try {{
+    const payload = await requestJson("/api/v1/search", {{
+      method: "POST",
+      body: JSON.stringify({{
+        origin: preferences.value.home_airport,
+        destination: "HND",
+        cabin: preferences.value.cabin_preference
+      }})
+    }});
+    searchStatus.value = payload.status ?? "accepted";
+    lastSearch.value = payload;
+  }} catch (error: any) {{
+    searchStatus.value = error?.message ?? String(error);
+  }}
+}}
+
+async function savePreferences() {{
+  await requestJson("/api/v1/user/preferences", {{
+    method: "PUT",
+    body: JSON.stringify({{ preferences: preferences.value }})
+  }});
+  await refreshMe();
+}}
+
+onMounted(async () => {{
+  await refreshMe();
+}});
+</script>
+
+<template>
+  <main class="app-shell">
+    <section class="hero">
+      <p class="eyebrow">Soracloud Split App</p>
+      <h1>{app_name}</h1>
+      <p class="lede">
+        Static frontend on SoraFS, a hosted live API on Inrou, and a deterministic
+        wallet vault on IVM, all sharing the same `/api` surface.
+      </p>
+      <div class="actions">
+        <button @click="runSearch">Run Live Search</button>
+        <button class="secondary" @click="savePreferences">Save Preferences</button>
+      </div>
+    </section>
+
+    <section class="panel-grid">
+      <article class="panel">
+        <h2>Vault</h2>
+        <label>
+          Home airport
+          <input v-model="preferences.home_airport" />
+        </label>
+        <label>
+          Cabin
+          <select v-model="preferences.cabin_preference">
+            <option value="business">Business</option>
+            <option value="first">First</option>
+            <option value="premium-economy">Premium Economy</option>
+          </select>
+        </label>
+      </article>
+
+      <article class="panel">
+        <h2>Live Search</h2>
+        <p>Status: <strong>{{ searchStatus }}</strong></p>
+        <pre>{{ lastSearch ? JSON.stringify(lastSearch, null, 2) : "No search submitted yet." }}</pre>
+      </article>
+    </section>
+
+    <section class="panel">
+      <h2>Auth / Me</h2>
+      <pre>{{ me }}</pre>
+    </section>
+  </main>
+</template>
+
+<style scoped>
+:global(body) {{
+  margin: 0;
+  background: radial-gradient(circle at top, #1f3d52 0%, #0b1720 55%, #05080a 100%);
+  color: #f5f3ec;
+  font-family: "Iowan Old Style", "Palatino Linotype", serif;
+}}
+
+.app-shell {{
+  min-height: 100vh;
+  padding: 3rem 1.5rem 4rem;
+  max-width: 1100px;
+  margin: 0 auto;
+}}
+
+.hero {{
+  padding: 2rem 0 3rem;
+}}
+
+.eyebrow {{
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #b7d7e8;
+  font-size: 0.8rem;
+}}
+
+h1 {{
+  margin: 0.25rem 0 1rem;
+  font-size: clamp(2.5rem, 8vw, 5rem);
+}}
+
+.lede {{
+  max-width: 48rem;
+  color: #d7e6ef;
+  line-height: 1.6;
+}}
+
+.actions {{
+  display: flex;
+  gap: 1rem;
+  margin-top: 1.5rem;
+  flex-wrap: wrap;
+}}
+
+button {{
+  border: 0;
+  background: #e6b05c;
+  color: #091018;
+  padding: 0.85rem 1.25rem;
+  font: inherit;
+  cursor: pointer;
+}}
+
+button.secondary {{
+  background: rgba(255, 255, 255, 0.12);
+  color: #f5f3ec;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}}
+
+.panel-grid {{
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}}
+
+.panel {{
+  background: rgba(5, 12, 18, 0.74);
+  border: 1px solid rgba(183, 215, 232, 0.18);
+  padding: 1.25rem;
+  backdrop-filter: blur(20px);
+}}
+
+label {{
+  display: grid;
+  gap: 0.4rem;
+  margin-bottom: 1rem;
+}}
+
+input,
+select {{
+  padding: 0.7rem 0.85rem;
+  font: inherit;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  background: rgba(255, 255, 255, 0.08);
+  color: inherit;
+}}
+
+pre {{
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #b7d7e8;
+}}
+</style>
+"#
+    )
 }
 
-function userSavedSearchStateKey(principal, savedSearchId) {
-  return `${USER_SAVED_SEARCHES_PREFIX}/${principal}/${savedSearchId}`;
+fn split_app_vault_build_sh() -> String {
+    r#"#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+OUTPUT_DIR="$SCRIPT_DIR/build"
+SOURCE_FILE="$SCRIPT_DIR/contract/vault_api.ko"
+BYTECODE_FILE="$OUTPUT_DIR/vault-api.to"
+CONTRACT_MANIFEST_FILE="$OUTPUT_DIR/vault-api.contract_manifest.json"
+
+mkdir -p "$OUTPUT_DIR"
+
+if [[ -n "${IROHA_MANIFEST_PATH:-}" ]]; then
+  IROHA_CARGO_MANIFEST="$IROHA_MANIFEST_PATH"
+elif REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; [[ -f "$REPO_ROOT/Cargo.toml" ]]; then
+  IROHA_CARGO_MANIFEST="$REPO_ROOT/Cargo.toml"
+else
+  echo "Unable to locate iroha/Cargo.toml. Set IROHA_MANIFEST_PATH to an iroha checkout." >&2
+  exit 1
+fi
+
+cargo run --manifest-path "$IROHA_CARGO_MANIFEST" -p ivm --bin koto_compile -- \
+  "$SOURCE_FILE" \
+  --out "$BYTECODE_FILE" \
+  --manifest-out "$CONTRACT_MANIFEST_FILE" \
+  --abi 1 \
+  --max-cycles 0
+
+echo "built $BYTECODE_FILE"
+"#
+    .to_owned()
 }
 
-function listUserSavedSearches(principal) {
-  return stateEntries(`${USER_SAVED_SEARCHES_PREFIX}/${principal}/`)
-    .map(([, record]) => canonicalizeJsonValue(record))
-    .sort((left, right) =>
-      Number(right?.updated_at_unix_ms ?? 0) - Number(left?.updated_at_unix_ms ?? 0)
-    );
-}
+fn split_app_vault_contract_ko(app_name: &str) -> String {
+    format!(
+        r#"kotoba 1;
 
-function summarizeState(prefix) {
-  const entries = stateEntries(prefix);
-  const newest = entries
-    .map(([, value]) => Number(value?.updated_at_unix_ms ?? value?.created_at_unix_ms ?? 0))
-    .filter((value) => Number.isFinite(value))
-    .sort((left, right) => right - left)[0] ?? null;
-  return {
-    count: entries.length,
-    latest_updated_at_unix_ms: newest
-  };
-}
+kaisho {app_name}_vault_api {{
+  kotoage fn json(route: str, method: str, body: Json) -> Json {{
+    return {{
+      schema_version: 1,
+      route: route,
+      method: method,
+      body: body
+    }};
+  }}
 
-const server = http.createServer(async (req, res) => {
-  cleanupExpiredAuthRecords();
-
-  if (req.url === "/api/healthz" || req.url === "/api/v1/health") {
-    sendJson(res, 200, {
+  kotoage fn serve_auth_health(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {{
+    return {{
       ok: true,
-      auth_mode: AUTH_MODE,
-      shared_state_required: AUTH_REQUIRE_EXTERNAL_SHARED_STATE,
-      state: {
-        collector_jobs: summarizeState(COLLECTOR_JOB_PREFIX),
-        collector_results: summarizeState(COLLECTOR_RESULT_PREFIX),
-        search_cache: summarizeState(SEARCH_CACHE_PREFIX),
-        search_sessions: summarizeState(SEARCH_SESSION_PREFIX)
-      }
-    });
-    return;
-  }
+      service: "{app_name}_vault",
+      observed_height: observed_height
+    }};
+  }}
 
-  if (req.method === "POST" && req.url === "/api/auth/challenge") {
-    await handleAuthChallenge(req, res);
-    return;
-  }
+  kotoage fn serve_auth_me(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {{
+    return {{
+      authenticated: false,
+      wallet: null,
+      observed_height: observed_height
+    }};
+  }}
 
-  if (req.method === "POST" && req.url === "/api/auth/login") {
-    await handleAuthLogin(req, res, CAPABILITY_MAP);
-    return;
-  }
+  kotoage fn serve_user_preferences(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {{
+    return {{
+      preferences: {{
+        home_airport: "BNE",
+        cabin_preference: "business"
+      }},
+      observed_height: observed_height
+    }};
+  }}
 
-  if (req.method === "GET" && req.url === "/api/auth/me") {
-    handleAuthMe(req, res, CAPABILITY_MAP);
-    return;
-  }
+  kotoage fn serve_saved_items(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {{
+    return {{
+      items: [],
+      observed_height: observed_height
+    }};
+  }}
 
-  if (req.method === "POST" && req.url === "/api/auth/logout") {
-    handleAuthLogout(req, res);
-    return;
-  }
+  kotoage fn issue_auth_challenge(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
+    return {{
+      accepted: true,
+      challenge_id: execution_sequence,
+      observed_height: observed_height
+    }};
+  }}
 
-  if (req.method === "GET" && req.url === "/api/v1/state/overview") {
-    sendJson(res, 200, {
-      collector_jobs: summarizeState(COLLECTOR_JOB_PREFIX),
-      collector_results: summarizeState(COLLECTOR_RESULT_PREFIX),
-      search_cache: summarizeState(SEARCH_CACHE_PREFIX),
-      search_sessions: summarizeState(SEARCH_SESSION_PREFIX)
-    });
-    return;
-  }
+  kotoage fn complete_auth_login(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
+    return {{
+      accepted: true,
+      action: "login",
+      sequence: execution_sequence,
+      observed_height: observed_height
+    }};
+  }}
 
-  if (req.method === "GET" && req.url === "/api/v1/collector/status") {
-    sendJson(res, 200, {
-      execution_model: "soracloud_workers",
-      shared_state_required: AUTH_REQUIRE_EXTERNAL_SHARED_STATE,
-      jobs: summarizeState(COLLECTOR_JOB_PREFIX),
-      results: summarizeState(COLLECTOR_RESULT_PREFIX)
-    });
-    return;
-  }
+  kotoage fn close_auth_session(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
+    return {{
+      accepted: true,
+      action: "logout",
+      sequence: execution_sequence,
+      observed_height: observed_height
+    }};
+  }}
 
-  if (req.method === "GET" && req.url === "/api/v1/user/preferences") {
-    const session = requireAuthenticatedSession(
-      req,
-      res,
-      CAPABILITY_MAP,
-      "hayahi.user.preferences.read"
-    );
-    if (!session) {
-      return;
-    }
-    const record = stateGet(userPreferencesStateKey(session.principal));
-    sendJson(res, 200, {
-      preferences: record?.preferences ?? {},
-      principal: session.principal,
-      updated_at_unix_ms: record?.updated_at_unix_ms ?? null
-    });
-    return;
-  }
+  kotoage fn store_user_preferences(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
+    return {{
+      accepted: true,
+      action: "store_preferences",
+      sequence: execution_sequence,
+      observed_height: observed_height
+    }};
+  }}
 
-  if (req.method === "PUT" && req.url === "/api/v1/user/preferences") {
-    try {
-      const session = requireAuthenticatedSession(
-        req,
-        res,
-        CAPABILITY_MAP,
-        "hayahi.user.preferences.write"
-      );
-      if (!session) {
-        return;
-      }
-      const body = await readJson(req);
-      const preferences = requirePlainObject(body.preferences ?? body, "preferences");
-      const record = {
-        schema_version: USER_VAULT_SCHEMA_VERSION,
-        principal: session.principal,
-        preferences: canonicalizeJsonValue(preferences),
-        updated_at_unix_ms: Date.now()
-      };
-      statePut(userPreferencesStateKey(session.principal), record);
-      sendJson(res, 200, record);
-    } catch (error) {
-      sendAuthError(res, 400, "INVALID_REQUEST", error.message);
-    }
-    return;
-  }
+  kotoage fn store_saved_item(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
+    return {{
+      accepted: true,
+      action: "store_saved_item",
+      sequence: execution_sequence,
+      observed_height: observed_height
+    }};
+  }}
+}}
+"#
+    )
+}
 
-  if (req.method === "GET" && req.url === "/api/v1/user/saved-searches") {
-    const session = requireAuthenticatedSession(
-      req,
-      res,
-      CAPABILITY_MAP,
-      "hayahi.user.saved_searches.read"
-    );
-    if (!session) {
-      return;
-    }
-    sendJson(res, 200, {
-      principal: session.principal,
-      saved_searches: listUserSavedSearches(session.principal)
-    });
-    return;
-  }
+fn split_app_live_readme(app_name: &str) -> String {
+    format!(
+        r#"# {app_name} Live API
 
-  if (req.method === "POST" && req.url === "/api/v1/user/saved-searches") {
-    try {
-      const session = requireAuthenticatedSession(
-        req,
-        res,
-        CAPABILITY_MAP,
-        "hayahi.user.saved_searches.write"
-      );
-      if (!session) {
-        return;
-      }
-      const body = await readJson(req);
-      const label = requireTrimmedString(body.label, "label");
-      const request = requirePlainObject(body.request, "request");
-      const nowMs = Date.now();
-      const savedSearchId = crypto.randomUUID();
-      const record = {
-        schema_version: USER_VAULT_SCHEMA_VERSION,
-        saved_search_id: savedSearchId,
-        principal: session.principal,
-        label,
-        request: canonicalizeJsonValue(request),
-        created_at_unix_ms: nowMs,
-        updated_at_unix_ms: nowMs
-      };
-      statePut(userSavedSearchStateKey(session.principal, savedSearchId), record);
-      sendJson(res, 201, record);
-    } catch (error) {
-      sendAuthError(res, 400, "INVALID_REQUEST", error.message);
-    }
-    return;
-  }
+This service is the hosted HTTP plane for the split app.
 
-  if (req.method === "POST" && req.url === "/api/v1/user/saved-searches/delete") {
-    try {
-      const session = requireAuthenticatedSession(
-        req,
-        res,
-        CAPABILITY_MAP,
-        "hayahi.user.saved_searches.write"
-      );
-      if (!session) {
-        return;
-      }
-      const body = await readJson(req);
-      const savedSearchId = requireTrimmedString(body.saved_search_id, "saved_search_id");
-      const key = userSavedSearchStateKey(session.principal, savedSearchId);
-      const existing = stateGet(key);
-      if (!existing) {
-        sendAuthError(res, 404, "NOT_FOUND", "saved search not found");
-        return;
-      }
-      stateDelete(key);
-      sendJson(res, 200, {
-        deleted: true,
-        saved_search_id: savedSearchId
-      });
-    } catch (error) {
-      sendAuthError(res, 400, "INVALID_REQUEST", error.message);
-    }
-    return;
-  }
+Build:
 
-  sendJson(res, 404, { code: "NOT_FOUND", error: "not found" });
-});
+```bash
+./build.sh
+```
 
-server.listen(port, "0.0.0.0", () => {
-  // eslint-disable-next-line no-console
-  console.log(`hayahi app core listening on :${port}`);
-});
-"#,
-    );
-    script
+The build emits `build/live-api.tgz`. The generated app manifest references
+that tarball through `bundle_file`, so:
+
+```bash
+iroha app soracloud sync-manifests --app-manifest ../../app_manifest.json
+```
+
+will refresh the live service `bundle_hash` automatically.
+"#
+    )
+}
+
+fn split_app_vault_readme(app_name: &str) -> String {
+    format!(
+        r#"# {app_name} Vault API
+
+This service is the deterministic IVM plane for wallet auth and private user
+state.
+
+Build:
+
+```bash
+./build.sh
+```
+
+The build emits `build/vault-api.to`, and the generated app manifest references
+that bytecode through `bundle_file` so the app-wide `sync-manifests` command can
+refresh the admitted manifest hashes in one pass.
+"#
+    )
+}
+
+fn split_app_readme(app_name: &str, package_name: &str) -> String {
+    format!(
+        r#"# {app_name} Split App Template
+
+This template provides:
+
+- `frontend/` static SPA intended for SoraFS publication
+- `services/live/` hosted HTTP live API targeting `Inrou`
+- `services/vault/` deterministic IVM vault API
+- `app_manifest.json` wiring the frontend plus both services together
+
+## Build everything
+
+```bash
+cd frontend
+npm install
+npm run build
+cd ../services/live
+./build.sh
+cd ../vault
+./build.sh
+cd ../..
+```
+
+## Refresh every manifest hash in one pass
+
+```bash
+iroha app soracloud sync-manifests --app-manifest ./app_manifest.json
+```
+
+Each service entry in the app manifest carries a `bundle_file`, so the sync
+command refreshes both `container.bundle_hash` and the referenced service
+container hash before deploy.
+
+## Publish + deploy the mixed app
+
+```bash
+iroha app soracloud app deploy \
+  --manifest ./app_manifest.json \
+  --torii-url http://127.0.0.1:8080
+```
+
+`app deploy` publishes the static frontend to SoraFS, binds it through the app
+static-site config, and deploys both services from the same manifest without
+manual pin registration or SSH-only steps.
+
+The generated public URL is `https://{package_name}.sora`, with the frontend at
+the root and both services sharing `/api`.
+"#
+    )
 }
 
 fn pii_app_consent_policy_template() -> String {
@@ -13721,51 +14905,62 @@ fn hayahi_app_readme(service_name: &str) -> String {
     format!(
         r#"# {service_name} Hayahi-App Template
 
-This template provides a Soracloud-native Hayahi app core:
+This template provides a real Soracloud/IVM Hayahi API scaffold:
 
-- `frontend/` Vue3 control panel for wallet challenge login and private vault actions.
-- `api/server.mjs` wallet-session API under `/api/*` with Soracloud shared-state adapter support.
+- `contract/hayahi_api.ko` with concrete Soracloud query/update/private-update entrypoints.
+- `build.sh` that compiles the contract into `build/hayahi-app-api.to`.
 - Shared Soracloud state bindings for search sessions, shared cache, and collector job/result ledgers.
 - Confidential Soracloud state bindings for wallet-bound preferences and saved searches.
 - Soracloud manifests in the parent init directory (`container_manifest.json`, `service_manifest.json`).
 
-## Local dev
+## Build the IVM bundle
 
 ```bash
-npm install
-npm --prefix frontend install
-export AUTH_MODE=dev
-export SESSION_HMAC_KEY='replace-with-at-least-32-random-characters'
-export AUTH_SESSION_TTL_SECS=900
-export AUTH_CHALLENGE_TTL_SECS=120
-export AUTH_CAPABILITY_MAP_JSON='{{"replace-with-ed25519-public-key-hex":["hayahi.user.preferences.read","hayahi.user.preferences.write","hayahi.user.saved_searches.read","hayahi.user.saved_searches.write"]}}'
-export AUTH_REQUIRE_EXTERNAL_SHARED_STATE=0
-export PUBLIC_BASE_URL='http://127.0.0.1:8787'
-npm run dev:api
-npm run dev:frontend
+./build.sh
 ```
 
-## Production required config
+`build.sh` will use a local `koto_compile` binary when available and otherwise
+falls back to:
 
-- `SESSION_HMAC_KEY` (>= 32 characters) is mandatory in strict/production mode.
-- `AUTH_CAPABILITY_MAP_JSON` must map wallet principals to Hayahi capabilities.
-- `AUTH_REQUIRE_EXTERNAL_SHARED_STATE` defaults to enabled in strict/production
-  mode and fails closed unless `globalThis.__soracloudSharedStateAdapter` is
-  provided by the host runtime.
-- `PUBLIC_BASE_URL` controls secure cookie issuance and request-origin binding.
+```bash
+cargo run --manifest-path ../../../Cargo.toml -p ivm --bin koto_compile -- \
+  ./contract/hayahi_api.ko \
+  --out ./build/hayahi-app-api.to \
+  --manifest-out ./build/hayahi-app-api.contract_manifest.json \
+  --abi 1 \
+  --max-cycles 0
+```
 
 ## Exposed routes
 
-- `POST /api/auth/challenge`
-- `POST /api/auth/login`
-- `GET /api/auth/me`
-- `POST /api/auth/logout`
 - `GET /api/v1/health`
 - `GET /api/v1/state/overview`
 - `GET /api/v1/collector/status`
-- `GET|PUT /api/v1/user/preferences`
-- `GET|POST /api/v1/user/saved-searches`
-- `POST /api/v1/user/saved-searches/delete`
+- `GET /api/auth/me`
+- `GET /api/v1/user/preferences`
+- `GET /api/v1/user/saved-searches`
+- `POST /api/auth/challenge`
+- `POST /api/v1/search`
+- `POST /api/auth/login`
+- `POST /api/auth/logout`
+- `PUT /api/v1/user/preferences`
+- `POST /api/v1/user/saved-searches`
+
+Method-aware public route matching in Torii is required for the shared REST
+paths such as `GET|PUT /api/v1/user/preferences` and
+`GET|POST /api/v1/user/saved-searches`.
+
+## Keep manifest hashes aligned
+
+After local edits or a fresh bytecode build, refresh the Soracloud manifest
+hashes before deploy:
+
+```bash
+iroha app soracloud sync-manifests \
+  --container ../container_manifest.json \
+  --service ../service_manifest.json \
+  --bundle-file ./build/hayahi-app-api.to
+```
 
 ## Deploy API service on Soracloud
 
@@ -13794,6 +14989,7 @@ mod tests {
     use super::*;
     use iroha::data_model::soracloud::{
         PrivateModelHuggingFaceSnapshotSourceV1, PrivateModelLocalDirSourceV1,
+        SoraServiceExecutionPlaneV1,
     };
     use rand::SeedableRng as _;
     use std::{
@@ -13836,8 +15032,7 @@ mod tests {
 
     fn hf_shared_lease_asset_definition() -> AssetDefinitionId {
         AssetDefinitionId::new(
-            iroha_data_model::domain::DomainId::try_new("wonderland", "universal")
-                .expect("domain"),
+            iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
             "lease".parse().expect("name"),
         )
     }
@@ -16121,6 +17316,50 @@ mod tests {
     }
 
     #[test]
+    fn init_http_service_template_scaffolds_inrou_service() {
+        let dir = temp_dir("http_service_template");
+        let output = InitArgs {
+            output_dir: dir.clone(),
+            service_name: "live_search".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        assert_eq!(output.template, "http-service");
+        assert!(dir.join("http-service/app/server.mjs").exists());
+        assert!(dir.join("http-service/build.sh").exists());
+
+        let readme = fs::read_to_string(dir.join("http-service/README.md"))
+            .expect("read http-service readme");
+        assert!(readme.contains("runtime = Inrou"));
+        assert!(readme.contains("SORACLOUD_LEASE_VOLUME_SHARED_CACHE_DIR"));
+
+        let container: SoraContainerManifestV1 =
+            load_json(&dir.join("container_manifest.json")).expect("container manifest");
+        assert_eq!(container.runtime, SoraContainerRuntimeV1::Inrou);
+        assert_eq!(container.bundle_path, "/app/server.mjs");
+
+        let service: SoraServiceManifestV1 =
+            load_json(&dir.join("service_manifest.json")).expect("service manifest");
+        assert_eq!(
+            service.execution_plane,
+            SoraServiceExecutionPlaneV1::HttpService
+        );
+        assert_eq!(
+            service
+                .route
+                .as_ref()
+                .map(|route| route.path_prefix.as_str()),
+            Some("/api/v1")
+        );
+        assert!(service.handlers.is_empty());
+        assert_eq!(service.lease_volumes.len(), 3);
+    }
+
+    #[test]
     fn init_site_template_scaffolds_vue_and_sorafs_workflow() {
         let dir = temp_dir("site_template");
         let output = InitArgs {
@@ -16363,7 +17602,92 @@ mod tests {
     }
 
     #[test]
-    fn init_hayahi_app_template_scaffolds_wallet_and_stateful_api() {
+    fn app_init_split_app_template_scaffolds_live_and_vault_services() {
+        let dir = temp_dir("split_app_template");
+        let output = AppInitArgs {
+            output_dir: dir.clone(),
+            app_name: "travel_ops".to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template: AppInitTemplate::SplitApp,
+            overwrite: false,
+        }
+        .run()
+        .expect("split-app init should succeed");
+
+        assert_eq!(output.template, "split-app");
+        assert!(dir.join("frontend/src/App.vue").exists());
+        assert!(dir.join("services/live/app/server.mjs").exists());
+        assert!(dir.join("services/vault/contract/vault_api.ko").exists());
+
+        let manifest: SoracloudAppManifestV1 =
+            load_json(&dir.join("app_manifest.json")).expect("app manifest");
+        assert_eq!(
+            manifest
+                .static_site
+                .as_ref()
+                .map(|site| site.dist_dir.as_str()),
+            Some("frontend/dist")
+        );
+        assert_eq!(manifest.services.len(), 2);
+        assert!(
+            manifest
+                .services
+                .iter()
+                .any(|service| service.bundle_file.as_deref()
+                    == Some("services/live/build/live-api.tgz"))
+        );
+        assert!(
+            manifest
+                .services
+                .iter()
+                .any(|service| service.bundle_file.as_deref()
+                    == Some("services/vault/build/vault-api.to"))
+        );
+
+        let live_container: SoraContainerManifestV1 =
+            load_json(&dir.join("services/live/container_manifest.json")).expect("live container");
+        let live_service: SoraServiceManifestV1 =
+            load_json(&dir.join("services/live/service_manifest.json")).expect("live service");
+        assert_eq!(live_container.runtime, SoraContainerRuntimeV1::Inrou);
+        assert_eq!(
+            live_service.execution_plane,
+            SoraServiceExecutionPlaneV1::HttpService
+        );
+        assert_eq!(
+            live_service
+                .route
+                .as_ref()
+                .map(|route| route.path_prefix.as_str()),
+            Some("/api/v1")
+        );
+        assert_eq!(live_service.lease_volumes.len(), 3);
+
+        let vault_container: SoraContainerManifestV1 =
+            load_json(&dir.join("services/vault/container_manifest.json"))
+                .expect("vault container");
+        let vault_service: SoraServiceManifestV1 =
+            load_json(&dir.join("services/vault/service_manifest.json")).expect("vault service");
+        assert_eq!(vault_container.runtime, SoraContainerRuntimeV1::Ivm);
+        assert_eq!(
+            vault_service.execution_plane,
+            SoraServiceExecutionPlaneV1::DeterministicService
+        );
+        assert!(
+            vault_service
+                .state_bindings
+                .iter()
+                .any(|binding| binding.key_prefix == "/state/users/preferences")
+        );
+        assert!(
+            vault_service
+                .handlers
+                .iter()
+                .any(|handler| handler.route_path.as_deref() == Some("/auth/login"))
+        );
+    }
+
+    #[test]
+    fn init_hayahi_app_template_scaffolds_real_ivm_api_project() {
         let dir = temp_dir("hayahi_app_template");
         let output = InitArgs {
             output_dir: dir.clone(),
@@ -16376,29 +17700,30 @@ mod tests {
         .expect("hayahi-app init should succeed");
 
         assert_eq!(output.template, "hayahi-app");
-        assert!(dir.join("hayahi-app/frontend/package.json").exists());
-        assert!(dir.join("hayahi-app/api/server.mjs").exists());
+        assert!(dir.join("hayahi-app/package.json").exists());
+        assert!(dir.join("hayahi-app/build.sh").exists());
+        assert!(dir.join("hayahi-app/contract/hayahi_api.ko").exists());
 
         let readme =
             fs::read_to_string(dir.join("hayahi-app/README.md")).expect("read hayahi readme");
-        assert!(readme.contains("SESSION_HMAC_KEY"));
-        assert!(readme.contains("AUTH_CAPABILITY_MAP_JSON"));
+        assert!(readme.contains("build/hayahi-app-api.to"));
+        assert!(readme.contains("sync-manifests"));
         assert!(readme.contains("/api/v1/user/preferences"));
         assert!(readme.contains("/api/v1/user/saved-searches"));
+        assert!(readme.contains("/api/auth/challenge"));
+        assert!(readme.contains("/api/v1/search"));
 
-        let api =
-            fs::read_to_string(dir.join("hayahi-app/api/server.mjs")).expect("read hayahi api");
-        assert!(api.contains("/api/auth/challenge"));
-        assert!(api.contains("/api/auth/login"));
-        assert!(api.contains("/api/v1/health"));
-        assert!(api.contains("/api/v1/state/overview"));
-        assert!(api.contains("/api/v1/collector/status"));
-        assert!(api.contains("/api/v1/user/preferences"));
-        assert!(api.contains("/api/v1/user/saved-searches"));
-        assert!(api.contains("hayahi.user.preferences.read"));
-        assert!(api.contains("hayahi.user.saved_searches.write"));
+        let contract = fs::read_to_string(dir.join("hayahi-app/contract/hayahi_api.ko"))
+            .expect("read hayahi contract");
+        assert!(contract.contains("kotoage fn serve_health"));
+        assert!(contract.contains("kotoage fn serve_state_overview"));
+        assert!(contract.contains("kotoage fn serve_collector_status"));
+        assert!(contract.contains("kotoage fn issue_auth_challenge"));
+        assert!(contract.contains("kotoage fn complete_auth_login"));
+        assert!(contract.contains("kotoage fn store_user_preferences"));
+        assert!(contract.contains("kotoage fn store_saved_search"));
         assert!(
-            !api.contains("TODO"),
+            !contract.contains("TODO"),
             "placeholder TODO markers must be removed from hayahi-app scaffold"
         );
 
@@ -16448,19 +17773,27 @@ mod tests {
             }),
             "user_preferences private binding missing from hayahi-app template"
         );
-        assert_eq!(service.handlers.len(), 3);
+        assert_eq!(service.handlers.len(), 12);
         assert_eq!(service.handlers[0].class, SoraServiceHandlerClassV1::Query);
-        assert_eq!(service.handlers[1].class, SoraServiceHandlerClassV1::Update);
         assert_eq!(
-            service.handlers[1]
+            service.handlers[0].route_path.as_deref(),
+            Some("/v1/health")
+        );
+        assert_eq!(service.handlers[6].class, SoraServiceHandlerClassV1::Update);
+        assert_eq!(
+            service.handlers[6]
                 .mailbox
                 .as_ref()
                 .map(|mailbox| mailbox.queue_name.as_ref()),
-            Some("search_updates")
+            Some("auth_updates")
         );
         assert_eq!(
-            service.handlers[2].class,
+            service.handlers[8].class,
             SoraServiceHandlerClassV1::PrivateUpdate
+        );
+        assert_eq!(
+            service.handlers[8].route_path.as_deref(),
+            Some("/auth/login")
         );
         assert_eq!(service.artifacts.len(), 2);
         assert_eq!(service.artifacts[0].kind, SoraArtifactKindV1::Journal);
@@ -16525,7 +17858,7 @@ mod tests {
     }
 
     #[test]
-    fn generated_hayahi_app_auth_module_contains_wallet_and_vault_routes() {
+    fn generated_hayahi_app_contract_contains_real_route_entrypoints() {
         let dir = temp_dir("hayahi_auth_markers");
         InitArgs {
             output_dir: dir.clone(),
@@ -16537,17 +17870,165 @@ mod tests {
         .run()
         .expect("hayahi-app init should succeed");
 
-        let api =
-            fs::read_to_string(dir.join("hayahi-app/api/server.mjs")).expect("read hayahi api");
-        assert!(api.contains("AUTH_CHALLENGE_REPLAYED"));
-        assert!(api.contains("AUTH_REQUIRE_EXTERNAL_SHARED_STATE"));
-        assert!(api.contains("__soracloudSharedStateAdapter"));
-        assert!(api.contains("/state/hayahi/search/sessions"));
-        assert!(api.contains("/state/hayahi/search/cache"));
-        assert!(api.contains("/state/hayahi/users/preferences"));
-        assert!(api.contains("/state/hayahi/users/saved_searches"));
-        assert!(api.contains("hayahi.user.preferences.write"));
-        assert!(api.contains("hayahi.user.saved_searches.write"));
+        let contract = fs::read_to_string(dir.join("hayahi-app/contract/hayahi_api.ko"))
+            .expect("read hayahi contract");
+        assert!(contract.contains("route: \"/api/v1/health\""));
+        assert!(contract.contains("route: \"/api/v1/state/overview\""));
+        assert!(contract.contains("route: \"/api/v1/collector/status\""));
+        assert!(contract.contains("route: \"/api/auth/challenge\""));
+        assert!(contract.contains("route: \"/api/auth/login\""));
+        assert!(contract.contains("route: \"/api/auth/logout\""));
+        assert!(contract.contains("route: \"/api/v1/user/preferences\""));
+        assert!(contract.contains("route: \"/api/v1/user/saved-searches\""));
+    }
+
+    #[test]
+    fn sync_manifests_updates_bundle_and_container_hashes() {
+        let dir = temp_dir("sync_manifests");
+        let mut container = fixture_container();
+        container.env.insert(
+            "PUBLIC_BASE_URL".to_owned(),
+            "https://taira.sora.org".to_owned(),
+        );
+        let mut service = fixture_service();
+        service.container.manifest_hash = Hash::prehashed([0x11; Hash::LENGTH]);
+        let container_path = dir.join("container_manifest.json");
+        let service_path = dir.join("service_manifest.json");
+        let bundle_path = dir.join("hayahi-app-api.to");
+        write_json(&container_path, &container).expect("write container");
+        write_json(&service_path, &service).expect("write service");
+        fs::write(&bundle_path, b"hayahi-ivm-bundle").expect("write bundle");
+
+        let output = SyncManifestsArgs {
+            app_manifest: None,
+            container: container_path.clone(),
+            service: service_path.clone(),
+            bundle_file: Some(bundle_path.clone()),
+        }
+        .run()
+        .expect("sync manifests should succeed");
+
+        let synced_container: SoraContainerManifestV1 =
+            load_json(&container_path).expect("synced container");
+        let synced_service: SoraServiceManifestV1 =
+            load_json(&service_path).expect("synced service");
+        assert_eq!(
+            synced_container.bundle_hash,
+            Hash::new(b"hayahi-ivm-bundle")
+        );
+        assert_eq!(
+            synced_service.container.manifest_hash,
+            Hash::new(Encode::encode(&synced_container))
+        );
+        assert_eq!(
+            synced_service.container.expected_schema_version,
+            synced_container.schema_version
+        );
+        assert_eq!(output.bundle_hash, Some(synced_container.bundle_hash));
+        assert_eq!(
+            output.container_manifest_hash,
+            Some(Hash::new(Encode::encode(&synced_container)))
+        );
+    }
+
+    #[test]
+    fn sync_manifests_app_manifest_refreshes_every_service_pair() {
+        let dir = temp_dir("sync_manifests_app");
+        let manifest_path = dir.join("app_manifest.json");
+
+        let live_bundle =
+            build_split_app_live_service_bundle("travel_ops", "travel-ops.sora", "1.0.0")
+                .expect("build live bundle");
+        let vault_bundle =
+            build_split_app_vault_service_bundle("travel_ops", "travel-ops.sora", "1.0.0")
+                .expect("build vault bundle");
+
+        let live_dir = dir.join("services/live");
+        let vault_dir = dir.join("services/vault");
+        fs::create_dir_all(live_dir.join("build")).expect("create live build dir");
+        fs::create_dir_all(vault_dir.join("build")).expect("create vault build dir");
+        write_json(
+            &live_dir.join("container_manifest.json"),
+            &live_bundle.container,
+        )
+        .expect("write live container");
+        write_json(
+            &live_dir.join("service_manifest.json"),
+            &live_bundle.service,
+        )
+        .expect("write live service");
+        write_json(
+            &vault_dir.join("container_manifest.json"),
+            &vault_bundle.container,
+        )
+        .expect("write vault container");
+        write_json(
+            &vault_dir.join("service_manifest.json"),
+            &vault_bundle.service,
+        )
+        .expect("write vault service");
+        fs::write(live_dir.join("build/live-api.tgz"), b"live-api-bundle")
+            .expect("write live bundle");
+        fs::write(vault_dir.join("build/vault-api.to"), b"vault-api-bundle")
+            .expect("write vault bundle");
+
+        let manifest = SoracloudAppManifestV1 {
+            schema_version: SORACLOUD_APP_MANIFEST_VERSION_V1,
+            app_name: "travel_ops".to_owned(),
+            public_url: "https://travel-ops.sora".to_owned(),
+            static_site: Some(SoracloudAppStaticSiteV1 {
+                dist_dir: "frontend/dist".to_owned(),
+                mount_path: "/".to_owned(),
+                api_base_path: Some("/api".to_owned()),
+                publish_label: None,
+            }),
+            services: vec![
+                SoracloudAppServiceRefV1 {
+                    service_name: live_bundle.service.service_name.to_string(),
+                    container_manifest: "services/live/container_manifest.json".to_owned(),
+                    service_manifest: "services/live/service_manifest.json".to_owned(),
+                    bundle_file: Some("services/live/build/live-api.tgz".to_owned()),
+                    initial_configs: None,
+                    initial_secrets: None,
+                },
+                SoracloudAppServiceRefV1 {
+                    service_name: vault_bundle.service.service_name.to_string(),
+                    container_manifest: "services/vault/container_manifest.json".to_owned(),
+                    service_manifest: "services/vault/service_manifest.json".to_owned(),
+                    bundle_file: Some("services/vault/build/vault-api.to".to_owned()),
+                    initial_configs: None,
+                    initial_secrets: None,
+                },
+            ],
+        };
+        write_json(&manifest_path, &manifest).expect("write app manifest");
+
+        let output = SyncManifestsArgs {
+            app_manifest: Some(manifest_path.clone()),
+            container: dir.join("unused-container.json"),
+            service: dir.join("unused-service.json"),
+            bundle_file: None,
+        }
+        .run()
+        .expect("app sync should succeed");
+
+        assert_eq!(
+            output.app_manifest_path.as_deref(),
+            Some(manifest_path.to_string_lossy().as_ref())
+        );
+        assert_eq!(output.services.len(), 2);
+        assert!(
+            output
+                .services
+                .iter()
+                .any(|service| service.bundle_hash == Hash::new(b"live-api-bundle"))
+        );
+        assert!(
+            output
+                .services
+                .iter()
+                .any(|service| service.bundle_hash == Hash::new(b"vault-api-bundle"))
+        );
     }
 
     #[test]
@@ -20141,5 +21622,11 @@ main().catch((error) => {
         let parsed_hayahi = <InitTemplate as ValueEnum>::from_str("hayahi-app", true)
             .expect("hayahi-app must parse");
         assert_eq!(parsed_hayahi, InitTemplate::HayahiApp);
+        let parsed_http_service = <InitTemplate as ValueEnum>::from_str("http-service", true)
+            .expect("http-service must parse");
+        assert_eq!(parsed_http_service, InitTemplate::HttpService);
+        let parsed_split_app = <AppInitTemplate as ValueEnum>::from_str("split-app", true)
+            .expect("split-app must parse");
+        assert_eq!(parsed_split_app, AppInitTemplate::SplitApp);
     }
 }

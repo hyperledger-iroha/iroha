@@ -3364,7 +3364,8 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_TO_INT => {
+            crate::syscalls::SYSCALL_NUMERIC_TO_INT
+            | crate::syscalls::SYSCALL_NUMERIC_TO_INT_DIRECT => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
                     return Err(VMError::NoritoInvalid);
@@ -3379,7 +3380,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, (value as i64) as u64);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_ADD => {
+            crate::syscalls::SYSCALL_NUMERIC_ADD | crate::syscalls::SYSCALL_NUMERIC_ADD_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs.checked_add(rhs).ok_or(VMError::AssertionFailed)?;
@@ -3388,7 +3389,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_SUB => {
+            crate::syscalls::SYSCALL_NUMERIC_SUB | crate::syscalls::SYSCALL_NUMERIC_SUB_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs.checked_sub(rhs).ok_or(VMError::AssertionFailed)?;
@@ -3400,7 +3401,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_MUL => {
+            crate::syscalls::SYSCALL_NUMERIC_MUL | crate::syscalls::SYSCALL_NUMERIC_MUL_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs
@@ -3411,7 +3412,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_DIV => {
+            crate::syscalls::SYSCALL_NUMERIC_DIV | crate::syscalls::SYSCALL_NUMERIC_DIV_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs
@@ -3422,7 +3423,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_REM => {
+            crate::syscalls::SYSCALL_NUMERIC_REM | crate::syscalls::SYSCALL_NUMERIC_REM_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs
@@ -3433,7 +3434,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_NEG => {
+            crate::syscalls::SYSCALL_NUMERIC_NEG | crate::syscalls::SYSCALL_NUMERIC_NEG_DIRECT => {
                 let val = self.decode_numeric_ptr(vm, vm.register(10))?;
                 if !val.is_zero() {
                     return Err(VMError::AssertionFailed);
@@ -3448,11 +3449,17 @@ impl IVMHost for WsvHost {
             | crate::syscalls::SYSCALL_NUMERIC_LT
             | crate::syscalls::SYSCALL_NUMERIC_LE
             | crate::syscalls::SYSCALL_NUMERIC_GT
-            | crate::syscalls::SYSCALL_NUMERIC_GE => {
+            | crate::syscalls::SYSCALL_NUMERIC_GE
+            | crate::syscalls::SYSCALL_NUMERIC_EQ_DIRECT
+            | crate::syscalls::SYSCALL_NUMERIC_NE_DIRECT
+            | crate::syscalls::SYSCALL_NUMERIC_LT_DIRECT
+            | crate::syscalls::SYSCALL_NUMERIC_LE_DIRECT
+            | crate::syscalls::SYSCALL_NUMERIC_GT_DIRECT
+            | crate::syscalls::SYSCALL_NUMERIC_GE_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let cmp = lhs.cmp(&rhs);
-                let result = match number {
+                let result = match crate::syscalls::canonical_helper_syscall(number) {
                     crate::syscalls::SYSCALL_NUMERIC_EQ => cmp == core::cmp::Ordering::Equal,
                     crate::syscalls::SYSCALL_NUMERIC_NE => cmp != core::cmp::Ordering::Equal,
                     crate::syscalls::SYSCALL_NUMERIC_LT => cmp == core::cmp::Ordering::Less,
@@ -3548,7 +3555,9 @@ impl IVMHost for WsvHost {
                 Ok(0)
             }
             crate::syscalls::SYSCALL_JSON_SET_I64
-            | crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID => {
+            | crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
+            | crate::syscalls::SYSCALL_JSON_SET_I64_DIRECT
+            | crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT => {
                 let json_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 let key_tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if json_tlv.type_id != PointerType::Json || key_tlv.type_id != PointerType::Name {
@@ -3580,7 +3589,7 @@ impl IVMHost for WsvHost {
                 let key_name: Name =
                     decode_from_bytes(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
 
-                let field = match number {
+                let field = match crate::syscalls::canonical_helper_syscall(number) {
                     crate::syscalls::SYSCALL_JSON_SET_I64 => {
                         njson::Value::from(vm.register(12) as i64)
                     }
@@ -3640,7 +3649,15 @@ impl IVMHost for WsvHost {
             | crate::syscalls::SYSCALL_JSON_GET_NFT_ID
             | crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX
             | crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID
-            | crate::syscalls::SYSCALL_JSON_GET_NUMERIC => {
+            | crate::syscalls::SYSCALL_JSON_GET_NUMERIC
+            | crate::syscalls::SYSCALL_JSON_GET_I64_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_JSON_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_NAME_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_NFT_ID_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_NUMERIC_DIRECT => {
                 let json_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 let key_tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if json_tlv.type_id != PointerType::Json || key_tlv.type_id != PointerType::Name {
@@ -3670,7 +3687,7 @@ impl IVMHost for WsvHost {
                     decode_from_bytes(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
                 let field = obj.get(key_name.as_ref()).ok_or(VMError::DecodeError)?;
 
-                match number {
+                match crate::syscalls::canonical_helper_syscall(number) {
                     crate::syscalls::SYSCALL_JSON_GET_I64 => {
                         let n = match field {
                             njson::Value::Number(njson::native::Number::I64(v)) => *v,
@@ -3943,7 +3960,8 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, if eq { 1 } else { 0 });
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_SCHEMA_ENCODE => {
+            crate::syscalls::SYSCALL_SCHEMA_ENCODE
+            | crate::syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT => {
                 let s_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 let v_tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if s_tlv.type_id != PointerType::Name || v_tlv.type_id != PointerType::Json {
@@ -4048,7 +4066,8 @@ impl IVMHost for WsvHost {
                     }
                 }
             }
-            crate::syscalls::SYSCALL_SCHEMA_DECODE => {
+            crate::syscalls::SYSCALL_SCHEMA_DECODE
+            | crate::syscalls::SYSCALL_SCHEMA_DECODE_DIRECT => {
                 let s_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 let b_tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if s_tlv.type_id != PointerType::Name || b_tlv.type_id != PointerType::NoritoBytes {
@@ -4161,7 +4180,7 @@ impl IVMHost for WsvHost {
                     }
                 }
             }
-            crate::syscalls::SYSCALL_SCHEMA_INFO => {
+            crate::syscalls::SYSCALL_SCHEMA_INFO | crate::syscalls::SYSCALL_SCHEMA_INFO_DIRECT => {
                 let tlv = vm.memory.validate_tlv(vm.register(10))?;
                 if tlv.type_id != PointerType::Name {
                     return Err(VMError::NoritoInvalid);
@@ -4201,7 +4220,8 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO => {
+            crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
+            | crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT => {
                 let base_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 if base_tlv.type_id != PointerType::Name {
                     return Err(VMError::NoritoInvalid);

@@ -44757,6 +44757,8 @@ mod tests {
                 schema_version: iroha_data_model::soracloud::SORA_SERVICE_MANIFEST_VERSION_V1,
                 service_name: service_name.clone(),
                 service_version: service_version.clone(),
+                execution_plane:
+                    iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService,
                 container: iroha_data_model::soracloud::SoraContainerManifestRefV1 {
                     manifest_hash: Hash::new(b"container"),
                     expected_schema_version:
@@ -44770,7 +44772,9 @@ mod tests {
                     health_window_secs: std::num::NonZeroU32::new(30).expect("nonzero"),
                     automatic_rollback_failures: std::num::NonZeroU32::new(1).expect("nonzero"),
                 },
+                economics: iroha_data_model::soracloud::SoraHttpServiceEconomicsV1::default(),
                 state_bindings: Vec::new(),
+                lease_volumes: Vec::new(),
                 handlers: vec![iroha_data_model::soracloud::SoraServiceHandlerV1 {
                     handler_name: "query".parse().expect("valid name"),
                     class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query,
@@ -44812,6 +44816,8 @@ mod tests {
                     secret_generation: 0,
                     service_configs: std::collections::BTreeMap::new(),
                     service_secrets: std::collections::BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
                 },
             );
         world.soracloud_service_runtime_mut_for_testing().insert(

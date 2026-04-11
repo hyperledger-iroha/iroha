@@ -6990,21 +6990,25 @@ mod tests {
         let mut block = state.block(header);
         let mut tx = block.transaction();
 
-        tx.world.bind_contract_alias(
-            &contract_address,
-            "router::universal".parse().expect("alias"),
-            None,
-            None,
-            10_000,
-        )
-        .expect("seed stale contract alias");
+        tx.world
+            .bind_contract_alias(
+                &contract_address,
+                "router::universal".parse().expect("alias"),
+                None,
+                None,
+                10_000,
+            )
+            .expect("seed stale contract alias");
 
         SetContractAlias::clear(contract_address.clone())
             .execute(&authority, &mut tx)
             .expect("clear should tolerate undeployed stale alias");
 
         assert!(
-            tx.world.contract_alias_bindings.get(&contract_address).is_none(),
+            tx.world
+                .contract_alias_bindings
+                .get(&contract_address)
+                .is_none(),
             "binding index should be removed"
         );
         assert!(

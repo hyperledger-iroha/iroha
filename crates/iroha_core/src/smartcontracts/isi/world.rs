@@ -6477,6 +6477,17 @@ pub mod isi {
             let proof_size = encoded.len();
             let backend_label = self.proof.backend_label();
             let commitment = hash_bridge_proof(&backend_label, &encoded);
+            let pid = iroha_data_model::proof::ProofId {
+                backend: backend_label.clone(),
+                proof_hash: commitment,
+            };
+
+            // Allow re-submitting the exact same proof artifact so higher-level
+            // bridge flows can register proof evidence independently from a
+            // later message-settlement transaction.
+            if state_transaction.world.proofs.get(&pid).is_some() {
+                return Ok(());
+            }
 
             if let Some(conflict) =
                 find_overlapping_bridge_range(state_transaction, &backend_label, &self.proof.range)
@@ -6488,10 +6499,6 @@ pub mod isi {
                 ));
             }
 
-            let pid = iroha_data_model::proof::ProofId {
-                backend: backend_label.clone(),
-                proof_hash: commitment,
-            };
             ensure_unique_proof(state_transaction, &pid)?;
 
             let height = current_height;

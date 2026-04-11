@@ -411,7 +411,10 @@ async fn contracts_redeploy_same_alias_reclaims_stale_inactive_binding() {
 
     let applied_first =
         iroha_torii::test_utils::drain_queue_and_apply_all(&state, &queue, &chain_id, 1);
-    assert!(applied_first > 0, "first deploy should enqueue transactions");
+    assert!(
+        applied_first > 0,
+        "first deploy should enqueue transactions"
+    );
 
     let stale_address = iroha_data_model::smart_contract::ContractAddress::derive(
         0,
@@ -446,7 +449,10 @@ async fn contracts_redeploy_same_alias_reclaims_stale_inactive_binding() {
             Some(stale_address.clone())
         );
         assert!(
-            view.world().contract_instances().get(&stale_address).is_none(),
+            view.world()
+                .contract_instances()
+                .get(&stale_address)
+                .is_none(),
             "stale alias setup should remove the old active binding"
         );
     }
@@ -475,7 +481,10 @@ async fn contracts_redeploy_same_alias_reclaims_stale_inactive_binding() {
 
     let applied_second =
         iroha_torii::test_utils::drain_queue_and_apply_all(&state, &queue, &chain_id, 2);
-    assert!(applied_second > 0, "second deploy should enqueue transactions");
+    assert!(
+        applied_second > 0,
+        "second deploy should enqueue transactions"
+    );
 
     let view = state.view();
     assert_eq!(
@@ -483,11 +492,17 @@ async fn contracts_redeploy_same_alias_reclaims_stale_inactive_binding() {
         Some(second_address.clone())
     );
     assert!(
-        view.world().contract_instances().get(&second_address).is_some(),
+        view.world()
+            .contract_instances()
+            .get(&second_address)
+            .is_some(),
         "stale alias redeploy should activate the new contract"
     );
     assert!(
-        view.world().contract_alias_bindings().get(&first_address).is_none(),
+        view.world()
+            .contract_alias_bindings()
+            .get(&first_address)
+            .is_none(),
         "stale alias binding should be cleared from the previous address"
     );
 }

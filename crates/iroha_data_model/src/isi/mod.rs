@@ -587,6 +587,12 @@ impl From<crate::isi::soracloud::SetSoracloudRuntimeState> for InstructionBox {
     }
 }
 
+impl From<crate::isi::soracloud::ReportSoracloudServiceLeaseUsage> for InstructionBox {
+    fn from(i: crate::isi::soracloud::ReportSoracloudServiceLeaseUsage) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::soracloud::RecordSoracloudMailboxMessage> for InstructionBox {
     fn from(i: crate::isi::soracloud::RecordSoracloudMailboxMessage) -> Self {
         InstructionBox(Box::new(i))
@@ -2834,8 +2840,9 @@ pub mod prelude {
         soracloud::{
             AdvanceSoracloudRollout, DeploySoracloudService, MutateSoracloudState,
             RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
-            RecordSoracloudMailboxMessage, RecordSoracloudRuntimeReceipt, RollbackSoracloudService,
-            RunSoracloudFheJob, SetSoracloudRuntimeState, UpgradeSoracloudService,
+            RecordSoracloudMailboxMessage, RecordSoracloudRuntimeReceipt,
+            ReportSoracloudServiceLeaseUsage, RollbackSoracloudService, RunSoracloudFheJob,
+            SetSoracloudRuntimeState, UpgradeSoracloudService,
         },
         soradns::{
             AddReleaseSigner, PublishDirectory, RemoveReleaseSigner, RevokeResolver,

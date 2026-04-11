@@ -10614,7 +10614,7 @@ pub async fn handle_post_contract_view(
         manifest,
         dataspace,
         contract_address,
-        contract_alias: _contract_alias,
+        contract_alias,
     } = prepared;
     let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
     let entrypoint_descriptor = ensure_view_contract_entrypoint(&manifest, resolved_entrypoint)?;
@@ -10622,6 +10622,8 @@ pub async fn handle_post_contract_view(
     let result = match execute_contract_view(
         &state,
         &authority,
+        &contract_address,
+        contract_alias.as_ref(),
         &code_bytes,
         resolved_entrypoint,
         entrypoint_descriptor,
@@ -11352,6 +11354,8 @@ fn render_contract_queued_instructions(
 fn execute_contract_view(
     state: &CoreState,
     authority: &iroha_data_model::account::AccountId,
+    contract_address: &iroha_data_model::smart_contract::ContractAddress,
+    contract_alias: Option<&iroha_data_model::smart_contract::ContractAlias>,
     code_bytes: &[u8],
     selector: &str,
     descriptor: &manifest::EntrypointDescriptor,
@@ -11385,6 +11389,11 @@ fn execute_contract_view(
     host.set_durable_state_snapshot_from_world(&query_view.world);
     host.set_public_inputs_from_parameters(query_view.world.parameters());
     host.set_vrf_epoch_seeds_from_world(&query_view.world);
+    host.bind_contract_runtime_context(
+        contract_address.clone(),
+        contract_alias.cloned(),
+        selector.to_owned(),
+    );
 
     vm.load_program(code_bytes)
         .map_err(|err| ContractViewExecutionError {
