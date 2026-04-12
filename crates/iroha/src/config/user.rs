@@ -23,6 +23,8 @@ use crate::{
 const MIN_TRANSACTION_TTL: Duration = Duration::from_secs(1);
 const PUBLIC_TAIRA_CHAIN_ID: &str = "809574f5-fee7-5e69-bfcf-52451e42d50f";
 const PUBLIC_NEXUS_CHAIN_ID: &str = "00000000-0000-0000-0000-000000000753";
+const PUBLIC_TAIRA_TORII_HOST: &str = "taira.sora.org";
+const PUBLIC_NEXUS_TORII_HOST: &str = "torii.nexus.sora.org";
 const TAIRA_CHAIN_DISCRIMINANT: u16 = 369;
 const NEXUS_CHAIN_DISCRIMINANT: u16 = 753;
 
@@ -30,6 +32,20 @@ fn known_chain_discriminant_for_chain_id(chain_id: &ChainId) -> Option<u16> {
     match chain_id.as_str() {
         "iroha3-taira" | PUBLIC_TAIRA_CHAIN_ID => Some(TAIRA_CHAIN_DISCRIMINANT),
         "iroha3-nexus" | PUBLIC_NEXUS_CHAIN_ID => Some(NEXUS_CHAIN_DISCRIMINANT),
+        _ => None,
+    }
+}
+
+fn known_chain_discriminant_for_torii_url(torii_url: &Url) -> Option<(u16, &'static str)> {
+    match torii_url.host_str() {
+        Some(PUBLIC_TAIRA_TORII_HOST) => Some((
+            TAIRA_CHAIN_DISCRIMINANT,
+            "derived from Torii host `taira.sora.org`",
+        )),
+        Some(PUBLIC_NEXUS_TORII_HOST) => Some((
+            NEXUS_CHAIN_DISCRIMINANT,
+            "derived from Torii host `torii.nexus.sora.org`",
+        )),
         _ => None,
     }
 }
@@ -268,15 +284,12 @@ impl Root {
 
         let chain_discriminant = match chain_discriminant.origin() {
             ParameterOrigin::Default { .. } => known_chain_discriminant_for_chain_id(&chain_id)
-                .map(|value| {
-                    WithOrigin::new(
-                        value,
-                        ParameterOrigin::custom(format!(
-                            "derived from chain `{}`",
-                            chain_id.as_str()
-                        )),
-                    )
+                .map(|value| (value, format!("derived from chain `{}`", chain_id.as_str())))
+                .or_else(|| {
+                    known_chain_discriminant_for_torii_url(&torii_api_url)
+                        .map(|(value, source)| (value, source.to_owned()))
                 })
+                .map(|(value, source)| WithOrigin::new(value, ParameterOrigin::custom(source)))
                 .unwrap_or(chain_discriminant),
             _ => chain_discriminant,
         };
@@ -584,6 +597,31 @@ mod tests {
         let config = root.parse().expect("configuration should be valid");
 
         assert_eq!(config.account_chain_discriminant, TAIRA_CHAIN_DISCRIMINANT);
+    }
+
+    #[test]
+    fn parse_infers_taira_account_chain_discriminant_from_torii_url_when_chain_id_unknown() {
+        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
+        root.chain = ChainId::from("00000000-0000-0000-0000-000000000000");
+        root.torii_url =
+            WithOrigin::inline(Url::parse("https://taira.sora.org/").expect("valid torii url"));
+
+        let config = root.parse().expect("configuration should be valid");
+
+        assert_eq!(config.account_chain_discriminant, TAIRA_CHAIN_DISCRIMINANT);
+    }
+
+    #[test]
+    fn parse_infers_nexus_account_chain_discriminant_from_torii_url_when_chain_id_unknown() {
+        let mut root = root_with_timeouts(Duration::from_secs(5), Duration::from_secs(3));
+        root.chain = ChainId::from("00000000-0000-0000-0000-000000000000");
+        root.torii_url = WithOrigin::inline(
+            Url::parse("https://torii.nexus.sora.org/").expect("valid torii url"),
+        );
+
+        let config = root.parse().expect("configuration should be valid");
+
+        assert_eq!(config.account_chain_discriminant, NEXUS_CHAIN_DISCRIMINANT);
     }
 
     #[test]

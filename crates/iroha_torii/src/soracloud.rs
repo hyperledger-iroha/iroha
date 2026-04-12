@@ -3004,15 +3004,15 @@ fn admit_scr_host_bundle(
         ));
     }
 
-    if let SoraNetworkPolicyV1::Allowlist(hosts) = &container.capabilities.network {
-        if hosts.is_empty() {
+    if let SoraNetworkPolicyV1::Allowlist(entries) = &container.capabilities.network {
+        if entries.is_empty() {
             return Err(SoracloudError::bad_request(
                 "container capability network allowlist must not be empty",
             ));
         }
         let mut seen = BTreeSet::new();
-        for host in hosts {
-            let normalized = host.trim();
+        for entry in entries {
+            let normalized = entry.host.trim();
             if normalized.is_empty() {
                 return Err(SoracloudError::bad_request(
                     "container capability network allowlist contains an empty host",
@@ -3025,10 +3025,28 @@ fn admit_scr_host_bundle(
                     "container capability network allowlist contains invalid host characters",
                 ));
             }
-            if !seen.insert(normalized.to_owned()) {
+            if !seen.insert(normalized.to_ascii_lowercase()) {
                 return Err(SoracloudError::bad_request(
                     "container capability network allowlist must not contain duplicates",
                 ));
+            }
+            if entry.ports.is_empty() {
+                return Err(SoracloudError::bad_request(
+                    "container capability network allowlist entries must include at least one port",
+                ));
+            }
+            let mut seen_ports = BTreeSet::new();
+            for port in &entry.ports {
+                if *port == 0 {
+                    return Err(SoracloudError::bad_request(
+                        "container capability network allowlist contains invalid port 0",
+                    ));
+                }
+                if !seen_ports.insert(*port) {
+                    return Err(SoracloudError::bad_request(
+                        "container capability network allowlist must not contain duplicate ports per host",
+                    ));
+                }
             }
         }
     }
@@ -8142,7 +8160,7 @@ fn authoritative_agent_autonomy_run_mutation_response(
     Ok(response)
 }
 
-fn authoritative_soracloud_sequence(app: &SharedAppState) -> u64 {
+pub(crate) fn authoritative_soracloud_sequence(app: &SharedAppState) -> u64 {
     let state_view = app.state.view();
     let world = state_view.world();
     [
@@ -9194,7 +9212,9 @@ pub(crate) fn resolve_public_route(
             {
                 continue;
             }
-            if !bundle.container.runtime.is_http_service_runtime() {
+            if bundle.container.runtime
+                != iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou
+            {
                 continue;
             }
             let Some(request_path) =
@@ -13407,7 +13427,7 @@ mod tests {
 
     use std::{
         fs,
-        num::{NonZeroU32, NonZeroU64},
+        num::{NonZeroU16, NonZeroU32, NonZeroU64},
         path::{Path, PathBuf},
         sync::Arc,
     };
@@ -13446,11 +13466,12 @@ mod tests {
             SoraHfSharedLeaseStatusV1, SoraHfSourceRecordV1, SoraHfSourceStatusV1,
             SoraModelPrivacyModeV1, SoraModelProvenanceKindV1, SoraModelProvenanceRefV1,
             SoraPrivateCompileProfileV1, SoraPrivateInferenceCheckpointV1,
-            SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1,
-            SoraServiceAuditEventV1, SoraServiceConfigEntryV1, SoraServiceDeploymentStateV1,
-            SoraServiceHandlerV1, SoraServiceLifecycleActionV1, SoraServiceManifestV1,
-            SoraServiceSecretEntryV1, SoraServiceStateEntryV1, SoraStateEncryptionV1,
-            SoraUploadedModelBundleV1, SoraUploadedModelChunkV1, SoraUploadedModelPricingPolicyV1,
+            SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1, SoraRouteTargetV1,
+            SoraRouteVisibilityV1, SoraServiceAuditEventV1, SoraServiceConfigEntryV1,
+            SoraServiceDeploymentStateV1, SoraServiceHandlerV1, SoraServiceLifecycleActionV1,
+            SoraServiceManifestV1, SoraServiceSecretEntryV1, SoraServiceStateEntryV1,
+            SoraStateEncryptionV1, SoraTlsModeV1, SoraUploadedModelBundleV1,
+            SoraUploadedModelChunkV1, SoraUploadedModelPricingPolicyV1,
             SoraUploadedModelRuntimeFormatV1,
         },
         sorafs::pin_registry::StorageClass,
@@ -14236,6 +14257,158 @@ mod tests {
             resolve_public_route(&app, "wrong.sora", "GET", "/app/v1/health").is_none(),
             "host matching must stay authoritative for hosted http services"
         );
+    }
+
+    #[tokio::test]
+    async fn resolve_public_route_splits_hosted_live_search_from_vault_handlers() {
+        use iroha_core::state::World;
+        use iroha_data_model::soracloud::SoraMailboxContractV1;
+
+        let mut world = World::new();
+
+        let mut live_bundle = fixture_bundle("2026.04.0");
+        live_bundle.service.service_name = "travel_ops_live".parse().expect("service name");
+        live_bundle.container.runtime = iroha_data_model::soracloud::SoraContainerRuntimeV1::Inrou;
+        live_bundle.service.execution_plane =
+            iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+        live_bundle.service.route = Some(SoraRouteTargetV1 {
+            host: "travel.sora".to_owned(),
+            path_prefix: "/api/v1".to_owned(),
+            service_port: NonZeroU16::new(8787).expect("nonzero literal"),
+            visibility: SoraRouteVisibilityV1::Public,
+            tls_mode: SoraTlsModeV1::Required,
+        });
+        live_bundle.service.state_bindings.clear();
+        live_bundle.service.handlers.clear();
+
+        let mut vault_bundle = fixture_bundle("2026.04.0");
+        vault_bundle.service.service_name = "travel_ops_vault".parse().expect("service name");
+        vault_bundle.service.route = Some(SoraRouteTargetV1 {
+            host: "travel.sora".to_owned(),
+            path_prefix: "/api".to_owned(),
+            service_port: NonZeroU16::new(8788).expect("nonzero literal"),
+            visibility: SoraRouteVisibilityV1::Public,
+            tls_mode: SoraTlsModeV1::Required,
+        });
+        vault_bundle.service.handlers = vec![
+            SoraServiceHandlerV1 {
+                handler_name: "auth_me".parse().expect("handler"),
+                class: SoraServiceHandlerClassV1::Query,
+                entrypoint: "serve_auth_me".to_owned(),
+                route_path: Some("/auth/me".to_owned()),
+                certified_response: SoraCertifiedResponsePolicyV1::AuditReceipt,
+                mailbox: None,
+            },
+            SoraServiceHandlerV1 {
+                handler_name: "saved_searches_get".parse().expect("handler"),
+                class: SoraServiceHandlerClassV1::Query,
+                entrypoint: "serve_saved_searches".to_owned(),
+                route_path: Some("/v1/user/saved-searches".to_owned()),
+                certified_response: SoraCertifiedResponsePolicyV1::AuditReceipt,
+                mailbox: None,
+            },
+            SoraServiceHandlerV1 {
+                handler_name: "saved_searches_put".parse().expect("handler"),
+                class: SoraServiceHandlerClassV1::PrivateUpdate,
+                entrypoint: "store_saved_search".to_owned(),
+                route_path: Some("/v1/user/saved-searches".to_owned()),
+                certified_response: SoraCertifiedResponsePolicyV1::None,
+                mailbox: Some(SoraMailboxContractV1 {
+                    queue_name: "private_updates".parse().expect("queue"),
+                    max_pending_messages: NonZeroU32::new(128).expect("pending"),
+                    max_message_bytes: NonZeroU64::new(131_072).expect("bytes"),
+                    retention_blocks: NonZeroU32::new(64).expect("retention"),
+                }),
+            },
+        ];
+
+        for bundle in [live_bundle.clone(), vault_bundle.clone()] {
+            let service_name = bundle.service.service_name.clone();
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(
+                    service_name.clone(),
+                    SoraServiceDeploymentStateV1 {
+                        schema_version:
+                            iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                        service_name,
+                        current_service_version: bundle.service.service_version.clone(),
+                        current_service_manifest_hash: bundle.service_manifest_hash(),
+                        current_container_manifest_hash: bundle.container_manifest_hash(),
+                        revision_count: 1,
+                        process_generation: 1,
+                        process_started_sequence: 1,
+                        active_rollout: None,
+                        last_rollout: None,
+                        config_generation: 0,
+                        secret_generation: 0,
+                        service_configs: BTreeMap::new(),
+                        service_secrets: BTreeMap::new(),
+                        service_lease: if bundle.service.execution_plane
+                            == iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
+                        {
+                            Some(iroha_data_model::soracloud::SoraServiceLeaseStateV1 {
+                                schema_version:
+                                    iroha_data_model::soracloud::SORA_SERVICE_LEASE_STATE_VERSION_V1,
+                                status:
+                                    iroha_data_model::soracloud::SoraServiceLeaseStatusV1::Active,
+                                quota_class: "taira-open".to_string(),
+                                deployment_deposit_nanos: 1_000_000_000,
+                                prepaid_runtime_balance_nanos: 50_000_000_000,
+                                runtime_nanos_per_sequence: 250_000,
+                                storage_nanos_per_gib_sequence: 25_000,
+                                egress_nanos_per_mib: 5_000,
+                                lease_started_sequence: 0,
+                                lease_expires_sequence: 100,
+                                last_billed_sequence: 0,
+                                accounted_egress_bytes: 0,
+                                last_status_reason: None,
+                            })
+                        } else {
+                            None
+                        },
+                        lease_volume_states: Vec::new(),
+                    },
+                );
+        }
+
+        let app = mk_app_state_for_tests_with_world(world);
+
+        let live_route = resolve_public_route(&app, "travel.sora", "POST", "/api/v1/search")
+            .expect("hosted live route");
+        match live_route {
+            PublicRouteMatch::HostedHttp(route_match) => {
+                assert_eq!(route_match.service_name, "travel_ops_live");
+                assert_eq!(route_match.request_path, "/search");
+            }
+            other => panic!("expected hosted-http live route, got {other:?}"),
+        }
+
+        let auth_route =
+            resolve_public_route(&app, "travel.sora", "GET", "/api/auth/me").expect("auth route");
+        match auth_route {
+            PublicRouteMatch::LocalRead(route_match) => {
+                assert_eq!(route_match.handler_name, "auth_me");
+            }
+            other => panic!("expected local-read auth route, got {other:?}"),
+        }
+
+        let saved_search_route =
+            resolve_public_route(&app, "travel.sora", "GET", "/api/v1/user/saved-searches")
+                .expect("saved searches route");
+        match saved_search_route {
+            PublicRouteMatch::LocalRead(route_match) => {
+                assert_eq!(route_match.handler_name, "saved_searches_get");
+            }
+            other => panic!("expected local-read saved searches route, got {other:?}"),
+        }
     }
 
     #[tokio::test]

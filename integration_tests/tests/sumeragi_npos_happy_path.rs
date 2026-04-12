@@ -440,9 +440,11 @@ async fn npos_rbc_large_payload_delivers_and_commits() -> eyre::Result<()> {
     ensure_rbc_sessions_persisted(&network, expected_height, start, COMMIT_WAIT_BUDGET, None)
         .await?;
 
-    let session = persisted_rbc_session_summary(&network, expected_height).ok_or_else(|| {
-        eyre!("missing persisted delivered RBC session at height {expected_height}")
-    })?;
+    let session = delivered_rbc_session_summary(&http, &network, expected_height)
+        .await?
+        .ok_or_else(|| {
+            eyre!("missing delivered RBC session summary at height {expected_height}")
+        })?;
 
     ensure!(
         session.received_chunks == session.total_chunks,
@@ -603,10 +605,47 @@ fn has_persisted_rbc_session_file(store_dir: &Path, expected_height: u64) -> boo
     })
 }
 
+async fn delivered_rbc_session_summary(
+    http: &reqwest::Client,
+    network: &Network,
+    expected_height: u64,
+) -> eyre::Result<Option<RbcSessionView>> {
+    if let Some(summary) = persisted_rbc_session_summary(network, expected_height) {
+        return Ok(Some(summary));
+    }
+
+    for peer in network.peers() {
+        let url = peer
+            .client()
+            .torii_url
+            .join("v1/sumeragi/rbc/sessions")
+            .wrap_err("compose RBC sessions URL")?;
+        let response = http
+            .get(url)
+            .header("Accept", "application/json")
+            .send()
+            .await
+            .wrap_err("fetch RBC sessions snapshot")?;
+        if !response.status().is_success() {
+            continue;
+        }
+
+        let body = response.text().await.wrap_err("read RBC sessions body")?;
+        let value = json::from_str(&body).wrap_err("parse RBC sessions JSON")?;
+        if let Some(session) =
+            select_delivered_rbc_session(parse_rbc_sessions(&value)?, expected_height)
+        {
+            return Ok(Some(session));
+        }
+    }
+
+    Ok(None)
+}
+
 fn persisted_rbc_session_summary(
     network: &Network,
     expected_height: u64,
-) -> Option<rbc_status::Summary> {
+) -> Option<RbcSessionView> {
     network.peers().iter().find_map(|peer| {
         let store_dir = peer.kura_store_dir().join("rbc_sessions");
         rbc_status::read_persisted_snapshot(&store_dir)
@@ -617,6 +656,15 @@ fn persisted_rbc_session_summary(
                     && summary.received_chunks == summary.total_chunks
                     && summary.total_chunks > 0
                     && !summary.invalid
+            })
+            .map(|summary| RbcSessionView {
+                block_hash: summary.block_hash.to_string(),
+                height: summary.height,
+                total_chunks: summary.total_chunks,
+                received_chunks: summary.received_chunks,
+                delivered: summary.delivered,
+                recovered: summary.recovered_from_disk,
+                invalid: summary.invalid,
             })
     })
 }
@@ -1081,6 +1129,19 @@ fn parse_rbc_sessions(root: &Value) -> eyre::Result<Vec<RbcSessionView>> {
     Ok(sessions)
 }
 
+fn select_delivered_rbc_session(
+    sessions: Vec<RbcSessionView>,
+    expected_height: u64,
+) -> Option<RbcSessionView> {
+    sessions.into_iter().find(|session| {
+        session.height == expected_height
+            && session.delivered
+            && session.received_chunks == session.total_chunks
+            && session.total_chunks > 0
+            && !session.invalid
+    })
+}
+
 fn field_as_string(obj: &Map, field: &str) -> eyre::Result<String> {
     obj.get(field)
         .and_then(Value::as_str)
@@ -1104,4 +1165,57 @@ fn field_as_bool(obj: &Map, field: &str) -> eyre::Result<bool> {
     obj.get(field)
         .and_then(Value::as_bool)
         .ok_or_else(|| eyre!("RBC session missing {field} field"))
+}
+
+#[test]
+fn select_delivered_rbc_session_requires_complete_valid_delivery() {
+    let selected = select_delivered_rbc_session(
+        vec![
+            RbcSessionView {
+                block_hash: "wrong-height".to_owned(),
+                height: 1,
+                total_chunks: 4,
+                received_chunks: 4,
+                delivered: true,
+                recovered: false,
+                invalid: false,
+            },
+            RbcSessionView {
+                block_hash: "incomplete".to_owned(),
+                height: 2,
+                total_chunks: 4,
+                received_chunks: 3,
+                delivered: true,
+                recovered: false,
+                invalid: false,
+            },
+            RbcSessionView {
+                block_hash: "invalid".to_owned(),
+                height: 2,
+                total_chunks: 4,
+                received_chunks: 4,
+                delivered: true,
+                recovered: false,
+                invalid: true,
+            },
+            RbcSessionView {
+                block_hash: "selected".to_owned(),
+                height: 2,
+                total_chunks: 5,
+                received_chunks: 5,
+                delivered: true,
+                recovered: true,
+                invalid: false,
+            },
+        ],
+        2,
+    )
+    .expect("complete delivered session should be selected");
+
+    assert_eq!(selected.block_hash, "selected");
+    assert_eq!(selected.total_chunks, 5);
+    assert_eq!(selected.received_chunks, 5);
+    assert!(selected.delivered);
+    assert!(selected.recovered);
+    assert!(!selected.invalid);
 }

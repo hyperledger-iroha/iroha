@@ -632,7 +632,11 @@ public enum ToriiOfflineCashCodec {
     public static func canonicalData<T: Encodable>(_ value: T) throws -> Data {
         let encoder = JSONEncoder()
         if #available(iOS 11.0, macOS 10.13, *) {
-            encoder.outputFormatting = [.sortedKeys]
+            if #available(iOS 13.0, macOS 10.15, *) {
+                encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            } else {
+                encoder.outputFormatting = [.sortedKeys]
+            }
         }
         return try encoder.encode(value)
     }

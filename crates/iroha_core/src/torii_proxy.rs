@@ -126,6 +126,25 @@ pub struct ToriiReadProxyRequestV1 {
     pub response_format: ToriiProxyResponseFormatV1,
 }
 
+/// Hosted HTTP request forwarded to a peer that may own a healthy Inrou target.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
+pub struct ToriiHostedHttpProxyRequestV1 {
+    /// Soracloud service name already resolved from the public route.
+    pub service_name: String,
+    /// Request path relative to the admitted public route prefix.
+    pub request_path: String,
+    /// Original client HTTP method.
+    pub method: String,
+    /// Raw query string without the leading `?`.
+    pub query_string: Option<String>,
+    /// Original request headers preserved by ingress.
+    pub headers: Vec<ToriiProxyHeaderV1>,
+    /// Raw request body bytes.
+    pub body: Vec<u8>,
+    /// Original client IP address when known, used for deterministic canary selection.
+    pub remote_ip: Option<String>,
+}
+
 /// Canonical Torii request body forwarded over the P2P control plane.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode)]
 pub enum ToriiProxyRequestKindV1 {
@@ -156,6 +175,8 @@ pub enum ToriiProxyRequestKindV1 {
     },
     /// Execute a routed Torii read endpoint on the authoritative peer.
     Read(ToriiReadProxyRequestV1),
+    /// Proxy a Soracloud public hosted-HTTP request to a peer with a local healthy Inrou target.
+    HostedHttp(ToriiHostedHttpProxyRequestV1),
 }
 
 /// P2P Torii proxy request sent from ingress to an authoritative peer.

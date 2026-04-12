@@ -5957,20 +5957,33 @@ impl Actor {
             .into_iter()
             .collect();
         for key in orphan_keys {
+            self.refresh_retained_rbc_summary_from_local_payload(key);
             // Commit cleanup should retain the final status summary for observability and
             // restart recovery, while still clearing all runtime-only RBC state. If the live
             // session has already retired (for example, exact-frontier snapshots), commit means
-            // the retained summary has reached the same delivered terminal state.
+            // the retained summary has reached the same delivered terminal state with the
+            // complete deterministic chunk set available from the local block payload.
             if let Some(mut summary) = self.subsystems.da_rbc.rbc.status_handle.get(&key)
                 && !summary.invalid
-                && !summary.delivered
             {
-                summary.delivered = true;
-                self.subsystems
-                    .da_rbc
-                    .rbc
-                    .status_handle
-                    .update(summary, SystemTime::now());
+                let mut changed = false;
+                if self.block_payload_available_for_progress(key.0)
+                    && summary.received_chunks != summary.total_chunks
+                {
+                    summary.received_chunks = summary.total_chunks;
+                    changed = true;
+                }
+                if !summary.delivered {
+                    summary.delivered = true;
+                    changed = true;
+                }
+                if changed {
+                    self.subsystems
+                        .da_rbc
+                        .rbc
+                        .status_handle
+                        .update(summary, SystemTime::now());
+                }
             }
             self.maybe_record_rbc_payload_bytes_metric_for_retained_summary(key);
             self.clear_rbc_runtime_state(key, false);
@@ -6030,6 +6043,44 @@ impl Actor {
             .flatten();
         if let Some(bytes) = bytes {
             self.record_rbc_payload_bytes_metric_for_active_session(key, bytes);
+        }
+    }
+
+    fn refresh_retained_rbc_summary_from_local_payload(
+        &mut self,
+        key: super::rbc_store::SessionKey,
+    ) {
+        let needs_refresh = self
+            .subsystems
+            .da_rbc
+            .rbc
+            .status_handle
+            .get(&key)
+            .is_none_or(|summary| {
+                !summary.invalid && summary.received_chunks < summary.total_chunks
+            });
+        if !needs_refresh {
+            return;
+        }
+
+        let Some(block) = self.local_signed_block_for_hash(key.0) else {
+            return;
+        };
+        let payload_bytes = super::proposals::block_payload_bytes(block.as_ref());
+        let payload_hash = Hash::new(&payload_bytes);
+        if let Err(err) = self.persist_exact_frontier_rbc_recovery_snapshot(
+            key,
+            block.as_ref(),
+            payload_bytes.as_slice(),
+            payload_hash,
+        ) {
+            debug!(
+                height = key.1,
+                view = key.2,
+                block = %key.0,
+                ?err,
+                "failed to refresh retained committed RBC snapshot from local payload"
+            );
         }
     }
 

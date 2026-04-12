@@ -336,8 +336,15 @@ fn reserve_control_transfer_stub(code: &mut Vec<u8>) -> usize {
     start
 }
 
-fn patch_jump_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Result<(), String> {
-    let off = (target as i64) - (start as i64);
+fn patch_jump_transfer_stub(
+    code: &mut [u8],
+    start: usize,
+    target: u64,
+    pc_bias: u64,
+) -> Result<(), String> {
+    let runtime_start = start as u64 + pc_bias;
+    let runtime_target = target + pc_bias;
+    let off = (runtime_target as i64) - (runtime_start as i64);
     if (off % 4) != 0 {
         return Err(format!(
             "unaligned jump offset {off} for control transfer at {start}"
@@ -350,7 +357,7 @@ fn patch_jump_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Resul
         return Ok(());
     }
 
-    patch_pointer_literal_stub(code, start, CONTROL_TRANSFER_SCRATCH_REG, target)?;
+    patch_pointer_literal_stub(code, start, CONTROL_TRANSFER_SCRATCH_REG, runtime_target)?;
     let jalr = encoding::wide::encode_ri(
         instruction::wide::control::JALR,
         0,
@@ -361,8 +368,15 @@ fn patch_jump_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Resul
     Ok(())
 }
 
-fn patch_call_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Result<(), String> {
-    let off = (target as i64) - (start as i64);
+fn patch_call_transfer_stub(
+    code: &mut [u8],
+    start: usize,
+    target: u64,
+    pc_bias: u64,
+) -> Result<(), String> {
+    let runtime_start = start as u64 + pc_bias;
+    let runtime_target = target + pc_bias;
+    let off = (runtime_target as i64) - (runtime_start as i64);
     if (off % 4) != 0 {
         return Err(format!(
             "unaligned call offset {off} for control transfer at {start}"
@@ -377,7 +391,7 @@ fn patch_call_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Resul
         return Ok(());
     }
 
-    patch_pointer_literal_stub(code, start, 1, target)?;
+    patch_pointer_literal_stub(code, start, 1, runtime_target)?;
     let jalr = encoding::wide::encode_ri(instruction::wide::control::JALR, 1, 1, 0);
     write_word(code, start + POINTER_STUB_LEN * 4, jalr);
     Ok(())
@@ -758,7 +772,7 @@ seiyaku MyC {
     fn far_jump_fixup_uses_literal_stub_and_jalr() {
         let mut code = Vec::new();
         let start = super::reserve_control_transfer_stub(&mut code);
-        super::patch_jump_transfer_stub(&mut code, start, 200_000).expect("patch far jump");
+        super::patch_jump_transfer_stub(&mut code, start, 200_000, 0).expect("patch far jump");
         let final_word_at = start + super::POINTER_STUB_LEN * 4;
         let final_word =
             u32::from_le_bytes(code[final_word_at..final_word_at + 4].try_into().unwrap());
@@ -777,7 +791,7 @@ seiyaku MyC {
     fn near_call_fixup_skips_stub_padding_on_return() {
         let mut code = Vec::new();
         let start = super::reserve_control_transfer_stub(&mut code);
-        super::patch_call_transfer_stub(&mut code, start, (start + 16) as u64)
+        super::patch_call_transfer_stub(&mut code, start, (start + 16) as u64, 0)
             .expect("patch near call");
 
         let call_word = u32::from_le_bytes(code[start..start + 4].try_into().unwrap());
@@ -791,6 +805,31 @@ seiyaku MyC {
             skip_word,
             super::encode_jal(0, ((super::CONTROL_TRANSFER_STUB_WORDS - 1) * 4) as i32)
                 .expect("encode stub skip")
+        );
+    }
+
+    #[test]
+    fn far_call_fixup_includes_runtime_prefix_bias_in_literal_target() {
+        let mut code = Vec::new();
+        let start = super::reserve_control_transfer_stub(&mut code);
+        let target = 200_000u64;
+        let bias = 8_192u64;
+        super::patch_call_transfer_stub(&mut code, start, target, bias).expect("patch far call");
+
+        let mut expected = vec![0u8; super::POINTER_STUB_LEN * 4];
+        super::patch_pointer_literal_stub(&mut expected, 0, 1, target + bias)
+            .expect("patch expected pointer literal");
+        assert_eq!(
+            &code[start..start + super::POINTER_STUB_LEN * 4],
+            expected.as_slice()
+        );
+
+        let final_word_at = start + super::POINTER_STUB_LEN * 4;
+        let final_word =
+            u32::from_le_bytes(code[final_word_at..final_word_at + 4].try_into().unwrap());
+        assert_eq!(
+            final_word,
+            encoding::wide::encode_ri(instruction::wide::control::JALR, 1, 1, 0)
         );
     }
 
@@ -7424,7 +7463,7 @@ impl Compiler {
                     )
                 })?;
                 let target_pc = (func_base + target_off) as u64;
-                patch_jump_transfer_stub(&mut code, fix.at, target_pc)?;
+                patch_jump_transfer_stub(&mut code, fix.at, target_pc, 0)?;
             }
             for fix in branch_fixups {
                 let else_target = *block_offsets.get(&fix.else_label).ok_or_else(|| {
@@ -7442,8 +7481,8 @@ impl Compiler {
                 let else_target_pc = (func_base + else_target) as u64;
                 let then_target_pc = (func_base + then_target) as u64;
 
-                patch_jump_transfer_stub(&mut code, fix.jal_else_at, else_target_pc)?;
-                patch_jump_transfer_stub(&mut code, fix.jal_then_at, then_target_pc)?;
+                patch_jump_transfer_stub(&mut code, fix.jal_else_at, else_target_pc, 0)?;
+                patch_jump_transfer_stub(&mut code, fix.jal_then_at, then_target_pc, 0)?;
             }
             uses_zk_global |= uses_zk;
         }
@@ -7453,7 +7492,7 @@ impl Compiler {
             let target = *func_start_offsets.get(callee).ok_or_else(|| {
                 i18n::translate(self.lang, Message::SemanticError("unknown callee"))
             })? as u64;
-            patch_call_transfer_stub(&mut code, *at, target)?;
+            patch_call_transfer_stub(&mut code, *at, target, 0)?;
         }
 
         uses_vector_global |= detect_vector_usage(&code);
@@ -7832,6 +7871,21 @@ impl Compiler {
             if rem != 0 {
                 post_pad = 4 - rem;
             }
+        }
+        let runtime_code_prefix = contract_section.len() as u64
+            + debug_section.len() as u64
+            + lit_header_size
+            + lit_size
+            + data_bytes.len() as u64
+            + post_pad as u64;
+        // Relative near calls are invariant under the runtime prefix, but far
+        // JALR stubs need the final code-region prefix added to their absolute
+        // targets so they do not jump into the CNTR/DBG1/LTLB prefix bytes.
+        for (at, callee, _caller) in &call_fixups {
+            let target = *func_start_offsets.get(callee).ok_or_else(|| {
+                i18n::translate(self.lang, Message::SemanticError("unknown callee"))
+            })? as u64;
+            patch_call_transfer_stub(&mut code, *at, target, runtime_code_prefix)?;
         }
         if need_literals {
             let data_len = data_bytes.len() as u32;

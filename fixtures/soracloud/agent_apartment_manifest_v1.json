@@ -39,8 +39,18 @@
   "network_egress": {
     "mode": "Allowlist",
     "value": [
-      "rpc.sora.internal",
-      "torii.sora.internal"
+      {
+        "host": "rpc.sora.internal",
+        "ports": [
+          443
+        ]
+      },
+      {
+        "host": "torii.sora.internal",
+        "ports": [
+          443
+        ]
+      }
     ]
   },
   "upgrade_policy": {

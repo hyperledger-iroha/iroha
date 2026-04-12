@@ -27,6 +27,8 @@ use crate::{
 
 /// Schema version for [`SoraContainerManifestV1`].
 pub const SORA_CONTAINER_MANIFEST_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraInrouManifestV1`].
+pub const SORA_INROU_MANIFEST_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceManifestV1`].
 pub const SORA_SERVICE_MANIFEST_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHttpServiceEconomicsV1`].
@@ -249,8 +251,6 @@ pub enum SoraContainerRuntimeV1 {
     /// Execute IVM bytecode entrypoints.
     #[default]
     Ivm,
-    /// Legacy compatibility runtime for host-supervised HTTP processes on Taira.
-    NativeProcess,
     /// Execute a Soracloud Inrou workload for hosted HTTP services.
     Inrou,
 }
@@ -265,7 +265,115 @@ impl SoraContainerRuntimeV1 {
     /// Returns `true` when the runtime targets the hosted HTTP service plane.
     #[must_use]
     pub const fn is_http_service_runtime(self) -> bool {
-        matches!(self, Self::NativeProcess | Self::Inrou)
+        matches!(self, Self::Inrou)
+    }
+}
+
+/// Guest userspace profile expected by an Inrou VM image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema, Default)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "guest_os", content = "value"))]
+pub enum SoraInrouGuestOsV1 {
+    /// Debian slim guest userspace with `apt` package management.
+    #[default]
+    DebianSlim,
+}
+
+/// Explicit Inrou microVM metadata carried by hosted HTTP container manifests.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraInrouManifestV1 {
+    /// Schema version; must equal [`SORA_INROU_MANIFEST_VERSION_V1`].
+    pub schema_version: u16,
+    /// Guest userspace contract expected by the runtime.
+    pub guest_os: SoraInrouGuestOsV1,
+    /// Kernel image path inside the signed Soracloud VM artifact bundle.
+    pub kernel_image_path: String,
+    /// Root filesystem image path inside the signed Soracloud VM artifact bundle.
+    pub rootfs_image_path: String,
+    /// Optional initrd image path inside the signed Soracloud VM artifact bundle.
+    #[norito(default)]
+    pub initrd_image_path: Option<String>,
+    /// Optional user-data overlay path copied into the bootstrap seed drive.
+    #[norito(default)]
+    pub bootstrap_user_data_path: Option<String>,
+    /// SSH public keys injected for tenant administration.
+    #[norito(default)]
+    pub ssh_authorized_keys: Vec<String>,
+}
+
+impl SoraInrouManifestV1 {
+    /// Validate Inrou image paths and guest bootstrap metadata.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch, image
+    /// paths are invalid, or SSH authorized keys are malformed.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORA_INROU_MANIFEST_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "sora inrou manifest",
+                expected: SORA_INROU_MANIFEST_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+
+        validate_bundle_absolute_path(
+            "sora inrou manifest",
+            "kernel_image_path",
+            &self.kernel_image_path,
+        )?;
+        validate_bundle_absolute_path(
+            "sora inrou manifest",
+            "rootfs_image_path",
+            &self.rootfs_image_path,
+        )?;
+        if let Some(initrd_image_path) = self.initrd_image_path.as_ref() {
+            validate_bundle_absolute_path(
+                "sora inrou manifest",
+                "initrd_image_path",
+                initrd_image_path,
+            )?;
+        }
+        if let Some(bootstrap_user_data_path) = self.bootstrap_user_data_path.as_ref() {
+            validate_bundle_absolute_path(
+                "sora inrou manifest",
+                "bootstrap_user_data_path",
+                bootstrap_user_data_path,
+            )?;
+        }
+
+        let mut seen_ssh_authorized_keys = BTreeSet::new();
+        for key in &self.ssh_authorized_keys {
+            if key.trim().is_empty() {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora inrou manifest",
+                    field: "ssh_authorized_keys",
+                    reason: "must not contain empty SSH public keys".to_string(),
+                });
+            }
+            if key.chars().any(char::is_control) {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora inrou manifest",
+                    field: "ssh_authorized_keys",
+                    reason: "must not contain control characters".to_string(),
+                });
+            }
+            if !seen_ssh_authorized_keys.insert(key.clone()) {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora inrou manifest",
+                    field: "ssh_authorized_keys",
+                    reason: format!("duplicate SSH authorized key `{key}`"),
+                });
+            }
+        }
+
+        Ok(())
     }
 }
 
@@ -281,8 +389,68 @@ pub enum SoraNetworkPolicyV1 {
     Open,
     /// No network egress is allowed.
     Isolated,
-    /// Egress is allowed only to the listed hostnames.
-    Allowlist(Vec<String>),
+    /// Egress is allowed only to the listed hostnames and ports.
+    Allowlist(Vec<SoraNetworkAllowlistEntryV1>),
+}
+
+/// A single allowlist rule for outbound network access.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraNetworkAllowlistEntryV1 {
+    /// Allowed outbound hostname.
+    pub host: String,
+    /// Allowed outbound TCP ports for the hostname.
+    pub ports: Vec<u16>,
+}
+
+impl SoraNetworkAllowlistEntryV1 {
+    /// Construct a hostname + ports allowlist entry.
+    #[must_use]
+    pub fn new(host: impl Into<String>, ports: impl IntoIterator<Item = u16>) -> Self {
+        Self {
+            host: host.into(),
+            ports: ports.into_iter().collect(),
+        }
+    }
+
+    /// Return `true` when the rule matches the supplied hostname.
+    #[must_use]
+    pub fn matches_host(&self, host: &str) -> bool {
+        self.host.eq_ignore_ascii_case(host)
+    }
+
+    /// Return `true` when the rule admits the supplied TCP port.
+    #[must_use]
+    pub fn allows_port(&self, port: u16) -> bool {
+        self.ports.contains(&port)
+    }
+}
+
+impl SoraNetworkPolicyV1 {
+    /// Return `true` when the policy admits the supplied hostname.
+    #[must_use]
+    pub fn allows_host(&self, host: &str) -> bool {
+        match self {
+            Self::Open => true,
+            Self::Isolated => false,
+            Self::Allowlist(entries) => entries.iter().any(|entry| entry.matches_host(host)),
+        }
+    }
+
+    /// Return `true` when the policy admits the supplied hostname and port.
+    #[must_use]
+    pub fn allows_host_port(&self, host: &str, port: u16) -> bool {
+        match self {
+            Self::Open => true,
+            Self::Isolated => false,
+            Self::Allowlist(entries) => entries
+                .iter()
+                .any(|entry| entry.matches_host(host) && entry.allows_port(port)),
+        }
+    }
 }
 
 /// Capability policy enforced by the Sora Container Runtime.
@@ -443,6 +611,9 @@ pub struct SoraContainerManifestV1 {
     /// Environment variables supplied at launch.
     #[norito(default)]
     pub env: std::collections::BTreeMap<String, String>,
+    /// Optional Inrou microVM metadata required for hosted HTTP VM workloads.
+    #[norito(default)]
+    pub inrou: Option<SoraInrouManifestV1>,
     /// Service-scoped config entries that must exist before this revision may start.
     #[norito(default)]
     pub required_config_names: Vec<String>,
@@ -487,6 +658,23 @@ impl SoraContainerManifestV1 {
             return Err(SoraCloudManifestError::EmptyField {
                 manifest: "sora container manifest",
                 field: "entrypoint",
+            });
+        }
+
+        if self.runtime == SoraContainerRuntimeV1::Inrou {
+            let Some(inrou) = self.inrou.as_ref() else {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora container manifest",
+                    field: "inrou",
+                    reason: "Inrou runtimes require explicit microVM metadata".to_string(),
+                });
+            };
+            inrou.validate()?;
+        } else if self.inrou.is_some() {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora container manifest",
+                field: "inrou",
+                reason: "only Inrou runtimes may declare microVM metadata".to_string(),
             });
         }
 
@@ -684,10 +872,29 @@ pub enum SoraServiceExecutionPlaneV1 {
 )]
 #[cfg_attr(feature = "json", norito(tag = "lease_volume", content = "value"))]
 pub enum SoraLeaseVolumeKindV1 {
-    /// Rebuildable public-service state such as indexes and checkpoints.
+    /// Rebuildable public-service state such as indexes and checkpoints,
+    /// shared across replicas of the same hosted-service revision.
     ServiceLeaseVolume,
-    /// Confidential service state backed by encrypted or FHE payloads.
+    /// Confidential service state backed by encrypted or FHE payloads,
+    /// shared across replicas of the same hosted-service revision.
     ConfidentialLeaseVolume,
+    /// Persistent mutable root disk for an Inrou VM guest, materialized
+    /// separately for each replica.
+    PersistentRootLeaseVolume,
+}
+
+impl SoraLeaseVolumeKindV1 {
+    /// Returns `true` when the volume is attached separately to each hosted-HTTP replica.
+    #[must_use]
+    pub const fn is_per_replica(self) -> bool {
+        matches!(self, Self::PersistentRootLeaseVolume)
+    }
+
+    /// Returns `true` when the volume is shared across replicas of the same revision.
+    #[must_use]
+    pub const fn is_shared_across_replicas(self) -> bool {
+        !self.is_per_replica()
+    }
 }
 
 /// Lease-backed mutable storage binding for one hosted HTTP service.
@@ -710,6 +917,20 @@ pub struct SoraLeaseVolumeBindingV1 {
 }
 
 impl SoraLeaseVolumeBindingV1 {
+    /// Returns `true` when this binding is attached separately to each
+    /// hosted-HTTP replica.
+    #[must_use]
+    pub const fn attaches_per_replica(&self) -> bool {
+        self.kind.is_per_replica()
+    }
+
+    /// Returns `true` when this binding is shared across replicas of the same
+    /// hosted-HTTP revision.
+    #[must_use]
+    pub const fn attaches_shared_across_replicas(&self) -> bool {
+        self.kind.is_shared_across_replicas()
+    }
+
     /// Validate lease-volume binding invariants.
     ///
     /// # Errors
@@ -735,6 +956,14 @@ impl SoraLeaseVolumeBindingV1 {
                 manifest: "sora lease volume binding",
                 field: "mount_path",
                 reason: "must not contain control characters".to_string(),
+            });
+        }
+
+        if self.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume && self.mount_path != "/" {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora lease volume binding",
+                field: "mount_path",
+                reason: "persistent Inrou root volumes must mount at `/`".to_string(),
             });
         }
 
@@ -1875,8 +2104,8 @@ impl AgentApartmentManifestV1 {
             }
         }
 
-        if let SoraNetworkPolicyV1::Allowlist(hosts) = &self.network_egress {
-            if hosts.is_empty() {
+        if let SoraNetworkPolicyV1::Allowlist(entries) = &self.network_egress {
+            if entries.is_empty() {
                 return Err(SoraCloudManifestError::InvalidField {
                     manifest: "agent apartment manifest",
                     field: "network_egress",
@@ -1884,8 +2113,8 @@ impl AgentApartmentManifestV1 {
                 });
             }
             let mut seen_hosts = BTreeSet::new();
-            for host in hosts {
-                let normalized = host.trim();
+            for entry in entries {
+                let normalized = entry.host.trim();
                 if normalized.is_empty() {
                     return Err(SoraCloudManifestError::InvalidField {
                         manifest: "agent apartment manifest",
@@ -1893,12 +2122,53 @@ impl AgentApartmentManifestV1 {
                         reason: "allowlist host entries must be non-empty".to_string(),
                     });
                 }
-                if !seen_hosts.insert(normalized.to_owned()) {
+                if normalized.chars().any(char::is_control)
+                    || normalized.chars().any(char::is_whitespace)
+                {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "agent apartment manifest",
+                        field: "network_egress",
+                        reason: format!(
+                            "allowlist host `{normalized}` contains invalid characters"
+                        ),
+                    });
+                }
+                if !seen_hosts.insert(normalized.to_ascii_lowercase()) {
                     return Err(SoraCloudManifestError::InvalidField {
                         manifest: "agent apartment manifest",
                         field: "network_egress",
                         reason: format!("duplicate allowlist host `{normalized}`"),
                     });
+                }
+                if entry.ports.is_empty() {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "agent apartment manifest",
+                        field: "network_egress",
+                        reason: format!(
+                            "allowlist host `{normalized}` must include at least one port"
+                        ),
+                    });
+                }
+                let mut seen_ports = BTreeSet::new();
+                for port in &entry.ports {
+                    if *port == 0 {
+                        return Err(SoraCloudManifestError::InvalidField {
+                            manifest: "agent apartment manifest",
+                            field: "network_egress",
+                            reason: format!(
+                                "allowlist host `{normalized}` contains invalid port `0`"
+                            ),
+                        });
+                    }
+                    if !seen_ports.insert(*port) {
+                        return Err(SoraCloudManifestError::InvalidField {
+                            manifest: "agent apartment manifest",
+                            field: "network_egress",
+                            reason: format!(
+                                "allowlist host `{normalized}` contains duplicate port `{port}`"
+                            ),
+                        });
+                    }
                 }
             }
         }
@@ -3762,12 +4032,12 @@ impl SoraDeploymentBundleV1 {
                 }
             }
             SoraServiceExecutionPlaneV1::HttpService => {
-                if !self.container.runtime.is_http_service_runtime() {
+                if self.container.runtime != SoraContainerRuntimeV1::Inrou {
                     return Err(SoraCloudManifestError::InvalidField {
                         manifest: "sora deployment bundle",
                         field: "container.runtime",
                         reason: format!(
-                            "http services require `Inrou` or compatibility `NativeProcess`, found `{:?}`",
+                            "http services require `Inrou`, found `{:?}`",
                             self.container.runtime
                         ),
                     });
@@ -3777,6 +4047,49 @@ impl SoraDeploymentBundleV1 {
                         manifest: "sora deployment bundle",
                         field: "container.lifecycle.healthcheck_path",
                         reason: "http services require an explicit healthcheck path".to_string(),
+                    });
+                }
+                let root_volume_count = self
+                    .service
+                    .lease_volumes
+                    .iter()
+                    .filter(|volume| volume.attaches_per_replica())
+                    .count();
+                if root_volume_count != 1 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "sora deployment bundle",
+                        field: "service.lease_volumes",
+                        reason:
+                            "Inrou runtimes require exactly one `PersistentRootLeaseVolume` binding"
+                                .to_string(),
+                    });
+                }
+                if !self
+                    .service
+                    .lease_volumes
+                    .iter()
+                    .any(SoraLeaseVolumeBindingV1::attaches_shared_across_replicas)
+                {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "sora deployment bundle",
+                        field: "service.lease_volumes",
+                        reason:
+                            "Inrou runtimes require at least one shared `ServiceLeaseVolume` or `ConfidentialLeaseVolume` binding"
+                                .to_string(),
+                    });
+                }
+
+                if self
+                    .container
+                    .inrou
+                    .as_ref()
+                    .is_some_and(|inrou| inrou.ssh_authorized_keys.is_empty())
+                {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "sora deployment bundle",
+                        field: "container.inrou.ssh_authorized_keys",
+                        reason: "Inrou runtimes require at least one SSH authorized key"
+                            .to_string(),
                     });
                 }
             }
@@ -4472,6 +4785,53 @@ fn validate_config_export_relative_path(value: &str) -> Result<(), SoraCloudMani
                 ),
             });
         }
+    }
+    Ok(())
+}
+
+fn validate_bundle_absolute_path(
+    manifest: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<(), SoraCloudManifestError> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(SoraCloudManifestError::EmptyField { manifest, field });
+    }
+    if trimmed != value {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must not include surrounding whitespace".to_string(),
+        });
+    }
+    if !value.starts_with('/') {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must be an absolute path within the signed Soracloud bundle".to_string(),
+        });
+    }
+    if value.contains('\\') {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must use '/' separators only".to_string(),
+        });
+    }
+    if value.contains("..") {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must not contain '..' path traversal segments".to_string(),
+        });
+    }
+    if value.chars().any(char::is_control) {
+        return Err(SoraCloudManifestError::InvalidField {
+            manifest,
+            field,
+            reason: "must not contain control characters".to_string(),
+        });
     }
     Ok(())
 }
@@ -11203,13 +11563,14 @@ mod tests {
             entrypoint: "main".to_string(),
             args: vec!["--http".to_string()],
             env: BTreeMap::from([("APP_ENV".to_string(), "prod".to_string())]),
+            inrou: None,
             required_config_names: Vec::new(),
             required_secret_names: Vec::new(),
             config_exports: Vec::new(),
             capabilities: SoraCapabilityPolicyV1 {
                 network: SoraNetworkPolicyV1::Allowlist(vec![
-                    "api.sora.internal".to_string(),
-                    "rpc.sora.internal".to_string(),
+                    SoraNetworkAllowlistEntryV1::new("api.sora.internal", [443]),
+                    SoraNetworkAllowlistEntryV1::new("rpc.sora.internal", [443]),
                 ]),
                 allow_wallet_signing: true,
                 allow_state_writes: true,
@@ -11229,6 +11590,37 @@ mod tests {
                 healthcheck_path: Some("/healthz".to_string()),
             },
         }
+    }
+
+    fn sample_inrou_manifest() -> SoraInrouManifestV1 {
+        SoraInrouManifestV1 {
+            schema_version: SORA_INROU_MANIFEST_VERSION_V1,
+            guest_os: SoraInrouGuestOsV1::DebianSlim,
+            kernel_image_path: "/inrou/vmlinux".to_string(),
+            rootfs_image_path: "/inrou/rootfs.ext4".to_string(),
+            initrd_image_path: None,
+            bootstrap_user_data_path: None,
+            ssh_authorized_keys: vec!["ssh-ed25519 test-key soracloud-tests".to_string()],
+        }
+    }
+
+    fn sample_inrou_lease_volumes() -> Vec<SoraLeaseVolumeBindingV1> {
+        vec![
+            SoraLeaseVolumeBindingV1 {
+                volume_name: "root_disk".parse().expect("valid name"),
+                kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+                storage_class: StorageClass::Warm,
+                mount_path: "/".to_string(),
+                max_total_bytes: NonZeroU64::new(8 * 1024 * 1024 * 1024).expect("nonzero"),
+            },
+            SoraLeaseVolumeBindingV1 {
+                volume_name: "index_state".parse().expect("valid name"),
+                kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+                storage_class: StorageClass::Warm,
+                mount_path: "/var/lib/ton-indexer".to_string(),
+                max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
+            },
+        ]
     }
 
     fn sample_service(state_bindings: Vec<SoraStateBindingV1>) -> SoraServiceManifestV1 {
@@ -11382,8 +11774,8 @@ mod tests {
             }],
             state_quota_bytes: NonZeroU64::new(134_217_728).expect("nonzero"),
             network_egress: SoraNetworkPolicyV1::Allowlist(vec![
-                "rpc.sora.internal".to_string(),
-                "torii.sora.internal".to_string(),
+                SoraNetworkAllowlistEntryV1::new("rpc.sora.internal", [443]),
+                SoraNetworkAllowlistEntryV1::new("torii.sora.internal", [443]),
             ]),
             upgrade_policy: AgentUpgradePolicyV1::Governed,
         }
@@ -11788,19 +12180,10 @@ mod tests {
     }
 
     #[test]
-    fn container_validate_accepts_native_process_runtime() {
-        let mut container = sample_container();
-        container.runtime = SoraContainerRuntimeV1::NativeProcess;
-        assert!(
-            container.validate().is_ok(),
-            "native-process Soracloud manifests should be admitted by the data model"
-        );
-    }
-
-    #[test]
     fn container_validate_accepts_inrou_runtime() {
         let mut container = sample_container();
         container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.inrou = Some(sample_inrou_manifest());
         assert!(
             container.validate().is_ok(),
             "Inrou Soracloud manifests should be admitted by the data model"
@@ -11989,6 +12372,29 @@ mod tests {
     }
 
     #[test]
+    fn lease_volume_binding_attachment_semantics_match_kind() {
+        let root = SoraLeaseVolumeBindingV1 {
+            volume_name: "root_disk".parse().expect("valid name"),
+            kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/".to_string(),
+            max_total_bytes: NonZeroU64::new(8 * 1024 * 1024).expect("nonzero"),
+        };
+        let shared = SoraLeaseVolumeBindingV1 {
+            volume_name: "index_state".parse().expect("valid name"),
+            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/var/lib/ton-indexer".to_string(),
+            max_total_bytes: NonZeroU64::new(8 * 1024 * 1024).expect("nonzero"),
+        };
+
+        assert!(root.attaches_per_replica());
+        assert!(!root.attaches_shared_across_replicas());
+        assert!(!shared.attaches_per_replica());
+        assert!(shared.attaches_shared_across_replicas());
+    }
+
+    #[test]
     fn service_validate_rejects_http_service_with_underfunded_prepaid_balance() {
         let mut manifest = sample_service(Vec::new());
         manifest.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
@@ -12155,21 +12561,17 @@ mod tests {
     fn deployment_bundle_validate_accepts_inrou_http_service() {
         let mut container = sample_container();
         container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.inrou = Some(sample_inrou_manifest());
         container.capabilities.network = SoraNetworkPolicyV1::Open;
         let container_hash = Hash::new(Encode::encode(&container));
         let mut service = sample_service(Vec::new());
         service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        service.replicas = NonZeroU16::new(1).expect("nonzero");
         service.container.manifest_hash = container_hash;
         service.state_bindings.clear();
         service.handlers.clear();
         service.artifacts.clear();
-        service.lease_volumes = vec![SoraLeaseVolumeBindingV1 {
-            volume_name: "index_state".parse().expect("valid name"),
-            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
-            storage_class: StorageClass::Warm,
-            mount_path: "/var/lib/ton-indexer".to_string(),
-            max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
-        }];
+        service.lease_volumes = sample_inrou_lease_volumes();
         let bundle = SoraDeploymentBundleV1 {
             schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
             container,
@@ -12183,25 +12585,162 @@ mod tests {
     }
 
     #[test]
+    fn deployment_bundle_validate_accepts_replicated_inrou_http_service() {
+        let mut container = sample_container();
+        container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.inrou = Some(sample_inrou_manifest());
+        container.capabilities.network =
+            SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
+                "indexer.ton.example",
+                [443],
+            )]);
+        let container_hash = Hash::new(Encode::encode(&container));
+        let mut service = sample_service(Vec::new());
+        service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        service.replicas = NonZeroU16::new(3).expect("nonzero");
+        service.container.manifest_hash = container_hash;
+        service.state_bindings.clear();
+        service.handlers.clear();
+        service.artifacts.clear();
+        service.lease_volumes = sample_inrou_lease_volumes();
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+
+        assert!(
+            bundle.validate_for_admission().is_ok(),
+            "replicated Inrou http services should pass admission"
+        );
+    }
+
+    #[test]
+    fn deployment_bundle_validate_rejects_http_service_without_shared_lease_volume() {
+        let mut container = sample_container();
+        container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.inrou = Some(sample_inrou_manifest());
+        container.capabilities.network =
+            SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
+                "indexer.ton.example",
+                [443],
+            )]);
+        let container_hash = Hash::new(Encode::encode(&container));
+        let mut service = sample_service(Vec::new());
+        service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        service.replicas = NonZeroU16::new(2).expect("nonzero");
+        service.container.manifest_hash = container_hash;
+        service.state_bindings.clear();
+        service.handlers.clear();
+        service.artifacts.clear();
+        service.lease_volumes = vec![SoraLeaseVolumeBindingV1 {
+            volume_name: "root_disk".parse().expect("valid name"),
+            kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/".to_string(),
+            max_total_bytes: NonZeroU64::new(8 * 1024 * 1024 * 1024).expect("nonzero"),
+        }];
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+
+        let error = bundle
+            .validate_for_admission()
+            .expect_err("replicated Inrou http services must declare shared storage");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "service.lease_volumes",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn deployment_bundle_validate_accepts_http_service_with_confidential_shared_lease() {
+        let mut container = sample_container();
+        container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.inrou = Some(sample_inrou_manifest());
+        container.capabilities.network =
+            SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
+                "indexer.ton.example",
+                [443],
+            )]);
+        let container_hash = Hash::new(Encode::encode(&container));
+        let mut service = sample_service(Vec::new());
+        service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        service.replicas = NonZeroU16::new(2).expect("nonzero");
+        service.container.manifest_hash = container_hash;
+        service.state_bindings.clear();
+        service.handlers.clear();
+        service.artifacts.clear();
+        service.lease_volumes = vec![
+            SoraLeaseVolumeBindingV1 {
+                volume_name: "root_disk".parse().expect("valid name"),
+                kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+                storage_class: StorageClass::Warm,
+                mount_path: "/".to_string(),
+                max_total_bytes: NonZeroU64::new(8 * 1024 * 1024 * 1024).expect("nonzero"),
+            },
+            SoraLeaseVolumeBindingV1 {
+                volume_name: "sealed_state".parse().expect("valid name"),
+                kind: SoraLeaseVolumeKindV1::ConfidentialLeaseVolume,
+                storage_class: StorageClass::Hot,
+                mount_path: "/var/lib/ton-indexer/private".to_string(),
+                max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
+            },
+        ];
+        let bundle = SoraDeploymentBundleV1 {
+            schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
+            container,
+            service,
+        };
+
+        assert!(
+            bundle.validate_for_admission().is_ok(),
+            "confidential lease volumes should satisfy the shared hosted-storage requirement"
+        );
+    }
+
+    #[test]
+    fn agent_apartment_validate_rejects_allowlist_entry_without_ports() {
+        let mut manifest = sample_agent_apartment_manifest();
+        manifest.network_egress =
+            SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
+                "rpc.sora.internal",
+                [],
+            )]);
+
+        let error = manifest
+            .validate()
+            .expect_err("allowlist entries without ports must be rejected");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "network_egress",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn deployment_bundle_validate_rejects_unknown_http_service_quota_class() {
         let mut container = sample_container();
         container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.inrou = Some(sample_inrou_manifest());
         container.capabilities.network = SoraNetworkPolicyV1::Open;
         let container_hash = Hash::new(Encode::encode(&container));
         let mut service = sample_service(Vec::new());
         service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        service.replicas = NonZeroU16::new(1).expect("nonzero");
         service.container.manifest_hash = container_hash;
         service.state_bindings.clear();
         service.handlers.clear();
         service.artifacts.clear();
         service.economics.quota_class = "taira-unsupported".to_string();
-        service.lease_volumes = vec![SoraLeaseVolumeBindingV1 {
-            volume_name: "index_state".parse().expect("valid name"),
-            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
-            storage_class: StorageClass::Warm,
-            mount_path: "/var/lib/ton-indexer".to_string(),
-            max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
-        }];
+        service.lease_volumes = sample_inrou_lease_volumes();
         let bundle = SoraDeploymentBundleV1 {
             schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
             container,
@@ -12224,22 +12763,18 @@ mod tests {
     fn deployment_bundle_validate_rejects_http_service_resources_over_quota_class_cap() {
         let mut container = sample_container();
         container.runtime = SoraContainerRuntimeV1::Inrou;
+        container.inrou = Some(sample_inrou_manifest());
         container.capabilities.network = SoraNetworkPolicyV1::Open;
         container.resources.cpu_millis = NonZeroU32::new(5_000).expect("nonzero");
         let container_hash = Hash::new(Encode::encode(&container));
         let mut service = sample_service(Vec::new());
         service.execution_plane = SoraServiceExecutionPlaneV1::HttpService;
+        service.replicas = NonZeroU16::new(1).expect("nonzero");
         service.container.manifest_hash = container_hash;
         service.state_bindings.clear();
         service.handlers.clear();
         service.artifacts.clear();
-        service.lease_volumes = vec![SoraLeaseVolumeBindingV1 {
-            volume_name: "index_state".parse().expect("valid name"),
-            kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
-            storage_class: StorageClass::Warm,
-            mount_path: "/var/lib/ton-indexer".to_string(),
-            max_total_bytes: NonZeroU64::new(1024 * 1024).expect("nonzero"),
-        }];
+        service.lease_volumes = sample_inrou_lease_volumes();
         let bundle = SoraDeploymentBundleV1 {
             schema_version: SORA_DEPLOYMENT_BUNDLE_VERSION_V1,
             container,

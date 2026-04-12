@@ -11141,9 +11141,7 @@ fn decode_contract_view_result_value(
         ContractSchemaType::Unit => Ok((Value::Null, 0)),
         ContractSchemaType::Int => {
             let raw = vm.register(start_register);
-            let value = i64::try_from(raw).map_err(|_| {
-                conversion_error("contract view int return overflowed i64".to_owned())
-            })?;
+            let value = decode_contract_view_signed_i64(raw);
             Ok((Value::from(value), 1))
         }
         ContractSchemaType::Bool => Ok((Value::Bool(vm.register(start_register) != 0), 1)),
@@ -11271,6 +11269,12 @@ fn decode_contract_view_result_value(
             Ok((Value::Array(values), consumed))
         }
     }
+}
+
+fn decode_contract_view_signed_i64(raw: u64) -> i64 {
+    // IVM exposes signed integer returns in the register file as raw
+    // two's-complement bits inside a u64 register value.
+    raw as i64
 }
 
 #[cfg(feature = "app_api")]
@@ -62357,6 +62361,13 @@ mod tests {
 
     use super::{sorafs_capacity_tests::build_por_challenge, *};
     use crate::mk_app_state_for_tests;
+
+    #[test]
+    fn contract_view_signed_int_decodes_twos_complement_register_bits() {
+        assert_eq!(decode_contract_view_signed_i64(u64::MAX), -1);
+        assert_eq!(decode_contract_view_signed_i64(i64::MAX as u64), i64::MAX);
+        assert_eq!(decode_contract_view_signed_i64(i64::MIN as u64), i64::MIN);
+    }
 
     #[test]
     fn openapi_handler_emits_alias_spec() {

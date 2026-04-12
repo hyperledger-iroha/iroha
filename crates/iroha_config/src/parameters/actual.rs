@@ -174,8 +174,8 @@ pub struct SoracloudRuntime {
     pub hydration_concurrency: NonZeroUsize,
     /// Cache budgets for hydrated Soracloud artifacts.
     pub cache_budgets: SoracloudRuntimeCacheBudgets,
-    /// Deterministic native-process hosting limits.
-    pub native_process: SoracloudRuntimeNativeProcess,
+    /// Inrou microVM hosting limits.
+    pub inrou: SoracloudRuntimeInrou,
     /// Outbound egress policy enforced by the embedded runtime manager.
     pub egress: SoracloudRuntimeEgress,
     /// Hugging Face importer and inference bridge settings.
@@ -191,7 +191,7 @@ impl Default for SoracloudRuntime {
             ),
             hydration_concurrency: defaults::soracloud_runtime::HYDRATION_CONCURRENCY,
             cache_budgets: SoracloudRuntimeCacheBudgets::default(),
-            native_process: SoracloudRuntimeNativeProcess::default(),
+            inrou: SoracloudRuntimeInrou::default(),
             egress: SoracloudRuntimeEgress::default(),
             hf: SoracloudRuntimeHuggingFace::default(),
         }
@@ -228,44 +228,23 @@ impl Default for SoracloudRuntimeCacheBudgets {
     }
 }
 
-/// Resource ceilings for deterministic `NativeProcess` Soracloud workloads.
+/// Resource ceilings for mutable Inrou microVM workloads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct SoracloudRuntimeNativeProcess {
-    /// Maximum number of native-process workloads hosted concurrently.
-    pub max_concurrent_processes: NonZeroUsize,
-    /// CPU budget in millicores per hosted process.
-    pub cpu_millis: NonZeroU32,
-    /// Memory budget in bytes per hosted process.
-    pub memory_bytes: NonZeroU64,
-    /// Ephemeral filesystem budget in bytes per hosted process.
-    pub ephemeral_storage_bytes: NonZeroU64,
-    /// Open-file ceiling per hosted process.
-    pub max_open_files: NonZeroU32,
-    /// Task/thread ceiling per hosted process.
-    pub max_tasks: NonZeroU16,
-    /// Startup grace window before the manager treats the process as failed.
+pub struct SoracloudRuntimeInrou {
+    /// Maximum number of Inrou VMs hosted concurrently.
+    pub max_concurrent_vms: NonZeroUsize,
+    /// Startup grace window before the manager treats the VM as failed.
     pub start_grace: Duration,
-    /// Shutdown grace window before the manager force-stops the process.
+    /// Shutdown grace window before the manager force-stops the VMM process.
     pub stop_grace: Duration,
 }
 
-impl Default for SoracloudRuntimeNativeProcess {
+impl Default for SoracloudRuntimeInrou {
     fn default() -> Self {
         Self {
-            max_concurrent_processes:
-                defaults::soracloud_runtime::NATIVE_PROCESS_MAX_CONCURRENT_PROCESSES,
-            cpu_millis: defaults::soracloud_runtime::NATIVE_PROCESS_CPU_MILLIS,
-            memory_bytes: defaults::soracloud_runtime::NATIVE_PROCESS_MEMORY_BYTES,
-            ephemeral_storage_bytes:
-                defaults::soracloud_runtime::NATIVE_PROCESS_EPHEMERAL_STORAGE_BYTES,
-            max_open_files: defaults::soracloud_runtime::NATIVE_PROCESS_MAX_OPEN_FILES,
-            max_tasks: defaults::soracloud_runtime::NATIVE_PROCESS_MAX_TASKS,
-            start_grace: Duration::from_millis(
-                defaults::soracloud_runtime::NATIVE_PROCESS_START_GRACE_MS,
-            ),
-            stop_grace: Duration::from_millis(
-                defaults::soracloud_runtime::NATIVE_PROCESS_STOP_GRACE_MS,
-            ),
+            max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
+            start_grace: Duration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS),
+            stop_grace: Duration::from_millis(defaults::soracloud_runtime::INROU_STOP_GRACE_MS),
         }
     }
 }

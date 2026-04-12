@@ -1,6 +1,57 @@
 # Status
 
-Last updated: 2026-04-11
+Last updated: 2026-04-12
+
+## 2026-04-12 Follow-up: NPoS large-payload RBC summary check no longer loses committed sessions to snapshot rotation
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_npos_happy_path.rs`
+  now keeps the existing disk-persistence proof for
+  `npos_rbc_large_payload_delivers_and_commits`, but the final multi-chunk
+  delivered-session assertion falls back to the live
+  `/v1/sumeragi/rbc/sessions` endpoint when `sessions.norito` has already
+  rotated away the committed summary while the per-session persisted RBC
+  snapshot is still present.
+- The same file now includes a focused selector regression test so the helper
+  continues to require a complete, valid delivered session before accepting the
+  live fallback.
+- Validation completed in this slice:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_happy_path::select_delivered_rbc_session_requires_complete_valid_delivery -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_happy_path::npos_rbc_large_payload_delivers_and_commits -- --nocapture`
+
+## 2026-04-12 Follow-up: zero-participation randomness status check no longer races later epochs
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_randomness.rs`
+  now validates the epoch-specific zero-participation penalties through the
+  dedicated penalties endpoint first, then accepts any later
+  `vrf_penalty_epoch >= epoch` status snapshot that preserves the same
+  zero-participation semantics (`committed_no_reveal == 0`,
+  `no_participation == 4`, `late_reveals == 0`).
+- This removes the flake where the network could finalize the next identical
+  zero-participation epoch before the final status poll, causing the old
+  `vrf_penalty_epoch == epoch` assertion to miss a still-correct status view.
+- Validation completed in this slice:
+  - `cargo test -p integration_tests npos_zero_participation_epoch_reports_full_no_participation -- --nocapture`
+- Validation currently blocked for broader grouped reruns by unrelated dirty
+  tree config changes that make peer startup fail with missing
+  `soracloud_runtime.cache_budgets`, `soracloud_runtime.egress`,
+  `soracloud_runtime.hf`, and `soracloud_runtime.inrou` parameters.
+
+## 2026-04-11 Follow-up: adversarial RBC polling now retries transient Torii disconnects
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_adversarial.rs`
+  now treats transient `/v1/sumeragi/rbc/sessions` fetch failures
+  (connect-refused / timeout style errors) as retryable inside
+  `try_wait_for_rbc_session(...)` instead of aborting the scenario
+  immediately.
+- This keeps the adversarial RBC invalidation/stall scenarios aligned with
+  their intended semantics: if an RBC session is temporarily not observable,
+  the harness can continue polling and eventually count that as
+  missing-session evidence rather than failing the whole test on a momentary
+  Torii flap.
+- The same file now includes a narrow regression test for the transient-error
+  classifier so the retry path continues to recognize connect failures.
+- Validation completed in this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target/adversarial-rbc-retry cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::transient_rbc_sessions_fetch_errors_include_connect_failures -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target/adversarial-rbc-retry IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/adversarial-rbc-retry cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_equivocation_marks_invalid -- --exact --nocapture --test-threads=1`
 
 ## 2026-04-11 Follow-up: direct helper syscall dispatch now matches the ABI surface again
 - `/Users/takemiyamakoto/dev/iroha/crates/ivm_abi/src/syscalls.rs`
@@ -16765,22 +16816,22 @@ Last updated: 2026-04-11
   - `cargo fmt --all --check` (pass)
   - `cargo check -p iroha_core -p iroha_torii` (pass; existing unrelated warning remains in `crates/iroha_torii/src/routing.rs`)
 
-## 2026-03-21 Follow-up: Soracloud v1 now rejects `NativeProcess` and the runtime-manager prepares the IVM-only host layout
+## 2026-03-21 Follow-up: Soracloud v1 removed the legacy hosted runtime and the runtime-manager prepares the IVM-only host layout
 - Closed the revised IVM-only admission/runtime gap across
   `crates/iroha_data_model/src/soracloud.rs`,
   `crates/iroha_core/src/smartcontracts/isi/soracloud.rs`,
   `crates/irohad/src/soracloud_runtime.rs`, and
   `crates/iroha_cli/src/soracloud.rs`:
-  - `SoraContainerManifestV1::validate()` now rejects
-    `SoraContainerRuntimeV1::NativeProcess`, so Soracloud v1 admission accepts
-    only `Ivm`,
+  - `SoraContainerManifestV1::validate()` now rejects the removed hosted
+    runtime, so Soracloud v1 admission accepts only `Ivm`,
   - core Soracloud deployment tests now cover that admission rejection path,
   - the embedded runtime manager now creates the full v1 state roots
     (`services`, `apartments`, `artifacts`, `journals`, `checkpoints`,
-    `secrets`) and rejects `NativeProcess` revisions during reconcile/runtime
-    activation instead of projecting them as partially supported plans,
+    `secrets`) and rejects removed hosted-runtime revisions during
+    reconcile/runtime activation instead of projecting them as partially
+    supported plans,
   - Soracloud CLI init templates (`site`, `webapp`, `pii-app`) now emit `Ivm`
-    manifests and no longer scaffold `NativeProcess` container targets.
+    manifests and no longer scaffold the removed hosted-runtime target.
 - Added focused regressions for the new behavior in the data model, core
   admission path, and runtime-manager reconcile path.
 - Validation:
@@ -16804,8 +16855,8 @@ Last updated: 2026-04-11
   `crates/irohad/src/{main.rs,soracloud_runtime.rs}`, and Torii test helpers:
   - added the dedicated `iroha_config::soracloud_runtime` surface with
     explicit defaults for the runtime-manager state directory, reconcile
-    cadence, hydration concurrency, cache budgets, deterministic
-    `NativeProcess` limits, and outbound egress policy,
+    cadence, hydration concurrency, cache budgets, Inrou VM limits, and
+    outbound egress policy,
   - threaded the parsed `actual::SoracloudRuntime` into
     `actual::Root`, user parsing, and `irohad` construction so the embedded
     runtime manager no longer derives its state directory or cadence from
@@ -16834,8 +16885,8 @@ Last updated: 2026-04-11
 - Remaining execution-plane work in this area:
   - the embedded runtime manager still uses those new settings only for
     planning/reconciliation and snapshot recovery; it does not yet perform
-    real SoraFS/DA hydration, cache-budget enforcement, or deterministic
-    `NativeProcess` supervision,
+    real SoraFS/DA hydration, cache-budget enforcement, or live hosted-service
+    supervision,
   - ordered mailbox execution is still synthetic, and local reads/apartments,
     certified fast paths, private secret/credential enforcement, and the IVM
     cloud-runtime ABI cutover remain outstanding.
@@ -16957,7 +17008,7 @@ Last updated: 2026-04-11
   - `CARGO_TARGET_DIR=/tmp/iroha-private-runtime-state-mutation-target-2 cargo test -p iroha_core --lib mutate_soracloud_state_records_authoritative_service_state -- --nocapture` (pass)
 - Remaining execution-plane work in this area:
   - the embedded runtime manager still returns synthetic mailbox results and
-    does not yet host real IVM or deterministic `NativeProcess` workloads,
+    does not yet host real IVM or live hosted-service workloads,
   - ordered mailbox execution still lacks the real runtime host surface for
     local reads, private updates, apartments, journals/checkpoints, and
     certified fast-path responses,
@@ -21745,3 +21796,12 @@ Last updated: 2026-04-11
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p integration_tests --test core_api fast_dsl_build::workspace_builds_with_fast_dsl_feature -- --exact --nocapture`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test -p integration_tests --test core_api`
   - `CARGO_TARGET_DIR=/tmp/iroha-codex-target cargo test --workspace` was rerun through every suite up to `integration_tests/tests/core_api.rs`; after the nested-target-dir fix above, the remaining `core_api` suite passed in a separate rerun under the same outer `CARGO_TARGET_DIR`.
+
+## 2026-04-12 RBC Retained-Summary Refresh For NPoS Large Payload Commit
+- Fixed the retained-summary commit-cleanup path in [`crates/iroha_core/src/sumeragi/main_loop/commit.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/commit.rs) so committed blocks with already-retired live RBC runtime now refresh their persisted summary from the local block payload before cleanup finalizes delivery.
+- Commit cleanup now promotes retained summaries to the full terminal state when the local payload is available: `delivered = true` and `received_chunks = total_chunks`. This keeps the disk-backed operator snapshot aligned with the persisted RBC session files used for restart recovery.
+- Added `committed_rbc_cleanup_completes_retained_summary_when_local_payload_exists` in [`crates/iroha_core/src/sumeragi/main_loop/tests.rs`](/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs) to lock the behavior down.
+- Focused validation completed:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core committed_rbc_cleanup_completes_retained_summary_when_local_payload_exists -- --nocapture`
+  - `cargo test -p integration_tests sumeragi_npos_happy_path::npos_rbc_large_payload_delivers_and_commits -- --nocapture`

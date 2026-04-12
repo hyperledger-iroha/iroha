@@ -1,6 +1,53 @@
 # Roadmap (Open Work Only)
 
-Last updated: 2026-04-11
+Last updated: 2026-04-12
+
+Latest sync (2026-04-12 NPoS large-payload RBC summary lookup tolerates post-commit snapshot rotation):
+the grouped `consensus_and_da` failure in
+`sumeragi_npos_happy_path::npos_rbc_large_payload_delivers_and_commits` was a
+test-source mismatch, not a commit failure. The scenario already accepted the
+per-session persisted RBC files as the durability signal, but the final
+multi-chunk assertion only trusted `sessions.norito`. The helper now falls
+back to the live `/v1/sumeragi/rbc/sessions` summary after the persistence
+check, so committed sessions that have already rotated out of the aggregate
+snapshot no longer fail the test spuriously.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_npos_happy_path.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_happy_path::select_delivered_rbc_session_requires_complete_valid_delivery -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_happy_path::npos_rbc_large_payload_delivers_and_commits -- --nocapture`
+- open work after this slice:
+  - rerun broader grouped or workspace validation only if wider signoff is
+    required; this specific `consensus_and_da` regression is closed on the
+    current tree.
+
+Latest sync (2026-04-12 zero-participation randomness polling tolerates later identical epochs):
+the `sumeragi_randomness::npos_zero_participation_epoch_reports_full_no_participation`
+integration test no longer treats the status endpoint as an epoch-exact source
+after the penalties endpoint has already pinned the epoch-specific record. The
+status surface only exposes the latest penalty snapshot, so later
+zero-participation epochs can legitimately overtake the final poll while still
+reporting the same semantics. The test now accepts `vrf_penalty_epoch >= epoch`
+as long as the status counters still show zero committed-no-reveal validators,
+four no-participation validators, and zero late reveals.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_randomness.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo test -p integration_tests npos_zero_participation_epoch_reports_full_no_participation -- --nocapture`
+- open work after this slice:
+  - rerun the grouped `consensus_and_da` / broader workspace validation once
+    the unrelated dirty-tree Soracloud config regression is resolved; current
+    grouped reruns fail during peer startup because
+    `soracloud_runtime.cache_budgets`, `soracloud_runtime.egress`,
+    `soracloud_runtime.hf`, and `soracloud_runtime.inrou` are missing from the
+    generated configs.
 
 Latest sync (2026-04-11 direct helper runtime dispatch now matches the ABI/golden surface):
 the remaining gap after the earlier clippy cleanup was runtime, not ABI shape.
@@ -17135,3 +17182,8 @@ This appendix tracks open TODO markers discovered in the repository. Items are g
 5. Completed: throughput runs now use one shared sampled audit worker with a deterministic `1%` sample rate and a hard cap of `100` confirmation reads per minute per endpoint, keeping sampled correctness bounded without reintroducing per-transaction blocking confirmation.
 6. Completed: teardown-time status-read `connection refused` is now classified as shutdown noise once Izanami has entered stop/shutdown, so late audit/status reads do not count as throughput failures.
 7. Remaining open: rerun the stepped single-host throughput sweep on the de-amplified harness, then repeat the multi-host NPoS/permissioned benchmark and compare the post-fix knees against the prior 25-50 TPS / 75-100 TPS baselines.
+
+## 2026-04-12 Retained RBC Summary Follow-up
+1. Completed: committed-block RBC cleanup now refreshes retained summaries from the local payload before finalizing them, so restart-recovery snapshots stay readable as fully delivered sessions even after the live RBC runtime has already retired.
+2. Completed: the focused regression suite now includes `committed_rbc_cleanup_completes_retained_summary_when_local_payload_exists`, and the previously failing `integration_tests` case `sumeragi_npos_happy_path::npos_rbc_large_payload_delivers_and_commits` is green on the patched tree.
+3. No additional roadmap item was opened from this fix; the change closes a concrete persisted-summary drift in the existing NPoS/RBC recovery path.

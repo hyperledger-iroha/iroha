@@ -1464,6 +1464,10 @@ fn is_transient_status_fetch_error(err: &Report) -> bool {
     })
 }
 
+fn is_transient_rbc_sessions_fetch_error(err: &Report) -> bool {
+    is_transient_status_fetch_error(err)
+}
+
 async fn wait_for_rbc_session(
     client: &Client,
     target_height: u64,
@@ -1492,7 +1496,16 @@ async fn try_wait_for_rbc_session(
             move || client.get_sumeragi_rbc_sessions_json()
         })
         .await
-        .wrap_err("join sessions fetch")??;
+        .wrap_err("join sessions fetch")?;
+
+        let sessions = match sessions {
+            Ok(sessions) => sessions,
+            Err(err) if is_transient_rbc_sessions_fetch_error(&err) => {
+                sleep(Duration::from_millis(200)).await;
+                continue;
+            }
+            Err(err) => return Err(err),
+        };
 
         if let Some(session) = extract_session_at_or_after(&sessions, target_height) {
             return Ok(Some(session));
@@ -1557,6 +1570,15 @@ fn extract_session(value: &Value, target_height: u64) -> Option<Value> {
         }
     }
     None
+}
+
+#[test]
+fn transient_rbc_sessions_fetch_errors_include_connect_failures() {
+    let connect_err = eyre!("Connection refused (os error 61)");
+    let permanent_err = eyre!("permission denied");
+
+    assert!(is_transient_rbc_sessions_fetch_error(&connect_err));
+    assert!(!is_transient_rbc_sessions_fetch_error(&permanent_err));
 }
 
 fn extract_session_at_or_after(value: &Value, target_height: u64) -> Option<Value> {

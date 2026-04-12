@@ -1839,8 +1839,7 @@ fn decode_local_contract_view_result_value(
         LocalContractSchemaType::Unit => Ok((norito::json::Value::Null, 0)),
         LocalContractSchemaType::Int => {
             let raw = vm.register(start_register);
-            let value =
-                i64::try_from(raw).map_err(|_| eyre!("contract view int return overflowed i64"))?;
+            let value = decode_contract_view_signed_i64(raw);
             Ok((norito::json::Value::from(value), 1))
         }
         LocalContractSchemaType::Bool => Ok((
@@ -1956,6 +1955,12 @@ fn decode_local_contract_view_result_value(
     }
 }
 
+fn decode_contract_view_signed_i64(raw: u64) -> i64 {
+    // IVM exposes signed integer returns in the register file as raw
+    // two's-complement bits inside a u64 register value.
+    raw as i64
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2006,6 +2011,13 @@ mod tests {
             .compile_source_with_manifest(source)
             .expect("compile contract with source path");
         program
+    }
+
+    #[test]
+    fn local_contract_view_signed_int_decodes_twos_complement_register_bits() {
+        assert_eq!(decode_contract_view_signed_i64(u64::MAX), -1);
+        assert_eq!(decode_contract_view_signed_i64(i64::MAX as u64), i64::MAX);
+        assert_eq!(decode_contract_view_signed_i64(i64::MIN as u64), i64::MIN);
     }
 
     #[test]

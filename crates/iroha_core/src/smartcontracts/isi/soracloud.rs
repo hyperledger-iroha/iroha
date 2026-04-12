@@ -10531,11 +10531,13 @@ mod tests {
             SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1,
             SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1, SoraHfPlacementStatusV1,
             SoraHfResourceProfileV1, SoraHfSharedLeaseActionV1, SoraHfSharedLeaseAuditEventV1,
-            SoraHttpServiceEconomicsV1, SoraLifecycleHooksV1, SoraModelHostCapabilityRecordV1,
-            SoraNetworkPolicyV1, SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1,
-            SoraRouteVisibilityV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-            SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1,
-            SoraStateMutabilityV1, SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1,
+            SoraHttpServiceEconomicsV1, SoraInrouGuestOsV1, SoraInrouManifestV1,
+            SoraLeaseVolumeBindingV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
+            SoraModelHostCapabilityRecordV1, SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1,
+            SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
+            SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1,
+            SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
+            SoraStateMutationOperationV1, SoraStateScopeV1, SoraTlsModeV1,
         },
     };
     use iroha_primitives::json::Json;
@@ -10709,11 +10711,15 @@ mod tests {
             entrypoint: "main".to_string(),
             args: Vec::new(),
             env: std::collections::BTreeMap::new(),
+            inrou: None,
             required_config_names: Vec::new(),
             required_secret_names: Vec::new(),
             config_exports: Vec::new(),
             capabilities: SoraCapabilityPolicyV1 {
-                network: SoraNetworkPolicyV1::Allowlist(vec!["api.example.test".to_string()]),
+                network: SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
+                    "api.example.test",
+                    [443],
+                )]),
                 allow_wallet_signing: false,
                 allow_state_writes: false,
                 allow_model_inference: false,
@@ -13344,15 +13350,32 @@ mod tests {
     }
 
     #[test]
-    fn deploy_soracloud_service_accepts_native_process_runtime() -> Result<(), eyre::Report> {
+    fn deploy_soracloud_service_rejects_missing_shared_http_service_volume()
+    -> Result<(), eyre::Report> {
         let kura = Kura::blank_kura_for_testing();
         let state = state_with_soracloud_permission(&kura)?;
         let mut bundle = sample_bundle("portal", "1.0.0", 0);
-        bundle.container.runtime = SoraContainerRuntimeV1::NativeProcess;
+        bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
+        bundle.container.inrou = Some(SoraInrouManifestV1 {
+            schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
+            guest_os: SoraInrouGuestOsV1::DebianSlim,
+            kernel_image_path: "/inrou/vmlinux".to_string(),
+            rootfs_image_path: "/inrou/rootfs.ext4".to_string(),
+            initrd_image_path: None,
+            bootstrap_user_data_path: None,
+            ssh_authorized_keys: vec!["ssh-ed25519 test-key soracloud-tests".to_string()],
+        });
         bundle.service.execution_plane =
             iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
         bundle.service.state_bindings.clear();
         bundle.service.handlers.clear();
+        bundle.service.lease_volumes = vec![SoraLeaseVolumeBindingV1 {
+            volume_name: "root_disk".parse().expect("valid name"),
+            kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+            storage_class: StorageClass::Warm,
+            mount_path: "/".to_string(),
+            max_total_bytes: NonZeroU64::new(8 * 1024 * 1024 * 1024).expect("nonzero"),
+        }];
         bundle.service.container.manifest_hash = bundle.container_manifest_hash();
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
@@ -13367,7 +13390,7 @@ mod tests {
             provenance: bundle_provenance(&bundle),
         }
         .execute(&ALICE_ID, &mut stx)
-        .expect("native-process deployment should be admitted");
+        .expect_err("hosted HTTP deployments must declare shared replica-safe storage");
         Ok(())
     }
 

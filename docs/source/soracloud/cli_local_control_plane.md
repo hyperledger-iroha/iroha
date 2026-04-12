@@ -5,8 +5,8 @@ Soracloud v1 is an authoritative mixed-plane runtime:
 - deterministic services run on `SoraContainerRuntimeV1::Ivm`
 - hosted HTTP services run on `execution_plane = HttpService` with
   `runtime = Inrou`
-- `NativeProcess` remains a compatibility path, not the recommended production
-  target
+- `NativeProcess` is no longer admitted, routed, or executed for hosted HTTP
+  services
 
 The control plane remains authoritative. Torii serves status and mutation
 routes directly from committed world state plus the embedded Soracloud runtime
@@ -22,15 +22,23 @@ manager; the CLI does not keep a shadow control-plane mirror.
   `/api/v1/search*` to a hosted service while `/api/auth*` and
   `/api/v1/user*` stay on an IVM service.
 - Hosted services declare persistent lease-backed storage through
-  `lease_volumes`. At runtime, each mounted volume is exposed as:
+  `lease_volumes`.
+- `PersistentRootLeaseVolume` is required for `HttpService + Inrou`, must mount
+  at `/`, and is materialized per replica.
+- Non-root `ServiceLeaseVolume` and `ConfidentialLeaseVolume` attachments are
+  shared across replicas of the same service revision by default.
+- At runtime, each mounted volume is exposed as:
   - `SORACLOUD_LEASE_VOLUME_<NAME>_DIR`
   - `SORACLOUD_LEASE_VOLUME_<NAME>_MOUNT_PATH`
 - Config and secret materialization is still authoritative. Deploy, upgrade,
   and rollback fail closed when required config/secret bindings are missing or
   inconsistent with the active manifests.
-- The local control plane can materialize both planes together, so mixed apps
-  can be run locally as one deterministic IVM service plus one hosted Inrou
-  service.
+- The current local workflow validates both planes together with
+  `iroha app soracloud app local-plan`, resolves manifest-adjacent workspace
+  scripts with `iroha app soracloud app local-dev` and
+  `iroha app soracloud app build-and-sync`, and verifies deterministic vault
+  builds with `verify-build.sh`. This is a dev shim for the deterministic
+  plane, not a full embedded IVM runtime.
 
 ## Offline Scaffolding Commands
 
@@ -50,6 +58,24 @@ manager; the CLI does not keep a shadow control-plane mirror.
   - templates now include:
     - `single-api`
     - `split-app`
+  - `single-api` produces a root-bound frontend plus one deterministic API
+    service under `/api`
+  - `split-app` produces a SoraFS frontend plus one hosted live API and one
+    deterministic vault API
+- `iroha app soracloud app local-plan`
+  - validates every service referenced by an app manifest locally
+  - prints the mixed-plane runtime split:
+    - hosted `/api/v1/*` ownership for `HttpService + Inrou`
+    - deterministic handler ownership for `/api/auth*` and `/api/v1/user*`
+  - prints the frontend CID gateway URL template when `publish_mode = CidOnly`
+- `iroha app soracloud app local-dev`
+  - resolves `local-dev.sh` adjacent to the app manifest
+  - `--dry-run` prints the resolved working directory, script path, and mixed-plane summary
+  - without `--dry-run`, executes the local app entrypoint in place
+- `iroha app soracloud app build-and-sync`
+  - resolves `build-and-sync.sh` adjacent to the app manifest
+  - `--dry-run` prints the resolved working directory, script path, and mixed-plane summary
+  - without `--dry-run`, executes the root rebuild + manifest-sync entrypoint in place
 - `iroha app soracloud sync-manifests`
   - recomputes `container.bundle_hash`, the service-side referenced container
     hash, and matching schema versions after local edits
@@ -57,6 +83,14 @@ manager; the CLI does not keep a shadow control-plane mirror.
     - one service pair via `--container`, `--service`, and optional
       `--bundle-file`
     - every service in an app manifest via `--app-manifest`
+- `iroha app soracloud local-dev`
+  - resolves `local-dev.sh` adjacent to one container/service manifest pair
+  - `--dry-run` prints the resolved working directory, script path, and service plane summary
+  - without `--dry-run`, executes the local service entrypoint in place
+- `iroha app soracloud build-and-sync`
+  - resolves `build-and-sync.sh` adjacent to one container/service manifest pair
+  - `--dry-run` prints the resolved working directory, script path, and service plane summary
+  - without `--dry-run`, executes the root rebuild + manifest-sync entrypoint in place
 
 ## Network-Backed Commands
 
@@ -91,15 +125,19 @@ Example manifest shape:
 ```json
 {
   "lease_volumes": [
+    { "volume_name": "root_disk", "mount_path": "/" },
     { "volume_name": "shared_cache", "mount_path": "/var/lib/soracloud/shared-cache" },
     { "volume_name": "search_sessions", "mount_path": "/var/lib/soracloud/search-sessions" },
-    { "volume_name": "collector_state", "mount_path": "/var/lib/soracloud/collector-state" }
+    { "volume_name": "collector_state", "mount_path": "/var/lib/soracloud/collector-state" },
+    { "volume_name": "runtime_cache", "mount_path": "/var/lib/soracloud/runtime-cache" }
   ]
 }
 ```
 
-At runtime the service receives, for each declared volume:
+For the example above, the service receives:
 
+- `SORACLOUD_LEASE_VOLUME_ROOT_DISK_DIR`
+- `SORACLOUD_LEASE_VOLUME_ROOT_DISK_MOUNT_PATH`
 - `SORACLOUD_LEASE_VOLUME_SHARED_CACHE_DIR`
 - `SORACLOUD_LEASE_VOLUME_SHARED_CACHE_MOUNT_PATH`
 - `SORACLOUD_LEASE_VOLUME_SEARCH_SESSIONS_DIR`
@@ -111,6 +149,85 @@ At runtime the service receives, for each declared volume:
 
 The `_DIR` value is the materialized runtime path. The `_MOUNT_PATH` value is
 the logical mount path declared in the manifest.
+
+## Recommended Hosted-Service Workflow
+
+Use the `http-service` scaffold for one hosted HTTP service that should run on
+the Soracloud hosted plane without an app manifest wrapper.
+
+Build and refresh the single service pair:
+
+```bash
+cd .soracloud-live
+./build-and-sync.sh
+iroha app soracloud build-and-sync --container ./container_manifest.json --service ./service_manifest.json --dry-run
+```
+
+Run the local hosted-service dev entrypoint:
+
+```bash
+cd .soracloud-live
+./local-dev.sh
+iroha app soracloud local-dev --container ./container_manifest.json --service ./service_manifest.json --dry-run
+```
+
+## Recommended Single-App Workflow
+
+Use the single-api scaffold for apps that need:
+
+- one root-bound static frontend on the public host
+- one deterministic IVM API on the same host under `/api`
+- no hosted `Inrou` plane and no split `/api` ownership
+
+```bash
+iroha app soracloud app init \
+  --template single-api \
+  --app-name docs_portal \
+  --app-version 1.0.0 \
+  --output-dir .soracloud-docs-portal
+```
+
+Build the frontend and API bundle:
+
+```bash
+cd .soracloud-docs-portal
+./build-and-sync.sh
+iroha app soracloud app build-and-sync --manifest ./app_manifest.json --dry-run
+```
+
+For local development, the scaffold also includes:
+
+- `services/api/dev.sh` to run a local `/api/healthz` HTTP shim
+- `./local-dev.sh` to boot the frontend plus the local API shim
+- `./build-and-sync.sh` to rebuild the frontend and deterministic bytecode and
+  refresh manifest hashes
+- `./deploy.sh` to run the full app-wide publish + deploy flow
+- `./upgrade.sh` to rerun the same rebuild path and submit the app upgrade
+
+Run the root-bound app locally:
+
+```bash
+cd .soracloud-docs-portal
+./local-dev.sh
+iroha app soracloud app local-dev --manifest ./app_manifest.json --dry-run
+```
+
+Deploy the root-bound frontend plus the API service in one step:
+
+```bash
+cd .soracloud-docs-portal
+TORII_URL=http://127.0.0.1:8080 ./deploy.sh
+```
+
+Upgrade the root-bound frontend plus the API service in one step:
+
+```bash
+cd .soracloud-docs-portal
+TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
+```
+
+This path keeps the frontend at `/` and the API at `/api/healthz` on the same
+hostname.
 
 ## Recommended Mixed-App Workflow
 
@@ -128,33 +245,56 @@ iroha app soracloud app init \
   --output-dir .soracloud-hayahi
 ```
 
-Build the three app surfaces:
+For local development, the scaffold includes:
+
+- `frontend/` Vite dev mode for the same-host `/api` base with proxy rules for
+  the live and vault planes
+- `services/live/dev.sh` to run the hosted HTTP starter directly with local
+  fallback lease directories
+- `services/vault/dev.sh` to run the local vault HTTP shim for `/api/auth*` and
+  `/api/v1/user*`
+- `services/vault/verify-build.sh` to recompile the deterministic vault
+  contract and verify that the committed build outputs still match
+- `./local-dev.sh` to boot the frontend plus both local API processes
+- `./build-and-sync.sh` to rebuild all artifacts and refresh manifest hashes
+- `./deploy.sh` to run the full app-wide publish + deploy flow
+- `./upgrade.sh` to rerun the same rebuild path and submit the app upgrade
+
+Run the local mixed-app loop:
 
 ```bash
-cd .soracloud-hayahi/frontend
-npm install
-VITE_PUBLIC_API_BASE=/api VITE_DATA_MODE=live npm run build
-
-cd ../services/live
-./build.sh
-
-cd ../vault
-./build.sh
+cd .soracloud-hayahi
+./local-dev.sh
+iroha app soracloud app local-dev --manifest ./app_manifest.json --dry-run
 ```
 
-Refresh every manifest hash in one pass:
+Build the three app surfaces and refresh manifest hashes:
 
 ```bash
-iroha app soracloud sync-manifests \
-  --app-manifest .soracloud-hayahi/app_manifest.json
+cd .soracloud-hayahi
+./build-and-sync.sh
+iroha app soracloud app build-and-sync --manifest ./app_manifest.json --dry-run
+```
+
+Inspect the local split-plane routing and frontend publish shape before deploy:
+
+```bash
+iroha app soracloud app local-plan \
+  --manifest .soracloud-hayahi/app_manifest.json
 ```
 
 Deploy the static site plus every service without SSH or manual pinning:
 
 ```bash
-iroha app soracloud app deploy \
-  --manifest .soracloud-hayahi/app_manifest.json \
-  --torii-url http://127.0.0.1:8080
+cd .soracloud-hayahi
+TORII_URL=http://127.0.0.1:8080 ./deploy.sh
+```
+
+Upgrade the static site plus every service without SSH or manual pinning:
+
+```bash
+cd .soracloud-hayahi
+TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
 ```
 
 For Taira-style deployments, keep Torii root bound to Torii itself and publish

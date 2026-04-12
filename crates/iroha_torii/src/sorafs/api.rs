@@ -11503,6 +11503,128 @@ mod advert_tests {
     }
 
     #[tokio::test]
+    async fn authoritative_root_ignores_public_services_without_static_site_binding_config() {
+        let (node, _dir) = sorafs_node_with_temp_storage();
+
+        let old_index_bytes = b"<!doctype html><title>Old site</title>";
+        let (old_plan, old_payload) = CarBuildPlan::from_files_with_profile(
+            vec![FileEntry {
+                path: vec!["index.html".to_owned()],
+                data: old_index_bytes.to_vec(),
+            }],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("old directory plan");
+        let old_manifest = manifest_for_payload(0xD7, &old_payload);
+        let old_content_cid = encode_content_cid(&old_manifest.root_cid);
+        let old_manifest_digest_hex = hex::encode(
+            old_manifest
+                .digest()
+                .expect("old manifest digest")
+                .as_bytes(),
+        );
+
+        let new_index_bytes = b"<!doctype html><title>Unbound service</title>";
+        let (new_plan, new_payload) = CarBuildPlan::from_files_with_profile(
+            vec![FileEntry {
+                path: vec!["index.html".to_owned()],
+                data: new_index_bytes.to_vec(),
+            }],
+            sorafs_chunker::ChunkProfile::DEFAULT,
+        )
+        .expect("new directory plan");
+        let new_manifest = manifest_for_payload(0xE7, &new_payload);
+
+        let mut old_reader = old_payload.as_slice();
+        node.ingest_manifest(&old_manifest, &old_plan, &mut old_reader)
+            .expect("ingest old site payload");
+        let mut new_reader = new_payload.as_slice();
+        node.ingest_manifest(&new_manifest, &new_plan, &mut new_reader)
+            .expect("ingest new site payload");
+
+        let bindings_file = NamedTempFile::new().expect("site bindings file");
+        fs::write(
+            bindings_file.path(),
+            norito::json::to_vec(&crate::sorafs::site::SiteBindingsDocument {
+                version: Some(1),
+                sites: vec![crate::sorafs::site::SiteBinding {
+                    hostname: "taira.sora.org".to_owned(),
+                    manifest_digest_hex: old_manifest_digest_hex,
+                    index_document: None,
+                    spa_fallback: Some(true),
+                }],
+            })
+            .expect("encode site bindings"),
+        )
+        .expect("write site bindings");
+        let _env_guard = SiteBindingsOverrideGuard::set(bindings_file.path());
+
+        let mut world = World::new();
+        let bundle = fixture_public_service_bundle("2026.04.1", "taira.sora.org");
+        let service_name = bundle.service.service_name.clone();
+        world.soracloud_service_revisions_mut_for_testing().insert(
+            (
+                bundle.service.service_name.to_string(),
+                bundle.service.service_version.clone(),
+            ),
+            bundle.clone(),
+        );
+        world
+            .soracloud_service_deployments_mut_for_testing()
+            .insert(
+                service_name.clone(),
+                SoraServiceDeploymentStateV1 {
+                    schema_version:
+                        iroha_data_model::soracloud::SORA_SERVICE_DEPLOYMENT_STATE_VERSION_V1,
+                    service_name,
+                    current_service_version: bundle.service.service_version.clone(),
+                    current_service_manifest_hash: bundle.service_manifest_hash(),
+                    current_container_manifest_hash: bundle.container_manifest_hash(),
+                    revision_count: 1,
+                    process_generation: 1,
+                    process_started_sequence: 1,
+                    active_rollout: None,
+                    last_rollout: None,
+                    config_generation: 0,
+                    secret_generation: 0,
+                    service_configs: BTreeMap::new(),
+                    service_secrets: BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
+                },
+            );
+
+        let app = mk_app_state_for_tests_with_world(world);
+        let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));
+        inner.sorafs_node = node;
+        let state = Arc::new(inner);
+
+        let mut root_headers = HeaderMap::new();
+        root_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let root_response = handle_get_sorafs_site_root(State(state.clone()), root_headers).await;
+        assert_eq!(root_response.status(), StatusCode::OK);
+        let root_body = body::to_bytes(root_response.into_body(), usize::MAX)
+            .await
+            .expect("read root body");
+        assert_eq!(root_body, &old_index_bytes[..]);
+
+        let mut manifest_headers = HeaderMap::new();
+        manifest_headers.insert(header::HOST, HeaderValue::from_static("taira.sora.org"));
+        let manifest_response =
+            handle_get_sorafs_site_manifest(State(state), manifest_headers).await;
+        assert_eq!(manifest_response.status(), StatusCode::OK);
+        let manifest_body = body::to_bytes(manifest_response.into_body(), usize::MAX)
+            .await
+            .expect("read manifest body");
+        let manifest_value: Value =
+            norito::json::from_slice(&manifest_body).expect("decode manifest response");
+        assert_eq!(
+            manifest_value.get("content_cid").and_then(Value::as_str),
+            Some(old_content_cid.as_str())
+        );
+    }
+
+    #[tokio::test]
     async fn cid_host_serves_manifest_and_spa_fallback() {
         let app = mk_app_state_for_tests();
         let mut inner = Arc::try_unwrap(app).unwrap_or_else(|_| panic!("unique app state"));

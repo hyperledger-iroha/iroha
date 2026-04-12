@@ -30,8 +30,18 @@
       "network": {
         "mode": "Allowlist",
         "value": [
-          "api.sora.internal",
-          "wallet.sora.internal"
+          {
+            "host": "api.sora.internal",
+            "ports": [
+              443
+            ]
+          },
+          {
+            "host": "wallet.sora.internal",
+            "ports": [
+              443
+            ]
+          }
         ]
       },
       "allow_wallet_signing": true,

@@ -10043,6 +10043,7 @@ pub(crate) mod valid {
                     entrypoint: "main".to_string(),
                     args: Vec::new(),
                     env: std::collections::BTreeMap::new(),
+                    inrou: None,
                     required_config_names: Vec::new(),
                     required_secret_names: Vec::new(),
                     config_exports: Vec::new(),

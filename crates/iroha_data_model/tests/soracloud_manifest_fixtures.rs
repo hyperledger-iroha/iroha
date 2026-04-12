@@ -29,11 +29,11 @@ use iroha_data_model::{
         SecretEnvelopeEncryptionV1, SecretEnvelopeV1, SoraArtifactKindV1, SoraArtifactRefV1,
         SoraCapabilityPolicyV1, SoraCertifiedResponsePolicyV1, SoraConfigExportV1,
         SoraContainerManifestRefV1, SoraContainerManifestV1, SoraContainerRuntimeV1,
-        SoraDeploymentBundleV1, SoraLifecycleHooksV1, SoraMailboxContractV1, SoraNetworkPolicyV1,
-        SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
-        SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
-        SoraServiceManifestV1, SoraStateBindingV1, SoraStateEncryptionV1, SoraStateMutabilityV1,
-        SoraStateScopeV1, SoraTlsModeV1,
+        SoraDeploymentBundleV1, SoraLifecycleHooksV1, SoraMailboxContractV1,
+        SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1, SoraResourceLimitsV1,
+        SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1, SoraServiceExecutionPlaneV1,
+        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceManifestV1, SoraStateBindingV1,
+        SoraStateEncryptionV1, SoraStateMutabilityV1, SoraStateScopeV1, SoraTlsModeV1,
     },
 };
 #[cfg(feature = "json")]
@@ -133,13 +133,14 @@ fn expected_container_manifest() -> SoraContainerManifestV1 {
             ("APP_ENV".to_string(), "production".to_string()),
             ("LOG_LEVEL".to_string(), "info".to_string()),
         ]),
+        inrou: None,
         required_config_names: Vec::new(),
         required_secret_names: Vec::new(),
         config_exports: Vec::<SoraConfigExportV1>::new(),
         capabilities: SoraCapabilityPolicyV1 {
             network: SoraNetworkPolicyV1::Allowlist(vec![
-                "api.sora.internal".to_string(),
-                "wallet.sora.internal".to_string(),
+                SoraNetworkAllowlistEntryV1::new("api.sora.internal", [443]),
+                SoraNetworkAllowlistEntryV1::new("wallet.sora.internal", [443]),
             ]),
             allow_wallet_signing: true,
             allow_state_writes: true,
@@ -323,8 +324,8 @@ fn expected_agent_apartment_manifest() -> AgentApartmentManifestV1 {
         ],
         state_quota_bytes: NonZeroU64::new(134_217_728).expect("nonzero"),
         network_egress: SoraNetworkPolicyV1::Allowlist(vec![
-            "rpc.sora.internal".to_string(),
-            "torii.sora.internal".to_string(),
+            SoraNetworkAllowlistEntryV1::new("rpc.sora.internal", [443]),
+            SoraNetworkAllowlistEntryV1::new("torii.sora.internal", [443]),
         ]),
         upgrade_policy: AgentUpgradePolicyV1::Governed,
     }

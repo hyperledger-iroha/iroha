@@ -62585,6 +62585,77 @@ async fn committed_rbc_cleanup_marks_retained_summary_delivered_without_live_ses
     harness.shutdown.send();
 }
 
+#[tokio::test(flavor = "current_thread")]
+async fn committed_rbc_cleanup_completes_retained_summary_when_local_payload_exists() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let height = actor
+        .state
+        .view()
+        .height()
+        .saturating_add(1)
+        .try_into()
+        .unwrap_or(u64::MAX);
+    let view = 0_u64;
+    let parent = actor.state.view().latest_block_hash();
+    let block = sample_block(height, view, parent);
+    let block_hash = block.hash();
+    let key = Actor::session_key(&block_hash, height, view);
+    let payload = super::proposals::block_payload_bytes(&block);
+    let payload_hash = Hash::new(&payload);
+
+    actor
+        .kura
+        .store_block(Arc::new(block))
+        .expect("store committed block");
+    actor.subsystems.da_rbc.rbc.persisted_sessions.insert(key);
+    actor.subsystems.da_rbc.rbc.status_handle.update(
+        super::rbc_status::Summary {
+            block_hash,
+            height,
+            view,
+            total_chunks: 3,
+            encoding: iroha_data_model::block::consensus::RbcEncoding::Plain,
+            data_shards: 0,
+            parity_shards: 0,
+            received_chunks: 1,
+            ready_count: 0,
+            delivered: false,
+            payload_hash: Some(payload_hash),
+            recovered_from_disk: true,
+            invalid: false,
+            reconstructed_stripes: 0,
+            reconstructable_stripes: 0,
+            lane_backlog: Vec::new(),
+            dataspace_backlog: Vec::new(),
+        },
+        SystemTime::now(),
+    );
+
+    assert!(
+        actor.clean_rbc_sessions_for_committed_block_if_settled(block_hash, height),
+        "committed cleanup should settle retained exact-frontier summaries without a live session",
+    );
+    let summary = actor
+        .subsystems
+        .da_rbc
+        .rbc
+        .status_handle
+        .get(&key)
+        .expect("retained summary");
+    assert!(
+        summary.delivered,
+        "committed cleanup should promote retained summaries to delivered",
+    );
+    assert_eq!(
+        summary.received_chunks, summary.total_chunks,
+        "committed cleanup should publish complete chunk accounting when the local payload is available",
+    );
+
+    harness.shutdown.send();
+}
+
 #[cfg(feature = "telemetry")]
 #[tokio::test(flavor = "current_thread")]
 async fn committed_rbc_cleanup_records_payload_bytes_for_retained_summary_without_live_session() {
