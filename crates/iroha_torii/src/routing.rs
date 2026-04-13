@@ -4634,6 +4634,11 @@ pub struct SccpCounterpartyCapabilityDto {
     pub counterparty_account_codec: u8,
     /// Stable logical key for `counterparty_account_codec`.
     pub counterparty_account_codec_key: String,
+    /// Whether the current lane is safe to use for production proof generation and consumption.
+    pub production_ready: bool,
+    /// Explanation for why the lane is disabled when `production_ready` is false.
+    #[norito(default)]
+    pub disabled_reason: Option<String>,
 }
 
 #[derive(
@@ -4823,6 +4828,8 @@ fn sccp_counterparty_capabilities() -> Result<Vec<SccpCounterpartyCapabilityDto>
                 registry_backend: manifest.registry_backend,
                 counterparty_account_codec: manifest.counterparty_account_codec,
                 counterparty_account_codec_key: manifest.counterparty_account_codec_key,
+                production_ready: manifest.production_ready,
+                disabled_reason: manifest.disabled_reason,
             })
         })
         .collect()
@@ -5046,11 +5053,46 @@ fn sccp_counterparty_from_backend(backend: &str) -> Option<(u32, &'static str)> 
     Some((domain, iroha_sccp::sccp_chain_key_for_domain(domain)?))
 }
 
+fn sccp_message_manifest_for_bundle(
+    bundle: &NexusSccpMessageProofV1,
+) -> Result<SccpProofManifestV1> {
+    let counterparty_domain = iroha_sccp::sccp_counterparty_domain_for_message_payload(
+        &bundle.payload,
+    )
+    .ok_or_else(|| {
+        conversion_error("unsupported SCCP counterparty domain for message bundle".to_owned())
+    })?;
+    iroha_sccp::sccp_proof_manifest_for_domain(counterparty_domain).ok_or_else(|| {
+        conversion_error(format!(
+            "unsupported SCCP domain for manifest discovery: {counterparty_domain}"
+        ))
+    })
+}
+
+fn sccp_message_lane_disabled_message(
+    bundle: &NexusSccpMessageProofV1,
+    target: &str,
+) -> Option<String> {
+    let manifest = sccp_message_manifest_for_bundle(bundle).ok()?;
+    (!manifest.production_ready).then(|| {
+        let reason = manifest
+            .disabled_reason
+            .unwrap_or_else(|| iroha_sccp::SCCP_PRODUCTION_DISABLED_REASON_V1.to_owned());
+        format!(
+            "SCCP {target} for {} ({}) is disabled: {reason}",
+            manifest.chain, manifest.counterparty_domain
+        )
+    })
+}
+
 fn sccp_message_proof_build_error_message(
     bundle: &NexusSccpMessageProofV1,
     signer: &KeyPair,
     target: &str,
 ) -> String {
+    if let Some(message) = sccp_message_lane_disabled_message(bundle, target) {
+        return message;
+    }
     let mut message = format!("failed to build SCCP {target}");
     let needs_evm_attestation = matches!(
         iroha_sccp::sccp_counterparty_domain_for_message_payload(&bundle.payload),
@@ -5071,6 +5113,11 @@ fn bridge_proof_from_sccp_message_bundle(
         return Err(conversion_error(
             "SCCP message bundle failed structural verification".to_owned(),
         ));
+    }
+    if let Some(message) =
+        sccp_message_lane_disabled_message(bundle, "transparent proof consumption")
+    {
+        return Err(conversion_error(message));
     }
     let finality = decode_nexus_bridge_finality_proof(&bundle.finality_proof).ok_or_else(|| {
         conversion_error("SCCP message bundle finality proof could not be decoded".to_owned())
@@ -5109,6 +5156,15 @@ fn bridge_proof_from_sccp_message_bundle(
 #[cfg(all(test, feature = "app_api"))]
 mod sccp_message_backend_tests {
     use super::*;
+
+    fn conversion_message(err: &crate::Error) -> Option<&str> {
+        match err {
+            crate::Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => Some(message.as_str()),
+            _ => None,
+        }
+    }
 
     #[test]
     fn sccp_message_backend_descriptor_uses_counterparty_domain_suffix() {
@@ -5283,10 +5339,49 @@ mod sccp_message_backend_tests {
             payload,
             finality_proof: norito::to_bytes(&finality_proof).expect("encode finality proof"),
         };
-        let artifact =
-            build_nexus_sccp_message_transparent_proof(&bundle).expect("build SCCP artifact");
-        let inner = iroha_sccp::build_sccp_message_transparent_inner_proof_from_artifact(&artifact)
-            .expect("derive inner proof context");
+        let manifest = iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON)
+            .expect("ton manifest");
+        let public_inputs = iroha_sccp::sccp_message_transparent_public_inputs(&bundle)
+            .expect("message public inputs");
+        let artifact = iroha_sccp::NexusSccpMessageTransparentProofV1 {
+            version: 1,
+            local_domain: manifest.local_domain,
+            counterparty_domain: manifest.counterparty_domain,
+            security_model: manifest.security_model,
+            anchor_governance: manifest.anchor_governance,
+            destination_binding: manifest.destination_binding.clone(),
+            proof_family: manifest.proof_family.clone(),
+            verifier_backend: manifest.verifier_backend.clone(),
+            message_backend: manifest.message_backend.clone(),
+            registry_backend: manifest.registry_backend.clone(),
+            manifest_seed: manifest.manifest_seed.clone(),
+            finality_model: manifest.finality_model,
+            verifier_target: manifest.verifier_target,
+            public_inputs,
+            proof_bytes: vec![0xAA, 0xBB],
+            submission_package: iroha_sccp::SccpCounterpartySubmissionPackageV1 {
+                version: 1,
+                proof_family: manifest.proof_family,
+                verifier_backend: manifest.verifier_backend,
+                envelope_encoding: "ton_message_body_v1".to_owned(),
+                submission_kind: manifest.submission_template.submission_kind.clone(),
+                verifier_entrypoint: manifest.submission_template.verifier_entrypoint.clone(),
+                platform_payload: iroha_sccp::SccpPlatformSubmissionPayloadV1::TonInternalMessage(
+                    iroha_sccp::SccpTonInternalMessageSubmissionPayloadV1 {
+                        proof_cell: vec![0xAA, 0xBB],
+                        public_inputs_cell:
+                            iroha_sccp::canonical_sccp_message_transparent_public_inputs_bytes(
+                                &iroha_sccp::sccp_message_transparent_public_inputs(&bundle)
+                                    .expect("message public inputs"),
+                            ),
+                        bundle_cell: iroha_sccp::canonical_nexus_sccp_message_bundle_bytes(&bundle),
+                    },
+                ),
+                arguments: Vec::new(),
+                envelope_bytes: vec![0xCC],
+            },
+            bundle,
+        };
         let proof_bytes = norito::to_bytes(&artifact).expect("encode artifact");
         let record = iroha_data_model::bridge::BridgeProofRecord {
             proof: iroha_data_model::bridge::BridgeProof {
@@ -5327,31 +5422,31 @@ mod sccp_message_backend_tests {
             payload
                 .get("inner_chain_family")
                 .and_then(norito::json::Value::as_str),
-            Some("ton")
+            None
         );
         assert_eq!(
             payload
                 .get("inner_payload_kind")
                 .and_then(norito::json::Value::as_str),
-            Some("transfer")
+            None
         );
         assert_eq!(
             payload
                 .get("verifier_backend")
                 .and_then(norito::json::Value::as_str),
-            Some("ton-contract-v1")
+            None
         );
         assert_eq!(
             payload
                 .get("inner_verifier_backend")
                 .and_then(norito::json::Value::as_str),
-            Some("ton-contract-v1")
+            None
         );
         assert_eq!(
             payload
                 .get("inner_statement_hash")
                 .and_then(norito::json::Value::as_str),
-            Some(hex::encode(inner.statement_hash).as_str())
+            None
         );
     }
 
@@ -5409,6 +5504,11 @@ mod sccp_message_backend_tests {
             iroha_sccp::SCCP_CODEC_TON_RAW
         );
         assert_eq!(ton.counterparty_account_codec_key, "ton_raw");
+        assert!(!ton.production_ready);
+        assert_eq!(
+            ton.disabled_reason.as_deref(),
+            Some(iroha_sccp::SCCP_PRODUCTION_DISABLED_REASON_V1)
+        );
     }
 
     #[test]
@@ -5449,6 +5549,11 @@ mod sccp_message_backend_tests {
         assert_eq!(ton.chain, "ton");
         assert_eq!(ton.verifier_backend.key.as_str(), "ton-contract-v1");
         assert_eq!(ton.counterparty_account_codec_key, "ton_raw");
+        assert!(!ton.production_ready);
+        assert_eq!(
+            ton.disabled_reason.as_deref(),
+            Some(iroha_sccp::SCCP_PRODUCTION_DISABLED_REASON_V1)
+        );
     }
 
     #[test]
@@ -5627,23 +5732,9 @@ mod sccp_message_backend_tests {
             b"iroha:torii:routing:test:evm-attestor".to_vec(),
             Algorithm::Secp256k1,
         );
-        let bridge_proof =
-            bridge_proof_from_sccp_message_bundle(&bundle, &signer).expect("build bridge proof");
-        let iroha_data_model::bridge::BridgeProofPayload::TransparentZk(tp) = bridge_proof.payload
-        else {
-            panic!("expected transparent proof payload");
-        };
-        let decoded = recover_nexus_sccp_message_transparent_proof(
-            tp.proof.backend.as_str(),
-            &tp.proof.bytes,
-        )
-        .expect("recover typed proof");
-        assert!(iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(&decoded));
-        assert_eq!(decoded.message_backend, "sccp/stark-fri-v1/eth");
-        assert_eq!(
-            decoded.bundle.commitment.message_id,
-            bundle.commitment.message_id
-        );
+        let err = bridge_proof_from_sccp_message_bundle(&bundle, &signer)
+            .expect_err("disabled lane should reject bridge proof generation");
+        assert!(conversion_message(&err).is_some_and(|message| message.contains("is disabled")));
     }
 }
 
@@ -6337,6 +6428,10 @@ pub async fn handle_v1_sccp_message_proof_artifact(
                 .cloned()
         })
         .ok_or_else(sccp_not_found)?;
+    if let Some(message) = sccp_message_lane_disabled_message(&bundle, "proof artifact generation")
+    {
+        return Err(sccp_bad_request(message));
+    }
     let artifact = build_nexus_sccp_message_transparent_proof_with_signer(&bundle, signer)
         .or_else(|| build_nexus_sccp_message_transparent_proof(&bundle))
         .ok_or_else(|| {
@@ -6367,6 +6462,9 @@ pub async fn handle_v1_sccp_message_proof_job(
                 .cloned()
         })
         .ok_or_else(sccp_not_found)?;
+    if let Some(message) = sccp_message_lane_disabled_message(&bundle, "proof job generation") {
+        return Err(sccp_bad_request(message));
+    }
     let job = build_sccp_counterparty_proof_job_from_bundle_with_signer(&bundle, signer)
         .or_else(|| build_sccp_counterparty_proof_job_from_bundle(&bundle))
         .ok_or_else(|| {

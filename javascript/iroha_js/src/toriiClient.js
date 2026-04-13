@@ -163,6 +163,8 @@ const SCCP_FINALITY_MODEL_VALUES = new Set([
   "TronDpos",
   "SubstrateGrandpa",
 ]);
+const SCCP_PROOF_SECURITY_MODEL_VALUES = new Set(["RecursiveZk"]);
+const SCCP_ANCHOR_GOVERNANCE_VALUES = new Set(["SoraParliament"]);
 const SCCP_VERIFIER_TARGET_VALUES = new Set([
   "EvmContract",
   "SolanaProgram",
@@ -13188,6 +13190,10 @@ function normalizeSccpCapabilitiesResponse(payload) {
       record.message_job_path,
       "sccp capabilities response.message_job_path",
     ),
+    recentMessagesPath: requireNonEmptyString(
+      record.recent_messages_path,
+      "sccp capabilities response.recent_messages_path",
+    ),
     proofManifestPath: requireNonEmptyString(
       record.proof_manifest_path,
       "sccp capabilities response.proof_manifest_path",
@@ -13243,11 +13249,16 @@ function normalizeSccpCodecCapability(value, context) {
 
 function normalizeSccpCounterpartyCapability(value, context) {
   const record = ensureRecord(value, context);
+  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
   return {
     domain: ToriiClient._normalizeUnsignedInteger(record.domain, `${context}.domain`, {
       allowZero: true,
     }),
     chain: requireNonEmptyString(record.chain, `${context}.chain`),
+    verifierBackendKey: requireNonEmptyString(
+      verifierBackend.key,
+      `${context}.verifier_backend.key`,
+    ),
     messageBackend: requireNonEmptyString(record.message_backend, `${context}.message_backend`),
     registryBackend: requireNonEmptyString(
       record.registry_backend,
@@ -13261,6 +13272,11 @@ function normalizeSccpCounterpartyCapability(value, context) {
     counterpartyAccountCodecKey: requireNonEmptyString(
       record.counterparty_account_codec_key,
       `${context}.counterparty_account_codec_key`,
+    ),
+    productionReady: requireBooleanLike(record.production_ready, `${context}.production_ready`),
+    disabledReason: optionalString(
+      record.disabled_reason ?? null,
+      `${context}.disabled_reason`,
     ),
   };
 }
@@ -13420,6 +13436,17 @@ function normalizeSccpCounterpartySubmissionPackage(value, context) {
   };
 }
 
+function normalizeSccpDestinationBinding(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    key: requireNonEmptyString(record.key, `${context}.key`),
+    bindingHash: normalizeHex32String(record.binding_hash, `${context}.binding_hash`),
+  };
+}
+
 function normalizeSccpProofManifestSetResponse(payload) {
   const record = ensureRecord(payload, "sccp proof manifests response");
   return {
@@ -13447,11 +13474,31 @@ function normalizeSccpProofManifestSetResponse(payload) {
 
 function normalizeSccpProofManifest(value, context) {
   const record = ensureRecord(value, context);
+  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
+  const securityModel = requireNonEmptyString(record.security_model, `${context}.security_model`);
+  const anchorGovernance = requireNonEmptyString(
+    record.anchor_governance,
+    `${context}.anchor_governance`,
+  );
   const finalityModel = requireNonEmptyString(record.finality_model, `${context}.finality_model`);
   const verifierTarget = requireNonEmptyString(
     record.verifier_target,
     `${context}.verifier_target`,
   );
+  if (!SCCP_PROOF_SECURITY_MODEL_VALUES.has(securityModel)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.security_model must be a supported SCCP proof security model`,
+      `${context}.security_model`,
+    );
+  }
+  if (!SCCP_ANCHOR_GOVERNANCE_VALUES.has(anchorGovernance)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.anchor_governance must be a supported SCCP anchor governance mode`,
+      `${context}.anchor_governance`,
+    );
+  }
   if (!SCCP_FINALITY_MODEL_VALUES.has(finalityModel)) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
@@ -13481,6 +13528,16 @@ function normalizeSccpProofManifest(value, context) {
     ),
     chain: requireNonEmptyString(record.chain, `${context}.chain`),
     proofFamily: requireNonEmptyString(record.proof_family, `${context}.proof_family`),
+    securityModel,
+    anchorGovernance,
+    destinationBinding: normalizeSccpDestinationBinding(
+      record.destination_binding,
+      `${context}.destination_binding`,
+    ),
+    verifierBackendKey: requireNonEmptyString(
+      verifierBackend.key,
+      `${context}.verifier_backend.key`,
+    ),
     messageBackend: requireNonEmptyString(record.message_backend, `${context}.message_backend`),
     registryBackend: requireNonEmptyString(record.registry_backend, `${context}.registry_backend`),
     counterpartyAccountCodec: ToriiClient._normalizeUnsignedInteger(
@@ -13507,6 +13564,11 @@ function normalizeSccpProofManifest(value, context) {
     ).map((entry, index) =>
       requireNonEmptyString(entry, `${context}.message_payload_kinds[${index}]`),
     ),
+    productionReady: requireBooleanLike(record.production_ready, `${context}.production_ready`),
+    disabledReason: optionalString(
+      record.disabled_reason ?? null,
+      `${context}.disabled_reason`,
+    ),
     submissionTemplate: normalizeSccpCounterpartySubmissionTemplate(
       record.submission_template,
       `${context}.submission_template`,
@@ -13517,11 +13579,31 @@ function normalizeSccpProofManifest(value, context) {
 function normalizeSccpMessageTransparentProofArtifact(payload) {
   const context = "sccp message proof artifact response";
   const record = ensureRecord(payload, context);
+  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
+  const securityModel = requireNonEmptyString(record.security_model, `${context}.security_model`);
+  const anchorGovernance = requireNonEmptyString(
+    record.anchor_governance,
+    `${context}.anchor_governance`,
+  );
   const finalityModel = requireNonEmptyString(record.finality_model, `${context}.finality_model`);
   const verifierTarget = requireNonEmptyString(
     record.verifier_target,
     `${context}.verifier_target`,
   );
+  if (!SCCP_PROOF_SECURITY_MODEL_VALUES.has(securityModel)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.security_model must be a supported SCCP proof security model`,
+      `${context}.security_model`,
+    );
+  }
+  if (!SCCP_ANCHOR_GOVERNANCE_VALUES.has(anchorGovernance)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.anchor_governance must be a supported SCCP anchor governance mode`,
+      `${context}.anchor_governance`,
+    );
+  }
   if (!SCCP_FINALITY_MODEL_VALUES.has(finalityModel)) {
     throw createValidationError(
       ValidationErrorCode.INVALID_OBJECT,
@@ -13549,6 +13631,16 @@ function normalizeSccpMessageTransparentProofArtifact(payload) {
       { allowZero: true },
     ),
     proofFamily: requireNonEmptyString(record.proof_family, `${context}.proof_family`),
+    securityModel,
+    anchorGovernance,
+    destinationBinding: normalizeSccpDestinationBinding(
+      record.destination_binding,
+      `${context}.destination_binding`,
+    ),
+    verifierBackendKey: requireNonEmptyString(
+      verifierBackend.key,
+      `${context}.verifier_backend.key`,
+    ),
     messageBackend: requireNonEmptyString(record.message_backend, `${context}.message_backend`),
     registryBackend: requireNonEmptyString(record.registry_backend, `${context}.registry_backend`),
     manifestSeed: requireNonEmptyString(record.manifest_seed, `${context}.manifest_seed`),
@@ -13592,7 +13684,13 @@ function normalizeSccpMessageTransparentProofArtifact(payload) {
 function normalizeSccpCounterpartyProofJob(payload) {
   const context = "sccp message proof job response";
   const record = ensureRecord(payload, context);
+  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
   const chainFamily = requireNonEmptyString(record.chain_family, `${context}.chain_family`);
+  const securityModel = requireNonEmptyString(record.security_model, `${context}.security_model`);
+  const anchorGovernance = requireNonEmptyString(
+    record.anchor_governance,
+    `${context}.anchor_governance`,
+  );
   const finalityModel = requireNonEmptyString(record.finality_model, `${context}.finality_model`);
   const verifierTarget = requireNonEmptyString(
     record.verifier_target,
@@ -13603,6 +13701,20 @@ function normalizeSccpCounterpartyProofJob(payload) {
       ValidationErrorCode.INVALID_OBJECT,
       `${context}.chain_family must be a supported SCCP chain family`,
       `${context}.chain_family`,
+    );
+  }
+  if (!SCCP_PROOF_SECURITY_MODEL_VALUES.has(securityModel)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.security_model must be a supported SCCP proof security model`,
+      `${context}.security_model`,
+    );
+  }
+  if (!SCCP_ANCHOR_GOVERNANCE_VALUES.has(anchorGovernance)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.anchor_governance must be a supported SCCP anchor governance mode`,
+      `${context}.anchor_governance`,
     );
   }
   if (!SCCP_FINALITY_MODEL_VALUES.has(finalityModel)) {
@@ -13634,6 +13746,16 @@ function normalizeSccpCounterpartyProofJob(payload) {
       { allowZero: true },
     ),
     proofFamily: requireNonEmptyString(record.proof_family, `${context}.proof_family`),
+    securityModel,
+    anchorGovernance,
+    destinationBinding: normalizeSccpDestinationBinding(
+      record.destination_binding,
+      `${context}.destination_binding`,
+    ),
+    verifierBackendKey: requireNonEmptyString(
+      verifierBackend.key,
+      `${context}.verifier_backend.key`,
+    ),
     messageBackend: requireNonEmptyString(record.message_backend, `${context}.message_backend`),
     registryBackend: requireNonEmptyString(record.registry_backend, `${context}.registry_backend`),
     manifestSeed: requireNonEmptyString(record.manifest_seed, `${context}.manifest_seed`),

@@ -12,13 +12,17 @@ contract SccpMessageBridgeDeployer {
         address verifierAddress,
         string memory verifierBackendKey,
         string memory proofFamily,
-        bytes32 networkId
+        bytes32 networkId,
+        uint32 sourceDomain,
+        uint32 targetDomain
     ) public returns (address) {
         bridge = new SccpMessageBridge(
             verifierAddress,
             verifierBackendKey,
             proofFamily,
-            networkId
+            networkId,
+            sourceDomain,
+            targetDomain
         );
         emit NewSccpMessageBridgeDeployed(address(bridge));
         return address(bridge);

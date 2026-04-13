@@ -4180,10 +4180,13 @@ export interface ToriiSccpCodecCapability {
 export interface ToriiSccpCounterpartyCapability {
   domain: number;
   chain: string;
+  verifierBackendKey: string;
   messageBackend: string;
   registryBackend: string;
   counterpartyAccountCodec: number;
   counterpartyAccountCodecKey: string;
+  productionReady: boolean;
+  disabledReason: string | null;
 }
 
 export interface ToriiSccpCapabilities {
@@ -4195,6 +4198,7 @@ export interface ToriiSccpCapabilities {
   messageBundlePath: string;
   messageProofPath: string;
   messageJobPath: string;
+  recentMessagesPath: string;
   proofManifestPath: string;
   legacyBurnRegistryBackend: string;
   legacyGovernanceRegistryBackend: string;
@@ -4220,6 +4224,16 @@ export type ToriiSccpProofVerifierTarget =
   | "TronContract"
   | "SubstrateRuntime";
 
+export type ToriiSccpProofSecurityModel = "RecursiveZk";
+
+export type ToriiSccpAnchorGovernance = "SoraParliament";
+
+export interface ToriiSccpDestinationBinding {
+  version: number;
+  key: string;
+  bindingHash: string;
+}
+
 export interface ToriiSccpProofManifest {
   version: number;
   localDomain: number;
@@ -4227,6 +4241,10 @@ export interface ToriiSccpProofManifest {
   counterpartyDomain: number;
   chain: string;
   proofFamily: string;
+  securityModel: ToriiSccpProofSecurityModel;
+  anchorGovernance: ToriiSccpAnchorGovernance;
+  destinationBinding: ToriiSccpDestinationBinding;
+  verifierBackendKey: string;
   messageBackend: string;
   registryBackend: string;
   counterpartyAccountCodec: number;
@@ -4236,6 +4254,8 @@ export interface ToriiSccpProofManifest {
   manifestSeed: string;
   requiredPublicInputs: ReadonlyArray<string>;
   messagePayloadKinds: ReadonlyArray<string>;
+  productionReady: boolean;
+  disabledReason: string | null;
   submissionTemplate: ToriiSccpCounterpartySubmissionTemplate;
 }
 
@@ -4299,11 +4319,68 @@ export interface ToriiSccpMessageTransparentPublicInputs {
   finalityBlockHash: string;
 }
 
+export interface ToriiSccpEvmWordPublicInputs {
+  messageId: string;
+  payloadHash: string;
+  targetDomainWord: string;
+  commitmentRoot: string;
+  finalityHeightWord: string;
+  finalityBlockHash: string;
+}
+
+export type ToriiSccpPlatformSubmissionPayload =
+  | {
+      kind: "evm_contract_call" | "tron_contract_call";
+      value: {
+        proofBytes: string;
+        publicInputs: ToriiSccpEvmWordPublicInputs;
+        statementHash: string;
+      };
+    }
+  | {
+      kind: "solana_program_instruction" | "substrate_runtime_call";
+      value: {
+        proofBytes: string;
+        publicInputsBytes: string;
+        bundleBytes: string;
+      };
+    }
+  | {
+      kind: "ton_internal_message";
+      value: {
+        proofCell: string;
+        publicInputsCell: string;
+        bundleCell: string;
+      };
+    };
+
+export interface ToriiSccpSubmissionArgumentValue {
+  key: string;
+  encoding: string;
+  bytes: string;
+}
+
+export interface ToriiSccpCounterpartySubmissionPackage {
+  version: number;
+  proofFamily: string;
+  verifierBackendKey: string;
+  envelopeEncoding: string;
+  submissionKind: string;
+  verifierEntrypoint: string;
+  platformPayload: ToriiSccpPlatformSubmissionPayload;
+  arguments: ReadonlyArray<ToriiSccpSubmissionArgumentValue>;
+  envelopeBytes: string;
+}
+
 export interface ToriiSccpMessageTransparentProofArtifact {
   version: number;
   localDomain: number;
   counterpartyDomain: number;
   proofFamily: string;
+  securityModel: ToriiSccpProofSecurityModel;
+  anchorGovernance: ToriiSccpAnchorGovernance;
+  destinationBinding: ToriiSccpDestinationBinding;
+  verifierBackendKey: string;
   messageBackend: string;
   registryBackend: string;
   manifestSeed: string;
@@ -4311,6 +4388,7 @@ export interface ToriiSccpMessageTransparentProofArtifact {
   verifierTarget: ToriiSccpProofVerifierTarget;
   publicInputs: ToriiSccpMessageTransparentPublicInputs;
   proofBytes: string;
+  submissionPackage: ToriiSccpCounterpartySubmissionPackage;
   bundle: ToriiSccpMessageProofBundle;
 }
 
@@ -4382,6 +4460,10 @@ export interface ToriiSccpCounterpartyProofJob {
   localDomain: number;
   counterpartyDomain: number;
   proofFamily: string;
+  securityModel: ToriiSccpProofSecurityModel;
+  anchorGovernance: ToriiSccpAnchorGovernance;
+  destinationBinding: ToriiSccpDestinationBinding;
+  verifierBackendKey: string;
   messageBackend: string;
   registryBackend: string;
   manifestSeed: string;
@@ -4391,6 +4473,7 @@ export interface ToriiSccpCounterpartyProofJob {
   payloadKind: string;
   payloadProjection: ToriiSccpPayloadProjection;
   submissionTemplate: ToriiSccpCounterpartySubmissionTemplate;
+  submissionPackage: ToriiSccpCounterpartySubmissionPackage;
   bundle: ToriiSccpMessageProofBundle;
 }
 

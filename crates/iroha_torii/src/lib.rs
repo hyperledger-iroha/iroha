@@ -29861,6 +29861,15 @@ pub(crate) mod tests_runtime_handlers {
         })
     }
 
+    fn query_conversion_message(err: &Error) -> Option<&str> {
+        match err {
+            Error::Query(ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => Some(message.as_str()),
+            _ => None,
+        }
+    }
+
     pub fn mk_app_state_for_tests() -> SharedAppState {
         mk_app_state_for_tests_with_world_and_options(World::default(), None, None, None, None)
     }
@@ -34493,7 +34502,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn sccp_message_artifact_endpoint_roundtrips_json_and_norito() {
+    async fn sccp_message_artifact_endpoint_rejects_disabled_lane() {
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
@@ -34514,61 +34523,23 @@ pub(crate) mod tests_runtime_handlers {
         });
         let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
 
-        let json_response = routing::handle_v1_sccp_message_proof_artifact(
+        let err = routing::handle_v1_sccp_message_proof_artifact(
             app.state.as_ref(),
             &app.da_receipt_signer,
             hex::encode(message_id),
             None,
         )
         .await
-        .expect("json response");
-        assert_eq!(
-            json_response
-                .headers()
-                .get(axum::http::header::CONTENT_TYPE)
-                .map(HeaderValue::as_bytes),
-            Some(b"application/json".as_slice())
+        .expect_err("disabled lane should reject artifact generation");
+        assert!(
+            query_conversion_message(&err).is_some_and(|message| message.contains("is disabled"))
         );
-        let json_bytes = axum::body::to_bytes(json_response.into_body(), usize::MAX)
-            .await
-            .expect("json body");
-        let decoded_json: iroha_sccp::NexusSccpMessageTransparentProofV1 =
-            serde_json::from_slice(&json_bytes).expect("decode json artifact");
-        assert_eq!(
-            decoded_json.counterparty_domain,
-            iroha_sccp::SCCP_DOMAIN_TON
-        );
-        assert_eq!(decoded_json.message_backend, "sccp/stark-fri-v1/ton");
-        assert_eq!(decoded_json.bundle.commitment.message_id, message_id);
-        assert!(iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(&decoded_json));
-
-        let norito_response = routing::handle_v1_sccp_message_proof_artifact(
-            app.state.as_ref(),
-            &app.da_receipt_signer,
-            hex::encode(message_id),
-            Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
-        )
-        .await
-        .expect("norito response");
-        assert_eq!(
-            norito_response
-                .headers()
-                .get(axum::http::header::CONTENT_TYPE)
-                .map(HeaderValue::as_bytes),
-            Some(crate::utils::NORITO_MIME_TYPE.as_bytes())
-        );
-        let norito_bytes = axum::body::to_bytes(norito_response.into_body(), usize::MAX)
-            .await
-            .expect("norito body");
-        let decoded_norito: iroha_sccp::NexusSccpMessageTransparentProofV1 =
-            norito::decode_from_bytes(&norito_bytes).expect("decode norito artifact");
-        assert_eq!(decoded_norito, decoded_json);
 
         routing::clear_sccp_bundles_for_tests();
     }
 
     #[tokio::test]
-    async fn sccp_message_job_endpoint_roundtrips_json_and_norito() {
+    async fn sccp_message_job_endpoint_rejects_disabled_lane() {
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
@@ -34589,66 +34560,23 @@ pub(crate) mod tests_runtime_handlers {
         });
         let (app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
 
-        let json_response = routing::handle_v1_sccp_message_proof_job(
+        let err = routing::handle_v1_sccp_message_proof_job(
             app.state.as_ref(),
             &app.da_receipt_signer,
             hex::encode(message_id),
             None,
         )
         .await
-        .expect("json response");
-        assert_eq!(
-            json_response
-                .headers()
-                .get(axum::http::header::CONTENT_TYPE)
-                .map(HeaderValue::as_bytes),
-            Some(b"application/json".as_slice())
+        .expect_err("disabled lane should reject proof job generation");
+        assert!(
+            query_conversion_message(&err).is_some_and(|message| message.contains("is disabled"))
         );
-        let json_bytes = axum::body::to_bytes(json_response.into_body(), usize::MAX)
-            .await
-            .expect("json body");
-        let decoded_json: iroha_sccp::SccpCounterpartyProofJobV1 =
-            serde_json::from_slice(&json_bytes).expect("decode json proof job");
-        assert_eq!(decoded_json.chain, "ton");
-        assert_eq!(
-            decoded_json.counterparty_domain,
-            iroha_sccp::SCCP_DOMAIN_TON
-        );
-        assert_eq!(decoded_json.payload_kind, "transfer");
-        match &decoded_json.payload_projection {
-            iroha_sccp::SccpPayloadProjectionV1::Transfer(transfer) => {
-                assert_eq!(transfer.amount, 77);
-            }
-            other => panic!("unexpected proof job projection: {other:?}"),
-        }
-
-        let norito_response = routing::handle_v1_sccp_message_proof_job(
-            app.state.as_ref(),
-            &app.da_receipt_signer,
-            hex::encode(message_id),
-            Some(HeaderValue::from_static(crate::utils::NORITO_MIME_TYPE)),
-        )
-        .await
-        .expect("norito response");
-        assert_eq!(
-            norito_response
-                .headers()
-                .get(axum::http::header::CONTENT_TYPE)
-                .map(HeaderValue::as_bytes),
-            Some(crate::utils::NORITO_MIME_TYPE.as_bytes())
-        );
-        let norito_bytes = axum::body::to_bytes(norito_response.into_body(), usize::MAX)
-            .await
-            .expect("norito body");
-        let decoded_norito: iroha_sccp::SccpCounterpartyProofJobV1 =
-            norito::decode_from_bytes(&norito_bytes).expect("decode norito proof job");
-        assert_eq!(decoded_norito, decoded_json);
 
         routing::clear_sccp_bundles_for_tests();
     }
 
     #[tokio::test]
-    async fn sccp_message_artifact_endpoint_builds_evm_attestation_payloads() {
+    async fn sccp_message_artifact_endpoint_rejects_disabled_evm_lane() {
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
@@ -34669,36 +34597,17 @@ pub(crate) mod tests_runtime_handlers {
         let (mut app, message_id) = app_with_recorded_sccp_message_for_test(1, payload);
         install_evm_da_receipt_signer_for_test(&mut app);
 
-        let response = routing::handle_v1_sccp_message_proof_artifact(
+        let err = routing::handle_v1_sccp_message_proof_artifact(
             app.state.as_ref(),
             &app.da_receipt_signer,
             hex::encode(message_id),
             None,
         )
         .await
-        .expect("json response");
-        let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("json body");
-        let decoded: iroha_sccp::NexusSccpMessageTransparentProofV1 =
-            serde_json::from_slice(&bytes).expect("decode json artifact");
-
-        assert_eq!(
-            decoded.verifier_backend.key,
-            iroha_sccp::SCCP_EVM_SECP256K1_PROOF_BACKEND_V1
+        .expect_err("disabled lane should reject EVM artifact generation");
+        assert!(
+            query_conversion_message(&err).is_some_and(|message| message.contains("is disabled"))
         );
-        assert!(iroha_sccp::verify_nexus_sccp_message_transparent_proof_structure(&decoded));
-        match &decoded.submission_package.platform_payload {
-            iroha_sccp::SccpPlatformSubmissionPayloadV1::EvmContractCall(payload) => {
-                assert_eq!(
-                    payload.attestation.source_domain,
-                    iroha_sccp::SCCP_DOMAIN_SORA
-                );
-                assert_eq!(payload.attestation.signatures.len(), 1);
-                assert_ne!(payload.proof_bytes, decoded.proof_bytes);
-            }
-            other => panic!("unexpected EVM platform payload: {other:?}"),
-        }
 
         routing::clear_sccp_bundles_for_tests();
     }
@@ -34747,6 +34656,11 @@ pub(crate) mod tests_runtime_handlers {
             iroha_sccp::SCCP_CODEC_TON_RAW
         );
         assert_eq!(ton.counterparty_account_codec_key, "ton_raw");
+        assert!(!ton.production_ready);
+        assert_eq!(
+            ton.disabled_reason.as_deref(),
+            Some(iroha_sccp::SCCP_PRODUCTION_DISABLED_REASON_V1)
+        );
 
         let norito_response = routing::handle_v1_sccp_capabilities(Some(HeaderValue::from_static(
             crate::utils::NORITO_MIME_TYPE,
@@ -34818,6 +34732,11 @@ pub(crate) mod tests_runtime_handlers {
             ton.manifest_seed,
             "iroha:sccp:bridge-proof:message:stark-fri:v1:ton"
         );
+        assert!(!ton.production_ready);
+        assert_eq!(
+            ton.disabled_reason.as_deref(),
+            Some(iroha_sccp::SCCP_PRODUCTION_DISABLED_REASON_V1)
+        );
 
         let norito_response = routing::handle_v1_sccp_manifests(Some(HeaderValue::from_static(
             crate::utils::NORITO_MIME_TYPE,
@@ -34843,7 +34762,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn bridge_proof_submit_uses_chain_specific_sccp_backend_for_message_bundle() {
+    async fn bridge_proof_submit_rejects_disabled_sccp_message_bundle_lane() {
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
@@ -34879,7 +34798,7 @@ pub(crate) mod tests_runtime_handlers {
         .expect("bundle value");
 
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let response = routing::handle_post_bridge_proof_submit(
+        let err = match routing::handle_post_bridge_proof_submit(
             app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
@@ -34897,45 +34816,19 @@ pub(crate) mod tests_runtime_handlers {
             }),
         )
         .await
-        .expect("proof submit response")
-        .into_response();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body");
-        let decoded = norito::json::from_str::<norito::json::Value>(
-            std::str::from_utf8(&body).expect("response utf8"),
-        )
-        .expect("response json");
-        let object = decoded.as_object().expect("response object");
-
-        assert_eq!(
-            object
-                .get("proof_kind")
-                .and_then(norito::json::Value::as_str),
-            Some("message")
-        );
-        assert_eq!(
-            object.get("backend").and_then(norito::json::Value::as_str),
-            Some("bridge/sccp/stark-fri-v1/eth")
-        );
-        assert_eq!(
-            object
-                .get("counterparty_domain")
-                .and_then(norito::json::Value::as_u64),
-            Some(iroha_sccp::SCCP_DOMAIN_ETH.into())
-        );
-        assert_eq!(
-            object
-                .get("counterparty_chain")
-                .and_then(norito::json::Value::as_str),
-            Some("eth")
+        {
+            Err(err) => err,
+            Ok(_) => panic!("disabled lane should reject proof submit"),
+        };
+        assert!(
+            query_conversion_message(&err).is_some_and(|message| message.contains("is disabled"))
         );
 
         routing::clear_sccp_bundles_for_tests();
     }
 
     #[tokio::test]
-    async fn bridge_message_submit_prepares_inbound_transfer_receipt() {
+    async fn bridge_message_submit_rejects_disabled_inbound_transfer_lane() {
         routing::clear_sccp_bundles_for_tests();
         let payload = iroha_sccp::SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
@@ -34971,7 +34864,7 @@ pub(crate) mod tests_runtime_handlers {
         .expect("bundle value");
 
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let response = routing::handle_post_bridge_message_submit(
+        let err = match routing::handle_post_bridge_message_submit(
             app.chain_id.clone(),
             app.queue.clone(),
             app.state.clone(),
@@ -34989,63 +34882,11 @@ pub(crate) mod tests_runtime_handlers {
             }),
         )
         .await
-        .expect("message submit response")
-        .into_response();
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
-            .await
-            .expect("response body");
-        let decoded = norito::json::from_str::<norito::json::Value>(
-            std::str::from_utf8(&body).expect("response utf8"),
-        )
-        .expect("response json");
-        let object = decoded.as_object().expect("response object");
-        let message_id_hex = hex::encode(message_id);
-        assert_eq!(
-            object
-                .get("submitted")
-                .and_then(norito::json::Value::as_bool),
-            Some(false)
-        );
-        assert_eq!(
-            object
-                .get("message_kind")
-                .and_then(norito::json::Value::as_str),
-            Some("transfer")
-        );
-        assert_eq!(
-            object.get("backend").and_then(norito::json::Value::as_str),
-            Some("bridge/sccp/stark-fri-v1/eth")
-        );
-        assert_eq!(
-            object
-                .get("counterparty_domain")
-                .and_then(norito::json::Value::as_u64),
-            Some(iroha_sccp::SCCP_DOMAIN_ETH.into())
-        );
-        assert_eq!(
-            object
-                .get("counterparty_chain")
-                .and_then(norito::json::Value::as_str),
-            Some("eth")
-        );
-        assert_eq!(
-            object
-                .get("message_id_hex")
-                .and_then(norito::json::Value::as_str),
-            Some(message_id_hex.as_str())
-        );
-        assert_eq!(
-            object
-                .get("receipt_lane")
-                .and_then(norito::json::Value::as_u64),
-            Some(7)
-        );
-        assert_eq!(
-            object
-                .get("receipt_direction")
-                .and_then(norito::json::Value::as_str),
-            Some("mint")
-        );
+        {
+            Err(err) => err,
+            Ok(_) => panic!("disabled lane should reject message submit"),
+        };
+        assert!(err.to_string().contains("transparent proof consumption"));
 
         routing::clear_sccp_bundles_for_tests();
     }

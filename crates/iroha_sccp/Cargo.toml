@@ -27,3 +27,4 @@ serde = { version = "1.0.228", default-features = false, features = ["derive"], 
 norito = { path = "../norito", optional = true }
 fastpq_prover = { path = "../fastpq_prover", optional = true }
 iroha_crypto = { path = "../iroha_crypto", optional = true }
+iroha_data_model = { path = "../iroha_data_model", default-features = false }

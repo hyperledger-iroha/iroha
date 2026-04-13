@@ -1459,6 +1459,14 @@ impl AppDeployArgs {
         manifest.validate()?;
         let frontend =
             build_app_frontend_projection(&manifest.public_url, manifest.static_site.as_ref(), &manifest_path)?;
+        let routes = build_app_local_plan_output(&manifest_path)?.routes;
+        let workspace_dir = manifest_dir.to_string_lossy().into_owned();
+        let workspace_scripts = AppLocalWorkspaceScriptsOutput {
+            local_dev: workspace_script_path_if_exists(&manifest_dir, "local-dev.sh"),
+            build_and_sync: workspace_script_path_if_exists(&manifest_dir, "build-and-sync.sh"),
+            deploy: workspace_script_path_if_exists(&manifest_dir, "deploy.sh"),
+            upgrade: workspace_script_path_if_exists(&manifest_dir, "upgrade.sh"),
+        };
         let synced_manifests = sync_app_manifest_service_refs(&manifest, &manifest_dir)
             .wrap_err("failed to sync app service manifests before deployment")?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
@@ -1625,7 +1633,10 @@ impl AppDeployArgs {
 
         Ok(AppMutationOutput {
             app_name: manifest.app_name,
+            manifest_path: manifest_path.to_string_lossy().into_owned(),
             public_url: manifest.public_url,
+            workspace_dir,
+            workspace_scripts,
             mode: mode_label,
             has_mixed_planes,
             hosted_http_service_count,
@@ -1635,6 +1646,7 @@ impl AppDeployArgs {
             frontend,
             synced_manifests,
             services,
+            routes,
             notes,
         })
     }
@@ -1668,6 +1680,14 @@ impl AppStatusArgs {
         manifest.validate()?;
         let frontend =
             build_app_frontend_projection(&manifest.public_url, manifest.static_site.as_ref(), &manifest_path)?;
+        let routes = build_app_local_plan_output(&manifest_path)?.routes;
+        let workspace_dir = manifest_dir.to_string_lossy().into_owned();
+        let workspace_scripts = AppLocalWorkspaceScriptsOutput {
+            local_dev: workspace_script_path_if_exists(&manifest_dir, "local-dev.sh"),
+            build_and_sync: workspace_script_path_if_exists(&manifest_dir, "build-and-sync.sh"),
+            deploy: workspace_script_path_if_exists(&manifest_dir, "deploy.sh"),
+            upgrade: workspace_script_path_if_exists(&manifest_dir, "upgrade.sh"),
+        };
         for service_ref in &manifest.services {
             let service_path = resolve_manifest_path(&manifest_dir, &service_ref.service_manifest);
             let service_manifest: SoraServiceManifestV1 = load_json(&service_path)?;
@@ -1788,7 +1808,10 @@ impl AppStatusArgs {
 
         Ok(AppStatusOutput {
             app_name: manifest.app_name,
+            manifest_path: manifest_path.to_string_lossy().into_owned(),
             public_url: manifest.public_url,
+            workspace_dir,
+            workspace_scripts,
             source: "torii_control_plane".to_owned(),
             torii_endpoint: Some(endpoint),
             static_site: manifest.static_site,
@@ -1797,6 +1820,7 @@ impl AppStatusArgs {
             hosted_http_service_count,
             deterministic_service_count,
             services,
+            routes,
             notes,
         })
     }
@@ -2235,6 +2259,56 @@ fn resolve_required_workspace_service_name(
     })
 }
 
+fn resolve_request_payload_service_name(
+    payload_service_name: &str,
+    service_name: Option<String>,
+    container_manifest: Option<&Path>,
+    service_manifest: Option<&Path>,
+    command_name: &str,
+) -> Result<String> {
+    let payload_service_name = payload_service_name.trim();
+    let resolved_service_name = resolve_optional_workspace_service_name(
+        service_name,
+        container_manifest,
+        service_manifest,
+        command_name,
+    )?;
+
+    match resolved_service_name {
+        Some(resolved_service_name) => {
+            if !payload_service_name.is_empty() && payload_service_name != resolved_service_name {
+                return Err(eyre!(
+                    "request payload service_name `{payload_service_name}` does not match the manifest-resolved service `{resolved_service_name}`"
+                ));
+            }
+            Ok(resolved_service_name)
+        }
+        None if !payload_service_name.is_empty() => Ok(payload_service_name.to_owned()),
+        None => Err(eyre!(
+            "`{command_name}` requires request payload `service_name` or a service identity via --service-name or --container plus --service"
+        )),
+    }
+}
+
+fn resolve_request_payload_service_name_name(
+    payload_service_name: &Name,
+    service_name: Option<String>,
+    container_manifest: Option<&Path>,
+    service_manifest: Option<&Path>,
+    command_name: &str,
+) -> Result<Name> {
+    let resolved_service_name = resolve_request_payload_service_name(
+        payload_service_name.as_ref(),
+        service_name,
+        container_manifest,
+        service_manifest,
+        command_name,
+    )?;
+    resolved_service_name.parse().wrap_err_with(|| {
+        format!("resolved service name `{resolved_service_name}` is not a valid Soracloud service name")
+    })
+}
+
 fn workspace_script_path_if_exists(workspace_dir: &Path, script_name: &str) -> Option<String> {
     let path = workspace_dir.join(script_name);
     path.is_file()
@@ -2511,6 +2585,21 @@ fn attach_service_plan_to_output(
     Ok(())
 }
 
+fn maybe_service_local_plan(
+    container_manifest: Option<&Path>,
+    service_manifest: Option<&Path>,
+) -> Result<Option<ServiceLocalPlanOutput>> {
+    match (container_manifest, service_manifest) {
+        (Some(container_manifest), Some(service_manifest)) => {
+            Ok(Some(build_service_local_plan_output(
+                container_manifest,
+                service_manifest,
+            )?))
+        }
+        _ => Ok(None),
+    }
+}
+
 fn build_app_frontend_projection(
     public_url: &str,
     static_site: Option<&SoracloudAppStaticSiteV1>,
@@ -2690,6 +2779,7 @@ fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutpu
 
     Ok(AppLocalPlanOutput {
         app_name: manifest.app_name,
+        manifest_path: manifest_path.to_string_lossy().into_owned(),
         public_url: manifest.public_url,
         hostname,
         has_mixed_planes,
@@ -2929,6 +3019,10 @@ pub struct ConfigSetArgs {
 
 impl ConfigSetArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan = maybe_service_local_plan(
+            self.container.as_deref(),
+            self.service.as_deref(),
+        )?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -2952,6 +3046,8 @@ impl ConfigSetArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
+        let mut payload = payload;
+        attach_service_plan_to_output(&mut payload, service_plan)?;
         Ok(payload)
     }
 }
@@ -2984,6 +3080,10 @@ pub struct ConfigDeleteArgs {
 
 impl ConfigDeleteArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan = maybe_service_local_plan(
+            self.container.as_deref(),
+            self.service.as_deref(),
+        )?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -3004,6 +3104,8 @@ impl ConfigDeleteArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
+        let mut payload = payload;
+        attach_service_plan_to_output(&mut payload, service_plan)?;
         Ok(payload)
     }
 }
@@ -3036,6 +3138,10 @@ pub struct ConfigStatusArgs {
 
 impl ConfigStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
+        let service_plan = maybe_service_local_plan(
+            self.container.as_deref(),
+            self.service.as_deref(),
+        )?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -3050,6 +3156,8 @@ impl ConfigStatusArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
+        let mut payload = payload;
+        attach_service_plan_to_output(&mut payload, service_plan)?;
         Ok(payload)
     }
 }
@@ -3085,6 +3193,10 @@ pub struct SecretSetArgs {
 
 impl SecretSetArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan = maybe_service_local_plan(
+            self.container.as_deref(),
+            self.service.as_deref(),
+        )?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -3108,6 +3220,8 @@ impl SecretSetArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
+        let mut payload = payload;
+        attach_service_plan_to_output(&mut payload, service_plan)?;
         Ok(payload)
     }
 }
@@ -3140,6 +3254,10 @@ pub struct SecretDeleteArgs {
 
 impl SecretDeleteArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan = maybe_service_local_plan(
+            self.container.as_deref(),
+            self.service.as_deref(),
+        )?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -3160,6 +3278,8 @@ impl SecretDeleteArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
+        let mut payload = payload;
+        attach_service_plan_to_output(&mut payload, service_plan)?;
         Ok(payload)
     }
 }
@@ -3192,6 +3312,10 @@ pub struct SecretStatusArgs {
 
 impl SecretStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
+        let service_plan = maybe_service_local_plan(
+            self.container.as_deref(),
+            self.service.as_deref(),
+        )?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -3206,6 +3330,8 @@ impl SecretStatusArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
+        let mut payload = payload;
+        attach_service_plan_to_output(&mut payload, service_plan)?;
         Ok(payload)
     }
 }
@@ -4096,6 +4222,8 @@ pub struct TrainingJobStartArgs {
 
 impl TrainingJobStartArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         if self.worker_group_size == 0 {
             return Err(eyre!("--worker-group-size must be greater than zero"));
         }
@@ -4144,7 +4272,9 @@ impl TrainingJobStartArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -4185,6 +4315,8 @@ pub struct TrainingJobCheckpointArgs {
 
 impl TrainingJobCheckpointArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         if self.completed_step == 0 {
             return Err(eyre!("--completed-step must be greater than zero"));
         }
@@ -4214,7 +4346,9 @@ impl TrainingJobCheckpointArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -4249,6 +4383,8 @@ pub struct TrainingJobRetryArgs {
 
 impl TrainingJobRetryArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -4270,7 +4406,9 @@ impl TrainingJobRetryArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -4302,6 +4440,8 @@ pub struct TrainingJobStatusArgs {
 
 impl TrainingJobStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -4316,7 +4456,9 @@ impl TrainingJobStatusArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -4366,6 +4508,8 @@ pub struct ModelArtifactRegisterArgs {
 
 impl ModelArtifactRegisterArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -4392,7 +4536,9 @@ impl ModelArtifactRegisterArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -4424,6 +4570,8 @@ pub struct ModelArtifactStatusArgs {
 
 impl ModelArtifactStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -4438,7 +4586,9 @@ impl ModelArtifactStatusArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -4494,6 +4644,8 @@ pub struct ModelWeightRegisterArgs {
 
 impl ModelWeightRegisterArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -4522,7 +4674,9 @@ impl ModelWeightRegisterArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -4563,6 +4717,8 @@ pub struct ModelWeightPromoteArgs {
 
 impl ModelWeightPromoteArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -4586,7 +4742,9 @@ impl ModelWeightPromoteArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -4624,6 +4782,8 @@ pub struct ModelWeightRollbackArgs {
 
 impl ModelWeightRollbackArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -4646,7 +4806,9 @@ impl ModelWeightRollbackArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -4678,6 +4840,8 @@ pub struct ModelWeightStatusArgs {
 
 impl ModelWeightStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -4692,13 +4856,21 @@ impl ModelWeightStatusArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
 /// Arguments for `app soracloud model-upload-encryption-recipient`.
 #[derive(clap::Args, Debug)]
 pub struct ModelUploadEncryptionRecipientArgs {
+    /// Optional path to a `SoraContainerManifestV1` JSON document used to project the local service plan.
+    #[arg(long, value_name = "PATH")]
+    container: Option<PathBuf>,
+    /// Optional path to a `SoraServiceManifestV1` JSON document used to project the local service plan.
+    #[arg(long, value_name = "PATH")]
+    service: Option<PathBuf>,
     /// Torii base URL for authoritative `model/upload/encryption-recipient`.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -4712,12 +4884,15 @@ pub struct ModelUploadEncryptionRecipientArgs {
 
 impl ModelUploadEncryptionRecipientArgs {
     fn run(self) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let (_, payload) = fetch_torii_soracloud_uploaded_model_encryption_recipient(
+        let (_, mut payload) = fetch_torii_soracloud_uploaded_model_encryption_recipient(
             torii_url,
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
+        attach_service_plan_to_output(&mut payload, service_plan)?;
         Ok(payload)
     }
 }
@@ -4728,6 +4903,15 @@ pub struct ModelUploadInitArgs {
     /// Path to a `SoraUploadedModelBundleV1` JSON document.
     #[arg(long, value_name = "PATH")]
     bundle_file: PathBuf,
+    /// Service name that owns the uploaded model.
+    #[arg(long, value_name = "NAME")]
+    service_name: Option<String>,
+    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    container: Option<PathBuf>,
+    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    service: Option<PathBuf>,
     /// Torii base URL for authoritative `model/upload/init`.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -4741,7 +4925,16 @@ pub struct ModelUploadInitArgs {
 
 impl ModelUploadInitArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let bundle: SoraUploadedModelBundleV1 = load_json(&self.bundle_file)?;
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
+        let mut bundle: SoraUploadedModelBundleV1 = load_json(&self.bundle_file)?;
+        bundle.service_name = resolve_request_payload_service_name_name(
+            &bundle.service_name,
+            self.service_name,
+            self.container.as_deref(),
+            self.service.as_deref(),
+            "iroha app soracloud model-upload-init",
+        )?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_uploaded_model_bundle_init_request(bundle, authority, key_pair)?;
         let (_, payload) = post_torii_soracloud_mutation(
@@ -4751,7 +4944,9 @@ impl ModelUploadInitArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -4761,6 +4956,15 @@ pub struct ModelUploadChunkArgs {
     /// Path to a `SoraUploadedModelChunkV1` JSON document.
     #[arg(long, value_name = "PATH")]
     chunk_file: PathBuf,
+    /// Service name that owns the uploaded model.
+    #[arg(long, value_name = "NAME")]
+    service_name: Option<String>,
+    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    container: Option<PathBuf>,
+    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    service: Option<PathBuf>,
     /// Torii base URL for authoritative `model/upload/chunk`.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -4774,7 +4978,16 @@ pub struct ModelUploadChunkArgs {
 
 impl ModelUploadChunkArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let chunk: SoraUploadedModelChunkV1 = load_json(&self.chunk_file)?;
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
+        let mut chunk: SoraUploadedModelChunkV1 = load_json(&self.chunk_file)?;
+        chunk.service_name = resolve_request_payload_service_name_name(
+            &chunk.service_name,
+            self.service_name,
+            self.container.as_deref(),
+            self.service.as_deref(),
+            "iroha app soracloud model-upload-chunk",
+        )?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_uploaded_model_chunk_request(chunk, authority, key_pair)?;
         let (_, payload) = post_torii_soracloud_mutation(
@@ -4784,7 +4997,9 @@ impl ModelUploadChunkArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -4794,6 +5009,15 @@ pub struct ModelUploadFinalizeArgs {
     /// Path to an `UploadedModelFinalizePayload` JSON document.
     #[arg(long, value_name = "PATH")]
     request_file: PathBuf,
+    /// Service name that owns the uploaded model.
+    #[arg(long, value_name = "NAME")]
+    service_name: Option<String>,
+    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    container: Option<PathBuf>,
+    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    service: Option<PathBuf>,
     /// Torii base URL for authoritative `model/upload/finalize`.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -4807,7 +5031,16 @@ pub struct ModelUploadFinalizeArgs {
 
 impl ModelUploadFinalizeArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let payload: UploadedModelFinalizePayload = load_json(&self.request_file)?;
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
+        let mut payload: UploadedModelFinalizePayload = load_json(&self.request_file)?;
+        payload.service_name = resolve_request_payload_service_name(
+            payload.service_name.as_str(),
+            self.service_name,
+            self.container.as_deref(),
+            self.service.as_deref(),
+            "iroha app soracloud model-upload-finalize",
+        )?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_uploaded_model_finalize_request(payload, authority, key_pair)?;
         let (_, payload) = post_torii_soracloud_mutation(
@@ -4817,7 +5050,9 @@ impl ModelUploadFinalizeArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -4861,6 +5096,8 @@ pub struct ModelUploadStatusArgs {
 
 impl ModelUploadStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -4880,7 +5117,9 @@ impl ModelUploadStatusArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -4890,6 +5129,15 @@ pub struct ModelCompileArgs {
     /// Path to a `PrivateCompilePayload` JSON document.
     #[arg(long, value_name = "PATH")]
     request_file: PathBuf,
+    /// Service name that owns the uploaded model.
+    #[arg(long, value_name = "NAME")]
+    service_name: Option<String>,
+    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    container: Option<PathBuf>,
+    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    service: Option<PathBuf>,
     /// Torii base URL for authoritative `model/compile`.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -4903,7 +5151,16 @@ pub struct ModelCompileArgs {
 
 impl ModelCompileArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let payload: PrivateCompilePayload = load_json(&self.request_file)?;
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
+        let mut payload: PrivateCompilePayload = load_json(&self.request_file)?;
+        payload.service_name = resolve_request_payload_service_name(
+            payload.service_name.as_str(),
+            self.service_name,
+            self.container.as_deref(),
+            self.service.as_deref(),
+            "iroha app soracloud model-compile",
+        )?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_private_compile_request(payload, authority, key_pair)?;
         let (_, payload) = post_torii_soracloud_mutation(
@@ -4913,7 +5170,9 @@ impl ModelCompileArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -4957,6 +5216,8 @@ pub struct ModelCompileStatusArgs {
 
 impl ModelCompileStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -4976,7 +5237,9 @@ impl ModelCompileStatusArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -4986,6 +5249,15 @@ pub struct ModelAllowArgs {
     /// Path to an `UploadedModelAllowPayload` JSON document.
     #[arg(long, value_name = "PATH")]
     request_file: PathBuf,
+    /// Service name that owns the uploaded model.
+    #[arg(long, value_name = "NAME")]
+    service_name: Option<String>,
+    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    container: Option<PathBuf>,
+    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    service: Option<PathBuf>,
     /// Torii base URL for authoritative `model/allow`.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -4999,7 +5271,16 @@ pub struct ModelAllowArgs {
 
 impl ModelAllowArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let payload: UploadedModelAllowPayload = load_json(&self.request_file)?;
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
+        let mut payload: UploadedModelAllowPayload = load_json(&self.request_file)?;
+        payload.service_name = resolve_request_payload_service_name(
+            payload.service_name.as_str(),
+            self.service_name,
+            self.container.as_deref(),
+            self.service.as_deref(),
+            "iroha app soracloud model-allow",
+        )?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
         let request = signed_uploaded_model_allow_request(payload, authority, key_pair)?;
         let (_, payload) = post_torii_soracloud_mutation(
@@ -5009,7 +5290,9 @@ impl ModelAllowArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        Ok(payload)
+        let mut output = payload;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -5019,6 +5302,15 @@ pub struct ModelRunPrivateArgs {
     /// Path to a `SoraPrivateInferenceSessionV1` JSON document.
     #[arg(long, value_name = "PATH")]
     session_file: PathBuf,
+    /// Service name that owns the uploaded model.
+    #[arg(long, value_name = "NAME")]
+    service_name: Option<String>,
+    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    container: Option<PathBuf>,
+    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    service: Option<PathBuf>,
     /// Torii base URL for authoritative `model/run-private`.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -5032,16 +5324,27 @@ pub struct ModelRunPrivateArgs {
 
 impl ModelRunPrivateArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let session: SoraPrivateInferenceSessionV1 = load_json(&self.session_file)?;
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
+        let mut session: SoraPrivateInferenceSessionV1 = load_json(&self.session_file)?;
+        session.service_name = resolve_request_payload_service_name_name(
+            &session.service_name,
+            self.service_name,
+            self.container.as_deref(),
+            self.service.as_deref(),
+            "iroha app soracloud model-run-private",
+        )?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        execute_private_inference_start(
+        let mut output = execute_private_inference_start(
             torii_url,
             session,
             self.api_token.as_deref(),
             self.timeout_secs,
             authority,
             key_pair,
-        )
+        )?;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -5051,6 +5354,12 @@ pub struct ModelRunStatusArgs {
     /// Private inference session identifier.
     #[arg(long, value_name = "ID")]
     session_id: String,
+    /// Optional path to a `SoraContainerManifestV1` JSON document used to project the local service plan.
+    #[arg(long, value_name = "PATH")]
+    container: Option<PathBuf>,
+    /// Optional path to a `SoraServiceManifestV1` JSON document used to project the local service plan.
+    #[arg(long, value_name = "PATH")]
+    service: Option<PathBuf>,
     /// Torii base URL for authoritative `model/run-status`.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -5064,13 +5373,16 @@ pub struct ModelRunStatusArgs {
 
 impl ModelRunStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let (_, payload) = fetch_torii_soracloud_private_inference_status(
+        let (_, mut payload) = fetch_torii_soracloud_private_inference_status(
             torii_url,
             &self.session_id,
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
+        attach_service_plan_to_output(&mut payload, service_plan)?;
         Ok(payload)
     }
 }
@@ -5084,6 +5396,12 @@ pub struct ModelDecryptOutputArgs {
     /// Decryption request identifier to release.
     #[arg(long, value_name = "ID")]
     decrypt_request_id: String,
+    /// Optional path to a `SoraContainerManifestV1` JSON document used to project the local service plan.
+    #[arg(long, value_name = "PATH")]
+    container: Option<PathBuf>,
+    /// Optional path to a `SoraServiceManifestV1` JSON document used to project the local service plan.
+    #[arg(long, value_name = "PATH")]
+    service: Option<PathBuf>,
     /// Torii base URL for authoritative `model/decrypt-output`.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -5097,8 +5415,10 @@ pub struct ModelDecryptOutputArgs {
 
 impl ModelDecryptOutputArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        execute_private_inference_output_release(
+        let mut output = execute_private_inference_output_release(
             torii_url,
             &self.session_id,
             &self.decrypt_request_id,
@@ -5106,7 +5426,9 @@ impl ModelDecryptOutputArgs {
             self.timeout_secs,
             authority,
             key_pair,
-        )
+        )?;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -5122,6 +5444,15 @@ pub struct ModelPublishPrivateArgs {
     /// Optional path where the prepared publish plan should be written.
     #[arg(long, value_name = "PATH", requires = "draft_file")]
     emit_plan_file: Option<PathBuf>,
+    /// Optional service binding for the uploaded-model publish workflow.
+    #[arg(long, value_name = "NAME")]
+    service_name: Option<String>,
+    /// Optional path to a `SoraContainerManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    container: Option<PathBuf>,
+    /// Optional path to a `SoraServiceManifestV1` JSON document used to resolve the service name.
+    #[arg(long, value_name = "PATH")]
+    service: Option<PathBuf>,
     /// Torii base URL for authoritative uploaded-model control-plane routes.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -5135,34 +5466,49 @@ pub struct ModelPublishPrivateArgs {
 
 impl ModelPublishPrivateArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let (_, recipient_payload) = fetch_torii_soracloud_uploaded_model_encryption_recipient(
+        enum PendingPrivateModelPublishInput {
+            Plan(PrivateModelPublishPlan),
+            Draft(PathBuf, PrivateModelPublishDraft),
+        }
+
+        let Self {
+            plan_file,
+            draft_file,
+            emit_plan_file,
+            service_name,
+            container,
+            service,
             torii_url,
-            self.api_token.as_deref(),
-            self.timeout_secs,
-        )?;
-        let recipient_value = recipient_payload.get("recipient").cloned().ok_or_else(|| {
-            eyre!("uploaded-model encryption recipient response is missing `recipient`")
-        })?;
-        let recipient: SoraUploadedModelEncryptionRecipientV1 =
-            json::from_value(recipient_value)
-                .wrap_err("failed to decode uploaded-model encryption recipient response")?;
+            api_token,
+            timeout_secs,
+        } = self;
+        let container_manifest = container.as_deref();
+        let service_manifest = service.as_deref();
+        let service_plan = maybe_service_local_plan(container_manifest, service_manifest)?;
 
         let mut prepared_plan_path = None;
-        let plan = match (self.plan_file.as_deref(), self.draft_file.as_deref()) {
-            (Some(plan_file), None) => load_json(plan_file)?,
-            (None, Some(draft_file)) => {
-                let draft: PrivateModelPublishDraft = load_json(draft_file)?;
-                let plan = prepare_private_model_publish_plan_from_draft(
-                    draft_file,
-                    draft,
-                    recipient.clone(),
+        let pending_input = match (plan_file.as_deref(), draft_file.as_deref()) {
+            (Some(plan_file), None) => {
+                let plan: PrivateModelPublishPlan = load_json(plan_file)?;
+                resolve_request_payload_service_name_name(
+                    &plan.bundle.service_name,
+                    service_name.clone(),
+                    container_manifest,
+                    service_manifest,
+                    "iroha app soracloud model-publish-private",
                 )?;
-                if let Some(path) = self.emit_plan_file.as_deref() {
-                    write_json(path, &plan)?;
-                    prepared_plan_path = Some(path.display().to_string());
-                }
-                plan
+                PendingPrivateModelPublishInput::Plan(plan)
+            }
+            (None, Some(draft_file)) => {
+                let mut draft: PrivateModelPublishDraft = load_json(draft_file)?;
+                draft.service_name = resolve_request_payload_service_name(
+                    &draft.service_name,
+                    service_name.clone(),
+                    container_manifest,
+                    service_manifest,
+                    "iroha app soracloud model-publish-private",
+                )?;
+                PendingPrivateModelPublishInput::Draft(draft_file.to_path_buf(), draft)
             }
             (Some(_), Some(_)) => {
                 return Err(eyre!(
@@ -5175,13 +5521,37 @@ impl ModelPublishPrivateArgs {
                 ));
             }
         };
+        let torii_url = require_torii_url(torii_url.as_deref())?;
+        let (_, recipient_payload) = fetch_torii_soracloud_uploaded_model_encryption_recipient(
+            torii_url,
+            api_token.as_deref(),
+            timeout_secs,
+        )?;
+        let recipient_value = recipient_payload.get("recipient").cloned().ok_or_else(|| {
+            eyre!("uploaded-model encryption recipient response is missing `recipient`")
+        })?;
+        let recipient: SoraUploadedModelEncryptionRecipientV1 =
+            json::from_value(recipient_value)
+                .wrap_err("failed to decode uploaded-model encryption recipient response")?;
+        let plan = match pending_input {
+            PendingPrivateModelPublishInput::Plan(plan) => plan,
+            PendingPrivateModelPublishInput::Draft(draft_path, draft) => {
+                let plan =
+                    prepare_private_model_publish_plan_from_draft(&draft_path, draft, recipient.clone())?;
+                if let Some(path) = emit_plan_file.as_deref() {
+                    write_json(path, &plan)?;
+                    prepared_plan_path = Some(path.display().to_string());
+                }
+                plan
+            }
+        };
 
         let mut output = execute_private_model_publish_plan(
             torii_url,
             plan,
             Some(recipient),
-            self.api_token.as_deref(),
-            self.timeout_secs,
+            api_token.as_deref(),
+            timeout_secs,
             authority,
             key_pair,
         )?;
@@ -5190,6 +5560,7 @@ impl ModelPublishPrivateArgs {
         {
             root.insert("prepared_plan_file".to_owned(), json::Value::String(path));
         }
+        attach_service_plan_to_output(&mut output, service_plan)?;
         Ok(output)
     }
 }
@@ -5243,6 +5614,8 @@ pub struct HfDeployArgs {
 
 impl HfDeployArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -5281,7 +5654,9 @@ impl HfDeployArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        build_hf_mutation_output(payload, &status_payload)
+        let mut output = build_hf_mutation_output(payload, &status_payload)?;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -5303,6 +5678,12 @@ pub struct HfStatusArgs {
     /// Optional account filter for membership-specific status.
     #[arg(long, value_name = "ACCOUNT")]
     account_id: Option<String>,
+    /// Optional path to a `SoraContainerManifestV1` JSON document used to project the local service plan.
+    #[arg(long, value_name = "PATH")]
+    container: Option<PathBuf>,
+    /// Optional path to a `SoraServiceManifestV1` JSON document used to project the local service plan.
+    #[arg(long, value_name = "PATH")]
+    service: Option<PathBuf>,
     /// Torii base URL for authoritative `hf/status`.
     #[arg(long, value_name = "URL")]
     torii_url: Option<String>,
@@ -5316,8 +5697,10 @@ pub struct HfStatusArgs {
 
 impl HfStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?;
-        let (_, payload) = fetch_torii_soracloud_hf_status(
+        let (_, mut payload) = fetch_torii_soracloud_hf_status(
             torii_url,
             &self.repo_id,
             self.revision.as_deref(),
@@ -5327,6 +5710,7 @@ impl HfStatusArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
+        attach_service_plan_to_output(&mut payload, service_plan)?;
         Ok(payload)
     }
 }
@@ -5371,6 +5755,8 @@ pub struct HfLeaseLeaveArgs {
 
 impl HfLeaseLeaveArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_optional_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -5406,7 +5792,9 @@ impl HfLeaseLeaveArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        build_hf_mutation_output(payload, &status_payload)
+        let mut output = build_hf_mutation_output(payload, &status_payload)?;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -5459,6 +5847,8 @@ pub struct HfLeaseRenewArgs {
 
 impl HfLeaseRenewArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -5497,7 +5887,9 @@ impl HfLeaseRenewArgs {
             self.api_token.as_deref(),
             self.timeout_secs,
         )?;
-        build_hf_mutation_output(payload, &status_payload)
+        let mut output = build_hf_mutation_output(payload, &status_payload)?;
+        attach_service_plan_to_output(&mut output, service_plan)?;
+        Ok(output)
     }
 }
 
@@ -6092,7 +6484,10 @@ struct AppInitOutput {
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppMutationOutput {
     app_name: String,
+    manifest_path: String,
     public_url: String,
+    workspace_dir: String,
+    workspace_scripts: AppLocalWorkspaceScriptsOutput,
     mode: String,
     has_mixed_planes: bool,
     hosted_http_service_count: u32,
@@ -6109,6 +6504,8 @@ struct AppMutationOutput {
     #[norito(default)]
     synced_manifests: Vec<SyncManifestEntryOutput>,
     services: Vec<AppServiceMutationOutput>,
+    #[norito(default)]
+    routes: Vec<AppLocalRoutePlanOutput>,
     #[norito(default)]
     notes: Vec<String>,
 }
@@ -6304,7 +6701,10 @@ struct ServiceLocalRouteOutput {
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppStatusOutput {
     app_name: String,
+    manifest_path: String,
     public_url: String,
+    workspace_dir: String,
+    workspace_scripts: AppLocalWorkspaceScriptsOutput,
     source: String,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -6319,6 +6719,8 @@ struct AppStatusOutput {
     hosted_http_service_count: u32,
     deterministic_service_count: u32,
     services: Vec<AppServiceStatusOutput>,
+    #[norito(default)]
+    routes: Vec<AppLocalRoutePlanOutput>,
     #[norito(default)]
     notes: Vec<String>,
 }
@@ -6352,6 +6754,7 @@ struct AppServiceStatusOutput {
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppLocalPlanOutput {
     app_name: String,
+    manifest_path: String,
     public_url: String,
     hostname: String,
     has_mixed_planes: bool,
@@ -17634,10 +18037,17 @@ iroha app soracloud rollout --container ./container_manifest.json --service ./se
 ```
 
 Other service-bound Soracloud commands, including `hf-deploy`,
-`hf-lease-renew`, `hf-lease-leave`, `training-job-*`,
-`model-artifact-*`, `model-weight-*`, `model-upload-status`, and
-`model-compile-status`, also accept the same `--container` plus
-`--service` manifest pair instead of a manual `--service-name`.
+`hf-status`, `hf-lease-renew`, `hf-lease-leave`, `training-job-*`,
+`model-artifact-*`, `model-weight-*`,
+`model-upload-encryption-recipient`, `model-upload-init`,
+`model-upload-chunk`, `model-upload-finalize`, `model-upload-status`,
+`model-compile`, `model-compile-status`, `model-allow`,
+`model-run-private`, `model-run-status`, `model-decrypt-output`, and
+`model-publish-private`, also accept the same `--container` plus
+`--service` manifest pair instead of a manual `--service-name` where a
+service name applies. The manifest-pair forms of those commands, plus
+`config-*`, `secret-*`, `rollback`, and `rollout`, also attach the same
+`service_plan` projection that `local-plan` reports.
 
 The generated service name will resolve under `https://{package_name}.sora/api/v1`.
 "#
@@ -18652,9 +19062,9 @@ Then inspect the mixed route split from the app manifest:
 iroha app soracloud app local-plan --manifest ./app_manifest.json
 ```
 
-`app local-plan` prints each service's resolved
-`container_manifest_path`, `service_manifest_path`, child `workspace_dir`,
-and child service scripts, which you can feed directly into service-scoped
+`app local-plan` prints the root `manifest_path`, then each service's resolved
+`container_manifest_path`, `service_manifest_path`, child `workspace_dir`, and
+child service scripts, which you can feed directly into service-scoped
 Soracloud commands.
 
 ## Build everything
@@ -18693,6 +19103,11 @@ Each service entry in the app manifest carries a `bundle_file`, so the sync
 step refreshes both `container.bundle_hash` and the referenced service
 container hash before deploy.
 
+Direct `iroha app soracloud app deploy` responses keep the root
+`manifest_path`, root `workspace_dir`, root `workspace_scripts`, the frontend
+publish projection, one manifest-derived child service entry per app service,
+and the top-level mixed `routes` split that `app local-plan` reports.
+
 ## Upgrade the mixed app
 
 ```bash
@@ -18704,6 +19119,10 @@ iroha app soracloud app upgrade-workspace --manifest ./app_manifest.json --torii
 `upgrade.sh` follows the same rebuild and manifest-refresh path, then submits
 `iroha app soracloud app upgrade`.
 
+Direct `iroha app soracloud app upgrade` responses keep the same root
+manifest/workspace metadata, frontend, service, and top-level `routes`
+projection as app deploy.
+
 ## Inspect deployed status
 
 ```bash
@@ -18711,8 +19130,10 @@ iroha app soracloud app status --manifest ./app_manifest.json --torii-url http:/
 ```
 
 `app status` keeps one entry per child service manifest and reports the child
-manifest paths, `workspace_dir`, plane/runtime, route prefix, the frontend
-publish projection, and the matched Torii control-plane status when present.
+manifest paths, the root `manifest_path`, root `workspace_dir`, root
+`workspace_scripts`, plane/runtime, route prefix, the top-level `routes`
+split, the frontend publish projection, and the matched Torii control-plane
+status when present.
 
 Service-scoped Soracloud commands still operate on the child service manifests:
 
@@ -18720,6 +19141,10 @@ Service-scoped Soracloud commands still operate on the child service manifests:
   `services/live/service_manifest.json` for live-plane commands
 - use `services/vault/container_manifest.json` plus
   `services/vault/service_manifest.json` for vault-plane commands
+
+When those commands are driven by `--container` plus `--service`, their
+responses also attach the same local `service_plan` projection that
+`iroha app soracloud local-plan` reports.
 
 The generated API origin is `https://{package_name}.sora`, and the frontend is
 served from the published `cid_gateway_url` under
@@ -19024,8 +19449,9 @@ iroha app soracloud app local-dev --manifest ./app_manifest.json
 ```
 
 `iroha app soracloud app local-plan --manifest ./app_manifest.json` also prints
-the resolved child manifest paths, child `workspace_dir`, and child service scripts
-for service-scoped Soracloud commands.
+the root `manifest_path`, the resolved child manifest paths, child
+`workspace_dir`, and child service scripts for service-scoped Soracloud
+commands.
 
 ## Build everything
 
@@ -19049,6 +19475,11 @@ iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-
 iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
 ```
 
+Direct `iroha app soracloud app deploy` responses keep the root
+`manifest_path`, root `workspace_dir`, root `workspace_scripts`, the frontend
+publish projection, one manifest-derived child service entry per app service,
+and the top-level `routes` split that `app local-plan` reports.
+
 ## Upgrade
 
 ```bash
@@ -19057,6 +19488,10 @@ iroha app soracloud app upgrade-workspace --manifest ./app_manifest.json --torii
 iroha app soracloud app upgrade-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
 ```
 
+Direct `iroha app soracloud app upgrade` responses keep the same root
+manifest/workspace metadata, frontend, service, and top-level `routes`
+projection as app deploy.
+
 ## Inspect deployed status
 
 ```bash
@@ -19064,11 +19499,17 @@ iroha app soracloud app status --manifest ./app_manifest.json --torii-url http:/
 ```
 
 `app status` keeps one entry per child service manifest and reports the child
-manifest paths, `workspace_dir`, plane/runtime, route prefix, the frontend
-publish projection, and the matched Torii control-plane status when present.
+manifest paths, the root `manifest_path`, root `workspace_dir`, root
+`workspace_scripts`, plane/runtime, route prefix, the top-level mixed `routes`
+split, the frontend publish projection, and the matched Torii control-plane
+status when present.
 
 Service-scoped Soracloud commands still operate on the child API manifests at
 `services/api/container_manifest.json` plus `services/api/service_manifest.json`.
+
+When those commands are driven by `--container` plus `--service`, their
+responses also attach the same local `service_plan` projection that
+`iroha app soracloud local-plan` reports.
 
 The frontend stays bound at `https://{package_name}.sora/`, and the API stays on
 the same host under `https://{package_name}.sora/api/healthz`.
@@ -19321,6 +19762,25 @@ mod tests {
         path
     }
 
+    fn assert_manifest_pair_service_plan(output: &norito::json::Value) {
+        assert_eq!(
+            output
+                .get("service_plan")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|plan| plan.get("route_path_prefix"))
+                .and_then(norito::json::Value::as_str),
+            Some("/api/v1")
+        );
+        assert!(output
+            .get("service_plan")
+            .and_then(norito::json::Value::as_object)
+            .and_then(|plan| plan.get("workspace_scripts"))
+            .and_then(norito::json::Value::as_object)
+            .and_then(|scripts| scripts.get("local_dev"))
+            .and_then(norito::json::Value::as_str)
+            .is_some_and(|path| path.ends_with("local-dev.sh")));
+    }
+
     fn fixture_container() -> SoraContainerManifestV1 {
         load_json(&workspace_fixture(DEFAULT_CONTAINER_MANIFEST)).expect("container fixture")
     }
@@ -19499,6 +19959,17 @@ mod tests {
             ),
             privacy_mode: finalize.privacy_mode,
             require_model_inference: true,
+        }
+    }
+
+    fn sample_private_compile_payload() -> PrivateCompilePayload {
+        let bundle = sample_uploaded_model_bundle();
+        PrivateCompilePayload {
+            service_name: bundle.service_name.to_string(),
+            model_id: bundle.model_id,
+            weight_version: bundle.weight_version,
+            bundle_root: bundle.bundle_root,
+            compile_profile: sample_private_compile_profile(),
         }
     }
 
@@ -20356,6 +20827,22 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("echo_console")
         );
+        assert_eq!(
+            output
+                .get("service_plan")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|plan| plan.get("route_path_prefix"))
+                .and_then(norito::json::Value::as_str),
+            Some("/api/v1")
+        );
+        assert!(output
+            .get("service_plan")
+            .and_then(norito::json::Value::as_object)
+            .and_then(|plan| plan.get("workspace_scripts"))
+            .and_then(norito::json::Value::as_object)
+            .and_then(|scripts| scripts.get("build_and_sync"))
+            .and_then(norito::json::Value::as_str)
+            .is_some_and(|path| path.ends_with("build-and-sync.sh")));
         let request = server
             .requests()
             .into_iter()
@@ -20364,6 +20851,80 @@ mod tests {
         assert_eq!(
             request.path,
             "/v1/soracloud/service/config/status?service_name=echo_console&config_name=demo_config"
+        );
+    }
+
+    #[test]
+    fn secret_status_args_can_resolve_service_name_from_manifest_pair() {
+        let dir = temp_dir("secret_status_service_filter_from_manifest_pair");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "echo_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        let response = norito::json!({
+            "service_name": "echo_console",
+            "secrets": [
+                {
+                    "secret_name": "demo_secret"
+                }
+            ]
+        });
+        let server = MockHttpServer::start(BTreeMap::from([(
+            "/v1/soracloud/service/secret/status?service_name=echo_console&secret_name=demo_secret".to_owned(),
+            MockHttpResponse {
+                content_type: "application/json",
+                body: json::to_vec(&response).expect("encode secret status response"),
+            },
+        )]));
+
+        let output = SecretStatusArgs {
+            service_name: None,
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            secret_name: Some("demo_secret".to_owned()),
+            torii_url: Some(server.base_url.clone()),
+            api_token: Some("token".to_owned()),
+            timeout_secs: 5,
+        }
+        .run()
+        .expect("secret-status should succeed");
+
+        assert_eq!(
+            output
+                .get("service_name")
+                .and_then(norito::json::Value::as_str),
+            Some("echo_console")
+        );
+        assert_eq!(
+            output
+                .get("service_plan")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|plan| plan.get("route_path_prefix"))
+                .and_then(norito::json::Value::as_str),
+            Some("/api/v1")
+        );
+        assert!(output
+            .get("service_plan")
+            .and_then(norito::json::Value::as_object)
+            .and_then(|plan| plan.get("workspace_scripts"))
+            .and_then(norito::json::Value::as_object)
+            .and_then(|scripts| scripts.get("upgrade"))
+            .and_then(norito::json::Value::as_str)
+            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        let request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "GET")
+            .expect("secret-status request");
+        assert_eq!(
+            request.path,
+            "/v1/soracloud/service/secret/status?service_name=echo_console&secret_name=demo_secret"
         );
     }
 
@@ -20617,7 +21178,7 @@ mod tests {
         ]));
 
         install_mock_submission_config(&authority, &key_pair);
-        HfDeployArgs {
+        let output = HfDeployArgs {
             repo_id: "openai/gpt-oss".to_owned(),
             revision: None,
             model_name: None,
@@ -20635,6 +21196,7 @@ mod tests {
         }
         .run(&authority, &key_pair)
         .expect("hf deploy should succeed");
+        assert_manifest_pair_service_plan(&output);
 
         let deploy_request = server
             .requests()
@@ -20650,6 +21212,81 @@ mod tests {
                 .and_then(|payload| payload.get("service_name"))
                 .and_then(norito::json::Value::as_str),
             Some("echo_console")
+        );
+    }
+
+    #[test]
+    fn hf_status_args_can_attach_service_plan_from_manifest_pair() {
+        let dir = temp_dir("hf_status_service_plan_from_manifest_pair");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "echo_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        let status_payload = norito::json!({
+            "repo_id": "openai/gpt-oss",
+            "storage_class": "Warm",
+            "lease_term_ms": 604_800_000,
+            "members": []
+        });
+        let status_path = mock_hf_status_path(
+            "http://127.0.0.1:1",
+            "openai/gpt-oss",
+            None,
+            StorageClass::Warm,
+            604_800_000,
+            None,
+        );
+        let server = MockHttpServer::start(BTreeMap::from([(
+            status_path.replace("http://127.0.0.1:1", ""),
+            MockHttpResponse {
+                content_type: "application/json",
+                body: json::to_vec(&status_payload).expect("encode hf status response"),
+            },
+        )]));
+
+        let output = HfStatusArgs {
+            repo_id: "openai/gpt-oss".to_owned(),
+            revision: None,
+            storage_class: HfStorageClassArg::Warm,
+            lease_term_ms: 604_800_000,
+            account_id: None,
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run()
+        .expect("hf status should succeed");
+
+        assert_manifest_pair_service_plan(&output);
+        assert_eq!(
+            output
+                .get("repo_id")
+                .and_then(norito::json::Value::as_str),
+            Some("openai/gpt-oss")
+        );
+        let request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "GET")
+            .expect("hf status request");
+        assert_eq!(
+            request.path,
+            mock_hf_status_path(
+                &server.base_url,
+                "openai/gpt-oss",
+                None,
+                StorageClass::Warm,
+                604_800_000,
+                None,
+            )
         );
     }
 
@@ -20703,7 +21340,7 @@ mod tests {
         ]));
 
         install_mock_submission_config(&authority, &key_pair);
-        HfLeaseLeaveArgs {
+        let output = HfLeaseLeaveArgs {
             repo_id: "openai/gpt-oss".to_owned(),
             revision: None,
             storage_class: HfStorageClassArg::Warm,
@@ -20718,6 +21355,7 @@ mod tests {
         }
         .run(&authority, &key_pair)
         .expect("hf lease leave should succeed");
+        assert_manifest_pair_service_plan(&output);
 
         let leave_request = server
             .requests()
@@ -20788,7 +21426,7 @@ mod tests {
         ]));
 
         install_mock_submission_config(&authority, &key_pair);
-        HfLeaseRenewArgs {
+        let output = HfLeaseRenewArgs {
             repo_id: "openai/gpt-oss".to_owned(),
             revision: None,
             model_name: None,
@@ -20806,6 +21444,7 @@ mod tests {
         }
         .run(&authority, &key_pair)
         .expect("hf lease renew should succeed");
+        assert_manifest_pair_service_plan(&output);
 
         let renew_request = server
             .requests()
@@ -20851,7 +21490,7 @@ mod tests {
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
-        TrainingJobStartArgs {
+        let output = TrainingJobStartArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
             service: Some(dir.join("service_manifest.json")),
@@ -20870,6 +21509,7 @@ mod tests {
         }
         .run(&authority, &key_pair)
         .expect("training-job-start should succeed");
+        assert_manifest_pair_service_plan(&output);
 
         let request = server
             .requests()
@@ -20914,7 +21554,7 @@ mod tests {
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
-        TrainingJobCheckpointArgs {
+        let output = TrainingJobCheckpointArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
             service: Some(dir.join("service_manifest.json")),
@@ -20928,6 +21568,7 @@ mod tests {
         }
         .run(&authority, &key_pair)
         .expect("training-job-checkpoint should succeed");
+        assert_manifest_pair_service_plan(&output);
 
         let request = server
             .requests()
@@ -20973,7 +21614,7 @@ mod tests {
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
-        TrainingJobRetryArgs {
+        let output = TrainingJobRetryArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
             service: Some(dir.join("service_manifest.json")),
@@ -20985,6 +21626,7 @@ mod tests {
         }
         .run(&authority, &key_pair)
         .expect("training-job-retry should succeed");
+        assert_manifest_pair_service_plan(&output);
 
         let request = server
             .requests()
@@ -21048,6 +21690,7 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("echo_console")
         );
+        assert_manifest_pair_service_plan(&output);
         let request = server
             .requests()
             .into_iter()
@@ -21084,7 +21727,7 @@ mod tests {
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
-        ModelArtifactRegisterArgs {
+        let output = ModelArtifactRegisterArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
             service: Some(dir.join("service_manifest.json")),
@@ -21101,6 +21744,7 @@ mod tests {
         }
         .run(&authority, &key_pair)
         .expect("model-artifact-register should succeed");
+        assert_manifest_pair_service_plan(&output);
 
         let request = server
             .requests()
@@ -21166,6 +21810,7 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("echo_console")
         );
+        assert_manifest_pair_service_plan(&output);
         let request = server
             .requests()
             .into_iter()
@@ -21202,7 +21847,7 @@ mod tests {
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
-        ModelWeightRegisterArgs {
+        let output = ModelWeightRegisterArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
             service: Some(dir.join("service_manifest.json")),
@@ -21221,6 +21866,7 @@ mod tests {
         }
         .run(&authority, &key_pair)
         .expect("model-weight-register should succeed");
+        assert_manifest_pair_service_plan(&output);
 
         let request = server
             .requests()
@@ -21265,7 +21911,7 @@ mod tests {
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
-        ModelWeightPromoteArgs {
+        let output = ModelWeightPromoteArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
             service: Some(dir.join("service_manifest.json")),
@@ -21279,6 +21925,7 @@ mod tests {
         }
         .run(&authority, &key_pair)
         .expect("model-weight-promote should succeed");
+        assert_manifest_pair_service_plan(&output);
 
         let request = server
             .requests()
@@ -21323,7 +21970,7 @@ mod tests {
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
         install_mock_submission_config(&authority, &key_pair);
-        ModelWeightRollbackArgs {
+        let output = ModelWeightRollbackArgs {
             service_name: None,
             container: Some(dir.join("container_manifest.json")),
             service: Some(dir.join("service_manifest.json")),
@@ -21336,6 +21983,7 @@ mod tests {
         }
         .run(&authority, &key_pair)
         .expect("model-weight-rollback should succeed");
+        assert_manifest_pair_service_plan(&output);
 
         let request = server
             .requests()
@@ -21400,6 +22048,7 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("echo_console")
         );
+        assert_manifest_pair_service_plan(&output);
         let request = server
             .requests()
             .into_iter()
@@ -21460,6 +22109,7 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("echo_console")
         );
+        assert_manifest_pair_service_plan(&output);
         let request = server
             .requests()
             .into_iter()
@@ -21521,6 +22171,7 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("echo_console")
         );
+        assert_manifest_pair_service_plan(&output);
         let request = server
             .requests()
             .into_iter()
@@ -21530,6 +22181,879 @@ mod tests {
             request.path,
             "/v1/soracloud/model/compile/status?service_name=echo_console&weight_version=v1&model_name=fare-model"
         );
+    }
+
+    #[test]
+    fn model_compile_args_can_resolve_service_name_from_manifest_pair() {
+        let dir = temp_dir("model_compile_service_name_from_manifest_pair");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "echo_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        let request_file = dir.join("private_compile_payload.json");
+        let mut payload = sample_private_compile_payload();
+        payload.service_name.clear();
+        fs::write(
+            &request_file,
+            json::to_vec(&payload).expect("encode compile payload"),
+        )
+        .expect("write compile payload");
+
+        let response = norito::json!({ "tx_instructions": [] });
+        let server = MockHttpServer::start(BTreeMap::from([(
+            "/v1/soracloud/model/compile".to_owned(),
+            MockHttpResponse {
+                content_type: "application/json",
+                body: json::to_vec(&response).expect("encode model compile response"),
+            },
+        )]));
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        install_mock_submission_config(&authority, &key_pair);
+        let output = ModelCompileArgs {
+            request_file,
+            service_name: None,
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(&authority, &key_pair)
+        .expect("model-compile should succeed");
+
+        assert_manifest_pair_service_plan(&output);
+        let request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/model/compile")
+            .expect("model compile request");
+        let body: norito::json::Value =
+            json::from_slice(&request.body).expect("decode model compile request");
+        assert_eq!(
+            body.get("payload")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|payload| payload.get("service_name"))
+                .and_then(norito::json::Value::as_str),
+            Some("echo_console")
+        );
+    }
+
+    #[test]
+    fn model_compile_args_reject_conflicting_payload_service_name_against_manifest_pair() {
+        let dir = temp_dir("model_compile_conflicting_service_name_from_manifest_pair");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "echo_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        let request_file = dir.join("private_compile_payload.json");
+        let payload = sample_private_compile_payload();
+        fs::write(
+            &request_file,
+            json::to_vec(&payload).expect("encode compile payload"),
+        )
+        .expect("write compile payload");
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let error = ModelCompileArgs {
+            request_file,
+            service_name: None,
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            torii_url: Some("http://127.0.0.1:1".to_owned()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(&authority, &key_pair)
+        .expect_err("conflicting compile payload service_name must fail");
+
+        assert!(
+            error
+                .to_string()
+                .contains("request payload service_name `private_models` does not match the manifest-resolved service `echo_console`")
+        );
+    }
+
+    #[test]
+    fn model_allow_args_can_resolve_service_name_from_manifest_pair() {
+        let dir = temp_dir("model_allow_service_name_from_manifest_pair");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "echo_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        let request_file = dir.join("uploaded_model_allow_payload.json");
+        let mut payload = sample_uploaded_model_allow_payload();
+        payload.service_name.clear();
+        fs::write(
+            &request_file,
+            json::to_vec(&payload).expect("encode allow payload"),
+        )
+        .expect("write allow payload");
+
+        let response = norito::json!({ "tx_instructions": [] });
+        let server = MockHttpServer::start(BTreeMap::from([(
+            "/v1/soracloud/model/allow".to_owned(),
+            MockHttpResponse {
+                content_type: "application/json",
+                body: json::to_vec(&response).expect("encode model allow response"),
+            },
+        )]));
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        install_mock_submission_config(&authority, &key_pair);
+        let output = ModelAllowArgs {
+            request_file,
+            service_name: None,
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(&authority, &key_pair)
+        .expect("model-allow should succeed");
+
+        assert_manifest_pair_service_plan(&output);
+        let request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/model/allow")
+            .expect("model allow request");
+        let body: norito::json::Value =
+            json::from_slice(&request.body).expect("decode model allow request");
+        assert_eq!(
+            body.get("payload")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|payload| payload.get("service_name"))
+                .and_then(norito::json::Value::as_str),
+            Some("echo_console")
+        );
+    }
+
+    #[test]
+    fn model_upload_init_args_can_resolve_service_name_from_manifest_pair() {
+        let dir = temp_dir("model_upload_init_service_name_from_manifest_pair");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "echo_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        let bundle_file = dir.join("uploaded_model_bundle.json");
+        let mut bundle = sample_uploaded_model_bundle();
+        bundle.service_name = "echo_console".parse().expect("service name");
+        fs::write(&bundle_file, json::to_vec(&bundle).expect("encode bundle"))
+            .expect("write bundle");
+
+        let response = norito::json!({ "tx_instructions": [] });
+        let server = MockHttpServer::start(BTreeMap::from([(
+            "/v1/soracloud/model/upload/init".to_owned(),
+            MockHttpResponse {
+                content_type: "application/json",
+                body: json::to_vec(&response).expect("encode model upload init response"),
+            },
+        )]));
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        install_mock_submission_config(&authority, &key_pair);
+        let output = ModelUploadInitArgs {
+            bundle_file,
+            service_name: None,
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(&authority, &key_pair)
+        .expect("model-upload-init should succeed");
+
+        assert_manifest_pair_service_plan(&output);
+        let request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/model/upload/init")
+            .expect("model upload init request");
+        let body: norito::json::Value =
+            json::from_slice(&request.body).expect("decode model upload init request");
+        assert_eq!(
+            body.get("payload")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|payload| payload.get("bundle"))
+                .and_then(norito::json::Value::as_object)
+                .and_then(|bundle| bundle.get("service_name"))
+                .and_then(norito::json::Value::as_str),
+            Some("echo_console")
+        );
+    }
+
+    #[test]
+    fn model_upload_encryption_recipient_args_can_attach_service_plan_from_manifest_pair() {
+        let dir = temp_dir("model_upload_encryption_recipient_service_plan_from_manifest_pair");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "echo_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        let recipient_response = json::Value::Object(norito::json::Map::from_iter([(
+            "recipient".to_owned(),
+            json::to_value(&sample_uploaded_model_encryption_recipient())
+                .expect("encode uploaded-model recipient"),
+        )]));
+        let server = MockHttpServer::start(BTreeMap::from([(
+            "/v1/soracloud/model/upload/encryption-recipient".to_owned(),
+            MockHttpResponse {
+                content_type: "application/json",
+                body: json::to_vec(&recipient_response)
+                    .expect("encode uploaded-model recipient response"),
+            },
+        )]));
+
+        let output = ModelUploadEncryptionRecipientArgs {
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run()
+        .expect("model-upload-encryption-recipient should succeed");
+
+        assert_manifest_pair_service_plan(&output);
+        assert!(output
+            .get("recipient")
+            .and_then(norito::json::Value::as_object)
+            .is_some());
+        let request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "GET")
+            .expect("model upload encryption recipient request");
+        assert_eq!(
+            request.path,
+            "/v1/soracloud/model/upload/encryption-recipient"
+        );
+    }
+
+    #[test]
+    fn model_upload_init_args_reject_conflicting_payload_service_name_against_manifest_pair() {
+        let dir = temp_dir("model_upload_init_conflicting_service_name_from_manifest_pair");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "echo_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        let bundle_file = dir.join("uploaded_model_bundle.json");
+        let bundle = sample_uploaded_model_bundle();
+        fs::write(&bundle_file, json::to_vec(&bundle).expect("encode bundle"))
+            .expect("write bundle");
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let error = ModelUploadInitArgs {
+            bundle_file,
+            service_name: None,
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            torii_url: Some("http://127.0.0.1:1".to_owned()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(&authority, &key_pair)
+        .expect_err("conflicting upload bundle service_name must fail");
+
+        assert!(error
+            .to_string()
+            .contains("request payload service_name `private_models` does not match the manifest-resolved service `echo_console`"));
+    }
+
+    #[test]
+    fn model_upload_chunk_args_can_resolve_service_name_from_manifest_pair() {
+        let dir = temp_dir("model_upload_chunk_service_name_from_manifest_pair");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "echo_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        let chunk_file = dir.join("uploaded_model_chunk.json");
+        let mut chunk = sample_uploaded_model_chunks()
+            .into_iter()
+            .next()
+            .expect("sample chunk");
+        chunk.service_name = "echo_console".parse().expect("service name");
+        fs::write(&chunk_file, json::to_vec(&chunk).expect("encode chunk"))
+            .expect("write chunk");
+
+        let response = norito::json!({ "tx_instructions": [] });
+        let server = MockHttpServer::start(BTreeMap::from([(
+            "/v1/soracloud/model/upload/chunk".to_owned(),
+            MockHttpResponse {
+                content_type: "application/json",
+                body: json::to_vec(&response).expect("encode model upload chunk response"),
+            },
+        )]));
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        install_mock_submission_config(&authority, &key_pair);
+        let output = ModelUploadChunkArgs {
+            chunk_file,
+            service_name: None,
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(&authority, &key_pair)
+        .expect("model-upload-chunk should succeed");
+
+        assert_manifest_pair_service_plan(&output);
+        let request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/model/upload/chunk")
+            .expect("model upload chunk request");
+        let body: norito::json::Value =
+            json::from_slice(&request.body).expect("decode model upload chunk request");
+        assert_eq!(
+            body.get("payload")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|payload| payload.get("chunk"))
+                .and_then(norito::json::Value::as_object)
+                .and_then(|chunk| chunk.get("service_name"))
+                .and_then(norito::json::Value::as_str),
+            Some("echo_console")
+        );
+    }
+
+    #[test]
+    fn model_upload_finalize_args_can_resolve_service_name_from_manifest_pair() {
+        let dir = temp_dir("model_upload_finalize_service_name_from_manifest_pair");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "echo_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        let request_file = dir.join("uploaded_model_finalize_payload.json");
+        let mut payload = sample_uploaded_model_finalize_payload();
+        payload.service_name = "echo_console".to_owned();
+        fs::write(
+            &request_file,
+            json::to_vec(&payload).expect("encode finalize payload"),
+        )
+        .expect("write finalize payload");
+
+        let response = norito::json!({ "tx_instructions": [] });
+        let server = MockHttpServer::start(BTreeMap::from([(
+            "/v1/soracloud/model/upload/finalize".to_owned(),
+            MockHttpResponse {
+                content_type: "application/json",
+                body: json::to_vec(&response).expect("encode model upload finalize response"),
+            },
+        )]));
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        install_mock_submission_config(&authority, &key_pair);
+        let output = ModelUploadFinalizeArgs {
+            request_file,
+            service_name: None,
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(&authority, &key_pair)
+        .expect("model-upload-finalize should succeed");
+
+        assert_manifest_pair_service_plan(&output);
+        let request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/model/upload/finalize")
+            .expect("model upload finalize request");
+        let body: norito::json::Value =
+            json::from_slice(&request.body).expect("decode model upload finalize request");
+        assert_eq!(
+            body.get("payload")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|payload| payload.get("service_name"))
+                .and_then(norito::json::Value::as_str),
+            Some("echo_console")
+        );
+    }
+
+    #[test]
+    fn model_run_private_args_can_resolve_service_name_from_manifest_pair() {
+        let dir = temp_dir("model_run_private_service_name_from_manifest_pair");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "echo_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        let session_file = dir.join("private_inference_session.json");
+        let mut session = sample_private_inference_session();
+        session.service_name = "echo_console".parse().expect("service name");
+        fs::write(&session_file, json::to_vec(&session).expect("encode session"))
+            .expect("write session");
+
+        let response = norito::json!({ "tx_instructions": [] });
+        let status_response = norito::json!({
+            "session_id": "session-1",
+            "service_name": "echo_console",
+            "status": "Submitted"
+        });
+        let server = MockHttpServer::start(BTreeMap::from([
+            (
+                "/v1/soracloud/model/run-private".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&response).expect("encode run-private response"),
+                },
+            ),
+            (
+                "/v1/soracloud/model/run-private/finalize".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&response).expect("encode finalize response"),
+                },
+            ),
+            (
+                "/v1/soracloud/model/run-status?session_id=session-1".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&status_response).expect("encode run-status response"),
+                },
+            ),
+        ]));
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        install_mock_submission_config(&authority, &key_pair);
+        let output = ModelRunPrivateArgs {
+            session_file,
+            service_name: None,
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(&authority, &key_pair)
+        .expect("model-run-private should succeed");
+
+        assert_manifest_pair_service_plan(&output);
+        let request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/model/run-private")
+            .expect("model run-private request");
+        let body: norito::json::Value =
+            json::from_slice(&request.body).expect("decode model run-private request");
+        assert_eq!(
+            body.get("payload")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|payload| payload.get("session"))
+                .and_then(norito::json::Value::as_object)
+                .and_then(|session| session.get("service_name"))
+                .and_then(norito::json::Value::as_str),
+            Some("echo_console")
+        );
+    }
+
+    #[test]
+    fn model_run_status_args_can_attach_service_plan_from_manifest_pair() {
+        let dir = temp_dir("model_run_status_service_plan_from_manifest_pair");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "echo_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        let status_response = norito::json!({
+            "session_id": "session-1",
+            "service_name": "echo_console",
+            "status": "Submitted"
+        });
+        let server = MockHttpServer::start(BTreeMap::from([(
+            "/v1/soracloud/model/run-status?session_id=session-1".to_owned(),
+            MockHttpResponse {
+                content_type: "application/json",
+                body: json::to_vec(&status_response).expect("encode run-status response"),
+            },
+        )]));
+
+        let output = ModelRunStatusArgs {
+            session_id: "session-1".to_owned(),
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run()
+        .expect("model-run-status should succeed");
+
+        assert_manifest_pair_service_plan(&output);
+        assert_eq!(
+            output
+                .get("session_id")
+                .and_then(norito::json::Value::as_str),
+            Some("session-1")
+        );
+        let request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "GET")
+            .expect("model run-status request");
+        assert_eq!(request.path, "/v1/soracloud/model/run-status?session_id=session-1");
+    }
+
+    #[test]
+    fn model_decrypt_output_args_can_attach_service_plan_from_manifest_pair() {
+        let dir = temp_dir("model_decrypt_output_service_plan_from_manifest_pair");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "echo_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        let response = norito::json!({ "tx_instructions": [], "submitted_tx_hash": "tx-1" });
+        let status_response = norito::json!({
+            "session_id": "session-1",
+            "service_name": "echo_console",
+            "status": "Decrypting"
+        });
+        let server = MockHttpServer::start(BTreeMap::from([
+            (
+                "/v1/soracloud/model/decrypt-output".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&response).expect("encode decrypt-output response"),
+                },
+            ),
+            (
+                "/v1/soracloud/model/run-status?session_id=session-1".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&status_response).expect("encode run-status response"),
+                },
+            ),
+        ]));
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        install_mock_submission_config(&authority, &key_pair);
+        let output = ModelDecryptOutputArgs {
+            session_id: "session-1".to_owned(),
+            decrypt_request_id: "decrypt-1".to_owned(),
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(&authority, &key_pair)
+        .expect("model-decrypt-output should succeed");
+
+        assert_manifest_pair_service_plan(&output);
+        assert_eq!(
+            output
+                .get("submission_mode")
+                .and_then(norito::json::Value::as_str),
+            Some("client_signed")
+        );
+        let request = server
+            .requests()
+            .into_iter()
+            .find(|request| {
+                request.method == "POST" && request.path == "/v1/soracloud/model/decrypt-output"
+            })
+            .expect("model decrypt-output request");
+        let body: norito::json::Value =
+            json::from_slice(&request.body).expect("decode decrypt-output request");
+        assert_eq!(
+            body.get("payload")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|payload| payload.get("session_id"))
+                .and_then(norito::json::Value::as_str),
+            Some("session-1")
+        );
+    }
+
+    #[test]
+    fn model_publish_private_args_can_resolve_service_name_from_manifest_pair() {
+        let dir = temp_dir("model_publish_private_service_name_from_manifest_pair");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "echo_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        let source_dir = dir.join("model");
+        write_sample_uploaded_model_source(&source_dir);
+        let draft_path = dir.join("private_model_publish_draft.json");
+        let plan_file = dir.join("private_model_publish_plan.json");
+        let mut draft = sample_private_model_publish_draft(PrivateModelSourceV1::LocalDir(
+            PrivateModelLocalDirSourceV1 {
+                path: "model".to_owned(),
+            },
+        ));
+        draft.service_name = "echo_console".to_owned();
+        let mut rng = rand::rngs::StdRng::from_seed([17_u8; 32]);
+        let plan = prepare_private_model_publish_plan_from_draft_with_rng(
+            &draft_path,
+            draft,
+            sample_uploaded_model_encryption_recipient(),
+            32,
+            &mut rng,
+        )
+        .expect("prepare publish plan");
+        fs::write(&plan_file, json::to_vec(&plan).expect("encode publish plan"))
+            .expect("write publish plan");
+
+        let mut compile_status_url =
+            reqwest::Url::parse("http://127.0.0.1:1").expect("compile status base URL");
+        compile_status_url
+            .path_segments_mut()
+            .expect("compile status path segments")
+            .extend(["v1", "soracloud", "model", "compile", "status"]);
+        compile_status_url
+            .query_pairs_mut()
+            .append_pair("service_name", "echo_console")
+            .append_pair("weight_version", "1.0.0")
+            .append_pair("model_id", "upload-1")
+            .append_pair(
+                "bundle_root",
+                &json::to_json(&plan.bundle.bundle_root).expect("encode bundle root"),
+            )
+            .append_pair(
+                "compile_profile_hash",
+                &json::to_json(&plan.bundle.compile_profile_hash)
+                    .expect("encode compile profile hash"),
+            );
+        let compile_status_path = format!(
+            "{}?{}",
+            compile_status_url.path(),
+            compile_status_url
+                .query()
+                .expect("compile status query string should exist"),
+        );
+        let response = norito::json!({ "tx_instructions": [], "submitted_tx_hash": "tx-1" });
+        let status_response = norito::json!({
+            "service_name": "echo_console",
+            "model_id": "upload-1",
+            "weight_version": "1.0.0",
+            "compile_status": "ready"
+        });
+        let recipient_response = json::Value::Object(norito::json::Map::from_iter([(
+            "recipient".to_owned(),
+            json::to_value(&sample_uploaded_model_encryption_recipient())
+                .expect("encode uploaded-model recipient"),
+        )]));
+        let server = MockHttpServer::start(BTreeMap::from([
+            (
+                "/v1/soracloud/model/upload/encryption-recipient".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&recipient_response)
+                        .expect("encode uploaded-model recipient response"),
+                },
+            ),
+            (
+                "/v1/soracloud/model/upload/init".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&response).expect("encode model upload init response"),
+                },
+            ),
+            (
+                "/v1/soracloud/model/upload/chunk".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&response).expect("encode model upload chunk response"),
+                },
+            ),
+            (
+                "/v1/soracloud/model/upload/finalize".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&response).expect("encode model upload finalize response"),
+                },
+            ),
+            (
+                "/v1/soracloud/model/compile".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&response).expect("encode model compile response"),
+                },
+            ),
+            (
+                "/v1/soracloud/model/allow".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&response).expect("encode model allow response"),
+                },
+            ),
+            (
+                compile_status_path,
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&status_response).expect("encode model compile status"),
+                },
+            ),
+        ]));
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        install_mock_submission_config(&authority, &key_pair);
+        let output = ModelPublishPrivateArgs {
+            plan_file: Some(plan_file),
+            draft_file: None,
+            emit_plan_file: None,
+            service_name: None,
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(&authority, &key_pair)
+        .expect("model-publish-private should succeed");
+
+        assert_eq!(
+            output
+                .get("service_name")
+                .and_then(norito::json::Value::as_str),
+            Some("echo_console")
+        );
+        assert_manifest_pair_service_plan(&output);
+        let request = server
+            .requests()
+            .into_iter()
+            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/model/upload/init")
+            .expect("model upload init request");
+        let body: norito::json::Value =
+            json::from_slice(&request.body).expect("decode model upload init request");
+        assert_eq!(
+            body.get("payload")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|payload| payload.get("bundle"))
+                .and_then(norito::json::Value::as_object)
+                .and_then(|bundle| bundle.get("service_name"))
+                .and_then(norito::json::Value::as_str),
+            Some("echo_console")
+        );
+    }
+
+    #[test]
+    fn model_publish_private_args_reject_conflicting_draft_service_name_against_manifest_pair() {
+        let dir = temp_dir("model_publish_private_conflicting_service_name_from_manifest_pair");
+        InitArgs {
+            output_dir: dir.clone(),
+            service_name: "echo_console".to_owned(),
+            service_version: "1.0.0".to_owned(),
+            template: InitTemplate::HttpService,
+            overwrite: false,
+        }
+        .run()
+        .expect("http-service init should succeed");
+
+        let source_dir = dir.join("model");
+        write_sample_uploaded_model_source(&source_dir);
+        let draft_file = dir.join("private_model_publish_draft.json");
+        let draft = sample_private_model_publish_draft(PrivateModelSourceV1::LocalDir(
+            PrivateModelLocalDirSourceV1 {
+                path: "model".to_owned(),
+            },
+        ));
+        fs::write(&draft_file, json::to_vec(&draft).expect("encode publish draft"))
+            .expect("write publish draft");
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        let error = ModelPublishPrivateArgs {
+            plan_file: None,
+            draft_file: Some(draft_file),
+            emit_plan_file: None,
+            service_name: None,
+            container: Some(dir.join("container_manifest.json")),
+            service: Some(dir.join("service_manifest.json")),
+            torii_url: Some("http://127.0.0.1:1".to_owned()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(&authority, &key_pair)
+        .expect_err("conflicting publish draft service_name must fail");
+
+        assert!(error
+            .to_string()
+            .contains("request payload service_name `private_models` does not match the manifest-resolved service `echo_console`"));
     }
 
     #[test]
@@ -23601,6 +25125,7 @@ mod tests {
             "status` is driven from `--container` plus `--service`"
         ));
         assert!(readme.contains("## Service control-plane commands"));
+        assert!(readme.contains("`service_plan` projection that `local-plan` reports"));
         assert!(readme.contains(
             "iroha app soracloud config-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080"
         ));
@@ -23611,11 +25136,22 @@ mod tests {
             "iroha app soracloud rollback --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080"
         ));
         assert!(readme.contains("hf-deploy"));
+        assert!(readme.contains("hf-status"));
         assert!(readme.contains("training-job-*"));
         assert!(readme.contains("model-artifact-*"));
         assert!(readme.contains("model-weight-*"));
+        assert!(readme.contains("model-upload-encryption-recipient"));
+        assert!(readme.contains("model-upload-init"));
+        assert!(readme.contains("model-upload-chunk"));
+        assert!(readme.contains("model-upload-finalize"));
         assert!(readme.contains("model-upload-status"));
+        assert!(readme.contains("model-compile"));
         assert!(readme.contains("model-compile-status"));
+        assert!(readme.contains("model-allow"));
+        assert!(readme.contains("model-run-private"));
+        assert!(readme.contains("model-run-status"));
+        assert!(readme.contains("model-decrypt-output"));
+        assert!(readme.contains("model-publish-private"));
         let deploy_sh =
             fs::read_to_string(dir.join("deploy.sh")).expect("read http-service deploy.sh");
         assert!(deploy_sh.contains("app soracloud deploy"));
@@ -24775,14 +26311,19 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/upgrade-workspace-args.txt"
         assert!(readme.contains("./verify-build.sh"));
         assert!(readme.contains("app local-plan --manifest ./app_manifest.json"));
         assert!(readme.contains("workspace_dir"));
+        assert!(readme.contains("workspace_scripts"));
         assert!(readme.contains("child service scripts"));
         assert!(readme.contains(
             "iroha app soracloud app status --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080"
         ));
         assert!(readme.contains("Torii control-plane status"));
         assert!(readme.contains("publish projection"));
+        assert!(readme.contains("top-level `routes` split"));
+        assert!(readme.contains("root `manifest_path`"));
+        assert!(readme.contains("root `workspace_scripts`"));
         assert!(readme.contains("services/api/container_manifest.json"));
         assert!(readme.contains("services/api/service_manifest.json"));
+        assert!(readme.contains("attach the same local `service_plan` projection"));
         let upgrade_sh =
             fs::read_to_string(dir.join("upgrade.sh")).expect("read single-api upgrade.sh");
         assert!(upgrade_sh.contains("app soracloud app upgrade"));
@@ -25226,12 +26767,16 @@ main().catch((error) => {
         assert!(app_readme.contains("SSH-only steps"));
         assert!(app_readme.contains("app local-plan"));
         assert!(app_readme.contains("workspace_dir"));
+        assert!(app_readme.contains("workspace_scripts"));
         assert!(app_readme.contains("child service scripts"));
         assert!(app_readme.contains(
             "iroha app soracloud app status --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080"
         ));
         assert!(app_readme.contains("Torii control-plane status"));
         assert!(app_readme.contains("publish projection"));
+        assert!(app_readme.contains("top-level mixed `routes` split"));
+        assert!(app_readme.contains("root `manifest_path`"));
+        assert!(app_readme.contains("root `workspace_scripts`"));
         assert!(app_readme.contains("./local-dev.sh"));
         assert!(app_readme.contains("app local-dev --manifest ./app_manifest.json"));
         assert!(app_readme.contains("./build-and-sync.sh"));
@@ -25250,6 +26795,7 @@ main().catch((error) => {
         assert!(app_readme.contains("services/live/service_manifest.json"));
         assert!(app_readme.contains("services/vault/container_manifest.json"));
         assert!(app_readme.contains("services/vault/service_manifest.json"));
+        assert!(app_readme.contains("attach the same local `service_plan` projection"));
         let upgrade_sh =
             fs::read_to_string(dir.join("upgrade.sh")).expect("read split-app upgrade.sh");
         assert!(upgrade_sh.contains("app soracloud app upgrade"));
@@ -25282,6 +26828,7 @@ main().catch((error) => {
         .expect("local-plan should succeed");
 
         assert_eq!(output.app_name, "travel_ops");
+        assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);
@@ -25421,6 +26968,7 @@ main().catch((error) => {
         .run()
         .expect("app local-plan should succeed");
 
+        assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(!output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 0);
         assert_eq!(output.deterministic_service_count, 1);
@@ -27011,6 +28559,28 @@ main().catch((error) => {
 
         assert_eq!(output.app_name, "travel_ops");
         assert_eq!(output.public_url, "https://travel-ops.sora");
+        assert!(output.manifest_path.ends_with("app_manifest.json"));
+        assert!(output.workspace_dir.contains("split_app_status"));
+        assert!(output
+            .workspace_scripts
+            .local_dev
+            .as_deref()
+            .is_some_and(|path| path.ends_with("local-dev.sh")));
+        assert!(output
+            .workspace_scripts
+            .build_and_sync
+            .as_deref()
+            .is_some_and(|path| path.ends_with("build-and-sync.sh")));
+        assert!(output
+            .workspace_scripts
+            .deploy
+            .as_deref()
+            .is_some_and(|path| path.ends_with("deploy.sh")));
+        assert!(output
+            .workspace_scripts
+            .upgrade
+            .as_deref()
+            .is_some_and(|path| path.ends_with("upgrade.sh")));
         assert_eq!(
             output
                 .static_site
@@ -27043,6 +28613,17 @@ main().catch((error) => {
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
         assert_eq!(output.services.len(), 2);
+        assert!(output.routes.iter().any(|route| {
+            route.service_name == "travel-ops_live"
+                && route.route_kind == "hosted_http_prefix"
+                && route.path == "/api/v1"
+        }));
+        assert!(output.routes.iter().any(|route| {
+            route.service_name == "travel-ops_vault"
+                && route.route_kind == "handler"
+                && route.handler_name.as_deref() == Some("auth_me")
+                && route.path == "/api/auth/me"
+        }));
         let live = output
             .services
             .iter()
@@ -27162,6 +28743,18 @@ main().catch((error) => {
         .run()
         .expect("app status should succeed");
 
+        assert!(output.manifest_path.ends_with("app_manifest.json"));
+        assert!(output.workspace_dir.contains("split_app_status_missing_service"));
+        assert!(output
+            .workspace_scripts
+            .deploy
+            .as_deref()
+            .is_some_and(|path| path.ends_with("deploy.sh")));
+        assert!(output
+            .workspace_scripts
+            .upgrade
+            .as_deref()
+            .is_some_and(|path| path.ends_with("upgrade.sh")));
         assert_eq!(output.services.len(), 2);
         let live = output
             .services
@@ -27178,6 +28771,17 @@ main().catch((error) => {
             .expect("vault service should remain visible even when absent");
         assert!(!vault.present_in_control_plane);
         assert!(vault.status.is_none());
+        assert!(output.routes.iter().any(|route| {
+            route.service_name == "travel-ops_live"
+                && route.route_kind == "hosted_http_prefix"
+                && route.path == "/api/v1"
+        }));
+        assert!(output.routes.iter().any(|route| {
+            route.service_name == "travel-ops_vault"
+                && route.route_kind == "handler"
+                && route.handler_name.as_deref() == Some("auth_me")
+                && route.path == "/api/auth/me"
+        }));
         assert!(vault.notes.iter().any(|note| {
             note.contains("no matching Torii control-plane entry was returned")
         }));
@@ -27226,6 +28830,18 @@ main().catch((error) => {
         .run()
         .expect("app status should succeed");
 
+        assert!(output.manifest_path.ends_with("app_manifest.json"));
+        assert!(output.workspace_dir.contains("single_api_status_root_binding"));
+        assert!(output
+            .workspace_scripts
+            .deploy
+            .as_deref()
+            .is_some_and(|path| path.ends_with("deploy.sh")));
+        assert!(output
+            .workspace_scripts
+            .upgrade
+            .as_deref()
+            .is_some_and(|path| path.ends_with("upgrade.sh")));
         assert!(!output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 0);
         assert_eq!(output.deterministic_service_count, 1);
@@ -27250,6 +28866,10 @@ main().catch((error) => {
                 .and_then(|frontend| frontend.cid_gateway_url_template.as_deref()),
             None
         );
+        assert!(output
+            .routes
+            .iter()
+            .any(|route| route.service_name == "travel-ops_api" && route.path == "/api/healthz"));
     }
 
     #[test]
@@ -27325,10 +28945,26 @@ main().catch((error) => {
         .run(MutationMode::Deploy, &authority, &key_pair)
         .expect("app deploy should succeed");
 
+        assert!(output.manifest_path.ends_with("app_manifest.json"));
+        assert!(output.workspace_dir.contains("single_api_root_binding_deploy"));
+        assert!(output
+            .workspace_scripts
+            .deploy
+            .as_deref()
+            .is_some_and(|path| path.ends_with("deploy.sh")));
+        assert!(output
+            .workspace_scripts
+            .upgrade
+            .as_deref()
+            .is_some_and(|path| path.ends_with("upgrade.sh")));
         assert!(!output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 0);
         assert_eq!(output.deterministic_service_count, 1);
         assert_eq!(output.services.len(), 1);
+        assert!(output
+            .routes
+            .iter()
+            .any(|route| route.service_name == "travel-ops_api" && route.path == "/api/healthz"));
         assert_eq!(
             output
                 .frontend
@@ -27457,7 +29093,7 @@ main().catch((error) => {
         assert!(
             error
                 .to_string()
-                .contains("failed to sync app service manifests before deployment")
+                .contains("wrong_live_name")
         );
         assert!(
             server.requests().is_empty(),
@@ -27545,10 +29181,35 @@ main().catch((error) => {
         .run(MutationMode::Deploy, &authority, &key_pair)
         .expect("split-app deploy should succeed");
 
+        assert!(output.manifest_path.ends_with("app_manifest.json"));
+        assert!(output.workspace_dir.contains("split_app_cid_only_deploy"));
+        assert!(output
+            .workspace_scripts
+            .deploy
+            .as_deref()
+            .is_some_and(|path| path.ends_with("deploy.sh")));
+        assert!(output
+            .workspace_scripts
+            .upgrade
+            .as_deref()
+            .is_some_and(|path| path.ends_with("upgrade.sh")));
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
         assert_eq!(output.services.len(), 2);
+        assert!(output
+            .routes
+            .iter()
+            .any(|route| route.service_name == "travel-ops_live"
+                && route.route_kind == "hosted_http_prefix"
+                && route.path == "/api/v1"));
+        assert!(output
+            .routes
+            .iter()
+            .any(|route| route.service_name == "travel-ops_vault"
+                && route.route_kind == "handler"
+                && route.handler_name.as_deref() == Some("auth_me")
+                && route.path == "/api/auth/me"));
         assert_eq!(
             output
                 .static_site
@@ -27640,6 +29301,155 @@ main().catch((error) => {
             assert!(
                 !initial_configs.contains_key(APP_STATIC_SITE_CONFIG_NAME),
                 "cid-only app deploy must not inject the reserved static-site config"
+            );
+        }
+    }
+
+    #[test]
+    fn app_upgrade_split_app_cid_only_keeps_route_projection() {
+        let dir = temp_dir("split_app_cid_only_upgrade");
+        AppInitArgs {
+            output_dir: dir.clone(),
+            app_name: "travel_ops".to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template: AppInitTemplate::SplitApp,
+            overwrite: false,
+        }
+        .run()
+        .expect("split-app init should succeed");
+
+        fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist dir");
+        fs::write(
+            dir.join("frontend/dist/index.html"),
+            "<!doctype html><title>Travel Ops Split</title>",
+        )
+        .expect("write frontend index");
+        fs::create_dir_all(dir.join("services/live/build")).expect("create live build dir");
+        fs::create_dir_all(dir.join("services/vault/build")).expect("create vault build dir");
+        fs::write(
+            dir.join("services/live/build/live-api.tgz"),
+            b"upgrade-live-bundle",
+        )
+        .expect("write live bundle");
+        fs::write(
+            dir.join("services/vault/build/vault-api.to"),
+            b"upgrade-vault-bundle",
+        )
+        .expect("write vault bundle");
+
+        let status_payload =
+            mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
+        let draft_response = norito::json!({ "tx_instructions": [] });
+        let server = MockHttpServer::start(BTreeMap::from([
+            (
+                "/v1/sorafs/pin/register".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&norito::json!({ "ok": true }))
+                        .expect("encode pin register response"),
+                },
+            ),
+            (
+                "/v1/sorafs/storage/pin".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&norito::json!({ "manifest_id_hex": "fedc" }))
+                        .expect("encode storage pin response"),
+                },
+            ),
+            (
+                "/v1/soracloud/upgrade".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&draft_response).expect("encode upgrade draft response"),
+                },
+            ),
+            (
+                "/v1/soracloud/status".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&status_payload).expect("encode status response"),
+                },
+            ),
+        ]));
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        install_mock_submission_config(&authority, &key_pair);
+        let output = AppDeployArgs {
+            manifest: dir.join("app_manifest.json"),
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+        }
+        .run(MutationMode::Upgrade, &authority, &key_pair)
+        .expect("split-app upgrade should succeed");
+
+        assert!(output.manifest_path.ends_with("app_manifest.json"));
+        assert!(output.workspace_dir.contains("split_app_cid_only_upgrade"));
+        assert!(output
+            .workspace_scripts
+            .deploy
+            .as_deref()
+            .is_some_and(|path| path.ends_with("deploy.sh")));
+        assert!(output
+            .workspace_scripts
+            .upgrade
+            .as_deref()
+            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert_eq!(output.mode, "upgrade");
+        assert!(output.has_mixed_planes);
+        assert_eq!(output.hosted_http_service_count, 1);
+        assert_eq!(output.deterministic_service_count, 1);
+        assert_eq!(output.services.len(), 2);
+        assert!(output.routes.iter().any(|route| {
+            route.service_name == "travel-ops_live"
+                && route.route_kind == "hosted_http_prefix"
+                && route.path == "/api/v1"
+        }));
+        assert!(output.routes.iter().any(|route| {
+            route.service_name == "travel-ops_vault"
+                && route.route_kind == "handler"
+                && route.handler_name.as_deref() == Some("auth_me")
+                && route.path == "/api/auth/me"
+        }));
+        assert_eq!(
+            output
+                .frontend
+                .as_ref()
+                .map(|frontend| frontend.publish_mode.as_str()),
+            Some(APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY)
+        );
+        assert_eq!(
+            output
+                .frontend
+                .as_ref()
+                .and_then(|frontend| frontend.cid_gateway_url_template.as_deref()),
+            Some("https://travel-ops.sora/sorafs/cid/<cid>/")
+        );
+        let publication = output
+            .published_static_site
+            .as_ref()
+            .expect("cid-only app should publish a static site");
+        assert_eq!(publication.manifest_id_hex.as_deref(), Some("fedc"));
+        assert!(publication.content_cid.starts_with('b'));
+
+        let upgrade_requests = server
+            .requests()
+            .into_iter()
+            .filter(|request| request.method == "POST" && request.path == "/v1/soracloud/upgrade")
+            .collect::<Vec<_>>();
+        assert_eq!(upgrade_requests.len(), 2);
+        for request in upgrade_requests {
+            let upgrade_body: norito::json::Value =
+                json::from_slice(&request.body).expect("decode upgrade request");
+            let initial_configs = upgrade_body
+                .get("initial_service_configs")
+                .and_then(norito::json::Value::as_object)
+                .expect("upgrade request must include initial service configs");
+            assert!(
+                !initial_configs.contains_key(APP_STATIC_SITE_CONFIG_NAME),
+                "cid-only app upgrade must not inject the reserved static-site config"
             );
         }
     }

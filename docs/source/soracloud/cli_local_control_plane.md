@@ -66,8 +66,9 @@ manager; the CLI does not keep a shadow control-plane mirror.
     - hosted `/api/v1/*` ownership for `HttpService + Inrou`
     - deterministic handler ownership for `/api/auth*` and `/api/v1/user*`
   - prints the frontend CID gateway URL template when `publish_mode = CidOnly`
-  - prints each service's resolved `container_manifest_path` and
-    `service_manifest_path` for service-scoped Soracloud commands
+  - prints the root `manifest_path`, then each service's resolved
+    `container_manifest_path` and `service_manifest_path` for service-scoped
+    Soracloud commands
   - prints each child service `workspace_dir` plus discovered child scripts such
     as `dev.sh`, `build.sh`, and `verify-build.sh` when present
   - reports the manifest-adjacent root script paths for `local-dev.sh`,
@@ -153,11 +154,14 @@ Torii-backed and require `--torii-url`.
   - synchronizes every referenced service pair before submission
   - publishes the declared static site from `static_site.dist_dir`
   - deploys every referenced service in one pass
-  - returns the frontend publish projection plus one manifest-derived service
-    entry per app service alongside the mutation responses
+  - returns the root app `manifest_path`, root `workspace_dir`, root
+    `workspace_scripts`, the frontend publish projection, the top-level app
+    `routes` split, and one manifest-derived service entry per app service
+    alongside the mutation responses
 - `iroha app soracloud app upgrade`
   - follows the same app-wide flow, but uses upgrade semantics
-  - returns the same app-scoped frontend and service projection
+  - returns the same app-scoped root manifest/workspace metadata, frontend,
+    top-level `routes`, and service projection
 - `iroha app soracloud status`
   - accepts `--service-name` directly or resolves the filter from
     `--container` plus `--service`
@@ -170,30 +174,44 @@ Torii-backed and require `--torii-url`.
   - accept `--service-name` directly or resolve the owning service from
     `--container` plus `--service`
   - keep service-scoped material operations aligned with manifest workspaces
+  - when driven by `--container` plus `--service`, attach the same local
+    `service_plan` projection that `local-plan` reports
 - `iroha app soracloud rollback` and `iroha app soracloud rollout`
   - accept `--service-name` directly or resolve the target service from
     `--container` plus `--service`
   - keep rollback and rollout control aligned with manifest workspaces
   - when driven by `--container` plus `--service`, attach the same local
     `service_plan` projection that `local-plan` reports
-- `iroha app soracloud hf-deploy`, `hf-lease-renew`, and `hf-lease-leave`
+- `iroha app soracloud hf-deploy`, `hf-status`, `hf-lease-renew`, and `hf-lease-leave`
   - accept `--service-name` directly or resolve the bound service from
-    `--container` plus `--service`
+    `--container` plus `--service` when a service name applies
   - keep HF shared-lease membership aligned with manifest workspaces
+  - when driven by `--container` plus `--service`, attach the same local
+    `service_plan` projection that `local-plan` reports
 - `iroha app soracloud training-job-*`
   - accept `--service-name` directly or resolve the owning service from
     `--container` plus `--service`
   - keep training-job control aligned with manifest workspaces
+  - when driven by `--container` plus `--service`, attach the same local
+    `service_plan` projection that `local-plan` reports
 - `iroha app soracloud model-artifact-*`, `model-weight-*`,
-  `model-upload-status`, and `model-compile-status`
+  `model-upload-encryption-recipient`, `model-upload-init`,
+  `model-upload-chunk`, `model-upload-finalize`, `model-upload-status`,
+  `model-compile`, `model-compile-status`, `model-allow`,
+  `model-run-private`, `model-run-status`, `model-decrypt-output`, and
+  `model-publish-private`
   - accept `--service-name` directly or resolve the owning service from
-    `--container` plus `--service`
+    `--container` plus `--service` when a service name applies
   - keep model registry and uploaded-model status control aligned with
     manifest workspaces
+  - when driven by `--container` plus `--service`, attach the same local
+    `service_plan` projection that `local-plan` reports
 - `iroha app soracloud app status`
   - keeps one status entry per service declared in one app manifest
-  - projects the frontend publish mode and the expected CID-gateway or
-    root-binding URL when a static site is configured
+  - projects the root app `manifest_path`, root `workspace_dir`, root
+    `workspace_scripts`, the top-level app `routes` split, the frontend
+    publish mode, and the expected CID-gateway or root-binding URL when a
+    static site is configured
   - projects child manifest paths, `workspace_dir`, plane/runtime, route
     ownership, and the matched Torii control-plane status when present
   - keeps missing manifest services visible instead of dropping them from the
@@ -233,6 +251,52 @@ For the example above, the service receives:
 
 The `_DIR` value is the materialized runtime path. The `_MOUNT_PATH` value is
 the logical mount path declared in the manifest.
+
+## Linux/KVM Inrou Smoke
+
+The real hosted-HTTP runtime is Linux/KVM only. The repo now ships an explicit
+Firecracker smoke harness for `HttpService + Inrou`:
+
+```bash
+sudo \
+  IROHA_INROU_LINUX_KVM_KERNEL_IMAGE=/var/lib/inrou/vmlinux \
+  IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE=/var/lib/inrou/debian-slim.ext4 \
+  IROHA_INROU_LINUX_KVM_INITRD_IMAGE=/var/lib/inrou/initrd.img \
+  scripts/ci/run_inrou_linux_kvm_smoke.sh
+```
+
+The harness runs four Linux-only unit checks first:
+
+- `build_inrou_user_data_projects_mounts_overlay_and_replica_env`
+- `write_inrou_firecracker_config_serializes_boot_source_drives_and_network`
+- `ensure_inrou_root_disk_copies_once_and_reuses_existing_rootfs`
+- `planned_inrou_tap_firewall_rules_keep_isolated_policy_private`
+
+It then runs the ignored end-to-end guest smokes:
+
+- `inrou_linux_kvm_smoke_boots_debian_guest_and_serves_healthcheck`
+- `inrou_linux_kvm_smoke_shares_service_volume_across_replicas_and_keeps_root_state_isolated`
+
+The command fails closed unless all of the following are true:
+
+- host OS is Linux
+- the caller is root
+- `/dev/kvm` exists
+- `/dev/net/tun` exists
+- `/proc/sys/net/ipv4/ip_forward = 1`
+- `firecracker`, `ip`, `iptables`, `tar`, `exportfs`, `rpc.nfsd`, `mount`,
+  `chown`, and `mke2fs` or `mkfs.ext4` are on `PATH`
+- `IROHA_INROU_LINUX_KVM_KERNEL_IMAGE` points to a real kernel image
+- `IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE` points to a real Debian slim ext4 image
+- `IROHA_INROU_LINUX_KVM_INITRD_IMAGE`, when set, points to a real initrd image
+
+The smoke path materializes a real per-replica root disk, exports shared
+service volumes from the host over the private tap network, injects the
+declared SSH keys and bootstrap user-data overlay, mounts the shared storage
+through NFS inside the guest, and requires the guest healthcheck to answer
+before the test passes. The Debian slim guest image must already provide
+`mount.nfs` (for example via a preinstalled `nfs-common`) so shared storage
+still works when service egress is isolated.
 
 ## Recommended Hosted-Service Workflow
 

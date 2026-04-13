@@ -2,7 +2,6 @@
 pragma solidity ^0.7.4;
 
 import "./ISccpMessageVerifier.sol";
-import "./Ownable.sol";
 
 /**
  * @title SccpSecp256k1MessageVerifier
@@ -10,11 +9,11 @@ import "./Ownable.sol";
  *
  * The native SCCP proof is verified off-chain and reduced to a secp256k1
  * attestation over `(message_id, source_domain, commitment_root,
- * public_inputs_hash, statement_hash, native_proof_hash)`. On-chain we only
- * verify that enough authorized attestors signed that digest using EVM-native
- * `keccak256` and `ecrecover`.
+ * public_inputs_hash, statement_hash, native_proof_hash,
+ * destination_binding_hash)`. On-chain we only verify that enough authorized
+ * attestors signed that digest using EVM-native `keccak256` and `ecrecover`.
  */
-contract SccpSecp256k1MessageVerifier is ISccpMessageVerifier, Ownable {
+contract SccpSecp256k1MessageVerifier is ISccpMessageVerifier {
     uint256 private constant ATTESTATION_VERSION = 1;
     bytes32 private constant ATTESTATION_DOMAIN_SEPARATOR =
         keccak256("iroha:sccp:evm-attestation:v1");
@@ -33,36 +32,11 @@ contract SccpSecp256k1MessageVerifier is ISccpMessageVerifier, Ownable {
         _setMinimumSignatures(initialMinimumSignatures);
     }
 
-    function setSigner(address signer, bool authorized) external onlyOwner {
-        require(signer != address(0), "Signer address is required");
-
-        bool current = authorizedSigners[signer];
-        if (current == authorized) {
-            return;
-        }
-
-        authorizedSigners[signer] = authorized;
-        if (authorized) {
-            authorizedSignerCount += 1;
-        } else {
-            authorizedSignerCount -= 1;
-            require(
-                minimumSignatures <= authorizedSignerCount,
-                "Minimum signatures exceed signer count"
-            );
-        }
-
-        emit SignerConfigured(signer, authorized);
-    }
-
-    function setMinimumSignatures(uint256 newMinimumSignatures) external onlyOwner {
-        _setMinimumSignatures(newMinimumSignatures);
-    }
-
     function verifySccpMessageProof(
         bytes calldata proofBytes,
         bytes32[6] calldata publicInputs,
-        bytes32 statementHash
+        bytes32 statementHash,
+        bytes32 destinationBindingHash
     )
         external
         view
@@ -76,6 +50,7 @@ contract SccpSecp256k1MessageVerifier is ISccpMessageVerifier, Ownable {
         uint256 rawVersion;
         uint256 rawSourceDomain;
         bytes32 nativeProofHash;
+        bytes32 attestedDestinationBindingHash;
         bytes memory signatures;
 
         (
@@ -84,34 +59,30 @@ contract SccpSecp256k1MessageVerifier is ISccpMessageVerifier, Ownable {
             rawSourceDomain,
             commitmentRoot,
             nativeProofHash,
+            attestedDestinationBindingHash,
             signatures
-        ) = abi.decode(proofBytes, (uint256, bytes32, uint256, bytes32, bytes32, bytes));
+        ) = abi.decode(
+            proofBytes,
+            (uint256, bytes32, uint256, bytes32, bytes32, bytes32, bytes)
+        );
 
         require(rawVersion == ATTESTATION_VERSION, "Unsupported attestation version");
         require(messageId != bytes32(0), "Message id is required");
         require(rawSourceDomain <= type(uint32).max, "Source domain overflow");
         require(signatures.length % 65 == 0, "Recoverable signatures must be 65 bytes");
-
-        bytes32 publicInputsHash = keccak256(
-            abi.encode(
-                publicInputs[0],
-                publicInputs[1],
-                publicInputs[2],
-                publicInputs[3],
-                publicInputs[4],
-                publicInputs[5]
-            )
+        require(
+            attestedDestinationBindingHash == destinationBindingHash,
+            "Destination binding mismatch"
         );
-        bytes32 attestationDigest = keccak256(
-            abi.encode(
-                ATTESTATION_DOMAIN_SEPARATOR,
-                messageId,
-                rawSourceDomain,
-                commitmentRoot,
-                publicInputsHash,
-                statementHash,
-                nativeProofHash
-            )
+
+        bytes32 attestationDigest = _attestationDigest(
+            messageId,
+            rawSourceDomain,
+            commitmentRoot,
+            publicInputs,
+            statementHash,
+            nativeProofHash,
+            attestedDestinationBindingHash
         );
 
         uint256 signatureCount = signatures.length / 65;
@@ -134,6 +105,46 @@ contract SccpSecp256k1MessageVerifier is ISccpMessageVerifier, Ownable {
 
         require(validSignatures >= minimumSignatures, "Signer quorum not met");
         sourceDomain = uint32(rawSourceDomain);
+    }
+
+    function _attestationDigest(
+        bytes32 messageId,
+        uint256 sourceDomain,
+        bytes32 commitmentRoot,
+        bytes32[6] calldata publicInputs,
+        bytes32 statementHash,
+        bytes32 nativeProofHash,
+        bytes32 destinationBindingHash
+    ) internal pure returns (bytes32) {
+        return keccak256(
+            abi.encode(
+                ATTESTATION_DOMAIN_SEPARATOR,
+                messageId,
+                sourceDomain,
+                commitmentRoot,
+                _publicInputsHash(publicInputs),
+                statementHash,
+                nativeProofHash,
+                destinationBindingHash
+            )
+        );
+    }
+
+    function _publicInputsHash(bytes32[6] calldata publicInputs)
+        internal
+        pure
+        returns (bytes32)
+    {
+        return keccak256(
+            abi.encode(
+                publicInputs[0],
+                publicInputs[1],
+                publicInputs[2],
+                publicInputs[3],
+                publicInputs[4],
+                publicInputs[5]
+            )
+        );
     }
 
     function _configureSigners(address[] memory signers, bool authorized) internal {

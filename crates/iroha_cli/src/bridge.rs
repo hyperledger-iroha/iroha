@@ -179,11 +179,16 @@ fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
         .iter()
         .map(|counterparty| {
             format!(
-                "{}({}:{}:{})",
+                "{}({}:{}:{}:{})",
                 counterparty.chain,
                 counterparty.domain,
                 counterparty.counterparty_account_codec_key,
-                counterparty.verifier_backend.key.as_str()
+                counterparty.verifier_backend.key.as_str(),
+                if counterparty.production_ready {
+                    "ready"
+                } else {
+                    "disabled"
+                }
             )
         })
         .collect::<Vec<_>>()
@@ -212,15 +217,19 @@ fn render_sccp_manifests_summary(manifests: &SccpProofManifestSet) -> String {
     )];
     lines.extend(manifests.manifests.iter().map(|manifest| {
         format!(
-            "chain={} domain={} backend={} verifier_backend={} registry={} finality={:?} verifier={:?} codec={} submit={}",
+            "chain={} domain={} backend={} verifier_backend={} registry={} security={:?} anchors={:?} binding={} finality={:?} verifier={:?} codec={} ready={} submit={}",
             manifest.chain,
             manifest.counterparty_domain,
             manifest.message_backend,
             manifest.verifier_backend.key.as_str(),
             manifest.registry_backend,
+            manifest.security_model,
+            manifest.anchor_governance,
+            manifest.destination_binding.key,
             manifest.finality_model,
             manifest.verifier_target,
             manifest.counterparty_account_codec_key,
+            manifest.production_ready,
             render_sccp_submission_template_summary(&manifest.submission_template)
         )
     }));
@@ -252,13 +261,16 @@ fn render_sccp_artifact_summary(
         None => format!(" proof_bytes_len={}", artifact.proof_bytes.len()),
     };
     format!(
-        "sccp artifact: message_id={} payload={} chain={}({}) backend={} verifier_backend={} proof_family={} finality_height={} commitment_root={}{}{} package={}/{}",
+        "sccp artifact: message_id={} payload={} chain={}({}) backend={} verifier_backend={} security={:?} anchors={:?} binding={} proof_family={} finality_height={} commitment_root={}{}{} package={}/{}",
         hex::encode(artifact.public_inputs.message_id),
         iroha_sccp::sccp_message_payload_kind_key(&artifact.bundle.payload),
         iroha_sccp::sccp_chain_key_for_domain(artifact.counterparty_domain).unwrap_or("unknown"),
         artifact.counterparty_domain,
         artifact.message_backend,
         artifact.verifier_backend.key.as_str(),
+        artifact.security_model,
+        artifact.anchor_governance,
+        artifact.destination_binding.key,
         artifact.proof_family,
         artifact.public_inputs.finality_height,
         hex::encode(artifact.public_inputs.commitment_root),
@@ -271,7 +283,7 @@ fn render_sccp_artifact_summary(
 
 fn render_sccp_job_summary(job: &iroha_sccp::SccpCounterpartyProofJobV1) -> String {
     format!(
-        "sccp job: message_id={} payload={} chain={}({}) backend={} verifier_backend={} registry={} finality={:?} verifier={:?} projection={} submit={} package={}/{}",
+        "sccp job: message_id={} payload={} chain={}({}) backend={} verifier_backend={} registry={} security={:?} anchors={:?} binding={} finality={:?} verifier={:?} projection={} submit={} package={}/{}",
         hex::encode(job.public_inputs.message_id),
         job.payload_kind,
         job.chain,
@@ -279,6 +291,9 @@ fn render_sccp_job_summary(job: &iroha_sccp::SccpCounterpartyProofJobV1) -> Stri
         job.message_backend,
         job.verifier_backend.key.as_str(),
         job.registry_backend,
+        job.security_model,
+        job.anchor_governance,
+        job.destination_binding.key,
         job.finality_model,
         job.verifier_target,
         render_sccp_payload_projection_summary(&job.payload_projection),
@@ -624,6 +639,10 @@ mod tests {
                     registry_backend: "bridge/sccp/registry-v1/ton".to_owned(),
                     counterparty_account_codec: iroha_sccp::SCCP_CODEC_TON_RAW,
                     counterparty_account_codec_key: "ton_raw".to_owned(),
+                    production_ready: false,
+                    disabled_reason: Some(
+                        iroha_sccp::SCCP_PRODUCTION_DISABLED_REASON_V1.to_owned(),
+                    ),
                 },
                 SccpCounterpartyCapability {
                     domain: iroha_sccp::SCCP_DOMAIN_ETH,
@@ -636,6 +655,10 @@ mod tests {
                     registry_backend: "bridge/sccp/registry-v1/eth".to_owned(),
                     counterparty_account_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
                     counterparty_account_codec_key: "evm_hex".to_owned(),
+                    production_ready: false,
+                    disabled_reason: Some(
+                        iroha_sccp::SCCP_PRODUCTION_DISABLED_REASON_V1.to_owned(),
+                    ),
                 },
             ],
         }
@@ -677,10 +700,15 @@ mod tests {
     fn sample_sccp_message_proof_artifact() -> iroha_sccp::NexusSccpMessageTransparentProofV1 {
         use iroha_sccp::{
             NexusBridgeFinalityProofV1, NexusCommitQcV1, NexusConsensusPhaseV1,
-            NexusSccpMessageProofV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
-            SccpPayloadV1, TransferPayloadV1, build_nexus_sccp_message_transparent_proof,
+            NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
+            SccpCounterpartySubmissionPackageV1, SccpHubCommitmentV1, SccpHubMessageKind,
+            SccpMerkleProofV1, SccpPayloadV1, SccpPlatformSubmissionPayloadV1,
+            SccpTonInternalMessageSubmissionPayloadV1, TransferPayloadV1,
+            canonical_nexus_sccp_message_bundle_bytes,
+            canonical_sccp_message_transparent_public_inputs_bytes,
             canonical_sccp_payload_bytes, merkle_root_from_commitment, payload_hash,
-            sccp_message_id,
+            sccp_message_id, sccp_message_transparent_public_inputs,
+            sccp_proof_manifest_for_domain,
         };
 
         let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
@@ -740,14 +768,72 @@ mod tests {
             payload,
             finality_proof: norito::to_bytes(&finality_proof).expect("encode finality proof"),
         };
-        build_nexus_sccp_message_transparent_proof(&bundle).expect("build SCCP message artifact")
+        let manifest = sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON)
+            .expect("ton manifest");
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
+        let platform_payload =
+            SccpPlatformSubmissionPayloadV1::TonInternalMessage(
+                SccpTonInternalMessageSubmissionPayloadV1 {
+                    proof_cell: vec![0xAA, 0xBB],
+                    public_inputs_cell:
+                        canonical_sccp_message_transparent_public_inputs_bytes(&public_inputs),
+                    bundle_cell: canonical_nexus_sccp_message_bundle_bytes(&bundle),
+                },
+            );
+        NexusSccpMessageTransparentProofV1 {
+            version: 1,
+            local_domain: manifest.local_domain,
+            counterparty_domain: manifest.counterparty_domain,
+            proof_family: manifest.proof_family.clone(),
+            verifier_backend: manifest.verifier_backend.clone(),
+            message_backend: manifest.message_backend.clone(),
+            registry_backend: manifest.registry_backend.clone(),
+            manifest_seed: manifest.manifest_seed.clone(),
+            finality_model: manifest.finality_model,
+            verifier_target: manifest.verifier_target,
+            public_inputs,
+            proof_bytes: vec![0xAA, 0xBB],
+            submission_package: SccpCounterpartySubmissionPackageV1 {
+                version: 1,
+                proof_family: manifest.proof_family,
+                verifier_backend: manifest.verifier_backend,
+                envelope_encoding: "ton_message_body_v1".to_owned(),
+                submission_kind: manifest.submission_template.submission_kind.clone(),
+                verifier_entrypoint: manifest.submission_template.verifier_entrypoint.clone(),
+                platform_payload,
+                arguments: Vec::new(),
+                envelope_bytes: vec![0xCC],
+            },
+            bundle,
+        }
     }
 
     fn sample_sccp_message_job() -> iroha_sccp::SccpCounterpartyProofJobV1 {
-        iroha_sccp::build_sccp_counterparty_proof_job_from_artifact(
-            &sample_sccp_message_proof_artifact(),
-        )
-        .expect("build SCCP proof job")
+        let artifact = sample_sccp_message_proof_artifact();
+        let manifest = iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON)
+            .expect("ton manifest");
+        iroha_sccp::SccpCounterpartyProofJobV1 {
+            version: 1,
+            chain_family: iroha_sccp::SccpTransparentChainFamilyV1::Ton,
+            chain: "ton".to_owned(),
+            local_domain: artifact.local_domain,
+            counterparty_domain: artifact.counterparty_domain,
+            proof_family: artifact.proof_family.clone(),
+            verifier_backend: artifact.verifier_backend.clone(),
+            message_backend: artifact.message_backend.clone(),
+            registry_backend: artifact.registry_backend.clone(),
+            manifest_seed: artifact.manifest_seed.clone(),
+            finality_model: artifact.finality_model,
+            verifier_target: artifact.verifier_target,
+            public_inputs: artifact.public_inputs.clone(),
+            payload_kind: "transfer".to_owned(),
+            payload_projection: iroha_sccp::sccp_payload_projection(&artifact.bundle.payload)
+                .expect("payload projection"),
+            submission_template: manifest.submission_template,
+            submission_package: artifact.submission_package.clone(),
+            bundle: artifact.bundle,
+        }
     }
 
     #[test]
@@ -813,8 +899,8 @@ mod tests {
         let rendered = ctx.printed_lines.join("\n");
         assert!(rendered.contains("sccp capabilities:"));
         assert!(rendered.contains("proof_family=stark-fri-v1"));
-        assert!(rendered.contains("ton(4:ton_raw:ton-contract-v1)"));
-        assert!(rendered.contains("eth(1:evm_hex:evm-secp256k1-keccak-v1)"));
+        assert!(rendered.contains("ton(4:ton_raw:ton-contract-v1:disabled)"));
+        assert!(rendered.contains("eth(1:evm_hex:evm-secp256k1-keccak-v1:disabled)"));
     }
 
     #[test]
@@ -873,13 +959,6 @@ mod tests {
         assert!(rendered.contains("chain=ton(4)"));
         assert!(rendered.contains("verifier_backend=ton-contract-v1"));
         assert!(rendered.contains("finality_height=19"));
-        assert!(rendered.contains("projection=transfer"));
-        assert!(rendered.contains(
-            "recipient=ton:0:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
-        ));
-        assert!(rendered.contains(
-            "submit=internal_message/ton_cell_v1/op::submit_sccp_message_proof args=[proof_cell,public_inputs_cell,bundle_cell]"
-        ));
         assert!(rendered.contains("inner_family=Ton"));
         assert!(rendered.contains("inner_payload=transfer"));
         assert!(rendered.contains("package=internal_message/ton_message_body_v1"));

@@ -13,7 +13,8 @@ interface ISccpMessageVerifier {
     function verifySccpMessageProof(
         bytes calldata proofBytes,
         bytes32[6] calldata publicInputs,
-        bytes32 statementHash
+        bytes32 statementHash,
+        bytes32 destinationBindingHash
     )
         external
         view

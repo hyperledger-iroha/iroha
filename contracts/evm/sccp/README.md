@@ -15,7 +15,6 @@ bundle through calldata.
 
 Files:
 
-- `Ownable.sol`: minimal owner-gated helper used by the wrapper/deployer.
 - `ISccpMessageVerifier.sol`: external verifier interface expected by the
   wrapper.
 - `SccpMessageBridge.sol`: replay-protected SCCP proof submission wrapper.
@@ -31,7 +30,18 @@ Quick verification:
 scripts/sccp_evm_contract_smoke.sh
 ```
 
-The EVM lane is now production-targeted: the native SCCP FASTPQ proof stays in
-the artifact, while the EVM submission package carries an attestation envelope
-over `native_proof_hash + public_inputs_hash + statement_hash`, and the
-verifier contract checks signer authorization and replay safety on-chain.
+The current reference path keeps the native SCCP proof artifact as a canonical
+`OpenVerifyEnvelope` that wraps the FASTPQ proof and bound public inputs, while
+the EVM submission package carries an attestation envelope over
+`native_proof_hash + public_inputs_hash + statement_hash +
+destination_binding_hash`, where `destination_binding_hash` binds the
+attestation to one SCCP lane on one deployed wrapper and its immutable verifier
+(`source_domain + target_domain + verifier_backend_hash + proof_family_hash +
+network_id + verifier_address + wrapper_address`). The wrapper also enforces
+the expected source/target domains and checks the returned `messageId` and
+`commitmentRoot` against the supplied public inputs. The verifier contract
+checks signer authorization, destination binding, and replay safety on-chain.
+That path is still treated as reference-only. SCCP production use is disabled
+until an immutable destination verifier can validate a recursive SCCP proof
+under governed trust anchors without challenge windows, watcher assumptions, or
+attestation-only shortcuts.

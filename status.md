@@ -1,6 +1,97 @@
 # Status
 
-Last updated: 2026-04-13
+Last updated: 2026-04-14
+
+## 2026-04-14 Follow-up: SCCP native proof bytes now use a canonical bound ZK envelope instead of bare FASTPQ payloads
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_sccp/src/lib.rs` now wraps the
+  native SCCP transparent FASTPQ proof in a Norito-encoded
+  `iroha_data_model::zk::OpenVerifyEnvelope` with:
+  - a fixed SCCP circuit id (`sccp-message-transparent-v1`);
+  - a schema descriptor derived from the manifest/public-input contract;
+  - a verifier commitment derived from the canonical FASTPQ parameter set plus
+    the SCCP message backend; and
+  - wrapped public-input columns for `message_id`, `payload_hash`,
+    `target_domain`, `commitment_root`, `finality_height`, and
+    `finality_block_hash`.
+- SCCP native verification no longer accepts a bare `fastpq_prover::Proof`
+  payload for typed transparent artifacts. It now requires the canonical
+  `OpenVerifyEnvelope`, validates the wrapper metadata against the manifest and
+  expected public inputs, and only then replays `fastpq_prover::verify(...)`
+  against the reconstructed SCCP batch.
+- Focused SCCP regressions now cover:
+  - successful decode/verification of the bound envelope;
+  - rejection when the `OpenVerifyEnvelope` verifier commitment is tampered;
+  - rejection of the legacy bare-proof payload format.
+- `/Users/takemiyamakoto/dev/iroha/docs/source/bridge_proofs.md` and
+  `/Users/takemiyamakoto/dev/iroha/contracts/evm/sccp/README.md` now describe
+  the native SCCP artifact correctly as an `OpenVerifyEnvelope` rather than a
+  bare FASTPQ proof blob.
+
+## 2026-04-13 Follow-up: SCCP now fails closed pending recursive verifiers, and bridge finality no longer bootstraps trust from the first proof
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_sccp/src/lib.rs`,
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/{routing.rs,lib.rs}`,
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha/src/client.rs`, and
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/bridge.rs`
+  now advertise every current non-SORA SCCP lane as
+  `production_ready = false` with an explicit `disabled_reason`, and Torii
+  refuses generic SCCP artifact generation, proof-job generation, bridge proof
+  submission, and inbound bridge-message consumption for those lanes. The
+  current attestation and wrapper paths remain discoverable as reference-only
+  metadata, but they are no longer consumable as production proofs.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/src/bridge.rs`
+  now requires explicit validator-set and epoch anchors before
+  `BridgeFinalityVerifier` accepts any proof. The verifier no longer adopts the
+  first observed validator set / epoch as trust anchors, and missing-anchor
+  cases now fail with deterministic `MissingEpochAnchor` or
+  `MissingValidatorSetAnchor` errors.
+- `/Users/takemiyamakoto/dev/iroha/contracts/evm/sccp/SccpMessageBridge.sol`
+  is now immutable after deployment: the verifier, verifier backend hash, proof
+  family hash, and network id are constructor-bound, and the owner-gated
+  hot-swap path is removed.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_sccp/src/lib.rs` now carries
+  explicit SCCP destination-binding metadata in proof manifests / inner proofs
+  / proof jobs / proof artifacts, and folds the deterministic binding hash into
+  the canonical SCCP statement bytes so the proof context is no longer lane-
+  agnostic even on disabled lanes.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_sccp/src/lib.rs` also now keeps
+  the EVM destination-binding key formatting on the in-crate lowercase-hex
+  helper path instead of an undeclared external `hex` dependency, with a
+  focused regression test covering the key/hash derivation and the reported
+  sandbox trusted-peer-pop/current-thread-drop checks passing again on the
+  current tree.
+- `/Users/takemiyamakoto/dev/iroha/contracts/evm/sccp/{ISccpMessageVerifier.sol,SccpMessageBridge.sol,SccpSecp256k1MessageVerifier.sol}`
+  and the EVM smoke test now bind secp256k1 attestation envelopes to one
+  deployed SCCP lane, wrapper, and immutable verifier via
+  `destination_binding_hash`; the wrapper now also enforces the configured
+  source/target domains and checks `messageId` / `commitmentRoot` against the
+  supplied public inputs, and the reference EVM verifier contract is
+  constructor-immutable rather than owner-mutable.
+- `/Users/takemiyamakoto/dev/iroha/docs/source/{bridge_finality.md,bridge_proofs.md}`
+  and `/Users/takemiyamakoto/dev/iroha/contracts/evm/sccp/README.md` now
+  describe the new fail-closed posture instead of TOFU anchors or
+  production-targeted attestation lanes.
+- `/Users/takemiyamakoto/dev/iroha/javascript/iroha_js/{index.d.ts,src/toriiClient.js,test/toriiClient.test.js}`
+  now expose the same SCCP lane disablement state to JS SDK consumers by
+  normalizing `verifier_backend`, `production_ready`, `disabled_reason`,
+  `security_model`, `anchor_governance`, `destination_binding`, and the
+  recent-message discovery path on SCCP capability / manifest / artifact / job
+  responses.
+- Focused validation completed on this slice:
+  - `CARGO_TARGET_DIR=/tmp/iroha-secure-sccp cargo test -p iroha_sccp --lib -- --nocapture`
+  - `cargo fmt --all`
+  - `cd javascript/iroha_js && IROHA_JS_DISABLE_NATIVE=1 node --test test/toriiClient.test.js`
+  - `cargo test -p iroha_sccp evm_destination_binding_uses_lowercase_hex_key_and_expected_hash -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-clone CARGO_TARGET_DIR=/tmp/iroha-secure-sccp-rerun cargo test --offline -p iroha_sccp --lib -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-clone CARGO_TARGET_DIR=/tmp/iroha-secure-sccp-evm-final cargo test --offline -p iroha_sccp evm_ -- --nocapture`
+  - `scripts/sccp_evm_contract_smoke.sh`
+  - `cargo test -p integration_tests sandbox::tests::start_network_ -- --nocapture`
+  - `./target/debug/deps/integration_tests-a853c0957f2e9a74 --exact sandbox::tests::serialized_network_drop_completes_on_current_thread_runtime --nocapture`
+- Additional focused Rust validation completed on isolated Cargo homes /
+  target dirs for:
+  - `CARGO_HOME=/tmp/iroha-cargo-clone CARGO_TARGET_DIR=/tmp/iroha-secure-bridge-clone cargo test --offline -p iroha_data_model verifier_requires_explicit_epoch_and_validator_set_anchors -- --nocapture`
+- Follow-up targeted Torii validation completed on isolated Cargo homes /
+  target dirs for:
+  - `CARGO_HOME=/tmp/iroha-cargo-clone CARGO_TARGET_DIR=/tmp/iroha-secure-torii-latest cargo test --offline -p iroha_torii sccp_ -- --nocapture`
 
 ## 2026-04-13 Follow-up: RBC/collector observability assertions now follow committed outcomes, and DA scenarios skip redundant runtime DA writes
 - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_adversarial.rs`

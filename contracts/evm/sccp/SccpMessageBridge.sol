@@ -2,7 +2,6 @@
 pragma solidity ^0.7.4;
 
 import "./ISccpMessageVerifier.sol";
-import "./Ownable.sol";
 
 /**
  * @title SccpMessageBridge
@@ -11,14 +10,18 @@ import "./Ownable.sol";
  * This contract binds a deployment to one concrete verifier backend / proof
  * family pair. The actual proof system lives behind `ISccpMessageVerifier`.
  */
-contract SccpMessageBridge is Ownable {
-    ISccpMessageVerifier public verifier;
-    bytes32 public verifierBackendHash;
-    bytes32 public proofFamilyHash;
-    bytes32 public networkId;
+contract SccpMessageBridge {
+    bytes32 private constant DESTINATION_BINDING_DOMAIN_SEPARATOR =
+        keccak256("iroha:sccp:evm-destination-binding:v1");
+    ISccpMessageVerifier public immutable verifier;
+    bytes32 public immutable verifierBackendHash;
+    bytes32 public immutable proofFamilyHash;
+    bytes32 public immutable networkId;
+    uint32 public immutable expectedSourceDomain;
+    uint32 public immutable expectedTargetDomain;
     mapping(bytes32 => bool) public usedMessageProofs;
 
-    event VerifierConfigured(
+    event VerifierBound(
         address indexed verifier,
         bytes32 verifierBackendHash,
         bytes32 proofFamilyHash
@@ -37,18 +40,27 @@ contract SccpMessageBridge is Ownable {
         address verifierAddress,
         string memory verifierBackendKey,
         string memory proofFamily,
-        bytes32 configuredNetworkId
+        bytes32 configuredNetworkId,
+        uint32 configuredSourceDomain,
+        uint32 configuredTargetDomain
     ) {
-        networkId = configuredNetworkId;
-        _configureVerifier(verifierAddress, verifierBackendKey, proofFamily);
-    }
+        require(verifierAddress != address(0), "Verifier address is required");
 
-    function configureVerifier(
-        address verifierAddress,
-        string memory verifierBackendKey,
-        string memory proofFamily
-    ) public onlyOwner {
-        _configureVerifier(verifierAddress, verifierBackendKey, proofFamily);
+        bytes32 backendHash = keccak256(bytes(verifierBackendKey));
+        bytes32 familyHash = keccak256(bytes(proofFamily));
+
+        verifier = ISccpMessageVerifier(verifierAddress);
+        verifierBackendHash = backendHash;
+        proofFamilyHash = familyHash;
+        networkId = configuredNetworkId;
+        expectedSourceDomain = configuredSourceDomain;
+        expectedTargetDomain = configuredTargetDomain;
+
+        emit VerifierBound(
+            verifierAddress,
+            backendHash,
+            familyHash
+        );
     }
 
     function submitSccpMessageProof(
@@ -56,14 +68,39 @@ contract SccpMessageBridge is Ownable {
         bytes32[6] calldata publicInputs,
         bytes32 statementHash
     ) external returns (bytes32 messageId) {
-        require(address(verifier) != address(0), "Verifier is not configured");
-
+        bytes32 destinationBindingHash = keccak256(
+            abi.encode(
+                DESTINATION_BINDING_DOMAIN_SEPARATOR,
+                verifierBackendHash,
+                proofFamilyHash,
+                networkId,
+                uint256(expectedSourceDomain),
+                uint256(expectedTargetDomain),
+                address(verifier),
+                address(this)
+            )
+        );
         uint32 sourceDomain;
         bytes32 commitmentRoot;
         (messageId, sourceDomain, commitmentRoot) = verifier
-            .verifySccpMessageProof(proofBytes, publicInputs, statementHash);
+            .verifySccpMessageProof(
+                proofBytes,
+                publicInputs,
+                statementHash,
+                destinationBindingHash
+            );
 
         require(messageId != bytes32(0), "Verifier returned empty message id");
+        require(sourceDomain == expectedSourceDomain, "Unexpected source domain");
+        require(publicInputs[0] == messageId, "Public inputs message id mismatch");
+        require(
+            publicInputs[2] == _abiWordU32(expectedTargetDomain),
+            "Unexpected target domain"
+        );
+        require(
+            publicInputs[3] == commitmentRoot,
+            "Public inputs commitment root mismatch"
+        );
         require(
             !usedMessageProofs[messageId],
             "Message proof already used"
@@ -81,21 +118,7 @@ contract SccpMessageBridge is Ownable {
         );
     }
 
-    function _configureVerifier(
-        address verifierAddress,
-        string memory verifierBackendKey,
-        string memory proofFamily
-    ) internal {
-        require(verifierAddress != address(0), "Verifier address is required");
-
-        verifier = ISccpMessageVerifier(verifierAddress);
-        verifierBackendHash = keccak256(bytes(verifierBackendKey));
-        proofFamilyHash = keccak256(bytes(proofFamily));
-
-        emit VerifierConfigured(
-            verifierAddress,
-            verifierBackendHash,
-            proofFamilyHash
-        );
+    function _abiWordU32(uint32 value) internal pure returns (bytes32 out) {
+        out = bytes32(uint256(value));
     }
 }

@@ -95,6 +95,21 @@ async function main() {
       "evm-secp256k1-keccak-v1",
       "stark-fri-v1",
       ethers.encodeBytes32String("evm-devnet"),
+      0,
+      1,
+    ]
+  );
+  const wrongLaneBridge = await deploy(
+    signer,
+    bridgeArtifact.abi,
+    bridgeArtifact.bytecode,
+    [
+      await verifier.getAddress(),
+      "evm-secp256k1-keccak-v1",
+      "stark-fri-v1",
+      ethers.encodeBytes32String("evm-devnet"),
+      0,
+      2,
     ]
   );
 
@@ -116,9 +131,49 @@ async function main() {
     )
   );
   const nativeProofHash = ethers.keccak256(nativeProofBytes);
+  const verifierBackendHash = ethers.keccak256(
+    ethers.toUtf8Bytes("evm-secp256k1-keccak-v1")
+  );
+  const proofFamilyHash = ethers.keccak256(ethers.toUtf8Bytes("stark-fri-v1"));
+  const networkId = ethers.encodeBytes32String("evm-devnet");
+  const destinationBindingHash = ethers.keccak256(
+    abi.encode(
+      [
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "uint256",
+        "uint256",
+        "address",
+        "address",
+      ],
+      [
+        ethers.keccak256(
+          ethers.toUtf8Bytes("iroha:sccp:evm-destination-binding:v1")
+        ),
+        verifierBackendHash,
+        proofFamilyHash,
+        networkId,
+        0,
+        1,
+        await verifier.getAddress(),
+        await bridge.getAddress(),
+      ]
+    )
+  );
   const attestationDigest = ethers.keccak256(
     abi.encode(
-      ["bytes32", "bytes32", "uint256", "bytes32", "bytes32", "bytes32", "bytes32"],
+      [
+        "bytes32",
+        "bytes32",
+        "uint256",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+        "bytes32",
+      ],
       [
         ethers.keccak256(ethers.toUtf8Bytes("iroha:sccp:evm-attestation:v1")),
         messageId,
@@ -127,18 +182,20 @@ async function main() {
         publicInputsHash,
         statementHash,
         nativeProofHash,
+        destinationBindingHash,
       ]
     )
   );
   const attestationSignature = attestor.signingKey.sign(attestationDigest).serialized;
   const proofBytes = abi.encode(
-    ["uint256", "bytes32", "uint256", "bytes32", "bytes32", "bytes"],
+    ["uint256", "bytes32", "uint256", "bytes32", "bytes32", "bytes32", "bytes"],
     [
       1,
       messageId,
       0,
       publicInputs[3],
       nativeProofHash,
+      destinationBindingHash,
       attestationSignature,
     ]
   );
@@ -164,14 +221,27 @@ async function main() {
     (error) => error && error.code === "CALL_EXCEPTION"
   );
 
+  await assert.rejects(
+    async () => {
+      const wrongLaneTx = await wrongLaneBridge.submitSccpMessageProof(
+        proofBytes,
+        publicInputs,
+        statementHash
+      );
+      await wrongLaneTx.wait();
+    },
+    (error) => error && error.code === "CALL_EXCEPTION"
+  );
+
   const tamperedProofBytes = abi.encode(
-    ["uint256", "bytes32", "uint256", "bytes32", "bytes32", "bytes"],
+    ["uint256", "bytes32", "uint256", "bytes32", "bytes32", "bytes32", "bytes"],
     [
       1,
       ethers.keccak256(ethers.toUtf8Bytes("message-2")),
       0,
       publicInputs[3],
       nativeProofHash,
+      destinationBindingHash,
       attestationSignature,
     ]
   );
@@ -203,13 +273,14 @@ async function main() {
   const unauthorized = ethers.Wallet.createRandom();
   const unauthorizedSignature = unauthorized.signingKey.sign(attestationDigest).serialized;
   const unauthorizedProofBytes = abi.encode(
-    ["uint256", "bytes32", "uint256", "bytes32", "bytes32", "bytes"],
+    ["uint256", "bytes32", "uint256", "bytes32", "bytes32", "bytes32", "bytes"],
     [
       1,
       messageId,
       0,
       publicInputs[3],
       nativeProofHash,
+      destinationBindingHash,
       unauthorizedSignature,
     ]
   );

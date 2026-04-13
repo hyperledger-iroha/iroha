@@ -68,10 +68,9 @@ justification wrapper for bridge protocols that prefer the separation.
 6. Verify signatures in the commit certificate against the header hash using
    the referenced validator public keys and indices; enforce quorum
    (`2f+1` when `n>3`, else `n`) and reject duplicate/out‑of‑range indices.
-7. Optionally bind to a trusted checkpoint by comparing the validator set hash
-   to an anchored value (weak‑subjectivity anchor).
-8. Optionally bind to an expected epoch anchor so proofs from older/newer
-   epochs are rejected until the anchor is rotated intentionally.
+7. Bind to a trusted validator-set hash anchor (weak-subjectivity anchor).
+8. Bind to an expected epoch anchor so proofs from older/newer epochs are
+   rejected until the anchor is rotated intentionally.
 
 `BridgeFinalityVerifier` (in `iroha_data_model::bridge`) applies these checks,
 rejecting chain-id/height drift, validator-set hash/version mismatches, missing
@@ -81,15 +80,15 @@ verifier.
 
 ## Reference verifier
 
-`BridgeFinalityVerifier` accepts an expected `chain_id` plus optional trusted
+`BridgeFinalityVerifier` accepts an expected `chain_id` plus explicit trusted
 validator-set and epoch anchors. It enforces the header/block-hash/
 commit-certificate tuple, validates validator-set hash/version, checks
 signatures/quorum against the advertised validator roster, and tracks the latest
 height to reject stale/skipped proofs. When anchors are supplied it rejects
 replays across epochs/rosters with explicit `UnexpectedEpoch`/
-`UnexpectedValidatorSet` errors; without anchors it adopts the first proof's
-validator-set hash and epoch before continuing to enforce duplicate/out-of-
-range/insufficient signatures with deterministic errors.
+`UnexpectedValidatorSet` errors. Proofs without both anchors are rejected with
+`MissingEpochAnchor` / `MissingValidatorSetAnchor`; the verifier no longer
+bootstraps trust from the first observed proof.
 
 ## API surface
 

@@ -131,14 +131,38 @@ iroha app soracloud secret-status --container ./container_manifest.json --servic
 iroha app soracloud rollback --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
 ```
 
+Before treating a hosted-HTTP release as complete, run the Linux/KVM Firecracker
+smoke on a real host with the same guest asset class you plan to publish:
+
+```bash
+sudo \
+  IROHA_INROU_LINUX_KVM_KERNEL_IMAGE=/var/lib/inrou/vmlinux \
+  IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE=/var/lib/inrou/debian-slim.ext4 \
+  IROHA_INROU_LINUX_KVM_INITRD_IMAGE=/var/lib/inrou/initrd.img \
+  scripts/ci/run_inrou_linux_kvm_smoke.sh
+```
+
+That harness validates the real `HttpService + Inrou` path, not the local
+`dev.sh` shim. It also exercises the shared-volume path through the private
+host/guest network, so the Linux host needs `exportfs` and `rpc.nfsd`
+available alongside Firecracker, and the Debian slim guest image needs a
+working `mount.nfs` client path so the shared volume still mounts under
+isolated egress. The ignored guest suite now covers both single-replica boot
+and the two-replica shared-volume/root-isolation path.
+
 The same `--container` plus `--service` manifest pair also works for other
-service-bound Soracloud commands such as `hf-deploy`, `hf-lease-renew`,
+service-bound Soracloud commands such as `hf-deploy`, `hf-status`, `hf-lease-renew`,
 `hf-lease-leave`, `training-job-*`, `model-artifact-*`, `model-weight-*`,
-`model-upload-status`, and `model-compile-status`. For `status`, the
+`model-upload-encryption-recipient`, `model-upload-init`,
+`model-upload-chunk`, `model-upload-finalize`, `model-upload-status`,
+`model-compile`, `model-compile-status`, `model-allow`,
+`model-run-private`, `model-run-status`, `model-decrypt-output`, and
+`model-publish-private`. For `status`, the
 manifest-pair form also keeps the same local route and workspace-script
 projection that `local-plan` reports. The direct `deploy` and `upgrade`
 commands now keep that same local projection in their response as well, and
-manifest-pair `rollback` / `rollout` responses attach it under `service_plan`.
+manifest-pair `config-*`, `secret-*`, `rollback`, `rollout`, HF, training-job,
+and model registry/status responses attach it under `service_plan`.
 
 Root-bound single-api app:
 
@@ -222,8 +246,9 @@ service reference can declare its own `bundle_file`, letting one command
 refresh every `bundle_hash` and referenced container manifest hash before
 deployment. The same path also works for single-api apps, where the manifest
 tracks `services/api/build/api-service.to`. The local-plan output also reports
-the manifest-adjacent root scripts that the generated workspace and CLI
-wrappers use for `local-dev`, `build-and-sync`, `deploy`, and `upgrade`.
+the root `manifest_path` and the manifest-adjacent root scripts that the
+generated workspace and CLI wrappers use for `local-dev`, `build-and-sync`,
+`deploy`, and `upgrade`.
 
 ## 4. Publish Frontend Assets
 
@@ -284,6 +309,9 @@ The app deploy flow:
 - split-app: returns the published `cid_gateway_url` for CID-only frontends
 - split-app: deploys the hosted `services/live` API
 - split-app: deploys the deterministic `services/vault` API
+- both modes: return the root app `manifest_path`, root `workspace_dir`, root
+  `workspace_scripts`, the top-level app `routes` split, and one
+  manifest-derived service entry per app service
 
 ## 6. Validate Routing and Runtime State
 
@@ -310,9 +338,10 @@ iroha app soracloud app status \
 ```
 
 `app status` keeps one entry per service declared in the app manifest and
-reports each child `container_manifest_path`, `service_manifest_path`,
-`workspace_dir`, plane/runtime, route prefix, the frontend publish projection,
-and the matched Torii status when present.
+reports each child `container_manifest_path`, `service_manifest_path`, the root
+`manifest_path`, root `workspace_dir`, root `workspace_scripts`, plane/runtime,
+route prefix, the top-level app `routes` split, the frontend publish
+projection, and the matched Torii status when present.
 
 Expected checks for a single-api app:
 

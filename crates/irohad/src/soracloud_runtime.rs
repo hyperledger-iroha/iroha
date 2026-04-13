@@ -29,26 +29,26 @@ use std::{
 use eyre::WrapErr;
 use iroha_core::soracloud_runtime::{
     SORACLOUD_APARTMENT_AUTONOMY_EXECUTION_SUMMARY_VERSION_V1,
-    SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1,
-    SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_VERSION_V1,
+    SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1, SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_VERSION_V1,
     SoracloudApartmentAutonomyExecutionSummaryV1, SoracloudApartmentAutonomyWorkflowStepSummaryV1,
     SoracloudApartmentExecutionRequest, SoracloudApartmentExecutionResult,
     SoracloudHostedHttpReplicaRuntimeStateV1, SoracloudHostedHttpRuntimeStateV1,
-    SoracloudLocalReadRequest, SoracloudLocalReadResponse,
-    SoracloudOrderedMailboxExecutionRequest, SoracloudOrderedMailboxExecutionResult,
-    SoracloudPrivateInferenceExecutionAction, SoracloudPrivateInferenceExecutionRequest,
-    SoracloudPrivateInferenceExecutionResult, SoracloudRuntime, SoracloudRuntimeApartmentPlan,
-    SoracloudRuntimeArtifactPlan, SoracloudRuntimeExecutionError,
-    SoracloudRuntimeExecutionErrorKind, SoracloudRuntimeHfSourcePlan,
-    SoracloudRuntimeHfSourceStatus, SoracloudRuntimeInrouPlan, SoracloudRuntimeLeaseVolumePlan,
-    SoracloudRuntimeMailboxPlan, SoracloudRuntimeReadHandle, SoracloudRuntimeRevisionRole,
-    SoracloudRuntimeReplicaPlan, SoracloudRuntimeServicePlan, SoracloudRuntimeSnapshot,
-    SoracloudUploadedModelEncryptionRecipient, soracloud_hf_generated_bundle_payload_if_applicable,
-    soracloud_hf_generated_source_binding,
+    SoracloudLocalReadRequest, SoracloudLocalReadResponse, SoracloudOrderedMailboxExecutionRequest,
+    SoracloudOrderedMailboxExecutionResult, SoracloudPrivateInferenceExecutionAction,
+    SoracloudPrivateInferenceExecutionRequest, SoracloudPrivateInferenceExecutionResult,
+    SoracloudRuntime, SoracloudRuntimeApartmentPlan, SoracloudRuntimeArtifactPlan,
+    SoracloudRuntimeExecutionError, SoracloudRuntimeExecutionErrorKind,
+    SoracloudRuntimeHfSourcePlan, SoracloudRuntimeHfSourceStatus, SoracloudRuntimeInrouPlan,
+    SoracloudRuntimeLeaseVolumePlan, SoracloudRuntimeMailboxPlan, SoracloudRuntimeReadHandle,
+    SoracloudRuntimeReplicaPlan, SoracloudRuntimeRevisionRole, SoracloudRuntimeServicePlan,
+    SoracloudRuntimeSnapshot, SoracloudUploadedModelEncryptionRecipient,
+    soracloud_hf_generated_bundle_payload_if_applicable, soracloud_hf_generated_source_binding,
 };
 use iroha_core::state::{State, StateReadOnly, StateView, WorldReadOnly};
 use iroha_core::{queue::Queue, tx::AcceptedTransaction};
 use iroha_crypto::{Hash, KeyPair};
+#[cfg(test)]
+use iroha_data_model::soracloud::SoraNetworkAllowlistEntryV1;
 use iroha_data_model::{
     ChainId, Encode,
     account::AccountId,
@@ -64,11 +64,10 @@ use iroha_data_model::{
         SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1, SoraHfPlacementRecordV1,
         SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1, SoraHfSourceStatusV1,
         SoraLeaseVolumeKindV1, SoraModelHostViolationKindV1, SoraModelPrivacyModeV1,
-        SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1,
-        SoraPrivateInferenceSessionStatusV1, SoraPrivateInferenceSessionV1,
-        SoraRouteVisibilityV1, SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1,
-        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceHealthStatusV1,
-        SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
+        SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
+        SoraPrivateInferenceSessionV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
+        SoraServiceDeploymentStateV1, SoraServiceHandlerClassV1, SoraServiceHandlerV1,
+        SoraServiceHealthStatusV1, SoraServiceLifecycleActionV1, SoraServiceMailboxMessageV1,
         SoraServiceRuntimeStateV1, SoraServiceStateEntryV1, SoraStateBindingV1,
         SoraStateMutationOperationV1, SoraUploadedModelBindingStatusV1, SoraUploadedModelBundleV1,
         SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
@@ -86,8 +85,6 @@ use iroha_data_model::{
     sorafs::pin_registry::ManifestDigest,
     transaction::TransactionBuilder,
 };
-#[cfg(test)]
-use iroha_data_model::soracloud::SoraNetworkAllowlistEntryV1;
 use iroha_futures::supervisor::{Child, OnShutdown, ShutdownSignal};
 use iroha_torii::sorafs::{
     EndpointKind, ProviderAdvertCache, ReplicationOrderV1, TransportProtocol,
@@ -245,6 +242,10 @@ impl SoracloudRuntimeMutationSink for QueuedSoracloudRuntimeMutationSink {
             "/internal/soracloud/runtime/model-host-heartbeat",
         )
     }
+}
+
+fn inrou_host_platform_supports_local_materialization() -> bool {
+    cfg!(target_os = "linux")
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2121,12 +2122,14 @@ struct HostedHttpWorker {
 struct InrouTapNetworkAttachment {
     ip_binary: PathBuf,
     iptables_binary: PathBuf,
+    exportfs_binary: Option<PathBuf>,
     tap_name: String,
     host_ip: String,
     guest_ip: String,
     guest_mac: String,
     firewall_plan: InrouTapFirewallPlan,
     installed_firewall_rules: Vec<Vec<String>>,
+    installed_nfs_exports: Vec<InrouNfsExport>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2147,6 +2150,13 @@ struct InrouTapResolvedAllowlistEndpoint {
 struct InrouTapFirewallRuleSpec {
     args: Vec<String>,
     context: &'static str,
+}
+
+#[cfg(target_os = "linux")]
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct InrouNfsExport {
+    guest_client: String,
+    export_path_on_host: PathBuf,
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -2434,7 +2444,8 @@ impl SoracloudRuntimeManager {
             .filter_map(|(service_name, versions)| {
                 versions.iter().find_map(|(service_version, plan)| {
                     (plan.runtime == SoraContainerRuntimeV1::Inrou
-                        && plan.role == SoracloudRuntimeRevisionRole::Active)
+                        && plan.role == SoracloudRuntimeRevisionRole::Active
+                        && !plan.local_replica_slots.is_empty())
                         .then_some((service_name.clone(), service_version.clone()))
                 })
             })
@@ -2447,6 +2458,7 @@ impl SoracloudRuntimeManager {
             let Some((service_version, plan)) = versions.iter().find(|(_service_version, plan)| {
                 plan.runtime == SoraContainerRuntimeV1::Inrou
                     && plan.role == SoracloudRuntimeRevisionRole::Active
+                    && !plan.local_replica_slots.is_empty()
             }) else {
                 continue;
             };
@@ -2680,13 +2692,15 @@ impl SoracloudRuntimeManager {
                 })
             })
             .flat_map(|(service_name, service_version)| {
-                bundle_registry
-                    .get(&(service_name.clone(), service_version.clone()))
+                snapshot
+                    .services
+                    .get(&service_name)
+                    .and_then(|versions| versions.get(&service_version))
                     .into_iter()
-                    .flat_map(move |bundle| {
+                    .flat_map(move |plan| {
                         let service_name = service_name.clone();
                         let service_version = service_version.clone();
-                        (1..=bundle.service.replicas.get()).map(move |replica_slot| {
+                        plan.local_replica_slots.iter().copied().map(move |replica_slot| {
                             (service_name.clone(), service_version.clone(), replica_slot)
                         })
                     })
@@ -2842,20 +2856,18 @@ impl SoracloudRuntimeManager {
                             running_processes = running_processes.saturating_sub(1);
                         }
                         if !replica_plan.bundle_available_locally {
-                            replica_runtime_states.push(
-                                persist_hosted_http_replica_runtime_state(
-                                    &PathBuf::from(&replica_plan.materialization_dir),
-                                    service_name,
-                                    service_version,
-                                    process_generation,
-                                    replica_slot,
-                                    SoraServiceHealthStatusV1::Hydrating,
-                                    None,
-                                    None,
-                                    accounted_egress_bytes,
-                                    Some(format!("{runtime_label} bundle is still hydrating")),
-                                )?,
-                            );
+                            replica_runtime_states.push(persist_hosted_http_replica_runtime_state(
+                                &PathBuf::from(&replica_plan.materialization_dir),
+                                service_name,
+                                service_version,
+                                process_generation,
+                                replica_slot,
+                                SoraServiceHealthStatusV1::Hydrating,
+                                None,
+                                None,
+                                accounted_egress_bytes,
+                                Some(format!("{runtime_label} bundle is still hydrating")),
+                            )?);
                             replica_accounted_egress_bytes.push(accounted_egress_bytes);
                             continue;
                         }
@@ -2980,12 +2992,10 @@ impl SoracloudRuntimeManager {
                     revision_lease_accounting_offset_bytes,
                     &replica_accounted_egress_bytes,
                 );
-                let revision_listen_base_url = aggregate_hosted_http_revision_listener(
-                    &replica_runtime_states,
-                )
-                .map(ToOwned::to_owned);
-                let revision_pid =
-                    aggregate_hosted_http_revision_pid(&replica_runtime_states);
+                let revision_listen_base_url =
+                    aggregate_hosted_http_revision_listener(&replica_runtime_states)
+                        .map(ToOwned::to_owned);
+                let revision_pid = aggregate_hosted_http_revision_pid(&replica_runtime_states);
                 let revision_last_error =
                     aggregate_hosted_http_revision_last_error(&replica_runtime_states);
                 write_hosted_http_runtime_state(
@@ -3045,9 +3055,7 @@ impl SoracloudRuntimeManager {
             let _ = bundle;
             let _ = cache_key;
             let _ = egress_accounting_offset_bytes;
-            eyre::bail!(
-                "Inrou sandbox execution is currently available only on Linux/KVM hosts"
-            );
+            eyre::bail!("Inrou sandbox execution is currently available only on Linux/KVM hosts");
         }
     }
 
@@ -3123,43 +3131,54 @@ impl SoracloudRuntimeManager {
         let mut network_attachment =
             setup_inrou_tap_network(&cache_key, &materialization_dir, firewall_plan)
                 .wrap_err("setup Inrou tap network")?;
-        let root_disk_path = match plan
-            .lease_volumes
-            .iter()
-            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
-        {
-            Some(root_volume) => ensure_inrou_root_disk(&base_rootfs_image_path, root_volume)
-                .wrap_err("prepare Inrou mutable root disk")?,
-            None => eyre::bail!("Inrou runtime requires one PersistentRootLeaseVolume"),
+        let startup_paths = (|| -> eyre::Result<(PathBuf, PathBuf)> {
+            let root_disk_path = match plan
+                .lease_volumes
+                .iter()
+                .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            {
+                Some(root_volume) => ensure_inrou_root_disk(&base_rootfs_image_path, root_volume)
+                    .wrap_err("prepare Inrou mutable root disk")?,
+                None => eyre::bail!("Inrou runtime requires one PersistentRootLeaseVolume"),
+            };
+            let shared_filesystem_mounts =
+                ensure_inrou_shared_filesystem_mounts(plan, &mut network_attachment)
+                    .wrap_err("prepare Inrou shared lease exports")?;
+            let seed_image_path = build_inrou_bootstrap_seed(
+                &mke2fs,
+                &materialization_dir,
+                plan,
+                &cache_key,
+                guest_port,
+                &network_attachment,
+                &shared_filesystem_mounts,
+                bootstrap_user_data.as_deref(),
+            )
+            .wrap_err("build Inrou bootstrap seed image")?;
+            let firecracker_config_path = write_inrou_firecracker_config(
+                &materialization_dir,
+                &kernel_image_path,
+                initrd_image_path.as_deref(),
+                &root_disk_path,
+                &seed_image_path,
+                &network_attachment,
+                bundle.container.resources,
+            )
+            .wrap_err("write Inrou Firecracker config")?;
+            let api_socket_path = materialization_dir.join("firecracker.sock");
+            if api_socket_path.exists() {
+                fs::remove_file(&api_socket_path)
+                    .wrap_err_with(|| format!("remove stale {}", api_socket_path.display()))?;
+            }
+            Ok((firecracker_config_path, api_socket_path))
+        })();
+        let (firecracker_config_path, api_socket_path) = match startup_paths {
+            Ok(paths) => paths,
+            Err(error) => {
+                network_attachment.cleanup();
+                return Err(error);
+            }
         };
-        let attached_data_disks = ensure_inrou_attached_data_disks(&mke2fs, plan)
-            .wrap_err("prepare Inrou lease disks")?;
-        let seed_image_path = build_inrou_bootstrap_seed(
-            &mke2fs,
-            &materialization_dir,
-            plan,
-            &cache_key,
-            guest_port,
-            &network_attachment,
-            bootstrap_user_data.as_deref(),
-        )
-        .wrap_err("build Inrou bootstrap seed image")?;
-        let firecracker_config_path = write_inrou_firecracker_config(
-            &materialization_dir,
-            &kernel_image_path,
-            initrd_image_path.as_deref(),
-            &root_disk_path,
-            &seed_image_path,
-            &attached_data_disks,
-            &network_attachment,
-            bundle.container.resources,
-        )
-        .wrap_err("write Inrou Firecracker config")?;
-        let api_socket_path = materialization_dir.join("firecracker.sock");
-        if api_socket_path.exists() {
-            fs::remove_file(&api_socket_path)
-                .wrap_err_with(|| format!("remove stale {}", api_socket_path.display()))?;
-        }
 
         let mut command = Command::new(&firecracker);
         command
@@ -6523,7 +6542,10 @@ fn resolve_generated_hf_apartment_service(
                 deployment.current_service_version.clone(),
             ))?;
             let route = bundle.service.route.as_ref()?;
-            if !allowed_hosts.iter().any(|allowed| allowed.matches_host(&route.host)) {
+            if !allowed_hosts
+                .iter()
+                .any(|allowed| allowed.matches_host(&route.host))
+            {
                 return None;
             }
             if bundle.container_manifest_hash() != record.manifest.container.manifest_hash {
@@ -8099,14 +8121,13 @@ fn build_runtime_snapshot(
             let hydration_complete = artifact_plans
                 .iter()
                 .all(|artifact| artifact.available_locally);
-            let lease_volumes =
-                build_lease_volume_plans(
-                    bundle,
-                    deployment,
-                    state_dir,
-                    &service_name,
-                    &service_version,
-                );
+            let lease_volumes = build_lease_volume_plans(
+                bundle,
+                deployment,
+                state_dir,
+                &service_name,
+                &service_version,
+            );
             let hosted_http_lease_active = bundle.service.execution_plane
                 != iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService
                 || (deployment.hosted_service_lease_active_at(current_sequence)
@@ -8187,7 +8208,9 @@ fn build_runtime_snapshot(
                     volume.mount_path.clone(),
                 );
             }
-            let local_replicas = if bundle.container.runtime == SoraContainerRuntimeV1::Inrou {
+            let local_replicas = if bundle.container.runtime == SoraContainerRuntimeV1::Inrou
+                && inrou_host_platform_supports_local_materialization()
+            {
                 build_hosted_http_local_replica_plans(
                     &service_dir,
                     bundle.service.replicas.get(),
@@ -8216,7 +8239,9 @@ fn build_runtime_snapshot(
                         is_runtime_active.then_some(deployment.process_generation)
                     }
                     SoraContainerRuntimeV1::Inrou => {
-                        hosted_http_lease_active.then_some(deployment.process_generation)
+                        (hosted_http_lease_active
+                            && inrou_host_platform_supports_local_materialization())
+                        .then_some(deployment.process_generation)
                     }
                 },
                 desired_replica_count: bundle.service.replicas.get(),
@@ -9703,7 +9728,9 @@ fn aggregate_hosted_http_revision_pid(
 fn aggregate_hosted_http_revision_last_error(
     replicas: &[SoracloudHostedHttpReplicaRuntimeStateV1],
 ) -> Option<String> {
-    replicas.iter().find_map(|replica| replica.last_error.clone())
+    replicas
+        .iter()
+        .find_map(|replica| replica.last_error.clone())
 }
 
 fn aggregate_hosted_http_revision_accounted_egress_bytes(
@@ -9777,11 +9804,11 @@ fn project_hosted_http_replica_plan(
     replica_slot: u16,
 ) -> SoracloudRuntimeServicePlan {
     let mut replica_plan = plan.clone();
-    let replica_materialization_dir =
-        hosted_http_replica_materialization_dir(&PathBuf::from(&plan.materialization_dir), replica_slot);
-    replica_plan.materialization_dir = replica_materialization_dir
-        .display()
-        .to_string();
+    let replica_materialization_dir = hosted_http_replica_materialization_dir(
+        &PathBuf::from(&plan.materialization_dir),
+        replica_slot,
+    );
+    replica_plan.materialization_dir = replica_materialization_dir.display().to_string();
     replica_plan.local_replica_slots = vec![replica_slot];
     replica_plan.local_replicas = plan
         .local_replicas
@@ -9799,9 +9826,10 @@ fn project_hosted_http_replica_plan(
                 last_error: None,
             }]
         });
-    replica_plan
-        .effective_env
-        .insert("SORACLOUD_REPLICA_SLOT".to_owned(), replica_slot.to_string());
+    replica_plan.effective_env.insert(
+        "SORACLOUD_REPLICA_SLOT".to_owned(),
+        replica_slot.to_string(),
+    );
     for volume in &mut replica_plan.lease_volumes {
         if volume.kind.is_per_replica() {
             volume.local_materialization_dir = hosted_http_per_replica_volume_materialization_dir(
@@ -9846,11 +9874,10 @@ fn build_hosted_http_service_volume_dir(
 }
 
 #[cfg(target_os = "linux")]
-struct InrouAttachedDisk {
-    path_on_host: PathBuf,
+struct InrouSharedFilesystemMount {
     mount_path: String,
-    drive_id: String,
-    guest_device_path: String,
+    guest_mount_source: String,
+    mount_options: String,
 }
 
 #[cfg(target_os = "linux")]
@@ -9858,9 +9885,23 @@ impl InrouTapNetworkAttachment {
     fn cleanup(&mut self) {
         let delete_link = ["link", "del", "dev", self.tap_name.as_str()];
 
+        if let Some(exportfs_binary) = self.exportfs_binary.as_ref() {
+            for export in self.installed_nfs_exports.iter().rev() {
+                let export_spec = format!(
+                    "{}:{}",
+                    export.guest_client,
+                    export.export_path_on_host.display()
+                );
+                let _ = Command::new(exportfs_binary)
+                    .args(["-u", export_spec.as_str()])
+                    .status();
+            }
+        }
         for args in self.installed_firewall_rules.iter().rev() {
             let delete_args = inrou_tap_delete_rule_args(args);
-            let _ = Command::new(&self.iptables_binary).args(&delete_args).status();
+            let _ = Command::new(&self.iptables_binary)
+                .args(&delete_args)
+                .status();
         }
         let _ = Command::new(&self.ip_binary).args(delete_link).status();
     }
@@ -9895,6 +9936,26 @@ impl InrouTapNetworkAttachment {
 #[cfg(target_os = "linux")]
 fn resolve_inrou_mke2fs_executable() -> Option<PathBuf> {
     resolve_executable_on_path("mke2fs").or_else(|| resolve_executable_on_path("mkfs.ext4"))
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_inrou_exportfs_executable() -> Option<PathBuf> {
+    resolve_executable_on_path("exportfs")
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_inrou_rpc_nfsd_executable() -> Option<PathBuf> {
+    resolve_executable_on_path("rpc.nfsd")
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_inrou_mount_executable() -> Option<PathBuf> {
+    resolve_executable_on_path("mount")
+}
+
+#[cfg(target_os = "linux")]
+fn resolve_inrou_chown_executable() -> Option<PathBuf> {
+    resolve_executable_on_path("chown")
 }
 
 #[cfg(target_os = "linux")]
@@ -9957,46 +10018,100 @@ fn ensure_inrou_root_disk(
 }
 
 #[cfg(target_os = "linux")]
-fn ensure_inrou_attached_data_disks(
-    mke2fs: &Path,
+fn ensure_inrou_nfs_server_running(
+    mount_binary: &Path,
+    rpc_nfsd_binary: &Path,
+) -> eyre::Result<()> {
+    let threads_path = Path::new("/proc/fs/nfsd/threads");
+    if !threads_path.exists() {
+        run_host_command(mount_binary, &["-t", "nfsd", "nfsd", "/proc/fs/nfsd"])
+            .wrap_err("mount nfsd pseudo-filesystem for Inrou shared storage")?;
+    }
+    if !threads_path.exists() {
+        eyre::bail!("/proc/fs/nfsd/threads is unavailable after mounting nfsd");
+    }
+    let current_threads = fs::read_to_string(threads_path)
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    if current_threads > 0 {
+        return Ok(());
+    }
+    run_host_command(rpc_nfsd_binary, &["8"]).wrap_err("start kernel nfsd threads for Inrou")?;
+    let current_threads = fs::read_to_string(threads_path)
+        .ok()
+        .and_then(|value| value.trim().parse::<u32>().ok())
+        .unwrap_or(0);
+    if current_threads == 0 {
+        eyre::bail!("rpc.nfsd did not report any running threads after startup");
+    }
+    Ok(())
+}
+
+#[cfg(target_os = "linux")]
+fn ensure_inrou_shared_filesystem_mounts(
     plan: &SoracloudRuntimeServicePlan,
-) -> eyre::Result<Vec<InrouAttachedDisk>> {
-    let mut disks = Vec::new();
-    for (index, volume) in plan
+    network_attachment: &mut InrouTapNetworkAttachment,
+) -> eyre::Result<Vec<InrouSharedFilesystemMount>> {
+    if !plan
+        .lease_volumes
+        .iter()
+        .any(|volume| volume.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+    {
+        return Ok(Vec::new());
+    }
+    let Some(exportfs_binary) = network_attachment.exportfs_binary.clone() else {
+        eyre::bail!("Inrou shared service volumes require `exportfs` on PATH");
+    };
+    let rpc_nfsd_binary = resolve_inrou_rpc_nfsd_executable()
+        .ok_or_else(|| eyre::eyre!("Inrou shared service volumes require `rpc.nfsd` on PATH"))?;
+    let mount_binary = resolve_inrou_mount_executable()
+        .ok_or_else(|| eyre::eyre!("Inrou shared service volumes require `mount` on PATH"))?;
+    let chown_binary = resolve_inrou_chown_executable()
+        .ok_or_else(|| eyre::eyre!("Inrou shared service volumes require `chown` on PATH"))?;
+    ensure_inrou_nfs_server_running(&mount_binary, &rpc_nfsd_binary)?;
+
+    let mut mounts = Vec::new();
+    for volume in plan
         .lease_volumes
         .iter()
         .filter(|volume| volume.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
-        .enumerate()
     {
         let volume_dir = PathBuf::from(&volume.local_materialization_dir);
         fs::create_dir_all(&volume_dir)
             .wrap_err_with(|| format!("create {}", volume_dir.display()))?;
-        let disk_path = volume_dir.join("volume.ext4");
-        if !disk_path.exists() {
-            create_blank_ext4_image(
-                mke2fs,
-                &disk_path,
-                volume.max_total_bytes,
-                &sanitize_filesystem_label(&volume.volume_name),
-            )
-            .wrap_err_with(|| {
-                format!(
-                    "create ext4 image for Inrou lease volume `{}` at {}",
-                    volume.volume_name,
-                    disk_path.display()
-                )
-            })?;
-        }
-        let drive_slot = index + 2;
-        let drive_letter = char::from(b'a' + u8::try_from(drive_slot).unwrap_or(b'z' - b'a'));
-        disks.push(InrouAttachedDisk {
-            path_on_host: disk_path,
+        fs::set_permissions(&volume_dir, fs::Permissions::from_mode(0o770))
+            .wrap_err_with(|| format!("chmod {}", volume_dir.display()))?;
+        run_host_command(
+            &chown_binary,
+            &[
+                "1000:1000",
+                volume_dir
+                    .to_str()
+                    .ok_or_else(|| eyre::eyre!("non-utf8 path"))?,
+            ],
+        )
+        .wrap_err_with(|| format!("chown shared Inrou volume {}", volume_dir.display()))?;
+        let export_options = "rw,sync,no_subtree_check,insecure";
+        let export_spec = format!("{}:{}", network_attachment.guest_ip, volume_dir.display());
+        run_host_command(
+            &exportfs_binary,
+            &["-i", "-o", export_options, export_spec.as_str()],
+        )
+        .wrap_err_with(|| format!("export shared Inrou volume {}", volume_dir.display()))?;
+        network_attachment
+            .installed_nfs_exports
+            .push(InrouNfsExport {
+                guest_client: network_attachment.guest_ip.clone(),
+                export_path_on_host: volume_dir.clone(),
+            });
+        mounts.push(InrouSharedFilesystemMount {
             mount_path: volume.mount_path.clone(),
-            drive_id: format!("lease{index}"),
-            guest_device_path: format!("/dev/vd{drive_letter}"),
+            guest_mount_source: format!("{}:{}", network_attachment.host_ip, volume_dir.display()),
+            mount_options: "rw,hard,nofail,proto=tcp,port=2049,vers=4".to_owned(),
         });
     }
-    Ok(disks)
+    Ok(mounts)
 }
 
 #[cfg(target_os = "linux")]
@@ -10007,6 +10122,7 @@ fn build_inrou_bootstrap_seed(
     cache_key: &HostedHttpWorkerCacheKey,
     guest_port: u16,
     network_attachment: &InrouTapNetworkAttachment,
+    shared_filesystem_mounts: &[InrouSharedFilesystemMount],
     bootstrap_user_data_overlay: Option<&str>,
 ) -> eyre::Result<PathBuf> {
     let seed_root = materialization_dir.join("inrou_cloud_init");
@@ -10027,7 +10143,13 @@ fn build_inrou_bootstrap_seed(
         ))
     );
     let network_config = build_inrou_network_config(network_attachment);
-    let user_data = build_inrou_user_data(plan, cache_key, guest_port, bootstrap_user_data_overlay);
+    let user_data = build_inrou_user_data(
+        plan,
+        cache_key,
+        guest_port,
+        shared_filesystem_mounts,
+        bootstrap_user_data_overlay,
+    );
 
     write_bytes_atomic(&seed_root.join("meta-data"), metadata.as_bytes())
         .wrap_err("write Inrou cloud-init meta-data")?;
@@ -10060,7 +10182,6 @@ fn write_inrou_firecracker_config(
     initrd_image_path: Option<&Path>,
     root_disk_path: &Path,
     seed_image_path: &Path,
-    attached_data_disks: &[InrouAttachedDisk],
     network_attachment: &InrouTapNetworkAttachment,
     resources: iroha_data_model::soracloud::SoraResourceLimitsV1,
 ) -> eyre::Result<PathBuf> {
@@ -10075,13 +10196,6 @@ fn write_inrou_firecracker_config(
         "{{\"drive_id\":\"seed\",\"path_on_host\":{},\"is_root_device\":false,\"is_read_only\":true}}",
         json_string_literal(seed_image_path.display().to_string()),
     ));
-    for disk in attached_data_disks {
-        drives.push(format!(
-            "{{\"drive_id\":{},\"path_on_host\":{},\"is_root_device\":false,\"is_read_only\":false}}",
-            json_string_literal(&disk.drive_id),
-            json_string_literal(disk.path_on_host.display().to_string()),
-        ));
-    }
     let initrd_fragment = initrd_image_path.map_or_else(String::new, |initrd| {
         format!(
             ",\"initrd_path\":{}",
@@ -10126,8 +10240,14 @@ fn setup_inrou_tap_network(
         .ok_or_else(|| eyre::eyre!("Inrou runtime requires `ip` on PATH"))?;
     let iptables_binary = resolve_executable_on_path("iptables")
         .ok_or_else(|| eyre::eyre!("Inrou runtime requires `iptables` on PATH"))?;
-    let mut attachment =
-        derive_inrou_tap_network_attachment(cache_key, ip_binary, iptables_binary, firewall_plan);
+    let exportfs_binary = resolve_executable_on_path("exportfs");
+    let mut attachment = derive_inrou_tap_network_attachment(
+        cache_key,
+        ip_binary,
+        iptables_binary,
+        exportfs_binary,
+        firewall_plan,
+    );
     let host_cidr = format!("{}/30", attachment.host_ip);
     let guest_cidr = format!("{}/32", attachment.guest_ip);
 
@@ -10220,7 +10340,10 @@ fn run_host_command_strings(program: &Path, args: &[String]) -> eyre::Result<()>
 
 fn inrou_tap_delete_rule_args(args: &[String]) -> Vec<String> {
     let mut delete_args = args.to_vec();
-    if let Some(index) = delete_args.iter().position(|arg| arg == "-A" || arg == "-I") {
+    if let Some(index) = delete_args
+        .iter()
+        .position(|arg| arg == "-A" || arg == "-I")
+    {
         delete_args[index] = "-D".to_owned();
         if delete_args
             .get(index + 2)
@@ -10238,6 +10361,22 @@ fn planned_inrou_tap_firewall_rules(
     firewall_plan: &InrouTapFirewallPlan,
 ) -> Vec<InrouTapFirewallRuleSpec> {
     let mut rules = Vec::new();
+    rules.push(InrouTapFirewallRuleSpec {
+        args: vec![
+            "-I".to_owned(),
+            "INPUT".to_owned(),
+            "1".to_owned(),
+            "-i".to_owned(),
+            tap_name.to_owned(),
+            "-p".to_owned(),
+            "tcp".to_owned(),
+            "--dport".to_owned(),
+            "2049".to_owned(),
+            "-j".to_owned(),
+            "ACCEPT".to_owned(),
+        ],
+        context: "install Inrou shared-storage ingress rule",
+    });
     if firewall_plan.installs_masquerade_rule() {
         rules.push(InrouTapFirewallRuleSpec {
             args: vec![
@@ -10346,9 +10485,9 @@ fn resolve_inrou_allowlist_endpoints(
             }
         } else {
             for port in &entry.ports {
-                let addresses = (host, *port)
-                    .to_socket_addrs()
-                    .wrap_err_with(|| format!("resolve allowlist host `{host}` on port `{port}`"))?;
+                let addresses = (host, *port).to_socket_addrs().wrap_err_with(|| {
+                    format!("resolve allowlist host `{host}` on port `{port}`")
+                })?;
                 for address in addresses {
                     if let SocketAddr::V4(address) = address {
                         host_endpoints.insert(InrouTapResolvedAllowlistEndpoint {
@@ -10376,6 +10515,7 @@ fn derive_inrou_tap_network_attachment(
     cache_key: &HostedHttpWorkerCacheKey,
     ip_binary: PathBuf,
     iptables_binary: PathBuf,
+    exportfs_binary: Option<PathBuf>,
     firewall_plan: InrouTapFirewallPlan,
 ) -> InrouTapNetworkAttachment {
     let fingerprint = Hash::new(
@@ -10403,12 +10543,14 @@ fn derive_inrou_tap_network_attachment(
     InrouTapNetworkAttachment {
         ip_binary,
         iptables_binary,
+        exportfs_binary,
         tap_name: tap_name.chars().take(15).collect(),
         host_ip,
         guest_ip,
         guest_mac,
         firewall_plan,
         installed_firewall_rules: Vec::new(),
+        installed_nfs_exports: Vec::new(),
     }
 }
 
@@ -10442,42 +10584,6 @@ fn run_host_command(program: &Path, args: &[&str]) -> eyre::Result<()> {
             format!(" stderr={}", String::from_utf8_lossy(&output.stderr).trim())
         }
     );
-}
-
-#[cfg(target_os = "linux")]
-fn create_blank_ext4_image(
-    mke2fs: &Path,
-    image_path: &Path,
-    size_bytes: u64,
-    label: &str,
-) -> eyre::Result<()> {
-    fs::create_dir_all(
-        image_path
-            .parent()
-            .ok_or_else(|| eyre::eyre!("path must have parent: {}", image_path.display()))?,
-    )?;
-    let file = fs::OpenOptions::new()
-        .create(true)
-        .write(true)
-        .truncate(true)
-        .open(image_path)
-        .wrap_err_with(|| format!("create {}", image_path.display()))?;
-    file.set_len(size_bytes)
-        .wrap_err_with(|| format!("resize {}", image_path.display()))?;
-    run_host_command(
-        mke2fs,
-        &[
-            "-q",
-            "-t",
-            "ext4",
-            "-F",
-            "-L",
-            label,
-            image_path
-                .to_str()
-                .ok_or_else(|| eyre::eyre!("non-utf8 path"))?,
-        ],
-    )
 }
 
 #[cfg(target_os = "linux")]
@@ -10552,8 +10658,37 @@ fn build_inrou_user_data(
     plan: &SoracloudRuntimeServicePlan,
     cache_key: &HostedHttpWorkerCacheKey,
     guest_port: u16,
+    shared_filesystem_mounts: &[InrouSharedFilesystemMount],
     bootstrap_user_data_overlay: Option<&str>,
 ) -> String {
+    let mut prepare_script = String::from("#!/bin/sh\nset -eu\n");
+    prepare_script
+        .push_str("mkdir -p /var/lib/soracloud/service /var/lib/soracloud/materialization\n");
+    if !shared_filesystem_mounts.is_empty() {
+        prepare_script.push_str("if ! command -v mount.nfs >/dev/null 2>&1; then\n");
+        prepare_script.push_str(
+            "  echo 'Inrou shared service storage requires mount.nfs in the guest image' >&2\n",
+        );
+        prepare_script.push_str("  exit 1\n");
+        prepare_script.push_str("fi\n");
+        for mount in shared_filesystem_mounts {
+            prepare_script.push_str("mkdir -p ");
+            prepare_script.push_str(&shell_single_quote(&mount.mount_path));
+            prepare_script.push('\n');
+            prepare_script.push_str("if ! mountpoint -q ");
+            prepare_script.push_str(&shell_single_quote(&mount.mount_path));
+            prepare_script.push_str("; then\n");
+            prepare_script.push_str("  mount -t nfs -o ");
+            prepare_script.push_str(&shell_single_quote(&mount.mount_options));
+            prepare_script.push(' ');
+            prepare_script.push_str(&shell_single_quote(&mount.guest_mount_source));
+            prepare_script.push(' ');
+            prepare_script.push_str(&shell_single_quote(&mount.mount_path));
+            prepare_script.push('\n');
+            prepare_script.push_str("fi\n");
+        }
+    }
+
     let mut launcher_script = String::from("#!/bin/sh\nset -eu\n");
     launcher_script
         .push_str("mkdir -p /var/lib/soracloud/service /var/lib/soracloud/materialization\n");
@@ -10581,11 +10716,13 @@ fn build_inrou_user_data(
     service_unit.push_str("After=network-online.target cloud-final.service\n");
     service_unit.push_str("Wants=network-online.target\n\n");
     service_unit.push_str("[Service]\n");
+    service_unit.push_str("PermissionsStartOnly=true\n");
     service_unit.push_str("Type=simple\n");
     service_unit.push_str("User=inrou\n");
     service_unit.push_str("Group=inrou\n");
     service_unit.push_str("Restart=always\n");
     service_unit.push_str("RestartSec=2\n");
+    service_unit.push_str("ExecStartPre=/usr/local/bin/inrou-prepare.sh\n");
     service_unit.push_str("ExecStart=/usr/local/bin/inrou-launch.sh\n\n");
     service_unit.push_str("[Install]\n");
     service_unit.push_str("WantedBy=multi-user.target\n");
@@ -10595,6 +10732,7 @@ fn build_inrou_user_data(
     user_data.push_str("users:\n");
     user_data.push_str("  - name: inrou\n");
     user_data.push_str("    gecos: Inrou Tenant\n");
+    user_data.push_str("    uid: 1000\n");
     user_data.push_str("    groups: [sudo]\n");
     user_data.push_str("    sudo: [\"ALL=(ALL) NOPASSWD:ALL\"]\n");
     user_data.push_str("    shell: /bin/bash\n");
@@ -10611,6 +10749,11 @@ fn build_inrou_user_data(
         user_data.push('\n');
     }
     user_data.push_str("write_files:\n");
+    user_data.push_str("  - path: /usr/local/bin/inrou-prepare.sh\n");
+    user_data.push_str("    owner: root:root\n");
+    user_data.push_str("    permissions: '0755'\n");
+    user_data.push_str("    content: |\n");
+    user_data.push_str(&yaml_block_literal(&prepare_script, 6));
     user_data.push_str("  - path: /usr/local/bin/inrou-launch.sh\n");
     user_data.push_str("    owner: root:root\n");
     user_data.push_str("    permissions: '0755'\n");
@@ -10621,28 +10764,6 @@ fn build_inrou_user_data(
     user_data.push_str("    permissions: '0644'\n");
     user_data.push_str("    content: |\n");
     user_data.push_str(&yaml_block_literal(&service_unit, 6));
-    if !plan
-        .lease_volumes
-        .iter()
-        .filter(|volume| volume.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
-        .collect::<Vec<_>>()
-        .is_empty()
-    {
-        user_data.push_str("mounts:\n");
-        for (index, volume) in plan
-            .lease_volumes
-            .iter()
-            .filter(|volume| volume.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
-            .enumerate()
-        {
-            let drive_slot = index + 2;
-            let drive_letter = char::from(b'a' + u8::try_from(drive_slot).unwrap_or(b'z' - b'a'));
-            user_data.push_str(&format!(
-                "  - [\"/dev/vd{drive_letter}\", {}, \"ext4\", \"defaults,nofail\", \"0\", \"2\"]\n",
-                json_string_literal(&volume.mount_path),
-            ));
-        }
-    }
     user_data.push_str("runcmd:\n");
     user_data
         .push_str("  - mkdir -p /var/lib/soracloud/service /var/lib/soracloud/materialization\n");
@@ -10709,20 +10830,6 @@ fn collect_host_nameservers() -> Vec<String> {
     }
     nameservers.truncate(3);
     nameservers
-}
-
-#[cfg(target_os = "linux")]
-fn sanitize_filesystem_label(value: &str) -> String {
-    let label = sanitize_path_component(value)
-        .chars()
-        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_')
-        .take(15)
-        .collect::<String>();
-    if label.is_empty() {
-        "INROU_VOL".to_owned()
-    } else {
-        label
-    }
 }
 
 fn sanitize_env_var_component(value: &str) -> String {
@@ -10857,11 +10964,12 @@ fn probe_hosted_http_health(
     let Some(path) = healthcheck_path else {
         return Ok(());
     };
-    let url = format!(
-        "{}{}",
-        listen_base_url,
-        if path.starts_with('/') { path } else { "/" }
-    );
+    let request_path = if path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!("/{path}")
+    };
+    let url = format!("{listen_base_url}{request_path}");
     let response = reqwest::blocking::Client::builder()
         .timeout(Duration::from_secs(5))
         .build()
@@ -10870,9 +10978,34 @@ fn probe_hosted_http_health(
         .send()
         .wrap_err_with(|| format!("probe hosted-HTTP healthcheck {url}"))?;
     if !response.status().is_success() {
-        eyre::bail!("hosted-HTTP healthcheck {url} returned {}", response.status());
+        eyre::bail!(
+            "hosted-HTTP healthcheck {url} returned {}",
+            response.status()
+        );
     }
     Ok(())
+}
+
+fn fetch_hosted_http_text(listen_base_url: &str, path: &str) -> eyre::Result<String> {
+    let request_path = if path.starts_with('/') {
+        path.to_owned()
+    } else {
+        format!("/{path}")
+    };
+    let url = format!("{listen_base_url}{request_path}");
+    let response = reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .wrap_err("build hosted-HTTP client")?
+        .get(&url)
+        .send()
+        .wrap_err_with(|| format!("fetch hosted-HTTP response {url}"))?;
+    if !response.status().is_success() {
+        eyre::bail!("hosted-HTTP request {url} returned {}", response.status());
+    }
+    response
+        .text()
+        .wrap_err_with(|| format!("read hosted-HTTP response body {url}"))
 }
 
 fn remote_hydration_nonce(
@@ -11607,6 +11740,229 @@ mod tests {
             runtime_state: Some(sample_runtime_state(bundle)),
             authoritative_pending_mailbox_messages: 1,
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn sample_inrou_test_bundle() -> Result<SoraDeploymentBundleV1> {
+        let mut bundle = load_deployment_bundle_fixture()?;
+        bundle.container.runtime = SoraContainerRuntimeV1::Inrou;
+        bundle.container.inrou = Some(iroha_data_model::soracloud::SoraInrouManifestV1 {
+            schema_version: iroha_data_model::soracloud::SORA_INROU_MANIFEST_VERSION_V1,
+            guest_os: iroha_data_model::soracloud::SoraInrouGuestOsV1::DebianSlim,
+            kernel_image_path: "/inrou/vmlinux".to_owned(),
+            rootfs_image_path: "/inrou/rootfs.ext4".to_owned(),
+            initrd_image_path: Some("/inrou/initrd.img".to_owned()),
+            bootstrap_user_data_path: Some("/inrou/bootstrap-user-data.yml".to_owned()),
+            ssh_authorized_keys: vec!["ssh-ed25519 AAAATESTKEY soracloud-tests".to_owned()],
+        });
+        bundle.container.entrypoint = "/bin/sh".to_owned();
+        bundle.container.args = vec!["-lc".to_owned(), "echo inrou-test".to_owned()];
+        bundle.container.capabilities.network = SoraNetworkPolicyV1::Open;
+        bundle.container.lifecycle.start_grace_secs =
+            std::num::NonZeroU16::new(180).expect("nonzero");
+        bundle.service.execution_plane =
+            iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::HttpService;
+        bundle.service.replicas = std::num::NonZeroU16::new(1).expect("replica");
+        bundle.service.state_bindings.clear();
+        bundle.service.handlers.clear();
+        bundle.service.artifacts.clear();
+        bundle.service.lease_volumes = vec![
+            iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
+                volume_name: "root_disk".parse().expect("volume"),
+                kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+                storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+                mount_path: "/".to_owned(),
+                max_total_bytes: std::num::NonZeroU64::new(16 * 1024 * 1024 * 1024).expect("bytes"),
+            },
+            iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
+                volume_name: "index_state".parse().expect("volume"),
+                kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+                storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+                mount_path: "/var/lib/ton-indexer".to_owned(),
+                max_total_bytes: std::num::NonZeroU64::new(128 * 1024 * 1024).expect("bytes"),
+            },
+        ];
+        Ok(bundle)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn materialize_inrou_replica_plan_for_tests(
+        bundle: &SoraDeploymentBundleV1,
+    ) -> Result<(
+        tempfile::TempDir,
+        SoracloudRuntimeServicePlan,
+        HostedHttpWorkerCacheKey,
+    )> {
+        let mut state = test_state()?;
+        let deployment_state = sample_deployment_state(bundle);
+        let process_generation = deployment_state.process_generation;
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(bundle.service.service_name.clone(), deployment_state);
+        }
+
+        let temp_dir = tempfile::tempdir()?;
+        let manager = SoracloudRuntimeManager::new(
+            test_runtime_manager_config(temp_dir.path().to_path_buf()),
+            Arc::clone(&state),
+        );
+        manager.reconcile_once()?;
+
+        let service_dir = temp_dir
+            .path()
+            .join("services")
+            .join(sanitize_path_component(
+                bundle.service.service_name.as_ref(),
+            ))
+            .join(sanitize_path_component(&bundle.service.service_version));
+        let replica_plan: SoracloudRuntimeServicePlan = read_json_optional(
+            service_dir
+                .join("replicas/replica-0001/runtime_plan.json")
+                .as_path(),
+        )?
+        .expect("replica runtime plan");
+        let cache_key = HostedHttpWorkerCacheKey {
+            runtime: bundle.container.runtime,
+            service_name: bundle.service.service_name.to_string(),
+            service_version: bundle.service.service_version.clone(),
+            replica_slot: 1,
+            bundle_hash: replica_plan.bundle_hash.clone(),
+            bundle_path: replica_plan.bundle_path.clone(),
+            entrypoint: replica_plan.entrypoint.clone(),
+            process_generation,
+            args: bundle.container.args.clone(),
+            effective_env: replica_plan.effective_env.clone(),
+            healthcheck_path: bundle.container.lifecycle.healthcheck_path.clone(),
+            service_data_dir: build_native_service_data_dir(
+                temp_dir.path(),
+                bundle.service.service_name.as_ref(),
+            ),
+        };
+        Ok((temp_dir, replica_plan, cache_key))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn write_linux_test_executable(path: &Path, contents: &str) -> Result<()> {
+        fs::create_dir_all(
+            path.parent()
+                .ok_or_else(|| eyre::eyre!("missing parent for {}", path.display()))?,
+        )?;
+        fs::write(path, contents)?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o755))?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn create_inrou_bundle_archive_for_linux_test(
+        temp_dir: &Path,
+        kernel_image: &Path,
+        rootfs_image: &Path,
+        initrd_image: Option<&Path>,
+        bootstrap_overlay: &str,
+    ) -> Result<Vec<u8>> {
+        let bundle_root = temp_dir.join("bundle-root");
+        fs::create_dir_all(bundle_root.join("inrou"))?;
+        fs::copy(kernel_image, bundle_root.join("inrou/vmlinux"))?;
+        fs::copy(rootfs_image, bundle_root.join("inrou/rootfs.ext4"))?;
+        if let Some(initrd_image) = initrd_image {
+            fs::copy(initrd_image, bundle_root.join("inrou/initrd.img"))?;
+        } else {
+            fs::write(bundle_root.join("inrou/initrd.img"), b"initrd placeholder")?;
+        }
+        fs::write(
+            bundle_root.join("inrou/bootstrap-user-data.yml"),
+            bootstrap_overlay,
+        )?;
+        write_linux_test_executable(
+            &bundle_root.join("bin/sh"),
+            "#!/bin/sh\nexec /bin/sh \"$@\"\n",
+        )?;
+
+        let archive_path = temp_dir.join("inrou-test-bundle.tgz");
+        let status = Command::new("tar")
+            .arg("-czf")
+            .arg(&archive_path)
+            .arg("-C")
+            .arg(&bundle_root)
+            .arg(".")
+            .status()?;
+        if !status.success() {
+            eyre::bail!("tar failed while building Inrou Linux/KVM smoke bundle: {status}");
+        }
+        Ok(fs::read(archive_path)?)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn linux_smoke_required_env_path(name: &str) -> Result<PathBuf> {
+        let value = std::env::var(name)
+            .wrap_err_with(|| format!("missing required environment variable `{name}`"))?;
+        let path = PathBuf::from(value);
+        if !path.is_file() {
+            eyre::bail!(
+                "environment variable `{name}` must point to an existing file, got {}",
+                path.display()
+            );
+        }
+        Ok(path)
+    }
+
+    #[cfg(target_os = "linux")]
+    fn require_linux_kvm_smoke_prerequisites() -> Result<()> {
+        if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1") {
+            println!(
+                "Skipping: set IROHA_RUN_IGNORED=1 to exercise the Linux/KVM Inrou smoke test."
+            );
+            return Ok(());
+        }
+        if std::env::var("IROHA_INROU_LINUX_KVM").ok().as_deref() != Some("1") {
+            println!(
+                "Skipping: set IROHA_INROU_LINUX_KVM=1 plus explicit guest asset env vars to run the Linux/KVM Inrou smoke test."
+            );
+            return Ok(());
+        }
+        if !Path::new("/dev/kvm").exists() {
+            eyre::bail!("/dev/kvm is required for the Linux/KVM Inrou smoke test");
+        }
+        if !Path::new("/dev/net/tun").exists() {
+            eyre::bail!("/dev/net/tun is required for the Linux/KVM Inrou smoke test");
+        }
+        let uid = Command::new("id").arg("-u").output()?;
+        if !uid.status.success() || String::from_utf8_lossy(&uid.stdout).trim() != "0" {
+            eyre::bail!(
+                "Linux/KVM Inrou smoke test must run as root so tap devices and firewall rules can be created"
+            );
+        }
+        if !inrou_ip_forward_enabled()? {
+            eyre::bail!("Linux/KVM Inrou smoke test requires /proc/sys/net/ipv4/ip_forward = 1");
+        }
+        let required_programs = [
+            "firecracker",
+            "ip",
+            "iptables",
+            "tar",
+            "exportfs",
+            "rpc.nfsd",
+            "mount",
+            "chown",
+        ];
+        for program in required_programs {
+            if resolve_executable_on_path(program).is_none() {
+                eyre::bail!("Linux/KVM Inrou smoke test requires `{program}` on PATH");
+            }
+        }
+        if resolve_inrou_mke2fs_executable().is_none() {
+            eyre::bail!("Linux/KVM Inrou smoke test requires `mke2fs` or `mkfs.ext4` on PATH");
+        }
+        Ok(())
     }
 
     fn spawn_http_fixture(body: Vec<u8>) -> Result<(String, std::thread::JoinHandle<()>)> {
@@ -16017,11 +16373,26 @@ mod tests {
             .and_then(|versions| versions.get("2026.03.0"))
             .expect("canary service plan present");
 
-        assert_eq!(active_plan.process_generation, Some(expected_process_generation));
-        assert_eq!(canary_plan.process_generation, Some(expected_process_generation));
-        assert_eq!(canary_plan.role, SoracloudRuntimeRevisionRole::CanaryCandidate);
-        assert_eq!(active_plan.health_status, SoraServiceHealthStatusV1::Degraded);
-        assert_eq!(canary_plan.health_status, SoraServiceHealthStatusV1::Degraded);
+        assert_eq!(
+            active_plan.process_generation,
+            Some(expected_process_generation)
+        );
+        assert_eq!(
+            canary_plan.process_generation,
+            Some(expected_process_generation)
+        );
+        assert_eq!(
+            canary_plan.role,
+            SoracloudRuntimeRevisionRole::CanaryCandidate
+        );
+        assert_eq!(
+            active_plan.health_status,
+            SoraServiceHealthStatusV1::Degraded
+        );
+        assert_eq!(
+            canary_plan.health_status,
+            SoraServiceHealthStatusV1::Degraded
+        );
         assert!(
             temp_dir
                 .path()
@@ -16057,8 +16428,7 @@ mod tests {
                 kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
                 storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
                 mount_path: "/".to_owned(),
-                max_total_bytes: std::num::NonZeroU64::new(8 * 1024 * 1024 * 1024)
-                    .expect("bytes"),
+                max_total_bytes: std::num::NonZeroU64::new(8 * 1024 * 1024 * 1024).expect("bytes"),
             },
             iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
                 volume_name: "index_state".parse().expect("volume"),
@@ -16113,14 +16483,20 @@ mod tests {
         assert_eq!(plan.local_replica_slots, vec![1, 2]);
         assert_eq!(plan.local_replicas.len(), 2);
         assert_eq!(plan.local_replicas[0].replica_slot, 1);
-        assert_eq!(plan.local_replicas[0].health_status, SoraServiceHealthStatusV1::Degraded);
+        assert_eq!(
+            plan.local_replicas[0].health_status,
+            SoraServiceHealthStatusV1::Degraded
+        );
         assert!(
             plan.local_replicas[0]
                 .materialization_dir
                 .ends_with("services/web_portal/2026.02.0/replicas/replica-0001")
         );
         assert_eq!(plan.local_replicas[1].replica_slot, 2);
-        assert_eq!(plan.local_replicas[1].health_status, SoraServiceHealthStatusV1::Degraded);
+        assert_eq!(
+            plan.local_replicas[1].health_status,
+            SoraServiceHealthStatusV1::Degraded
+        );
         assert!(
             plan.local_replicas[1]
                 .materialization_dir
@@ -16154,11 +16530,15 @@ mod tests {
                 .exists()
         );
         let replica_one_plan: SoracloudRuntimeServicePlan = read_json_optional(
-            service_dir.join("replicas/replica-0001/runtime_plan.json").as_path(),
+            service_dir
+                .join("replicas/replica-0001/runtime_plan.json")
+                .as_path(),
         )?
         .expect("replica one runtime plan");
         let replica_two_plan: SoracloudRuntimeServicePlan = read_json_optional(
-            service_dir.join("replicas/replica-0002/runtime_plan.json").as_path(),
+            service_dir
+                .join("replicas/replica-0002/runtime_plan.json")
+                .as_path(),
         )?
         .expect("replica two runtime plan");
         let replica_one_root = replica_one_plan
@@ -16181,24 +16561,20 @@ mod tests {
             .iter()
             .find(|volume| volume.kind == SoraLeaseVolumeKindV1::ServiceLeaseVolume)
             .expect("replica two shared service volume");
-        assert!(
-            replica_one_root
-                .local_materialization_dir
-                .ends_with("service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0001/root_disk")
-        );
-        assert!(
-            replica_two_root
-                .local_materialization_dir
-                .ends_with("service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0002/root_disk")
-        );
+        assert!(replica_one_root.local_materialization_dir.ends_with(
+            "service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0001/root_disk"
+        ));
+        assert!(replica_two_root.local_materialization_dir.ends_with(
+            "service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0002/root_disk"
+        ));
         assert_eq!(
             replica_one_shared.local_materialization_dir,
             replica_two_shared.local_materialization_dir
         );
         assert!(
-            replica_one_shared
-                .local_materialization_dir
-                .ends_with("service_data/web_portal/revisions/2026.02.0/volumes/shared/index_state")
+            replica_one_shared.local_materialization_dir.ends_with(
+                "service_data/web_portal/revisions/2026.02.0/volumes/shared/index_state"
+            )
         );
         Ok(())
     }
@@ -17773,7 +18149,10 @@ mod tests {
 
     #[test]
     fn inrou_tap_firewall_plan_supports_open_and_isolated() -> Result<()> {
-        assert_eq!(inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Open)?, InrouTapFirewallPlan::Open);
+        assert_eq!(
+            inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Open)?,
+            InrouTapFirewallPlan::Open
+        );
         assert_eq!(
             inrou_tap_firewall_plan(&SoraNetworkPolicyV1::Isolated)?,
             InrouTapFirewallPlan::Isolated
@@ -17833,16 +18212,39 @@ mod tests {
                 },
             ]),
         );
-        assert_eq!(rules.len(), 5);
-        assert_eq!(rules[0].context, "install Inrou egress masquerade rule");
-        assert_eq!(rules[1].context, "install Inrou return-traffic rule");
-        assert_eq!(rules[2].context, "install Inrou allowlist default-drop rule");
-        assert_eq!(rules[3].context, "install Inrou allowlist forward rule");
+        assert_eq!(rules.len(), 6);
+        assert_eq!(
+            rules[0].context,
+            "install Inrou shared-storage ingress rule"
+        );
+        assert_eq!(rules[1].context, "install Inrou egress masquerade rule");
+        assert_eq!(rules[2].context, "install Inrou return-traffic rule");
+        assert_eq!(
+            rules[3].context,
+            "install Inrou allowlist default-drop rule"
+        );
         assert_eq!(rules[4].context, "install Inrou allowlist forward rule");
-        assert_eq!(rules[3].args[8], "127.0.0.1");
-        assert_eq!(rules[3].args[10], "443");
-        assert_eq!(rules[4].args[8], "127.0.0.2");
-        assert_eq!(rules[4].args[10], "8443");
+        assert_eq!(rules[5].context, "install Inrou allowlist forward rule");
+        assert_eq!(rules[4].args[8], "127.0.0.1");
+        assert_eq!(rules[4].args[10], "443");
+        assert_eq!(rules[5].args[8], "127.0.0.2");
+        assert_eq!(rules[5].args[10], "8443");
+    }
+
+    #[test]
+    fn planned_inrou_tap_firewall_rules_keep_isolated_policy_private() {
+        let rules = planned_inrou_tap_firewall_rules(
+            "irtest0",
+            "172.31.10.2/32",
+            &InrouTapFirewallPlan::Isolated,
+        );
+        assert_eq!(rules.len(), 1);
+        assert_eq!(
+            rules[0].context,
+            "install Inrou shared-storage ingress rule"
+        );
+        assert_eq!(rules[0].args[1], "INPUT");
+        assert_eq!(rules[0].args[7], "2049");
     }
 
     #[test]
@@ -17873,6 +18275,584 @@ mod tests {
         );
     }
 
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn build_inrou_user_data_projects_mounts_overlay_and_replica_env() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let (_temp_dir, replica_plan, cache_key) =
+            materialize_inrou_replica_plan_for_tests(&bundle)?;
+        let shared_mounts = vec![InrouSharedFilesystemMount {
+            mount_path: "/var/lib/ton-indexer".to_owned(),
+            guest_mount_source:
+                "172.31.10.1:/srv/soracloud/web_portal/revisions/2026.02.0/volumes/shared/index_state"
+                    .to_owned(),
+            mount_options: "rw,hard,nofail,proto=tcp,port=2049,vers=4".to_owned(),
+        }];
+
+        let user_data = build_inrou_user_data(
+            &replica_plan,
+            &cache_key,
+            bundle
+                .service
+                .route
+                .as_ref()
+                .expect("route")
+                .service_port
+                .get(),
+            &shared_mounts,
+            Some("package_update: true\npackages:\n  - python3-minimal\n"),
+        );
+
+        assert!(user_data.contains("ssh-ed25519 AAAATESTKEY soracloud-tests"));
+        assert!(user_data.contains("export SORACLOUD_REPLICA_SLOT='1'"));
+        assert!(user_data.contains("export PORT='8080'"));
+        assert!(user_data.contains("/usr/local/bin/inrou-launch.sh"));
+        assert!(user_data.contains("/usr/local/bin/inrou-prepare.sh"));
+        assert!(user_data.contains("PermissionsStartOnly=true"));
+        assert!(user_data.contains("ExecStartPre=/usr/local/bin/inrou-prepare.sh"));
+        assert!(user_data.contains("systemctl enable --now inrou-app.service"));
+        assert!(user_data.contains("uid: 1000"));
+        assert!(user_data.contains("mount -t nfs -o 'rw,hard,nofail,proto=tcp,port=2049,vers=4'"));
+        assert!(user_data.contains(
+            "172.31.10.1:/srv/soracloud/web_portal/revisions/2026.02.0/volumes/shared/index_state"
+        ));
+        assert!(
+            user_data
+                .contains("Inrou shared service storage requires mount.nfs in the guest image")
+        );
+        assert!(!user_data.contains("apt-get install -y --no-install-recommends nfs-common"));
+        assert!(user_data.contains("package_update: true"));
+        assert!(user_data.contains("python3-minimal"));
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn write_inrou_firecracker_config_serializes_boot_source_drives_and_network() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let temp_dir = tempfile::tempdir()?;
+        let kernel_image_path = temp_dir.path().join("vmlinux");
+        let initrd_image_path = temp_dir.path().join("initrd.img");
+        let root_disk_path = temp_dir.path().join("rootfs.ext4");
+        let seed_image_path = temp_dir.path().join("seed.ext4");
+        fs::write(&kernel_image_path, b"kernel")?;
+        fs::write(&initrd_image_path, b"initrd")?;
+        fs::write(&root_disk_path, b"rootfs")?;
+        fs::write(&seed_image_path, b"seed")?;
+
+        let config_path = write_inrou_firecracker_config(
+            temp_dir.path(),
+            &kernel_image_path,
+            Some(&initrd_image_path),
+            &root_disk_path,
+            &seed_image_path,
+            &InrouTapNetworkAttachment {
+                ip_binary: PathBuf::from("/sbin/ip"),
+                iptables_binary: PathBuf::from("/sbin/iptables"),
+                exportfs_binary: None,
+                tap_name: "irtest0".to_owned(),
+                host_ip: "172.31.10.1".to_owned(),
+                guest_ip: "172.31.10.2".to_owned(),
+                guest_mac: "06:fc:01:02:03:04".to_owned(),
+                firewall_plan: InrouTapFirewallPlan::Open,
+                installed_firewall_rules: Vec::new(),
+                installed_nfs_exports: Vec::new(),
+            },
+            bundle.container.resources,
+        )?;
+
+        let config: norito::json::Value = norito::json::from_slice(&fs::read(&config_path)?)?;
+        let boot_source = config
+            .get("boot-source")
+            .and_then(norito::json::Value::as_object)
+            .expect("boot source object");
+        let drives = config
+            .get("drives")
+            .and_then(norito::json::Value::as_array)
+            .expect("drive array");
+        let machine_config = config
+            .get("machine-config")
+            .and_then(norito::json::Value::as_object)
+            .expect("machine config object");
+        let network_interfaces = config
+            .get("network-interfaces")
+            .and_then(norito::json::Value::as_array)
+            .expect("network interfaces");
+        let kernel_image_path_string = kernel_image_path.display().to_string();
+        let initrd_image_path_string = initrd_image_path.display().to_string();
+
+        assert_eq!(
+            boot_source
+                .get("kernel_image_path")
+                .and_then(norito::json::Value::as_str),
+            Some(kernel_image_path_string.as_str())
+        );
+        assert_eq!(
+            boot_source
+                .get("initrd_path")
+                .and_then(norito::json::Value::as_str),
+            Some(initrd_image_path_string.as_str())
+        );
+        assert_eq!(drives.len(), 2);
+        assert_eq!(
+            machine_config
+                .get("vcpu_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+        assert_eq!(
+            machine_config
+                .get("mem_size_mib")
+                .and_then(norito::json::Value::as_u64),
+            Some(512)
+        );
+        assert_eq!(
+            network_interfaces
+                .first()
+                .and_then(norito::json::Value::as_object)
+                .and_then(|iface| iface.get("host_dev_name"))
+                .and_then(norito::json::Value::as_str),
+            Some("irtest0")
+        );
+        assert_eq!(
+            network_interfaces
+                .first()
+                .and_then(norito::json::Value::as_object)
+                .and_then(|iface| iface.get("guest_mac"))
+                .and_then(norito::json::Value::as_str),
+            Some("06:fc:01:02:03:04")
+        );
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn ensure_inrou_root_disk_copies_once_and_reuses_existing_rootfs() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let (temp_dir, replica_plan, _cache_key) =
+            materialize_inrou_replica_plan_for_tests(&bundle)?;
+        let base_rootfs_image_path = temp_dir.path().join("base-rootfs.ext4");
+        fs::write(&base_rootfs_image_path, b"base-rootfs-v1")?;
+        let root_volume = replica_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .expect("root volume");
+
+        let first_root_disk = ensure_inrou_root_disk(&base_rootfs_image_path, root_volume)?;
+        assert_eq!(fs::read(&first_root_disk)?, b"base-rootfs-v1");
+
+        fs::write(&base_rootfs_image_path, b"base-rootfs-v2")?;
+        let second_root_disk = ensure_inrou_root_disk(&base_rootfs_image_path, root_volume)?;
+        assert_eq!(first_root_disk, second_root_disk);
+        assert_eq!(fs::read(&second_root_disk)?, b"base-rootfs-v1");
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires root on a real Linux/KVM host plus explicit guest assets; set IROHA_RUN_IGNORED=1 IROHA_INROU_LINUX_KVM=1"]
+    fn inrou_linux_kvm_smoke_boots_debian_guest_and_serves_healthcheck() -> Result<()> {
+        if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1")
+            || std::env::var("IROHA_INROU_LINUX_KVM").ok().as_deref() != Some("1")
+        {
+            println!(
+                "Skipping: set IROHA_RUN_IGNORED=1 IROHA_INROU_LINUX_KVM=1 to run the Linux/KVM Inrou smoke test."
+            );
+            return Ok(());
+        }
+        require_linux_kvm_smoke_prerequisites()?;
+
+        let kernel_image = linux_smoke_required_env_path("IROHA_INROU_LINUX_KVM_KERNEL_IMAGE")?;
+        let rootfs_image = linux_smoke_required_env_path("IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE")?;
+        let initrd_image = std::env::var("IROHA_INROU_LINUX_KVM_INITRD_IMAGE")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from);
+        if let Some(initrd_image) = initrd_image.as_ref()
+            && !initrd_image.is_file()
+        {
+            eyre::bail!(
+                "IROHA_INROU_LINUX_KVM_INITRD_IMAGE must point to an existing file, got {}",
+                initrd_image.display()
+            );
+        }
+
+        let python_http_server = r#"cat >/tmp/inrou-health.py <<'PY'
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path != "/healthz":
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        body = b"ok\n"
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        pass
+
+HTTPServer(("0.0.0.0", int(os.environ["PORT"])), Handler).serve_forever()
+PY
+mkdir -p /var/lib/ton-indexer
+printf 'booted\n' >/var/lib/ton-indexer/boot-marker
+exec python3 /tmp/inrou-health.py
+"#;
+        let bootstrap_overlay =
+            "package_update: true\npackages:\n  - python3-minimal\n  - nfs-common\n";
+        let temp_dir = tempfile::tempdir()?;
+        let bundle_bytes = create_inrou_bundle_archive_for_linux_test(
+            temp_dir.path(),
+            &kernel_image,
+            &rootfs_image,
+            initrd_image.as_deref(),
+            bootstrap_overlay,
+        )?;
+
+        let mut bundle = sample_inrou_test_bundle()?;
+        bundle.container.args = vec!["-lc".to_owned(), python_http_server.to_owned()];
+        bundle.container.bundle_path = "/bundles/inrou-linux-kvm-smoke.tgz".to_owned();
+        bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        bundle
+            .container
+            .inrou
+            .as_mut()
+            .expect("inrou manifest")
+            .initrd_image_path = initrd_image
+            .as_ref()
+            .map(|_| "/inrou/initrd.img".to_owned());
+
+        let mut state = test_state()?;
+        let deployment_state = sample_deployment_state(&bundle);
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(bundle.service.service_name.clone(), deployment_state);
+        }
+
+        let artifacts_root = temp_dir.path().join("artifacts");
+        fs::create_dir_all(&artifacts_root)?;
+        fs::write(
+            artifacts_root.join(hash_cache_name(bundle.container.bundle_hash)),
+            &bundle_bytes,
+        )?;
+
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.inrou.start_grace = Duration::from_secs(240);
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        manager.reconcile_once()?;
+
+        let service_dir = temp_dir
+            .path()
+            .join("services")
+            .join(sanitize_path_component(
+                bundle.service.service_name.as_ref(),
+            ))
+            .join(sanitize_path_component(&bundle.service.service_version));
+        let runtime_state =
+            read_hosted_http_runtime_state(&service_dir)?.expect("hosted runtime state");
+        let replica = runtime_state
+            .replicas
+            .first()
+            .expect("replica runtime state present");
+
+        assert_eq!(
+            runtime_state.health_status,
+            SoraServiceHealthStatusV1::Healthy
+        );
+        assert_eq!(replica.health_status, SoraServiceHealthStatusV1::Healthy);
+        assert_eq!(manager.hosted_http_workers.lock().len(), 1);
+        assert!(
+            service_dir
+                .join("replicas/replica-0001/firecracker-config.json")
+                .exists()
+        );
+        assert!(
+            temp_dir
+                .path()
+                .join("service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0001/root_disk/rootfs.ext4")
+                .exists()
+        );
+        assert!(
+            temp_dir
+                .path()
+                .join("service_data/web_portal/revisions/2026.02.0/volumes/shared/index_state/boot-marker")
+                .exists()
+        );
+        probe_hosted_http_health(
+            replica
+                .listen_base_url
+                .as_deref()
+                .expect("replica listen base url"),
+            bundle.container.lifecycle.healthcheck_path.as_deref(),
+        )?;
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    #[ignore = "requires root on a real Linux/KVM host plus explicit guest assets; set IROHA_RUN_IGNORED=1 IROHA_INROU_LINUX_KVM=1"]
+    fn inrou_linux_kvm_smoke_shares_service_volume_across_replicas_and_keeps_root_state_isolated()
+    -> Result<()> {
+        if std::env::var("IROHA_RUN_IGNORED").ok().as_deref() != Some("1")
+            || std::env::var("IROHA_INROU_LINUX_KVM").ok().as_deref() != Some("1")
+        {
+            println!(
+                "Skipping: set IROHA_RUN_IGNORED=1 IROHA_INROU_LINUX_KVM=1 to run the Linux/KVM Inrou replica smoke test."
+            );
+            return Ok(());
+        }
+        require_linux_kvm_smoke_prerequisites()?;
+
+        let kernel_image = linux_smoke_required_env_path("IROHA_INROU_LINUX_KVM_KERNEL_IMAGE")?;
+        let rootfs_image = linux_smoke_required_env_path("IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE")?;
+        let initrd_image = std::env::var("IROHA_INROU_LINUX_KVM_INITRD_IMAGE")
+            .ok()
+            .filter(|value| !value.trim().is_empty())
+            .map(PathBuf::from);
+        if let Some(initrd_image) = initrd_image.as_ref()
+            && !initrd_image.is_file()
+        {
+            eyre::bail!(
+                "IROHA_INROU_LINUX_KVM_INITRD_IMAGE must point to an existing file, got {}",
+                initrd_image.display()
+            );
+        }
+
+        let python_http_server = r#"cat >/tmp/inrou-shared-volume.py <<'PY'
+import os
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+slot = os.environ["SORACLOUD_REPLICA_SLOT"]
+root_marker = "/var/lib/soracloud/materialization/root-slot.txt"
+os.makedirs("/var/lib/ton-indexer", exist_ok=True)
+with open(f"/var/lib/ton-indexer/replica-{slot}.txt", "w", encoding="utf-8") as handle:
+    handle.write(f"{slot}\n")
+os.makedirs("/var/lib/soracloud/materialization", exist_ok=True)
+with open(root_marker, "w", encoding="utf-8") as handle:
+    handle.write(f"{slot}\n")
+
+class Handler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        if self.path == "/healthz":
+            body = b"ok\n"
+        elif self.path == "/root-slot":
+            with open(root_marker, "rb") as handle:
+                body = handle.read()
+        else:
+            self.send_response(404)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *_args):
+        pass
+
+HTTPServer(("0.0.0.0", int(os.environ["PORT"])), Handler).serve_forever()
+PY
+exec python3 /tmp/inrou-shared-volume.py
+"#;
+        let bootstrap_overlay =
+            "package_update: true\npackages:\n  - python3-minimal\n  - nfs-common\n";
+        let temp_dir = tempfile::tempdir()?;
+        let bundle_bytes = create_inrou_bundle_archive_for_linux_test(
+            temp_dir.path(),
+            &kernel_image,
+            &rootfs_image,
+            initrd_image.as_deref(),
+            bootstrap_overlay,
+        )?;
+
+        let mut bundle = sample_inrou_test_bundle()?;
+        bundle.container.args = vec!["-lc".to_owned(), python_http_server.to_owned()];
+        bundle.container.bundle_path = "/bundles/inrou-linux-kvm-replica-smoke.tgz".to_owned();
+        bundle.container.bundle_hash = Hash::new(&bundle_bytes);
+        bundle.service.replicas = std::num::NonZeroU16::new(2).expect("replica count");
+        bundle
+            .container
+            .inrou
+            .as_mut()
+            .expect("inrou manifest")
+            .initrd_image_path = initrd_image
+            .as_ref()
+            .map(|_| "/inrou/initrd.img".to_owned());
+
+        let mut state = test_state()?;
+        let deployment_state = sample_deployment_state(&bundle);
+        {
+            let world = &mut Arc::get_mut(&mut state).expect("unique test state").world;
+            world.soracloud_service_revisions_mut_for_testing().insert(
+                (
+                    bundle.service.service_name.to_string(),
+                    bundle.service.service_version.clone(),
+                ),
+                bundle.clone(),
+            );
+            world
+                .soracloud_service_deployments_mut_for_testing()
+                .insert(bundle.service.service_name.clone(), deployment_state);
+        }
+
+        let artifacts_root = temp_dir.path().join("artifacts");
+        fs::create_dir_all(&artifacts_root)?;
+        fs::write(
+            artifacts_root.join(hash_cache_name(bundle.container.bundle_hash)),
+            &bundle_bytes,
+        )?;
+
+        let mut config = test_runtime_manager_config(temp_dir.path().to_path_buf());
+        config.inrou.start_grace = Duration::from_secs(240);
+        let manager = SoracloudRuntimeManager::new(config, Arc::clone(&state));
+        manager.reconcile_once()?;
+
+        let service_dir = temp_dir
+            .path()
+            .join("services")
+            .join(sanitize_path_component(
+                bundle.service.service_name.as_ref(),
+            ))
+            .join(sanitize_path_component(&bundle.service.service_version));
+        let runtime_state =
+            read_hosted_http_runtime_state(&service_dir)?.expect("hosted runtime state");
+        assert_eq!(runtime_state.replicas.len(), 2);
+        assert_eq!(
+            runtime_state.health_status,
+            SoraServiceHealthStatusV1::Healthy
+        );
+
+        let mut observed_root_slots = BTreeSet::new();
+        for replica in &runtime_state.replicas {
+            assert_eq!(replica.health_status, SoraServiceHealthStatusV1::Healthy);
+            let listen_base_url = replica
+                .listen_base_url
+                .as_deref()
+                .expect("replica listen base url");
+            probe_hosted_http_health(
+                listen_base_url,
+                bundle.container.lifecycle.healthcheck_path.as_deref(),
+            )?;
+            observed_root_slots.insert(
+                fetch_hosted_http_text(listen_base_url, "/root-slot")?
+                    .trim()
+                    .to_owned(),
+            );
+        }
+        assert_eq!(
+            observed_root_slots,
+            BTreeSet::from(["1".to_owned(), "2".to_owned()])
+        );
+        assert_eq!(manager.hosted_http_workers.lock().len(), 2);
+        assert_eq!(
+            fs::read_to_string(
+                temp_dir
+                    .path()
+                    .join("service_data/web_portal/revisions/2026.02.0/volumes/shared/index_state/replica-1.txt")
+            )?,
+            "1\n"
+        );
+        assert_eq!(
+            fs::read_to_string(
+                temp_dir
+                    .path()
+                    .join("service_data/web_portal/revisions/2026.02.0/volumes/shared/index_state/replica-2.txt")
+            )?,
+            "2\n"
+        );
+        assert!(
+            temp_dir
+                .path()
+                .join("service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0001/root_disk/rootfs.ext4")
+                .exists()
+        );
+        assert!(
+            temp_dir
+                .path()
+                .join("service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0002/root_disk/rootfs.ext4")
+                .exists()
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn probe_hosted_http_health_accepts_paths_without_a_leading_slash() -> Result<()> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request = [0_u8; 1024];
+                let read = std::io::Read::read(&mut stream, &mut request).unwrap_or(0);
+                let request = String::from_utf8_lossy(&request[..read]);
+                let status_line = if request.starts_with("GET /healthz HTTP/1.1") {
+                    "HTTP/1.1 200 OK\r\n"
+                } else {
+                    "HTTP/1.1 404 Not Found\r\n"
+                };
+                let body = if request.starts_with("GET /healthz HTTP/1.1") {
+                    b"ok\n".as_slice()
+                } else {
+                    b"".as_slice()
+                };
+                let response = format!(
+                    "{status_line}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = std::io::Write::write_all(&mut stream, response.as_bytes());
+                let _ = std::io::Write::write_all(&mut stream, body);
+            }
+        });
+        probe_hosted_http_health(&format!("http://{address}"), Some("healthz"))?;
+        handle.join().expect("fixture thread should complete");
+        Ok(())
+    }
+
+    #[test]
+    fn fetch_hosted_http_text_accepts_paths_without_a_leading_slash() -> Result<()> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
+        let address = listener.local_addr()?;
+        let handle = std::thread::spawn(move || {
+            if let Ok((mut stream, _)) = listener.accept() {
+                let mut request = [0_u8; 1024];
+                let read = std::io::Read::read(&mut stream, &mut request).unwrap_or(0);
+                let request = String::from_utf8_lossy(&request[..read]);
+                let (status_line, body) = if request.starts_with("GET /root-slot HTTP/1.1") {
+                    ("HTTP/1.1 200 OK\r\n", b"replica-1\n".as_slice())
+                } else {
+                    ("HTTP/1.1 404 Not Found\r\n", b"".as_slice())
+                };
+                let response = format!(
+                    "{status_line}Content-Length: {}\r\nConnection: close\r\n\r\n",
+                    body.len()
+                );
+                let _ = std::io::Write::write_all(&mut stream, response.as_bytes());
+                let _ = std::io::Write::write_all(&mut stream, body);
+            }
+        });
+        let body = fetch_hosted_http_text(&format!("http://{address}"), "root-slot")?;
+        handle.join().expect("fixture thread should complete");
+        assert_eq!(body, "replica-1\n");
+        Ok(())
+    }
+
     #[test]
     fn ivm_host_egress_fetch_enforces_allowlist_rate_and_byte_limits() -> Result<()> {
         let mut bundle = load_deployment_bundle_fixture()?;
@@ -17881,9 +18861,11 @@ mod tests {
         let (url, server) = spawn_http_fixture(body.clone())?;
         let (allowed_host, allowed_port) =
             url_host_port(&url).expect("fixture URL should include a host and port");
-        bundle.container.capabilities.network = SoraNetworkPolicyV1::Allowlist(vec![
-            SoraNetworkAllowlistEntryV1::new(allowed_host, [allowed_port]),
-        ]);
+        bundle.container.capabilities.network =
+            SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
+                allowed_host,
+                [allowed_port],
+            )]);
         let temp_dir = tempfile::tempdir()?;
         let private_request = sample_ordered_mailbox_request(
             &bundle,
@@ -17932,9 +18914,11 @@ mod tests {
         let (url, server) = spawn_http_fixture(b"too-large".to_vec())?;
         let (allowed_host, allowed_port) =
             url_host_port(&url).expect("fixture URL should include a host and port");
-        bundle.container.capabilities.network = SoraNetworkPolicyV1::Allowlist(vec![
-            SoraNetworkAllowlistEntryV1::new(allowed_host, [allowed_port]),
-        ]);
+        bundle.container.capabilities.network =
+            SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
+                allowed_host,
+                [allowed_port],
+            )]);
         let private_request = sample_ordered_mailbox_request(
             &bundle,
             "private_update",
@@ -17966,9 +18950,11 @@ mod tests {
     #[test]
     fn ivm_host_egress_fetch_rejects_allowlisted_host_on_unlisted_port() -> Result<()> {
         let mut bundle = load_deployment_bundle_fixture()?;
-        bundle.container.capabilities.network = SoraNetworkPolicyV1::Allowlist(vec![
-            SoraNetworkAllowlistEntryV1::new("127.0.0.1", [443]),
-        ]);
+        bundle.container.capabilities.network =
+            SoraNetworkPolicyV1::Allowlist(vec![SoraNetworkAllowlistEntryV1::new(
+                "127.0.0.1",
+                [443],
+            )]);
         let temp_dir = tempfile::tempdir()?;
         let private_request = sample_ordered_mailbox_request(
             &bundle,
