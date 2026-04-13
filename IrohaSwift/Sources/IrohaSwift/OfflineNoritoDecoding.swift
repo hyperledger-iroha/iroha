@@ -133,10 +133,12 @@ extension OfflineNorito {
         return value
     }
 
-    static func assetDefinitionIdFromLiteral(_ literal: String) -> String? {
-        if let parsed = parsePublicAssetIdLiteral(literal) {
-            return parsed.assetDefinitionId
-        }
+    /// Decode an AccountId string from a Norito-encoded string field.
+    public static func decodeAccountId(_ data: Data) throws -> String {
+        return try decodeString(data)
+    }
+
+    public static func assetDefinitionIdFromLiteral(_ literal: String) -> String? {
         let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return nil

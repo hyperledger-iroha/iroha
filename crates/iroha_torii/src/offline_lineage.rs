@@ -512,10 +512,16 @@ pub struct OfflineCashAndroidDeviceBinding {
     pub offline_public_key: String,
     pub attestation_report_base64: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub ios_team_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub ios_bundle_id: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
     pub ios_environment: Option<String>,
 }
 
@@ -4190,10 +4196,20 @@ fn validate_cash_attestation(
                 "offline cash app attest verification failed: {err}"
             ))
         })?;
-    } else if extract_assertion_counter(&attestation.assertion_base64)? != attestation.counter {
-        return Err(conversion_error(
-            "offline cash attestation counter does not match assertion data".to_owned(),
-        ));
+    } else {
+        let settlement_cfg = &app.state.settlement().offline;
+        if !settlement_cfg.skip_platform_attestation {
+            return Err(conversion_error(
+                "platform attestation is required but no iOS attestation metadata was provided; \
+                 set skip_platform_attestation=true for simulator/development use"
+                    .to_owned(),
+            ));
+        }
+        if extract_assertion_counter(&attestation.assertion_base64)? != attestation.counter {
+            return Err(conversion_error(
+                "offline cash attestation counter does not match assertion data".to_owned(),
+            ));
+        }
     }
     validate_counter(attestation, counter_book)?;
     Ok(request_binding)
@@ -4388,10 +4404,20 @@ fn validate_lineage_attestation(
                 "offline cash app attest verification failed: {err}"
             ))
         })?;
-    } else if extract_assertion_counter(&attestation.assertion_base64)? != attestation.counter {
-        return Err(conversion_error(
-            "offline cash attestation counter does not match assertion data".to_owned(),
-        ));
+    } else {
+        let settlement_cfg = &app.state.settlement().offline;
+        if !settlement_cfg.skip_platform_attestation {
+            return Err(conversion_error(
+                "platform attestation is required but no iOS attestation metadata was provided; \
+                 set skip_platform_attestation=true for simulator/development use"
+                    .to_owned(),
+            ));
+        }
+        if extract_assertion_counter(&attestation.assertion_base64)? != attestation.counter {
+            return Err(conversion_error(
+                "offline cash attestation counter does not match assertion data".to_owned(),
+            ));
+        }
     }
     validate_counter(attestation, counter_book)?;
     Ok(request_binding)
@@ -4987,6 +5013,83 @@ mod tests {
     }
 
     #[test]
+    fn cash_receipt_payload_omits_none_device_binding_ios_fields() {
+        // Simulator sends device_binding without ios_team_id/ios_bundle_id/ios_environment.
+        // The canonical JSON must NOT include "null" for these fields,
+        // otherwise the signature computed by iOS (which skips nil) won't match.
+        let receipt = OfflineTransferReceipt {
+            version: 1,
+            transfer_id: "transfer-1".to_owned(),
+            direction: "outgoing".to_owned(),
+            lineage_id: "lineage-1".to_owned(),
+            account_id: TEST_ACCOUNT_I105.to_owned(),
+            device_id: "device-1".to_owned(),
+            offline_public_key: BASE64_STANDARD.encode([7u8; 32]),
+            pre_balance: "50.00".to_owned(),
+            post_balance: "40.00".to_owned(),
+            pre_locked_balance: "0".to_owned(),
+            post_locked_balance: "0".to_owned(),
+            pre_state_hash: "pre".to_owned(),
+            post_state_hash: "post".to_owned(),
+            local_revision: 1,
+            counterparty_lineage_id: "lineage-2".to_owned(),
+            counterparty_account_id: TEST_COUNTERPARTY_ACCOUNT_I105.to_owned(),
+            counterparty_device_id: "device-2".to_owned(),
+            counterparty_offline_public_key: BASE64_STANDARD.encode([8u8; 32]),
+            amount: "10".to_owned(),
+            authorization: Some(OfflineSpendAuthorization {
+                authorization_id: "auth-1".to_owned(),
+                lineage_id: "lineage-1".to_owned(),
+                account_id: TEST_ACCOUNT_I105.to_owned(),
+                device_id: "device-1".to_owned(),
+                offline_public_key: BASE64_STANDARD.encode([7u8; 32]),
+                verdict_id: "verdict-1".to_owned(),
+                max_balance: "1000000".to_owned(),
+                max_tx_value: "1000000".to_owned(),
+                issued_at_ms: 1,
+                refresh_at_ms: 2,
+                expires_at_ms: 3,
+                device_binding: Some(OfflineCashAndroidDeviceBinding {
+                    platform: "ios".to_owned(),
+                    attestation_key_id: "key-1".to_owned(),
+                    device_id: "device-1".to_owned(),
+                    offline_public_key: BASE64_STANDARD.encode([7u8; 32]),
+                    attestation_report_base64: String::new(),
+                    ios_team_id: None,
+                    ios_bundle_id: None,
+                    ios_environment: None,
+                }),
+                app_attest_key_id: "key-1".to_owned(),
+                issuer_signature_base64: BASE64_STANDARD.encode([9u8; 64]),
+            }),
+            attestation: OfflineDeviceAttestation {
+                key_id: "key-1".to_owned(),
+                counter: 3,
+                assertion_base64: BASE64_STANDARD.encode(b"assertion"),
+                challenge_hash_hex: "challenge".to_owned(),
+                attestation_report_base64: None,
+                ios_team_id: None,
+                ios_bundle_id: None,
+                ios_environment: None,
+            },
+            source_payload: None,
+            sender_signature_base64: BASE64_STANDARD.encode([9u8; 64]),
+            created_at_ms: 1,
+        };
+
+        let payload = cash_transfer_receipt_unsigned_payload(&receipt).expect("cash payload");
+        let payload_str = String::from_utf8(payload).expect("utf8");
+        // None ios fields must be omitted, not serialized as null
+        assert!(
+            !payload_str.contains("null"),
+            "canonical JSON must not contain null for None ios fields: {payload_str}"
+        );
+        assert!(!payload_str.contains("ios_team_id"));
+        assert!(!payload_str.contains("ios_bundle_id"));
+        assert!(!payload_str.contains("ios_environment"));
+    }
+
+    #[test]
     fn cash_local_state_hash_uses_lineage_shape() {
         let hash = cash_next_local_state_hash(
             "lineage-1",
@@ -5111,7 +5214,25 @@ fn normalize_cash_authorization_value(value: &mut json::Value) -> Result<(), Err
             "offline cash authorization payload must be an object".to_owned(),
         ));
     };
-    let _ = map;
+    // Inject device_id, offline_public_key, and app_attest_key_id from
+    // device_binding when they are missing at the top level.  The "cash"
+    // JSON format keeps these inside device_binding, but the lineage
+    // structs expect them as sibling fields.
+    if let Some(binding) = map.get("device_binding").cloned() {
+        if let Some(binding_map) = binding.as_object() {
+            if let Some(v) = binding_map.get("device_id") {
+                map.entry("device_id".to_owned()).or_insert(v.clone());
+            }
+            if let Some(v) = binding_map.get("offline_public_key") {
+                map.entry("offline_public_key".to_owned())
+                    .or_insert(v.clone());
+            }
+            if let Some(v) = binding_map.get("attestation_key_id") {
+                map.entry("app_attest_key_id".to_owned())
+                    .or_insert(v.clone());
+            }
+        }
+    }
     Ok(())
 }
 
@@ -5133,6 +5254,38 @@ fn normalize_cash_receipt_value(value: &mut json::Value) -> Result<(), Error> {
             "offline cash receipt payload must be an object".to_owned(),
         ));
     };
+    // Convert device_proof → attestation (matching translate_cash_receipt_to_lineage_json).
+    if !map.contains_key("attestation") {
+        if let Some(proof) = map.remove("device_proof") {
+            if let Some(proof_map) = proof.as_object() {
+                let key_id = proof_map
+                    .get("attestation_key_id")
+                    .cloned()
+                    .unwrap_or(json::Value::String(String::new()));
+                let counter = proof_map
+                    .get("counter")
+                    .cloned()
+                    .unwrap_or_else(|| json::to_value(&0u64).unwrap());
+                let assertion = proof_map
+                    .get("assertion_base64")
+                    .cloned()
+                    .unwrap_or(json::Value::String(String::new()));
+                let challenge = proof_map
+                    .get("challenge_hash_hex")
+                    .cloned()
+                    .unwrap_or(json::Value::String(String::new()));
+                let mut attestation = json::Map::new();
+                attestation.insert("key_id".to_owned(), key_id);
+                attestation.insert("counter".to_owned(), counter);
+                attestation.insert("assertion_base64".to_owned(), assertion);
+                attestation.insert("challenge_hash_hex".to_owned(), challenge);
+                map.insert(
+                    "attestation".to_owned(),
+                    json::Value::Object(attestation),
+                );
+            }
+        }
+    }
     if let Some(authorization) = map.get_mut("authorization") {
         normalize_cash_authorization_value(authorization)?;
     }
