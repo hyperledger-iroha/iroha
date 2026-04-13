@@ -13447,6 +13447,52 @@ function normalizeSccpDestinationBinding(value, context) {
   };
 }
 
+function normalizeSccpProofEnvelopeSummary(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    backend: requireNonEmptyString(record.backend, `${context}.backend`),
+    circuitId: requireNonEmptyString(record.circuit_id, `${context}.circuit_id`),
+    vkHash: normalizeHex32String(record.vk_hash, `${context}.vk_hash`),
+    publicInputsSchemaHash: normalizeHex32String(
+      record.public_inputs_schema_hash,
+      `${context}.public_inputs_schema_hash`,
+    ),
+    publicInputsSchemaLenBytes: ToriiClient._normalizeUnsignedInteger(
+      record.public_inputs_schema_len_bytes,
+      `${context}.public_inputs_schema_len_bytes`,
+      { allowZero: true },
+    ),
+    publicInputColumnCount: ToriiClient._normalizeUnsignedInteger(
+      record.public_input_column_count,
+      `${context}.public_input_column_count`,
+      { allowZero: true },
+    ),
+    publicInputWordCount: ToriiClient._normalizeUnsignedInteger(
+      record.public_input_word_count,
+      `${context}.public_input_word_count`,
+      { allowZero: true },
+    ),
+    openProofLenBytes: ToriiClient._normalizeUnsignedInteger(
+      record.open_proof_len_bytes,
+      `${context}.open_proof_len_bytes`,
+      { allowZero: true },
+    ),
+    backendProofLenBytes: ToriiClient._normalizeUnsignedInteger(
+      record.backend_proof_len_bytes,
+      `${context}.backend_proof_len_bytes`,
+      { allowZero: true },
+    ),
+    auxLenBytes: ToriiClient._normalizeUnsignedInteger(
+      record.aux_len_bytes,
+      `${context}.aux_len_bytes`,
+      { allowZero: true },
+    ),
+  };
+}
+
 function normalizeSccpProofManifestSetResponse(payload) {
   const record = ensureRecord(payload, "sccp proof manifests response");
   return {
@@ -13651,6 +13697,13 @@ function normalizeSccpMessageTransparentProofArtifact(payload) {
       `${context}.public_inputs`,
     ),
     proofBytes: normalizeArbitraryHex(record.proof_bytes, `${context}.proof_bytes`),
+    proofEnvelopeSummary:
+      record.proof_envelope_summary === undefined || record.proof_envelope_summary === null
+        ? null
+        : normalizeSccpProofEnvelopeSummary(
+            record.proof_envelope_summary,
+            `${context}.proof_envelope_summary`,
+          ),
     submissionPackage: normalizeSccpCounterpartySubmissionPackage(
       record.submission_package,
       `${context}.submission_package`,
@@ -13770,6 +13823,13 @@ function normalizeSccpCounterpartyProofJob(payload) {
       record.payload_projection,
       `${context}.payload_projection`,
     ),
+    proofEnvelopeSummary:
+      record.proof_envelope_summary === undefined || record.proof_envelope_summary === null
+        ? null
+        : normalizeSccpProofEnvelopeSummary(
+            record.proof_envelope_summary,
+            `${context}.proof_envelope_summary`,
+          ),
     submissionTemplate: normalizeSccpCounterpartySubmissionTemplate(
       record.submission_template,
       `${context}.submission_template`,

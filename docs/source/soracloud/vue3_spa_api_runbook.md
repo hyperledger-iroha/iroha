@@ -143,7 +143,10 @@ sudo \
 ```
 
 That harness validates the real `HttpService + Inrou` path, not the local
-`dev.sh` shim. It also exercises the shared-volume path through the private
+`dev.sh` shim. The local materialization backend still runs only on
+Linux/KVM peers; validators on other host OSes stay in the network and proxy
+hosted-HTTP traffic to healthy Inrou peers instead of trying to boot replicas
+locally. The harness also exercises the shared-volume path through the private
 host/guest network, so the Linux host needs `exportfs` and `rpc.nfsd`
 available alongside Firecracker, and the Debian slim guest image needs a
 working `mount.nfs` client path so the shared volume still mounts under

@@ -50,6 +50,12 @@ const COMBINED_PRESSURE_QUORUM_ATTEMPTS: usize = 600;
 const COMBINED_PRESSURE_RESTART_PROGRESS_TIMEOUT: Duration = Duration::from_secs(90);
 const COMBINED_PRESSURE_CATCH_UP_TIMEOUT: Duration = Duration::from_secs(180);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PeerBlockProgress {
+    total: u64,
+    non_empty: u64,
+}
+
 fn marker(byte: u8) -> [u8; 32] {
     [byte; 32]
 }
@@ -263,6 +269,16 @@ fn restart_progress_hard_timeout(context: &str) -> Duration {
         .unwrap_or_else(|| restart_progress_timeout(context))
 }
 
+fn peer_block_progressed(previous: Option<PeerBlockProgress>, current: PeerBlockProgress) -> bool {
+    previous.is_none_or(|previous| {
+        current.non_empty > previous.non_empty || current.total > previous.total
+    })
+}
+
+fn requires_hard_timeout_only_for_peer_catch_up(context: &str) -> bool {
+    context.contains("combined downtime+timeout restarted peer catch-up")
+}
+
 async fn restart_peer_and_wait_non_empty(
     network: &sandbox::SerializedNetwork,
     peer_index: usize,
@@ -345,17 +361,20 @@ async fn wait_for_peer_non_empty(
     let hard_timeout = restart_progress_hard_timeout(context);
     let started_at = tokio::time::Instant::now();
     let mut last_progress_at = started_at;
-    let mut last_observed_height = None;
+    let mut last_observed_progress = None;
 
     loop {
         match restart_client.get_status() {
             Ok(status) if status.blocks_non_empty >= target_non_empty => return Ok(()),
             Ok(status) => {
-                let height = status.blocks_non_empty;
-                if last_observed_height.is_none_or(|previous| height > previous) {
+                let progress = PeerBlockProgress {
+                    total: status.blocks,
+                    non_empty: status.blocks_non_empty,
+                };
+                if peer_block_progressed(last_observed_progress, progress) {
                     last_progress_at = tokio::time::Instant::now();
                 }
-                last_observed_height = Some(height);
+                last_observed_progress = Some(progress);
             }
             Err(err) if is_transient_client_error(&err) => {}
             Err(err) => {
@@ -364,14 +383,15 @@ async fn wait_for_peer_non_empty(
         }
 
         let now = tokio::time::Instant::now();
-        if now.duration_since(last_progress_at) >= progress_timeout
-            || now.duration_since(started_at) >= hard_timeout
-        {
+        let stalled = now.duration_since(last_progress_at) >= progress_timeout;
+        let exceeded_total = now.duration_since(started_at) >= hard_timeout;
+        if (stalled && !requires_hard_timeout_only_for_peer_catch_up(context)) || exceeded_total {
             return Err(eyre!(
-                "{context}: peer {peer_index} did not reach non-empty height {target_non_empty} within {:?} total wait (stalled for {:?}, last observed non-empty height {:?})",
+                "{context}: peer {peer_index} did not reach non-empty height {target_non_empty} within {:?} total wait (stalled for {:?}, last observed non-empty height {:?}, last observed total height {:?})",
                 now.duration_since(started_at),
                 now.duration_since(last_progress_at),
-                last_observed_height
+                last_observed_progress.map(|progress| progress.non_empty),
+                last_observed_progress.map(|progress| progress.total),
             ));
         }
 
@@ -3594,6 +3614,35 @@ fn restart_progress_hard_timeout_extends_combined_pressure_windows() {
             .checked_mul(2)
             .expect("default restart timeout should multiply"),
     );
+}
+
+#[test]
+fn peer_block_progressed_accepts_total_height_growth_when_non_empty_is_flat() {
+    let previous = PeerBlockProgress {
+        total: 6,
+        non_empty: 5,
+    };
+    let same_non_empty = PeerBlockProgress {
+        total: 7,
+        non_empty: 5,
+    };
+    let unchanged = PeerBlockProgress {
+        total: 7,
+        non_empty: 5,
+    };
+
+    assert!(peer_block_progressed(Some(previous), same_non_empty));
+    assert!(!peer_block_progressed(Some(same_non_empty), unchanged));
+}
+
+#[test]
+fn requires_hard_timeout_only_for_peer_catch_up_matches_combined_pressure_context() {
+    assert!(requires_hard_timeout_only_for_peer_catch_up(
+        "combined downtime+timeout restarted peer catch-up"
+    ));
+    assert!(!requires_hard_timeout_only_for_peer_catch_up(
+        "combined downtime+timeout transfer failed"
+    ));
 }
 
 #[test]

@@ -254,8 +254,11 @@ the logical mount path declared in the manifest.
 
 ## Linux/KVM Inrou Smoke
 
-The real hosted-HTTP runtime is Linux/KVM only. The repo now ships an explicit
-Firecracker smoke harness for `HttpService + Inrou`:
+The current local Inrou materialization backend is Linux/KVM only. Mixed-host
+validator fleets are still supported by materializing replicas only on
+Linux/KVM peers and proxying public hosted-HTTP traffic from other peers to the
+healthy Inrou hosts. The repo now ships an explicit Firecracker smoke harness
+for `HttpService + Inrou`:
 
 ```bash
 sudo \

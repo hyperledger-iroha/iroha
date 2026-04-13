@@ -145,15 +145,19 @@ use iroha_sccp::{
     NexusParliamentSignatureSchemeV1, NexusParliamentSignatureV1, NexusSccpBurnProofV1,
     NexusSccpGovernanceProofV1, NexusSccpMessageProofV1, NexusSccpMessageTransparentProofV1,
     SccpCounterpartyProofJobV1, SccpHubCommitmentV1, SccpHubMessageKind, SccpMerkleProofV1,
-    SccpNormalizedCodecValueV1, SccpPayloadProjectionV1, SccpPayloadV1, SccpProofManifestV1,
-    build_nexus_sccp_message_transparent_proof,
+    SccpNormalizedCodecValueV1, SccpOpenVerifyEnvelopeSummaryV1, SccpPayloadProjectionV1,
+    SccpPayloadV1, SccpProofManifestV1, build_nexus_sccp_message_transparent_proof,
     build_nexus_sccp_message_transparent_proof_with_signer,
     build_sccp_counterparty_proof_job_from_bundle,
-    build_sccp_counterparty_proof_job_from_bundle_with_signer, burn_message_id,
+    build_sccp_counterparty_proof_job_from_bundle_with_signer,
+    build_sccp_message_transparent_inner_proof_from_artifact,
+    build_sccp_message_transparent_open_verify_summary_from_bundle, burn_message_id,
     canonical_burn_payload_bytes, canonical_governance_payload_bytes, canonical_sccp_payload_bytes,
-    commitment_leaf_hash, decode_nexus_bridge_finality_proof, parliament_certificate_hash,
-    payload_hash, recover_nexus_sccp_message_transparent_proof, sccp_message_id, sccp_message_kind,
+    commitment_leaf_hash, decode_nexus_bridge_finality_proof,
+    decode_nexus_sccp_message_transparent_proof, parliament_certificate_hash, payload_hash,
+    recover_nexus_sccp_message_transparent_proof, sccp_message_id, sccp_message_kind,
     sccp_message_payload_kind_key, sccp_message_target_domain, sccp_payload_projection,
+    summarize_sccp_message_transparent_open_verify_proof_from_artifact,
     verify_burn_bundle_structure, verify_governance_bundle_structure,
     verify_message_bundle_structure,
 };
@@ -3021,10 +3025,18 @@ fn bridge_record_to_json(
                 "backend".into(),
                 norito::json::Value::from(tp.proof.backend.clone()),
             );
-            if let Some(proof) = recover_nexus_sccp_message_transparent_proof(
+            let verified_proof = recover_nexus_sccp_message_transparent_proof(
                 tp.proof.backend.as_str(),
                 &tp.proof.bytes,
-            ) {
+            );
+            let decoded_proof = verified_proof
+                .clone()
+                .or_else(|| decode_nexus_sccp_message_transparent_proof(&tp.proof.bytes));
+            if let Some(proof) = decoded_proof {
+                payload.insert(
+                    "artifact_verified".into(),
+                    norito::json::Value::from(verified_proof.is_some()),
+                );
                 payload.insert(
                     "counterparty_domain".into(),
                     norito::json::Value::from(proof.counterparty_domain),
@@ -3073,8 +3085,16 @@ fn bridge_record_to_json(
                     "proof_artifact_len_bytes".into(),
                     norito::json::Value::from(proof.proof_bytes.len()),
                 );
+                if let Some(summary) =
+                    summarize_sccp_message_transparent_open_verify_proof_from_artifact(&proof)
+                {
+                    payload.insert(
+                        "proof_envelope_summary".into(),
+                        sccp_open_verify_summary_to_json(&summary),
+                    );
+                }
                 if let Some(inner) =
-                    iroha_sccp::build_sccp_message_transparent_inner_proof_from_artifact(&proof)
+                    build_sccp_message_transparent_inner_proof_from_artifact(&proof)
                 {
                     payload.insert(
                         "inner_chain_family".into(),
@@ -4588,6 +4608,130 @@ where
     Ok(resp)
 }
 
+fn sccp_json_value_response(value: &norito::json::Value) -> Result<Response> {
+    let body = norito::json::to_vec(value).map_err(|err| {
+        sccp_internal_error(format!("failed to serialize SCCP bundle JSON: {err}"))
+    })?;
+    let mut resp = Response::new(Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+fn sccp_bundle_response_with_json_value<T>(
+    bundle: &T,
+    json_value: norito::json::Value,
+    accept: Option<&axum::http::HeaderValue>,
+) -> Result<Response>
+where
+    T: norito::core::NoritoSerialize + serde::Serialize,
+{
+    let format = match crate::utils::negotiate_response_format(accept) {
+        Ok(format) => format,
+        Err(response) => return Ok(response),
+    };
+
+    if matches!(format, crate::utils::ResponseFormat::Norito) {
+        return sccp_bundle_response(bundle, accept);
+    }
+
+    sccp_json_value_response(&json_value)
+}
+
+fn sccp_open_verify_summary_to_json(
+    summary: &SccpOpenVerifyEnvelopeSummaryV1,
+) -> norito::json::Value {
+    norito::json::Value::Object(Map::from_iter([
+        ("version".into(), norito::json::Value::from(summary.version)),
+        (
+            "backend".into(),
+            norito::json::Value::from(summary.backend.clone()),
+        ),
+        (
+            "circuit_id".into(),
+            norito::json::Value::from(summary.circuit_id.clone()),
+        ),
+        (
+            "vk_hash".into(),
+            norito::json::Value::from(hex::encode(summary.vk_hash)),
+        ),
+        (
+            "public_inputs_schema_hash".into(),
+            norito::json::Value::from(hex::encode(summary.public_inputs_schema_hash)),
+        ),
+        (
+            "public_inputs_schema_len_bytes".into(),
+            norito::json::Value::from(summary.public_inputs_schema_len_bytes),
+        ),
+        (
+            "public_input_column_count".into(),
+            norito::json::Value::from(summary.public_input_column_count),
+        ),
+        (
+            "public_input_word_count".into(),
+            norito::json::Value::from(summary.public_input_word_count),
+        ),
+        (
+            "open_proof_len_bytes".into(),
+            norito::json::Value::from(summary.open_proof_len_bytes),
+        ),
+        (
+            "backend_proof_len_bytes".into(),
+            norito::json::Value::from(summary.backend_proof_len_bytes),
+        ),
+        (
+            "aux_len_bytes".into(),
+            norito::json::Value::from(summary.aux_len_bytes),
+        ),
+    ]))
+}
+
+fn sccp_artifact_json_value(artifact: &NexusSccpMessageTransparentProofV1) -> Result<Value> {
+    let mut value = norito::json::value::to_value(artifact).map_err(|err| {
+        sccp_internal_error(format!(
+            "failed to serialize SCCP proof artifact JSON value: {err}"
+        ))
+    })?;
+    let Some(map) = value.as_object_mut() else {
+        return Err(sccp_internal_error(
+            "SCCP proof artifact JSON serialization must produce an object",
+        ));
+    };
+    if let Some(summary) =
+        summarize_sccp_message_transparent_open_verify_proof_from_artifact(artifact)
+    {
+        map.insert(
+            "proof_envelope_summary".into(),
+            sccp_open_verify_summary_to_json(&summary),
+        );
+    }
+    Ok(value)
+}
+
+fn sccp_job_json_value(job: &SccpCounterpartyProofJobV1) -> Result<Value> {
+    let mut value = norito::json::value::to_value(job).map_err(|err| {
+        sccp_internal_error(format!(
+            "failed to serialize SCCP proof job JSON value: {err}"
+        ))
+    })?;
+    let Some(map) = value.as_object_mut() else {
+        return Err(sccp_internal_error(
+            "SCCP proof job JSON serialization must produce an object",
+        ));
+    };
+    if let Some(summary) =
+        build_sccp_message_transparent_open_verify_summary_from_bundle(&job.bundle)
+    {
+        map.insert(
+            "proof_envelope_summary".into(),
+            sccp_open_verify_summary_to_json(&summary),
+        );
+    }
+    Ok(value)
+}
+
 #[derive(
     Clone,
     Debug,
@@ -5278,8 +5422,9 @@ mod sccp_message_backend_tests {
         );
     }
 
-    #[test]
-    fn bridge_record_to_json_includes_sccp_inner_proof_metadata() {
+    fn sample_ton_artifact_with_proof_bytes(
+        proof_bytes: Vec<u8>,
+    ) -> NexusSccpMessageTransparentProofV1 {
         let payload = SccpPayloadV1::Transfer(iroha_sccp::TransferPayloadV1 {
             version: 1,
             source_domain: iroha_sccp::SCCP_DOMAIN_SORA,
@@ -5343,7 +5488,7 @@ mod sccp_message_backend_tests {
             .expect("ton manifest");
         let public_inputs = iroha_sccp::sccp_message_transparent_public_inputs(&bundle)
             .expect("message public inputs");
-        let artifact = iroha_sccp::NexusSccpMessageTransparentProofV1 {
+        NexusSccpMessageTransparentProofV1 {
             version: 1,
             local_domain: manifest.local_domain,
             counterparty_domain: manifest.counterparty_domain,
@@ -5358,7 +5503,7 @@ mod sccp_message_backend_tests {
             finality_model: manifest.finality_model,
             verifier_target: manifest.verifier_target,
             public_inputs,
-            proof_bytes: vec![0xAA, 0xBB],
+            proof_bytes: proof_bytes.clone(),
             submission_package: iroha_sccp::SccpCounterpartySubmissionPackageV1 {
                 version: 1,
                 proof_family: manifest.proof_family,
@@ -5368,11 +5513,10 @@ mod sccp_message_backend_tests {
                 verifier_entrypoint: manifest.submission_template.verifier_entrypoint.clone(),
                 platform_payload: iroha_sccp::SccpPlatformSubmissionPayloadV1::TonInternalMessage(
                     iroha_sccp::SccpTonInternalMessageSubmissionPayloadV1 {
-                        proof_cell: vec![0xAA, 0xBB],
+                        proof_cell: proof_bytes,
                         public_inputs_cell:
                             iroha_sccp::canonical_sccp_message_transparent_public_inputs_bytes(
-                                &iroha_sccp::sccp_message_transparent_public_inputs(&bundle)
-                                    .expect("message public inputs"),
+                                &public_inputs,
                             ),
                         bundle_cell: iroha_sccp::canonical_nexus_sccp_message_bundle_bytes(&bundle),
                     },
@@ -5381,7 +5525,59 @@ mod sccp_message_backend_tests {
                 envelope_bytes: vec![0xCC],
             },
             bundle,
+        }
+    }
+
+    fn sample_ton_artifact_with_open_verify_envelope() -> NexusSccpMessageTransparentProofV1 {
+        let open = iroha_data_model::zk::StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: vec![vec![[0x55; 32]]],
+            envelope_bytes: vec![0xAA, 0xBB, 0xCC],
         };
+        let env = iroha_data_model::zk::OpenVerifyEnvelope {
+            backend: iroha_data_model::zk::BackendTag::Stark,
+            circuit_id: "sccp-message-transparent-v1".to_owned(),
+            vk_hash: [0x66; 32],
+            public_inputs: vec![0x77, 0x88, 0x99],
+            proof_bytes: norito::to_bytes(&open).expect("encode open proof"),
+            aux: vec![0xDE, 0xAD],
+        };
+        sample_ton_artifact_with_proof_bytes(norito::to_bytes(&env).expect("encode envelope"))
+    }
+
+    fn sample_ton_job() -> SccpCounterpartyProofJobV1 {
+        let artifact = sample_ton_artifact_with_proof_bytes(vec![0xAA, 0xBB]);
+        let manifest = iroha_sccp::sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON)
+            .expect("ton manifest");
+        SccpCounterpartyProofJobV1 {
+            version: 1,
+            chain_family: iroha_sccp::SccpTransparentChainFamilyV1::Ton,
+            chain: "ton".to_owned(),
+            local_domain: artifact.local_domain,
+            counterparty_domain: artifact.counterparty_domain,
+            security_model: artifact.security_model,
+            anchor_governance: artifact.anchor_governance,
+            destination_binding: artifact.destination_binding.clone(),
+            proof_family: artifact.proof_family.clone(),
+            verifier_backend: artifact.verifier_backend.clone(),
+            message_backend: artifact.message_backend.clone(),
+            registry_backend: artifact.registry_backend.clone(),
+            manifest_seed: artifact.manifest_seed.clone(),
+            finality_model: artifact.finality_model,
+            verifier_target: artifact.verifier_target,
+            public_inputs: artifact.public_inputs.clone(),
+            payload_kind: "transfer".to_owned(),
+            payload_projection: iroha_sccp::sccp_payload_projection(&artifact.bundle.payload)
+                .expect("payload projection"),
+            submission_template: manifest.submission_template,
+            submission_package: artifact.submission_package.clone(),
+            bundle: artifact.bundle,
+        }
+    }
+
+    #[test]
+    fn bridge_record_to_json_includes_sccp_inner_proof_metadata() {
+        let artifact = sample_ton_artifact_with_proof_bytes(vec![0xAA, 0xBB]);
         let proof_bytes = norito::to_bytes(&artifact).expect("encode artifact");
         let record = iroha_data_model::bridge::BridgeProofRecord {
             proof: iroha_data_model::bridge::BridgeProof {
@@ -5411,6 +5607,9 @@ mod sccp_message_backend_tests {
             .get("payload")
             .and_then(norito::json::Value::as_object)
             .expect("payload object");
+        let expected_inner = build_sccp_message_transparent_inner_proof_from_artifact(&artifact)
+            .expect("inner proof");
+        let expected_statement_hash = hex::encode(expected_inner.statement_hash);
 
         assert_eq!(
             payload
@@ -5420,33 +5619,100 @@ mod sccp_message_backend_tests {
         );
         assert_eq!(
             payload
-                .get("inner_chain_family")
-                .and_then(norito::json::Value::as_str),
-            None
+                .get("artifact_verified")
+                .and_then(norito::json::Value::as_bool),
+            Some(false)
         );
         assert_eq!(
             payload
-                .get("inner_payload_kind")
-                .and_then(norito::json::Value::as_str),
+                .get("proof_envelope_summary")
+                .and_then(norito::json::Value::as_object),
             None
         );
         assert_eq!(
             payload
                 .get("verifier_backend")
                 .and_then(norito::json::Value::as_str),
-            None
+            Some("ton-contract-v1")
+        );
+        assert_eq!(
+            payload
+                .get("inner_chain_family")
+                .and_then(norito::json::Value::as_str),
+            Some("ton")
+        );
+        assert_eq!(
+            payload
+                .get("inner_payload_kind")
+                .and_then(norito::json::Value::as_str),
+            Some("transfer")
         );
         assert_eq!(
             payload
                 .get("inner_verifier_backend")
                 .and_then(norito::json::Value::as_str),
-            None
+            Some("ton-contract-v1")
         );
         assert_eq!(
             payload
                 .get("inner_statement_hash")
                 .and_then(norito::json::Value::as_str),
-            None
+            Some(expected_statement_hash.as_str())
+        );
+    }
+
+    #[test]
+    fn sccp_artifact_json_value_includes_open_verify_summary() {
+        let artifact = sample_ton_artifact_with_open_verify_envelope();
+        let json = sccp_artifact_json_value(&artifact).expect("artifact json");
+        let object = json.as_object().expect("artifact json object");
+        let summary = object
+            .get("proof_envelope_summary")
+            .and_then(norito::json::Value::as_object)
+            .expect("proof envelope summary");
+        let expected_vk_hash = "66".repeat(32);
+
+        assert_eq!(
+            summary.get("backend").and_then(norito::json::Value::as_str),
+            Some("stark")
+        );
+        assert_eq!(
+            summary
+                .get("circuit_id")
+                .and_then(norito::json::Value::as_str),
+            Some("sccp-message-transparent-v1")
+        );
+        assert_eq!(
+            summary.get("vk_hash").and_then(norito::json::Value::as_str),
+            Some(expected_vk_hash.as_str())
+        );
+        assert_eq!(
+            summary
+                .get("public_input_column_count")
+                .and_then(norito::json::Value::as_u64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn sccp_job_json_value_includes_open_verify_summary() {
+        let job = sample_ton_job();
+        let json = sccp_job_json_value(&job).expect("job json");
+        let object = json.as_object().expect("job json object");
+        let summary = object
+            .get("proof_envelope_summary")
+            .and_then(norito::json::Value::as_object)
+            .expect("proof envelope summary");
+
+        assert_eq!(
+            summary.get("backend").and_then(norito::json::Value::as_str),
+            Some("stark")
+        );
+        assert_eq!(
+            summary
+                .get("circuit_id")
+                .and_then(norito::json::Value::as_str),
+            Some("sccp-message-transparent-v1")
         );
     }
 
@@ -6441,7 +6707,8 @@ pub async fn handle_v1_sccp_message_proof_artifact(
                 "proof artifact",
             ))
         })?;
-    sccp_bundle_response(&artifact, accept.as_ref())
+    let artifact_json = sccp_artifact_json_value(&artifact)?;
+    sccp_bundle_response_with_json_value(&artifact, artifact_json, accept.as_ref())
 }
 
 /// GET /v1/sccp/jobs/message/{message_id} — normalized SCCP counterparty proof job keyed by canonical message id.
@@ -6474,7 +6741,8 @@ pub async fn handle_v1_sccp_message_proof_job(
                 "normalized proof job",
             ))
         })?;
-    sccp_bundle_response(&job, accept.as_ref())
+    let job_json = sccp_job_json_value(&job)?;
+    sccp_bundle_response_with_json_value(&job, job_json, accept.as_ref())
 }
 
 /// GET /v1/sccp/capabilities — relayer-facing SCCP capability discovery for proof backends, codecs, and routes.

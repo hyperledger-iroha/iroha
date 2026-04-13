@@ -9,21 +9,38 @@ import XCTest
 //   1. Alice: setup  → load 5  → send 4 to Bob  → sync (outgoing)
 //   2. Bob:   setup  → sync incoming receipt       → balance == 4
 //
-// Requires a running local Iroha node at IROHA_NODE_URL (default http://192.168.1.63:8080).
-// Skipped automatically when the node is unreachable.
+// Requires a running local Iroha node at IROHA_NODE_URL (default http://127.0.0.1:8080),
+// a local `iroha` CLI, and a compatible client config. Skips automatically and
+// quickly when the environment is not provisioned.
 
 @available(iOS 15.0, macOS 12.0, *)
 final class OfflinePaymentE2ETest: XCTestCase {
 
     // MARK: - Configuration
 
+    private struct MintContext {
+        let cliURL: URL
+        let configURL: URL
+    }
+
+    private static let repositoryRoot: URL = {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent() // OfflinePaymentE2ETest.swift
+            .deletingLastPathComponent() // IrohaSwiftTests
+            .deletingLastPathComponent() // Tests
+            .deletingLastPathComponent() // IrohaSwift
+    }()
+
     private static let nodeURL: URL = {
         let env = ProcessInfo.processInfo.environment["IROHA_NODE_URL"]
-            ?? "http://192.168.1.63:8080"
+            ?? "http://127.0.0.1:8080"
         return URL(string: env)!
     }()
 
     private static let assetDefinitionId = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+    private static let probeTimeout: TimeInterval = 2
+    private static let cliEnvKey = "IROHA_CLI_PATH"
+    private static let clientConfigEnvKey = "IROHA_CLIENT_CONFIG"
 
     // MARK: - Per-participant state
 
@@ -54,17 +71,24 @@ final class OfflinePaymentE2ETest: XCTestCase {
     }
 
     private var client: ToriiClient!
+    private var mintContext: MintContext!
 
     // MARK: - Lifecycle
 
     override func setUp() async throws {
         try await super.setUp()
         client = ToriiClient(baseURL: Self.nodeURL)
+        mintContext = try Self.resolveMintContext()
 
         // Skip if node is unreachable.
-        let probe = URLRequest(url: Self.nodeURL.appendingPathComponent("status"))
+        var probe = URLRequest(url: Self.nodeURL.appendingPathComponent("status"))
+        probe.timeoutInterval = Self.probeTimeout
+        let sessionConfig = URLSessionConfiguration.ephemeral
+        sessionConfig.timeoutIntervalForRequest = Self.probeTimeout
+        sessionConfig.timeoutIntervalForResource = Self.probeTimeout
+        let session = URLSession(configuration: sessionConfig)
         do {
-            let (_, response) = try await URLSession.shared.data(for: probe)
+            let (_, response) = try await session.data(for: probe)
             guard let http = response as? HTTPURLResponse, (200..<300).contains(http.statusCode) else {
                 throw XCTSkip("Iroha node returned non-200 at \(Self.nodeURL)")
             }
@@ -402,12 +426,12 @@ final class OfflinePaymentE2ETest: XCTestCase {
     /// Key rules from Android E2E + Rust source:
     /// - attestation: only 4 fields (norito skips optional ios_*/attestation_report when None)
     /// - authorization: CashTransferReceiptAuthorizationPayload with device_binding
-    ///   (ios_* fields serialized as null in device_binding — norito doesn't skip them)
+    ///   (ios_* fields are omitted when nil)
     /// - source_payload: skip if nil
     /// - All keys sorted alphabetically at every nesting level
     private func buildCashUnsignedPayloadBytes(_ receipt: ToriiOfflineTransferReceipt) throws -> Data {
         // Attestation (4 fields only — norito skips optional fields)
-        var attestObj: [String: Any] = [
+        let attestObj: [String: Any] = [
             "assertion_base64": receipt.deviceProof.assertionBase64,
             "challenge_hash_hex": receipt.deviceProof.challengeHashHex,
             "counter": receipt.deviceProof.counter ?? 0,
@@ -425,10 +449,15 @@ final class OfflinePaymentE2ETest: XCTestCase {
                 "offline_public_key": binding.offlinePublicKey,
                 "platform": binding.platform,
             ]
-            // ios_* fields: serialized as null (norito does NOT skip them on OfflineCashAndroidDeviceBinding)
-            bindingObj["ios_bundle_id"] = binding.iosBundleId as Any? ?? NSNull()
-            bindingObj["ios_environment"] = binding.iosEnvironment as Any? ?? NSNull()
-            bindingObj["ios_team_id"] = binding.iosTeamId as Any? ?? NSNull()
+            if let iosBundleId = binding.iosBundleId {
+                bindingObj["ios_bundle_id"] = iosBundleId
+            }
+            if let iosEnvironment = binding.iosEnvironment {
+                bindingObj["ios_environment"] = iosEnvironment
+            }
+            if let iosTeamId = binding.iosTeamId {
+                bindingObj["ios_team_id"] = iosTeamId
+            }
 
             authObj = [
                 "account_id": auth.accountId,
@@ -746,21 +775,9 @@ final class OfflinePaymentE2ETest: XCTestCase {
         try await Task.sleep(nanoseconds: 3_000_000_000)
 
         // Mint via CLI
-        let cli = "/Users/nikolai/projects/sora/iroha/target/release/iroha"
-        let cfg = "/tmp/2iroha-localnet/client.toml"
-        guard FileManager.default.fileExists(atPath: cli) else {
-            throw XCTSkip("Iroha CLI not found at \(cli)")
-        }
-        if !FileManager.default.fileExists(atPath: cfg) {
-            try FileManager.default.copyItem(
-                atPath: "/Users/nikolai/projects/sora/iroha/defaults/client.toml",
-                toPath: cfg
-            )
-        }
-
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: cli)
-        process.arguments = ["--config", cfg, "ledger", "asset", "mint",
+        process.executableURL = mintContext.cliURL
+        process.arguments = ["--config", mintContext.configURL.path, "ledger", "asset", "mint",
                              "--definition-alias", "usd#wonderland",
                              "--account", accountId,
                              "--quantity", "100"]
@@ -774,6 +791,83 @@ final class OfflinePaymentE2ETest: XCTestCase {
 
         // Wait for mint to commit
         try await Task.sleep(nanoseconds: 3_000_000_000)
+    }
+
+    private static func resolveMintContext() throws -> MintContext {
+        let environment = ProcessInfo.processInfo.environment
+        let fileManager = FileManager.default
+
+        let cliURL: URL = {
+            if let cliPath = environment[cliEnvKey]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !cliPath.isEmpty {
+                return URL(fileURLWithPath: cliPath)
+            }
+            return repositoryRoot.appendingPathComponent("target/release/iroha")
+        }()
+        guard fileManager.fileExists(atPath: cliURL.path) else {
+            throw XCTSkip(
+                "Iroha CLI not found at \(cliURL.path); set \(cliEnvKey) or build target/release/iroha"
+            )
+        }
+
+        let configURL: URL = {
+            if let configPath = environment[clientConfigEnvKey]?.trimmingCharacters(in: .whitespacesAndNewlines),
+               !configPath.isEmpty {
+                return URL(fileURLWithPath: configPath)
+            }
+            return repositoryRoot.appendingPathComponent("defaults/client.toml")
+        }()
+        guard fileManager.fileExists(atPath: configURL.path) else {
+            throw XCTSkip(
+                "Iroha client config not found at \(configURL.path); set \(clientConfigEnvKey) to a valid client.toml"
+            )
+        }
+
+        let nodeWasOverridden = environment["IROHA_NODE_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        let configWasOverridden = environment[clientConfigEnvKey]?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        if nodeWasOverridden && !configWasOverridden {
+            let configContents = try String(contentsOf: configURL, encoding: .utf8)
+            guard let configToriiURL = Self.extractToriiURL(from: configContents) else {
+                throw XCTSkip("Could not read torii_url from \(configURL.path)")
+            }
+            if Self.normalizedURLString(configToriiURL) != Self.normalizedURLString(Self.nodeURL) {
+                throw XCTSkip(
+                    "\(clientConfigEnvKey) is not set, but defaults/client.toml points at \(configToriiURL.absoluteString) while IROHA_NODE_URL is \(Self.nodeURL.absoluteString)"
+                )
+            }
+        }
+
+        return MintContext(cliURL: cliURL, configURL: configURL)
+    }
+
+    private static func extractToriiURL(from configContents: String) -> URL? {
+        for line in configContents.split(whereSeparator: \.isNewline) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard trimmed.hasPrefix("torii_url"),
+                  let separator = trimmed.firstIndex(of: "=") else {
+                continue
+            }
+            let rawValue = trimmed[trimmed.index(after: separator)...]
+                .trimmingCharacters(in: .whitespaces)
+            guard rawValue.first == "\"", rawValue.last == "\"" else {
+                continue
+            }
+            let start = rawValue.index(after: rawValue.startIndex)
+            let end = rawValue.index(before: rawValue.endIndex)
+            return URL(string: String(rawValue[start..<end]))
+        }
+        return nil
+    }
+
+    private static func normalizedURLString(_ url: URL) -> String {
+        guard let components = URLComponents(url: url, resolvingAgainstBaseURL: false) else {
+            return url.absoluteString.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+        let scheme = components.scheme?.lowercased() ?? ""
+        let host = components.host?.lowercased() ?? ""
+        let port = components.port.map { ":\($0)" } ?? ""
+        let path = components.path == "/" ? "" : components.path
+        return "\(scheme)://\(host)\(port)\(path)"
     }
 
     // MARK: - Anchor hash (mirrors OfflineCashReceiptBuilder.computeAnchorHash)

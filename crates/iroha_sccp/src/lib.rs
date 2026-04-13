@@ -69,6 +69,8 @@ const SCCP_PARLIAMENT_HASH_PREFIX_V1: &[u8] = b"sccp:parliament:v1";
 const SCCP_TRANSPARENT_STATEMENT_PREFIX_V1: &[u8] = b"sccp:transparent:statement:v1";
 const SCCP_DESTINATION_BINDING_PREFIX_V1: &[u8] = b"sccp:destination:binding:v1";
 const SCCP_TRANSPARENT_FASTPQ_DSID_PREFIX_V1: &[u8] = b"sccp:transparent:fastpq:dsid:v1";
+const SCCP_TRANSPARENT_OPEN_VERIFY_SCHEMA_HASH_PREFIX_V1: &[u8] =
+    b"sccp:transparent:open-verify-schema:v1";
 const SCCP_TRANSPARENT_FASTPQ_PARAMETER_SET_V1: &str = "fastpq-lane-balanced";
 const SCCP_TRANSPARENT_FASTPQ_STATEMENT_KEY_V1: &[u8] = b"sccp:transparent:v1:statement";
 const SCCP_TRANSPARENT_FASTPQ_CONTEXT_KEY_V1: &[u8] = b"sccp:transparent:v1:context";
@@ -876,6 +878,21 @@ pub struct SccpMessageTransparentInnerProofV1 {
     pub payload_hash: H256,
     #[cfg_attr(feature = "serde", serde(with = "serde_utils::hex32"))]
     pub statement_hash: H256,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SccpOpenVerifyEnvelopeSummaryV1 {
+    pub version: u16,
+    pub backend: String,
+    pub circuit_id: String,
+    pub vk_hash: H256,
+    pub public_inputs_schema_hash: H256,
+    pub public_inputs_schema_len_bytes: u32,
+    pub public_input_column_count: u32,
+    pub public_input_word_count: u32,
+    pub open_proof_len_bytes: u32,
+    pub backend_proof_len_bytes: u32,
+    pub aux_len_bytes: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -3081,8 +3098,8 @@ fn sccp_message_transparent_fastpq_verifier_commitment(
 ) -> Option<H256> {
     let verifier = canonical_sccp_message_transparent_fastpq_verifier_bytes(manifest)?;
     let mut hasher = Sha256::new();
-    hasher.update(manifest.message_backend.as_bytes());
-    hasher.update(&verifier);
+    Digest::update(&mut hasher, manifest.message_backend.as_bytes());
+    Digest::update(&mut hasher, &verifier);
     Some(hasher.finalize().into())
 }
 
@@ -3105,6 +3122,22 @@ fn sccp_message_transparent_public_input_columns(
 }
 
 #[cfg(feature = "std")]
+fn sccp_open_verify_backend_key(backend: BackendTag) -> &'static str {
+    match backend {
+        BackendTag::Halo2IpaPasta => "halo2-ipa-pasta",
+        BackendTag::Halo2Bn254 => "halo2-bn254",
+        BackendTag::Groth16 => "groth16",
+        BackendTag::Stark => "stark",
+        BackendTag::Unsupported => "unsupported",
+    }
+}
+
+#[cfg(feature = "std")]
+fn saturating_u32(value: usize) -> u32 {
+    u32::try_from(value).unwrap_or(u32::MAX)
+}
+
+#[cfg(feature = "std")]
 fn decode_sccp_message_transparent_open_verify_proof(
     proof_bytes: &[u8],
 ) -> Option<(
@@ -3122,6 +3155,50 @@ fn decode_sccp_message_transparent_open_verify_proof(
     }
     let proof: fastpq_prover::Proof = norito::decode_from_bytes(&open.envelope_bytes).ok()?;
     Some((env, open, proof))
+}
+
+#[cfg(feature = "std")]
+pub fn summarize_sccp_message_transparent_open_verify_proof(
+    proof_bytes: &[u8],
+) -> Option<SccpOpenVerifyEnvelopeSummaryV1> {
+    let (env, open, _) = decode_sccp_message_transparent_open_verify_proof(proof_bytes)?;
+    let public_input_word_count = open.public_inputs.iter().map(Vec::len).sum::<usize>();
+    Some(SccpOpenVerifyEnvelopeSummaryV1 {
+        version: 1,
+        backend: sccp_open_verify_backend_key(env.backend).to_owned(),
+        circuit_id: env.circuit_id,
+        vk_hash: env.vk_hash,
+        public_inputs_schema_hash: prefixed_blake2b(
+            SCCP_TRANSPARENT_OPEN_VERIFY_SCHEMA_HASH_PREFIX_V1,
+            &env.public_inputs,
+        ),
+        public_inputs_schema_len_bytes: saturating_u32(env.public_inputs.len()),
+        public_input_column_count: saturating_u32(open.public_inputs.len()),
+        public_input_word_count: saturating_u32(public_input_word_count),
+        open_proof_len_bytes: saturating_u32(env.proof_bytes.len()),
+        backend_proof_len_bytes: saturating_u32(open.envelope_bytes.len()),
+        aux_len_bytes: saturating_u32(env.aux.len()),
+    })
+}
+
+#[cfg(feature = "std")]
+pub fn summarize_sccp_message_transparent_open_verify_proof_from_artifact(
+    artifact: &NexusSccpMessageTransparentProofV1,
+) -> Option<SccpOpenVerifyEnvelopeSummaryV1> {
+    summarize_sccp_message_transparent_open_verify_proof(&artifact.proof_bytes)
+}
+
+#[cfg(feature = "std")]
+pub fn build_sccp_message_transparent_open_verify_summary_from_bundle(
+    bundle: &NexusSccpMessageProofV1,
+) -> Option<SccpOpenVerifyEnvelopeSummaryV1> {
+    if !verify_message_bundle_structure(bundle) {
+        return None;
+    }
+    let counterparty_domain = sccp_counterparty_domain_for_message_payload(&bundle.payload)?;
+    let manifest = sccp_proof_manifest_for_domain(counterparty_domain)?;
+    let proof_bytes = build_sccp_message_transparent_fastpq_proof_bytes(bundle, &manifest)?;
+    summarize_sccp_message_transparent_open_verify_proof(&proof_bytes)
 }
 
 #[cfg(feature = "std")]
@@ -4943,6 +5020,119 @@ mod tests {
             &manifest,
             &public_inputs,
         ));
+    }
+
+    #[test]
+    fn transparent_fastpq_open_verify_summary_reports_binding_metadata() {
+        let bundle = sample_message_bundle(SccpPayloadV1::Transfer(TransferPayloadV1 {
+            version: 1,
+            source_domain: SCCP_DOMAIN_SORA,
+            dest_domain: SCCP_DOMAIN_TON,
+            nonce: 26,
+            asset_home_domain: SCCP_DOMAIN_SORA,
+            asset_id_codec: SCCP_CODEC_TEXT_UTF8,
+            asset_id: b"xor#open-verify-summary".to_vec(),
+            amount: 123,
+            sender_codec: SCCP_CODEC_TEXT_UTF8,
+            sender: b"nexus:summary".to_vec(),
+            recipient_codec: SCCP_CODEC_TON_RAW,
+            recipient: b"0:abcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcdefabcd"
+                .to_vec(),
+            route_id_codec: SCCP_CODEC_TEXT_UTF8,
+            route_id: b"nexus:ton:summary".to_vec(),
+        }));
+        let manifest = sccp_proof_manifest_for_domain(SCCP_DOMAIN_TON).expect("ton manifest");
+        let public_inputs =
+            sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
+        let proof_bytes =
+            build_sccp_message_transparent_fastpq_proof_bytes(&bundle, &manifest).expect("proof");
+        let summary = summarize_sccp_message_transparent_open_verify_proof(&proof_bytes)
+            .expect("proof summary");
+
+        assert_eq!(summary.version, 1);
+        assert_eq!(summary.backend, "stark");
+        assert_eq!(
+            summary.circuit_id,
+            SCCP_TRANSPARENT_OPEN_VERIFY_CIRCUIT_ID_V1
+        );
+        assert_eq!(
+            summary.vk_hash,
+            sccp_message_transparent_fastpq_verifier_commitment(&manifest)
+                .expect("verifier commitment")
+        );
+        assert_eq!(
+            summary.public_inputs_schema_hash,
+            prefixed_blake2b(
+                SCCP_TRANSPARENT_OPEN_VERIFY_SCHEMA_HASH_PREFIX_V1,
+                &sccp_message_transparent_open_verify_schema_descriptor(&manifest),
+            )
+        );
+        assert_eq!(
+            summary.public_inputs_schema_len_bytes as usize,
+            sccp_message_transparent_open_verify_schema_descriptor(&manifest).len()
+        );
+        assert_eq!(summary.public_input_column_count, 6);
+        assert_eq!(summary.public_input_word_count, 6);
+        assert_eq!(
+            summary.backend_proof_len_bytes as usize,
+            build_sccp_message_transparent_fastpq_raw_proof_bytes(
+                &build_sccp_message_transparent_fastpq_batch(&bundle, &manifest)
+                    .expect("fastpq batch"),
+            )
+            .expect("raw proof")
+            .len()
+        );
+        assert_eq!(summary.aux_len_bytes, 0);
+        assert_eq!(
+            summarize_sccp_message_transparent_open_verify_proof_from_artifact(
+                &NexusSccpMessageTransparentProofV1 {
+                    version: 1,
+                    local_domain: manifest.local_domain,
+                    counterparty_domain: manifest.counterparty_domain,
+                    security_model: manifest.security_model,
+                    anchor_governance: manifest.anchor_governance,
+                    destination_binding: manifest.destination_binding.clone(),
+                    proof_family: manifest.proof_family.clone(),
+                    verifier_backend: manifest.verifier_backend.clone(),
+                    message_backend: manifest.message_backend.clone(),
+                    registry_backend: manifest.registry_backend.clone(),
+                    manifest_seed: manifest.manifest_seed.clone(),
+                    finality_model: manifest.finality_model,
+                    verifier_target: manifest.verifier_target,
+                    public_inputs: public_inputs.clone(),
+                    proof_bytes: proof_bytes.clone(),
+                    submission_package: SccpCounterpartySubmissionPackageV1 {
+                        version: 1,
+                        proof_family: manifest.proof_family.clone(),
+                        verifier_backend: manifest.verifier_backend.clone(),
+                        envelope_encoding: "ton_message_body_v1".to_owned(),
+                        submission_kind: manifest.submission_template.submission_kind.clone(),
+                        verifier_entrypoint: manifest
+                            .submission_template
+                            .verifier_entrypoint
+                            .clone(),
+                        platform_payload: SccpPlatformSubmissionPayloadV1::TonInternalMessage(
+                            SccpTonInternalMessageSubmissionPayloadV1 {
+                                proof_cell: proof_bytes.clone(),
+                                public_inputs_cell:
+                                    canonical_sccp_message_transparent_public_inputs_bytes(
+                                        &public_inputs,
+                                    ),
+                                bundle_cell: canonical_nexus_sccp_message_bundle_bytes(&bundle),
+                            },
+                        ),
+                        arguments: Vec::new(),
+                        envelope_bytes: vec![0xCC],
+                    },
+                    bundle: bundle.clone(),
+                }
+            ),
+            Some(summary.clone())
+        );
+        assert_eq!(
+            build_sccp_message_transparent_open_verify_summary_from_bundle(&bundle),
+            Some(summary)
+        );
     }
 
     #[test]

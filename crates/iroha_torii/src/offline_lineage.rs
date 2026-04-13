@@ -5279,10 +5279,7 @@ fn normalize_cash_receipt_value(value: &mut json::Value) -> Result<(), Error> {
                 attestation.insert("counter".to_owned(), counter);
                 attestation.insert("assertion_base64".to_owned(), assertion);
                 attestation.insert("challenge_hash_hex".to_owned(), challenge);
-                map.insert(
-                    "attestation".to_owned(),
-                    json::Value::Object(attestation),
-                );
+                map.insert("attestation".to_owned(), json::Value::Object(attestation));
             }
         }
     }

@@ -3164,6 +3164,26 @@ final class ToriiClientTests: XCTestCase {
         XCTAssertEqual(OfflineNorito.assetDefinitionIdFromLiteral(literal), "62Fk4FPcMuLvW5QjDGNF2a4jAmjM")
     }
 
+    func testCanonicalAssetDefinitionLiteralRemainsCanonical() {
+        XCTAssertEqual(
+            OfflineNorito.assetDefinitionIdFromLiteral("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+            "62Fk4FPcMuLvW5QjDGNF2a4jAmjM"
+        )
+    }
+
+    func testMalformedPublicAssetLiteralReturnsNilDefinition() {
+        XCTAssertNil(OfflineNorito.assetDefinitionIdFromLiteral("62Fk4FPcMuLvW5QjDGNF2a4jAmjM#not-an-account"))
+    }
+
+    func testDecodeAccountIdReadsNoritoStringField() throws {
+        let publicKey = Data(repeating: 0x33, count: 32)
+        let address = try AccountAddress.fromAccount(publicKey: publicKey, algorithm: "ed25519")
+        let accountId = try address.toI105(networkPrefix: 0x02F1)
+        let encodedLength = withUnsafeBytes(of: UInt64(accountId.utf8.count).littleEndian) { Data($0) }
+        let encoded = encodedLength + Data(accountId.utf8)
+        XCTAssertEqual(try OfflineNorito.decodeAccountId(encoded), accountId)
+    }
+
     func testExplorerBurnInstructionParsedAsSummary() throws {
         let json = """
         {

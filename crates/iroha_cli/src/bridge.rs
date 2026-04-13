@@ -260,8 +260,11 @@ fn render_sccp_artifact_summary(
         ),
         None => format!(" proof_bytes_len={}", artifact.proof_bytes.len()),
     };
+    let open_verify_summary = iroha_sccp::summarize_sccp_message_transparent_open_verify_proof_from_artifact(artifact)
+        .map(render_sccp_open_verify_summary)
+        .unwrap_or_default();
     format!(
-        "sccp artifact: message_id={} payload={} chain={}({}) backend={} verifier_backend={} security={:?} anchors={:?} binding={} proof_family={} finality_height={} commitment_root={}{}{} package={}/{}",
+        "sccp artifact: message_id={} payload={} chain={}({}) backend={} verifier_backend={} security={:?} anchors={:?} binding={} proof_family={} finality_height={} commitment_root={}{}{}{} package={}/{}",
         hex::encode(artifact.public_inputs.message_id),
         iroha_sccp::sccp_message_payload_kind_key(&artifact.bundle.payload),
         iroha_sccp::sccp_chain_key_for_domain(artifact.counterparty_domain).unwrap_or("unknown"),
@@ -276,14 +279,19 @@ fn render_sccp_artifact_summary(
         hex::encode(artifact.public_inputs.commitment_root),
         projection_summary,
         inner_summary,
+        open_verify_summary,
         artifact.submission_package.submission_kind,
         artifact.submission_package.envelope_encoding
     )
 }
 
 fn render_sccp_job_summary(job: &iroha_sccp::SccpCounterpartyProofJobV1) -> String {
+    let open_verify_summary =
+        iroha_sccp::build_sccp_message_transparent_open_verify_summary_from_bundle(&job.bundle)
+            .map(render_sccp_open_verify_summary)
+            .unwrap_or_default();
     format!(
-        "sccp job: message_id={} payload={} chain={}({}) backend={} verifier_backend={} registry={} security={:?} anchors={:?} binding={} finality={:?} verifier={:?} projection={} submit={} package={}/{}",
+        "sccp job: message_id={} payload={} chain={}({}) backend={} verifier_backend={} registry={} security={:?} anchors={:?} binding={} finality={:?} verifier={:?} projection={} submit={}{} package={}/{}",
         hex::encode(job.public_inputs.message_id),
         job.payload_kind,
         job.chain,
@@ -298,8 +306,25 @@ fn render_sccp_job_summary(job: &iroha_sccp::SccpCounterpartyProofJobV1) -> Stri
         job.verifier_target,
         render_sccp_payload_projection_summary(&job.payload_projection),
         render_sccp_submission_template_summary(&job.submission_template),
+        open_verify_summary,
         job.submission_package.submission_kind,
         job.submission_package.envelope_encoding
+    )
+}
+
+fn render_sccp_open_verify_summary(
+    summary: iroha_sccp::SccpOpenVerifyEnvelopeSummaryV1,
+) -> String {
+    format!(
+        " open_verify={}/{} vk_hash={} schema_hash={} columns={} words={} backend_proof_len={} aux_len={}",
+        summary.backend,
+        summary.circuit_id,
+        hex::encode(summary.vk_hash),
+        hex::encode(summary.public_inputs_schema_hash),
+        summary.public_input_column_count,
+        summary.public_input_word_count,
+        summary.backend_proof_len_bytes,
+        summary.aux_len_bytes
     )
 }
 
@@ -772,10 +797,24 @@ mod tests {
             .expect("ton manifest");
         let public_inputs =
             sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
+        let open = iroha::data_model::zk::StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: vec![vec![[0x55; 32]]],
+            envelope_bytes: vec![0xAA, 0xBB, 0xCC],
+        };
+        let proof_bytes = norito::to_bytes(&iroha::data_model::zk::OpenVerifyEnvelope {
+            backend: iroha::data_model::zk::BackendTag::Stark,
+            circuit_id: "sccp-message-transparent-v1".to_owned(),
+            vk_hash: [0x66; 32],
+            public_inputs: vec![0x77, 0x88, 0x99],
+            proof_bytes: norito::to_bytes(&open).expect("encode open proof"),
+            aux: vec![0xDE, 0xAD],
+        })
+        .expect("encode open verify envelope");
         let platform_payload =
             SccpPlatformSubmissionPayloadV1::TonInternalMessage(
                 SccpTonInternalMessageSubmissionPayloadV1 {
-                    proof_cell: vec![0xAA, 0xBB],
+                    proof_cell: proof_bytes.clone(),
                     public_inputs_cell:
                         canonical_sccp_message_transparent_public_inputs_bytes(&public_inputs),
                     bundle_cell: canonical_nexus_sccp_message_bundle_bytes(&bundle),
@@ -785,6 +824,9 @@ mod tests {
             version: 1,
             local_domain: manifest.local_domain,
             counterparty_domain: manifest.counterparty_domain,
+            security_model: manifest.security_model,
+            anchor_governance: manifest.anchor_governance,
+            destination_binding: manifest.destination_binding.clone(),
             proof_family: manifest.proof_family.clone(),
             verifier_backend: manifest.verifier_backend.clone(),
             message_backend: manifest.message_backend.clone(),
@@ -793,7 +835,7 @@ mod tests {
             finality_model: manifest.finality_model,
             verifier_target: manifest.verifier_target,
             public_inputs,
-            proof_bytes: vec![0xAA, 0xBB],
+            proof_bytes: proof_bytes.clone(),
             submission_package: SccpCounterpartySubmissionPackageV1 {
                 version: 1,
                 proof_family: manifest.proof_family,
@@ -819,6 +861,9 @@ mod tests {
             chain: "ton".to_owned(),
             local_domain: artifact.local_domain,
             counterparty_domain: artifact.counterparty_domain,
+            security_model: artifact.security_model,
+            anchor_governance: artifact.anchor_governance,
+            destination_binding: artifact.destination_binding.clone(),
             proof_family: artifact.proof_family.clone(),
             verifier_backend: artifact.verifier_backend.clone(),
             message_backend: artifact.message_backend.clone(),
@@ -961,6 +1006,8 @@ mod tests {
         assert!(rendered.contains("finality_height=19"));
         assert!(rendered.contains("inner_family=Ton"));
         assert!(rendered.contains("inner_payload=transfer"));
+        assert!(rendered.contains("open_verify=stark/sccp-message-transparent-v1"));
+        assert!(rendered.contains(&format!("vk_hash={}", "66".repeat(32))));
         assert!(rendered.contains("package=internal_message/ton_message_body_v1"));
     }
 
@@ -996,6 +1043,7 @@ mod tests {
         assert!(rendered.contains(
             "submit=internal_message/ton_cell_v1/op::submit_sccp_message_proof args=[proof_cell,public_inputs_cell,bundle_cell]"
         ));
+        assert!(rendered.contains("open_verify=stark/sccp-message-transparent-v1"));
         assert!(rendered.contains("package=internal_message/ton_message_body_v1"));
     }
 }

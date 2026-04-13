@@ -2132,6 +2132,7 @@ struct InrouTapNetworkAttachment {
     installed_nfs_exports: Vec<InrouNfsExport>,
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum InrouTapFirewallPlan {
     Open,
@@ -2139,6 +2140,7 @@ enum InrouTapFirewallPlan {
     Allowlist(Vec<InrouTapResolvedAllowlistEndpoint>),
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 struct InrouTapResolvedAllowlistEndpoint {
     host: String,
@@ -2146,13 +2148,14 @@ struct InrouTapResolvedAllowlistEndpoint {
     port: u16,
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct InrouTapFirewallRuleSpec {
     args: Vec<String>,
     context: &'static str,
 }
 
-#[cfg(target_os = "linux")]
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct InrouNfsExport {
     guest_client: String,
@@ -2446,7 +2449,7 @@ impl SoracloudRuntimeManager {
                     (plan.runtime == SoraContainerRuntimeV1::Inrou
                         && plan.role == SoracloudRuntimeRevisionRole::Active
                         && !plan.local_replica_slots.is_empty())
-                        .then_some((service_name.clone(), service_version.clone()))
+                    .then_some((service_name.clone(), service_version.clone()))
                 })
             })
             .collect::<BTreeSet<_>>();
@@ -2679,7 +2682,7 @@ impl SoracloudRuntimeManager {
     fn desired_hosted_http_worker_keys(
         &self,
         snapshot: &SoracloudRuntimeSnapshot,
-        bundle_registry: &BTreeMap<(String, String), SoraDeploymentBundleV1>,
+        _bundle_registry: &BTreeMap<(String, String), SoraDeploymentBundleV1>,
     ) -> BTreeSet<(String, String, u16)> {
         snapshot
             .services
@@ -2700,9 +2703,12 @@ impl SoracloudRuntimeManager {
                     .flat_map(move |plan| {
                         let service_name = service_name.clone();
                         let service_version = service_version.clone();
-                        plan.local_replica_slots.iter().copied().map(move |replica_slot| {
-                            (service_name.clone(), service_version.clone(), replica_slot)
-                        })
+                        plan.local_replica_slots
+                            .iter()
+                            .copied()
+                            .map(move |replica_slot| {
+                                (service_name.clone(), service_version.clone(), replica_slot)
+                            })
                     })
             })
             .collect()
@@ -8238,11 +8244,9 @@ fn build_runtime_snapshot(
                     iroha_data_model::soracloud::SoraContainerRuntimeV1::Ivm => {
                         is_runtime_active.then_some(deployment.process_generation)
                     }
-                    SoraContainerRuntimeV1::Inrou => {
-                        (hosted_http_lease_active
-                            && inrou_host_platform_supports_local_materialization())
-                        .then_some(deployment.process_generation)
-                    }
+                    SoraContainerRuntimeV1::Inrou => (hosted_http_lease_active
+                        && inrou_host_platform_supports_local_materialization())
+                    .then_some(deployment.process_generation),
                 },
                 desired_replica_count: bundle.service.replicas.get(),
                 local_replica_slots: local_replicas
@@ -10294,6 +10298,7 @@ fn setup_inrou_tap_network(
     Ok(attachment)
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn inrou_tap_firewall_plan(
     network_policy: &SoraNetworkPolicyV1,
 ) -> eyre::Result<InrouTapFirewallPlan> {
@@ -10338,6 +10343,7 @@ fn run_host_command_strings(program: &Path, args: &[String]) -> eyre::Result<()>
     run_host_command(program, &borrowed)
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn inrou_tap_delete_rule_args(args: &[String]) -> Vec<String> {
     let mut delete_args = args.to_vec();
     if let Some(index) = delete_args
@@ -10355,6 +10361,7 @@ fn inrou_tap_delete_rule_args(args: &[String]) -> Vec<String> {
     delete_args
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn planned_inrou_tap_firewall_rules(
     tap_name: &str,
     guest_cidr: &str,
@@ -10466,6 +10473,7 @@ fn planned_inrou_tap_firewall_rules(
     rules
 }
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn resolve_inrou_allowlist_endpoints(
     entries: &[iroha_data_model::soracloud::SoraNetworkAllowlistEntryV1],
 ) -> eyre::Result<Vec<InrouTapResolvedAllowlistEndpoint>> {
@@ -10986,6 +10994,7 @@ fn probe_hosted_http_health(
     Ok(())
 }
 
+#[cfg(test)]
 fn fetch_hosted_http_text(listen_base_url: &str, path: &str) -> eyre::Result<String> {
     let request_path = if path.starts_with('/') {
         path.to_owned()
@@ -16471,8 +16480,7 @@ mod tests {
         manager.reconcile_once()?;
 
         let service_dir = temp_dir.path().join("services/web_portal/2026.02.0");
-        let summary = read_hosted_http_runtime_state(&service_dir)?
-            .expect("revision runtime summary should be written");
+        let summary = read_hosted_http_runtime_state(&service_dir)?;
         let snapshot = manager.snapshot.read().clone();
         let plan = snapshot
             .services
@@ -16480,102 +16488,117 @@ mod tests {
             .and_then(|versions| versions.get("2026.02.0"))
             .expect("replicated Inrou plan present");
         assert_eq!(plan.desired_replica_count, 2);
-        assert_eq!(plan.local_replica_slots, vec![1, 2]);
-        assert_eq!(plan.local_replicas.len(), 2);
-        assert_eq!(plan.local_replicas[0].replica_slot, 1);
-        assert_eq!(
-            plan.local_replicas[0].health_status,
-            SoraServiceHealthStatusV1::Degraded
-        );
-        assert!(
-            plan.local_replicas[0]
-                .materialization_dir
-                .ends_with("services/web_portal/2026.02.0/replicas/replica-0001")
-        );
-        assert_eq!(plan.local_replicas[1].replica_slot, 2);
-        assert_eq!(
-            plan.local_replicas[1].health_status,
-            SoraServiceHealthStatusV1::Degraded
-        );
-        assert!(
-            plan.local_replicas[1]
-                .materialization_dir
-                .ends_with("services/web_portal/2026.02.0/replicas/replica-0002")
-        );
-        assert_eq!(summary.replicas.len(), 2);
-        assert_eq!(summary.health_status, SoraServiceHealthStatusV1::Degraded);
-        assert!(summary.listen_base_url.is_none());
-        assert_eq!(summary.replicas[0].replica_slot, 1);
-        assert_eq!(summary.replicas[1].replica_slot, 2);
-        assert!(
-            service_dir
-                .join("replicas/replica-0001/runtime_plan.json")
-                .exists()
-        );
-        assert!(
-            service_dir
-                .join("replicas/replica-0002/runtime_plan.json")
-                .exists()
-        );
-        assert!(
-            service_dir
-                .join("replicas/replica-0001")
-                .join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1)
-                .exists()
-        );
-        assert!(
-            service_dir
-                .join("replicas/replica-0002")
-                .join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1)
-                .exists()
-        );
-        let replica_one_plan: SoracloudRuntimeServicePlan = read_json_optional(
-            service_dir
-                .join("replicas/replica-0001/runtime_plan.json")
-                .as_path(),
-        )?
-        .expect("replica one runtime plan");
-        let replica_two_plan: SoracloudRuntimeServicePlan = read_json_optional(
-            service_dir
-                .join("replicas/replica-0002/runtime_plan.json")
-                .as_path(),
-        )?
-        .expect("replica two runtime plan");
-        let replica_one_root = replica_one_plan
-            .lease_volumes
-            .iter()
-            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
-            .expect("replica one root volume");
-        let replica_two_root = replica_two_plan
-            .lease_volumes
-            .iter()
-            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
-            .expect("replica two root volume");
-        let replica_one_shared = replica_one_plan
-            .lease_volumes
-            .iter()
-            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::ServiceLeaseVolume)
-            .expect("replica one shared service volume");
-        let replica_two_shared = replica_two_plan
-            .lease_volumes
-            .iter()
-            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::ServiceLeaseVolume)
-            .expect("replica two shared service volume");
-        assert!(replica_one_root.local_materialization_dir.ends_with(
-            "service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0001/root_disk"
-        ));
-        assert!(replica_two_root.local_materialization_dir.ends_with(
-            "service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0002/root_disk"
-        ));
-        assert_eq!(
-            replica_one_shared.local_materialization_dir,
-            replica_two_shared.local_materialization_dir
-        );
-        assert!(
-            replica_one_shared.local_materialization_dir.ends_with(
+        if inrou_host_platform_supports_local_materialization() {
+            let summary = summary.expect("revision runtime summary should be written");
+            assert_eq!(plan.local_replica_slots, vec![1, 2]);
+            assert_eq!(plan.local_replicas.len(), 2);
+            assert_eq!(plan.local_replicas[0].replica_slot, 1);
+            assert_eq!(
+                plan.local_replicas[0].health_status,
+                SoraServiceHealthStatusV1::Degraded
+            );
+            assert!(
+                plan.local_replicas[0]
+                    .materialization_dir
+                    .ends_with("services/web_portal/2026.02.0/replicas/replica-0001")
+            );
+            assert_eq!(plan.local_replicas[1].replica_slot, 2);
+            assert_eq!(
+                plan.local_replicas[1].health_status,
+                SoraServiceHealthStatusV1::Degraded
+            );
+            assert!(
+                plan.local_replicas[1]
+                    .materialization_dir
+                    .ends_with("services/web_portal/2026.02.0/replicas/replica-0002")
+            );
+            assert_eq!(summary.replicas.len(), 2);
+            assert_eq!(summary.health_status, SoraServiceHealthStatusV1::Degraded);
+            assert!(summary.listen_base_url.is_none());
+            assert_eq!(summary.replicas[0].replica_slot, 1);
+            assert_eq!(summary.replicas[1].replica_slot, 2);
+            assert!(
+                service_dir
+                    .join("replicas/replica-0001/runtime_plan.json")
+                    .exists()
+            );
+            assert!(
+                service_dir
+                    .join("replicas/replica-0002/runtime_plan.json")
+                    .exists()
+            );
+            assert!(
+                service_dir
+                    .join("replicas/replica-0001")
+                    .join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1)
+                    .exists()
+            );
+            assert!(
+                service_dir
+                    .join("replicas/replica-0002")
+                    .join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1)
+                    .exists()
+            );
+            let replica_one_plan: SoracloudRuntimeServicePlan = read_json_optional(
+                service_dir
+                    .join("replicas/replica-0001/runtime_plan.json")
+                    .as_path(),
+            )?
+            .expect("replica one runtime plan");
+            let replica_two_plan: SoracloudRuntimeServicePlan = read_json_optional(
+                service_dir
+                    .join("replicas/replica-0002/runtime_plan.json")
+                    .as_path(),
+            )?
+            .expect("replica two runtime plan");
+            let replica_one_root = replica_one_plan
+                .lease_volumes
+                .iter()
+                .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+                .expect("replica one root volume");
+            let replica_two_root = replica_two_plan
+                .lease_volumes
+                .iter()
+                .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+                .expect("replica two root volume");
+            let replica_one_shared = replica_one_plan
+                .lease_volumes
+                .iter()
+                .find(|volume| volume.kind == SoraLeaseVolumeKindV1::ServiceLeaseVolume)
+                .expect("replica one shared service volume");
+            let replica_two_shared = replica_two_plan
+                .lease_volumes
+                .iter()
+                .find(|volume| volume.kind == SoraLeaseVolumeKindV1::ServiceLeaseVolume)
+                .expect("replica two shared service volume");
+            assert!(replica_one_root.local_materialization_dir.ends_with(
+                "service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0001/root_disk"
+            ));
+            assert!(replica_two_root.local_materialization_dir.ends_with(
+                "service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0002/root_disk"
+            ));
+            assert_eq!(
+                replica_one_shared.local_materialization_dir,
+                replica_two_shared.local_materialization_dir
+            );
+            assert!(replica_one_shared.local_materialization_dir.ends_with(
                 "service_data/web_portal/revisions/2026.02.0/volumes/shared/index_state"
-            )
-        );
+            ));
+        } else {
+            assert!(summary.is_none());
+            assert!(plan.local_replica_slots.is_empty());
+            assert!(plan.local_replicas.is_empty());
+            assert!(
+                !service_dir
+                    .join("replicas/replica-0001/runtime_plan.json")
+                    .exists()
+            );
+            assert!(
+                !service_dir
+                    .join("replicas/replica-0002/runtime_plan.json")
+                    .exists()
+            );
+        }
         Ok(())
     }
 
@@ -16616,25 +16639,32 @@ mod tests {
         manager.reconcile_once()?;
 
         let submitted_states = mutation_sink.submitted_runtime_states();
-        assert_eq!(
-            submitted_states.len(),
-            1,
-            "identical hosted-service runtime snapshots should not be resubmitted every reconcile interval"
-        );
-        let submitted_state = &submitted_states[0].state;
-        assert_eq!(submitted_state.service_name, bundle.service.service_name);
-        assert_eq!(
-            submitted_state.active_service_version,
-            bundle.service.service_version
-        );
-        assert_eq!(
-            submitted_state.health_status,
-            SoraServiceHealthStatusV1::Hydrating
-        );
-        assert_eq!(
-            submitted_state.materialized_bundle_hash,
-            bundle.container.bundle_hash
-        );
+        if inrou_host_platform_supports_local_materialization() {
+            assert_eq!(
+                submitted_states.len(),
+                1,
+                "identical hosted-service runtime snapshots should not be resubmitted every reconcile interval"
+            );
+            let submitted_state = &submitted_states[0].state;
+            assert_eq!(submitted_state.service_name, bundle.service.service_name);
+            assert_eq!(
+                submitted_state.active_service_version,
+                bundle.service.service_version
+            );
+            assert_eq!(
+                submitted_state.health_status,
+                SoraServiceHealthStatusV1::Hydrating
+            );
+            assert_eq!(
+                submitted_state.materialized_bundle_hash,
+                bundle.container.bundle_hash
+            );
+        } else {
+            assert!(
+                submitted_states.is_empty(),
+                "unsupported hosts should not publish authoritative Inrou runtime state"
+            );
+        }
         Ok(())
     }
 

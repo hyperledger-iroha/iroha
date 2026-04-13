@@ -2,6 +2,40 @@
 
 Last updated: 2026-04-14
 
+Latest sync (2026-04-14 grouped consensus helper paths now force fresh heights and tolerate lagged catch-up telemetry):
+the three reported `consensus_and_da` reds are addressed in the test helpers on
+the current tree. `integration_tests/tests/sumeragi_prf_collectors.rs` now
+forces the follow-up poll to observe at least one block beyond both the current
+chain height and the last advertised collector plan height, so a lagged
+`/v1/sumeragi/collectors` response can no longer leave the test polling without
+producing a newer block. `integration_tests/tests/sumeragi_rotation.rs` now
+uses plain submits plus explicit height waits to seed the certificate scenarios
+instead of waiting on per-transaction confirmations. And
+`integration_tests/tests/zk_confidential_localnet.rs` now treats total height
+growth as restarted-peer progress and keeps the combined-pressure catch-up path
+on the hard overall timeout instead of failing early on a flat
+`blocks_non_empty` counter.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_prf_collectors.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_rotation.rs`
+  - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/zk_confidential_localnet.rs`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- validation status for this slice:
+  - `cargo fmt --all`
+  - attempted focused `integration_tests` reruns are currently blocked by
+    unrelated dirty-worktree SCCP/Torii edits, with the rebuild failing in
+    `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs`
+    because `NexusSccpMessageTransparentProofV1` and
+    `SccpCounterpartyProofJobV1` do not satisfy the `JsonSerialize` bound
+    expected by `norito::json::value::to_value(...)`
+- open work after this slice:
+  - resolve or park the unrelated dirty-worktree SCCP/Torii compile failures so
+    `integration_tests` can rebuild again; and
+  - rerun the three reported exact `consensus_and_da` tests, then the broader
+    grouped boundary if wider signoff is needed.
+
 Latest sync (2026-04-14 SCCP native proofs now use canonical bound ZK envelopes):
 the SCCP native transparent proof path is no longer emitting or accepting a
 bare `fastpq_prover::Proof` blob. `crates/iroha_sccp/src/lib.rs` now wraps the

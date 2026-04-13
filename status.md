@@ -2,6 +2,55 @@
 
 Last updated: 2026-04-14
 
+## 2026-04-14 Follow-up: grouped consensus helper paths now force fresh heights and tolerate lagged catch-up telemetry
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_prf_collectors.rs`
+  now drives the network with plain submits plus explicit total-height waits and
+  computes the post-snapshot observation target as
+  `max(current_height, plan_height) + 1`. This closes the case where
+  `/v1/sumeragi/collectors` still advertised plan height 5 while the chain was
+  already at height 6, so the old test could poll forever without actually
+  forcing a newer block.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_rotation.rs`
+  now seeds the 5-peer, 7-peer, and cross-peer commit-certificate scenarios
+  with `submit_all(...)` plus explicit total-height waits instead of repeated
+  `submit_blocking(...)` calls. The tests still require the same block heights
+  and certificate windows, but they no longer depend on a 600-second per-tx
+  confirmation path in the heavier grouped run.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/zk_confidential_localnet.rs`
+  now treats total block-height growth as restarted-peer progress, and the
+  special combined `downtime+timeout` catch-up assertion waits until the hard
+  overall timeout instead of failing early just because `blocks_non_empty`
+  remains flat while the restarted peer is still syncing.
+- Focused helper regressions now cover:
+  - the collectors follow-up height calculation when the chain is already ahead
+    of the endpoint plan; and
+  - the restarted-peer catch-up helpers that accept total-height growth and use
+    the hard-timeout-only path for the combined-pressure catch-up context.
+- Validation for this slice is currently blocked by unrelated dirty-worktree
+  SCCP/Torii edits outside these files: rebuilding `integration_tests` now
+  fails in `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs`
+  because `NexusSccpMessageTransparentProofV1` and
+  `SccpCounterpartyProofJobV1` do not satisfy the `JsonSerialize` bound
+  required by `norito::json::value::to_value(...)`.
+
+## 2026-04-14 Follow-up: Swift offline cash helpers restored after merged `#5570`
+- `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift`
+  now again extracts the asset definition id from canonical public asset
+  literals of the form `assetDefinitionId#accountId`. The merged `#5570` change
+  added `decodeAccountId(...)` but accidentally dropped that parsing branch,
+  which broke the existing Swift canonical mint-destination path.
+- `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Tests/IrohaSwiftTests/ToriiClientTests.swift`
+  now covers the restored helper behavior directly for canonical public asset
+  literals, plain asset-definition literals, malformed literals, and the new
+  `decodeAccountId(...)` helper.
+- `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Tests/IrohaSwiftTests/OfflinePaymentE2ETest.swift`
+  is now portable for default SwiftPM runs: it defaults to
+  `http://127.0.0.1:8080`, probes `/status` with a 2-second timeout, resolves
+  the CLI/config from `IROHA_CLI_PATH` / `IROHA_CLIENT_CONFIG` or repo-relative
+  defaults, skips immediately when local infra is absent, and aligns its manual
+  cash-payload signing helper with the merged Rust behavior that omits nil iOS
+  binding fields instead of serializing them as `null`.
+
 ## 2026-04-14 Follow-up: SCCP native proof bytes now use a canonical bound ZK envelope instead of bare FASTPQ payloads
 - `/Users/takemiyamakoto/dev/iroha/crates/iroha_sccp/src/lib.rs` now wraps the
   native SCCP transparent FASTPQ proof in a Norito-encoded

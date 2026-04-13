@@ -40,13 +40,7 @@ async fn npos_prf_collectors_track_endpoint() -> eyre::Result<()> {
 
     // Produce a handful of blocks so VRF commit/reveal data is available.
     let client = network.client();
-    let status = client.get_status()?;
-    for idx in status.blocks..6 {
-        client.submit_blocking(Log::new(Level::INFO, format!("prf seed {idx}")))?;
-    }
-    network
-        .ensure_blocks_with(|height| height.total >= 6)
-        .await?;
+    drive_network_to_total_height(&network, &client, 6, "prf seed").await?;
 
     let topology = topology_from_peers(network.peers());
     let collectors_url = client
@@ -65,13 +59,9 @@ async fn npos_prf_collectors_track_endpoint() -> eyre::Result<()> {
 
     // Wait for at least one additional block to ensure collector rotation is observable.
     let status = client.get_status()?;
-    let target_height = snapshot_initial.plan_height.saturating_add(1);
-    for idx in status.blocks..target_height {
-        client.submit_blocking(Log::new(Level::INFO, format!("prf rotation tick {idx}")))?;
-    }
-    network
-        .ensure_blocks_with(|height| height.total > snapshot_initial.plan_height)
-        .await?;
+    let target_height =
+        next_collectors_observation_height(status.blocks, snapshot_initial.plan_height);
+    drive_network_to_total_height(&network, &client, target_height, "prf rotation tick").await?;
 
     let snapshot_next = retry_collectors_until_height(
         &http,
@@ -119,6 +109,28 @@ async fn npos_prf_collectors_track_endpoint() -> eyre::Result<()> {
 
     network.shutdown().await;
     Ok(())
+}
+
+async fn drive_network_to_total_height(
+    network: &sandbox::SerializedNetwork,
+    client: &iroha::client::Client,
+    target_height: u64,
+    label: &str,
+) -> eyre::Result<()> {
+    let mut current_height = client.get_status()?.blocks;
+    while current_height < target_height {
+        let next_height = current_height.saturating_add(1);
+        client.submit_all([Log::new(Level::INFO, format!("{label} {next_height}"))])?;
+        network
+            .ensure_blocks_with(|height| height.total >= next_height)
+            .await?;
+        current_height = client.get_status()?.blocks;
+    }
+    Ok(())
+}
+
+fn next_collectors_observation_height(current_height: u64, plan_height: u64) -> u64 {
+    current_height.max(plan_height).saturating_add(1)
 }
 
 fn topology_from_peers(peers: &[iroha_test_network::NetworkPeer]) -> Topology {
@@ -291,6 +303,12 @@ fn collectors_snapshot_advanced_accepts_same_height_with_higher_view() {
     assert!(collectors_snapshot_advanced(&snapshot, 5, 1));
     assert!(collectors_snapshot_advanced(&snapshot, 4, 99));
     assert!(!collectors_snapshot_advanced(&snapshot, 5, 2));
+}
+
+#[test]
+fn next_collectors_observation_height_forces_one_more_block_when_chain_is_ahead() {
+    assert_eq!(next_collectors_observation_height(6, 5), 7);
+    assert_eq!(next_collectors_observation_height(4, 5), 6);
 }
 
 fn parse_seed(hex_str: &str) -> eyre::Result<[u8; 32]> {

@@ -139,6 +139,9 @@ extension OfflineNorito {
     }
 
     public static func assetDefinitionIdFromLiteral(_ literal: String) -> String? {
+        if let parsed = parsePublicAssetIdLiteral(literal) {
+            return parsed.assetDefinitionId
+        }
         let trimmed = literal.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return nil
