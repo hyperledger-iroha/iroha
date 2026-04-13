@@ -27,7 +27,7 @@ Soracloud v1 - bu vakolatli, faqat IVM ish vaqti.
   nufuzli dunyo davlati va o'rnatilgan Soracloud ish vaqti menejeri.
 
 ## Ish vaqti doirasi- Soracloud v1 faqat `SoraContainerRuntimeV1::Ivm` ni qabul qiladi.
-- `NativeProcess` rad etilganligicha qolmoqda.
+- Hosted HTTP: `execution_plane = HttpService`, `runtime = Inrou`.
 - To'g'ridan-to'g'ri IVM ishlov beruvchilari tomonidan qabul qilingan pochta qutilarining buyurtma qilingan bajarilishi.
 - Hidratsiya va materializatsiya SoraFS/DA tarkibidan kelib chiqadi.
   sintetik mahalliy suratlarga qaraganda.

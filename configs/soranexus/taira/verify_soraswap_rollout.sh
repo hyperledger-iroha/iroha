@@ -15,6 +15,7 @@ RUN_SMOKE=0
 RUN_RELEASE_CHECKLIST=0
 ALLOW_TESTNET_MUTATIONS=0
 SKIP_MCP_CHECK=0
+SKIP_SORAFS_CHECK=0
 SKIP_NESTED_CALL=0
 
 usage() {
@@ -29,14 +30,16 @@ Usage: verify_soraswap_rollout.sh --public-root URL --write-config PATH
                                   [--run-release-checklist]
                                   [--allow-testnet-mutations]
                                   [--skip-mcp-check]
+                                  [--skip-sorafs-check]
                                   [--skip-nested-call]
 
 Run the post-upgrade public-Taira validation chain in the canonical order:
   1. `check_mcp_rollout.sh` on the chosen public node
-  2. `make testnet-nested-call-probe` in `../soraswap`
-  3. optional `make deploy-testnet`
-  4. optional signed `make smoke-testnet`
-  5. optional `make release-checklist`
+  2. `check_sorafs_rollout.sh` on the chosen public node
+  3. `make testnet-nested-call-probe` in `../soraswap`
+  4. optional `make deploy-testnet`
+  5. optional signed `make smoke-testnet`
+  6. optional `make release-checklist`
 
 `--run-smoke` implies deploy. `--run-release-checklist` implies both deploy
 and smoke. Mutating smoke requires `--allow-testnet-mutations`.
@@ -113,6 +116,10 @@ while [[ $# -gt 0 ]]; do
       SKIP_MCP_CHECK=1
       shift
       ;;
+    --skip-sorafs-check)
+      SKIP_SORAFS_CHECK=1
+      shift
+      ;;
     --skip-nested-call)
       SKIP_NESTED_CALL=1
       shift
@@ -137,13 +144,16 @@ if [[ $RUN_SMOKE -eq 1 ]]; then
   RUN_DEPLOY=1
 fi
 
-if [[ $SKIP_MCP_CHECK -ne 1 ]]; then
+if [[ $SKIP_MCP_CHECK -ne 1 || $SKIP_SORAFS_CHECK -ne 1 ]]; then
   if [[ -z "$PUBLIC_TORII_ROOT" ]]; then
-    echo "--public-root is required unless --skip-mcp-check is set" >&2
+    echo "--public-root is required unless both --skip-mcp-check and --skip-sorafs-check are set" >&2
     exit 1
   fi
+fi
+
+if [[ $SKIP_MCP_CHECK -ne 1 || $SKIP_SORAFS_CHECK -ne 1 ]]; then
   if [[ -z "$WRITE_CONFIG" ]]; then
-    echo "--write-config is required unless --skip-mcp-check is set" >&2
+    echo "--write-config is required unless both --skip-mcp-check and --skip-sorafs-check are set" >&2
     exit 1
   fi
 fi
@@ -191,6 +201,18 @@ if [[ $SKIP_MCP_CHECK -ne 1 ]]; then
     mcp_cmd+=(--iroha-bin "$IROHA_BIN")
   fi
   run_step "public Taira MCP + write canary" "${mcp_cmd[@]}"
+fi
+
+if [[ $SKIP_SORAFS_CHECK -ne 1 ]]; then
+  sorafs_cmd=(
+    "${SCRIPT_DIR}/check_sorafs_rollout.sh"
+    --public-root "$PUBLIC_TORII_ROOT"
+    --write-config "$WRITE_CONFIG"
+  )
+  if [[ -n "$IROHA_BIN" ]]; then
+    sorafs_cmd+=(--iroha-bin "$IROHA_BIN")
+  fi
+  run_step "public Taira SoraFS + capacity canary" "${sorafs_cmd[@]}"
 fi
 
 if [[ $SKIP_NESTED_CALL -ne 1 ]]; then

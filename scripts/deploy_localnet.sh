@@ -15,6 +15,7 @@ set -euo pipefail
 #   IROHA_LOCALNET_GAS_TO_STACK_MULTIPLIER Override [concurrency].gas_to_stack_multiplier in generated peer configs.
 #   IROHA_LOCALNET_MEMORY_BUDGET_PROFILE Override [ivm].memory_budget_profile in generated peer configs.
 #   IROHA_LOCALNET_MAX_STACK_BYTES Add/update a compute resource profile with this max_stack_bytes value.
+#   IROHA_LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS Override [sumeragi.persistence].commit_inflight_timeout_ms in generated peer configs.
 
 usage() {
   cat <<'EOF'
@@ -123,6 +124,7 @@ LOCALNET_GUEST_STACK_BYTES="${IROHA_LOCALNET_GUEST_STACK_BYTES:-}"
 LOCALNET_GAS_TO_STACK_MULTIPLIER="${IROHA_LOCALNET_GAS_TO_STACK_MULTIPLIER:-}"
 LOCALNET_MEMORY_BUDGET_PROFILE="${IROHA_LOCALNET_MEMORY_BUDGET_PROFILE:-}"
 LOCALNET_MAX_STACK_BYTES="${IROHA_LOCALNET_MAX_STACK_BYTES:-${LOCALNET_GUEST_STACK_BYTES:-}}"
+LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS="${IROHA_LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS:-}"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -651,6 +653,50 @@ max_egress_bytes = 12582912
 allow_gpu_hints = true
 allow_wasi = true
 EOF
+  done
+fi
+
+if [[ -n "$LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS" ]]; then
+  echo "Applying commit inflight timeout override in peer configs..."
+  for cfg in "$OUT_DIR"/peer*.toml; do
+    [[ -f "$cfg" ]] || continue
+    awk -v timeout="$LOCALNET_COMMIT_INFLIGHT_TIMEOUT_MS" '
+      function flush_persistence() {
+        if (in_persistence && !seen_timeout) {
+          print "commit_inflight_timeout_ms = " timeout
+        }
+        in_persistence = 0
+      }
+      /^\[[^]]+\]$/ {
+        flush_persistence()
+        if ($0 == "[sumeragi.persistence]") {
+          in_persistence = 1
+          saw_persistence = 1
+          seen_timeout = 0
+        }
+        print
+        next
+      }
+      {
+        if (in_persistence && $1 == "commit_inflight_timeout_ms") {
+          print "commit_inflight_timeout_ms = " timeout
+          seen_timeout = 1
+          next
+        }
+        print
+      }
+      END {
+        if (in_persistence) {
+          if (!seen_timeout) {
+            print "commit_inflight_timeout_ms = " timeout
+          }
+        } else if (!saw_persistence) {
+          print ""
+          print "[sumeragi.persistence]"
+          print "commit_inflight_timeout_ms = " timeout
+        }
+      }
+    ' "$cfg" > "${cfg}.tmp" && mv "${cfg}.tmp" "$cfg"
   done
 fi
 

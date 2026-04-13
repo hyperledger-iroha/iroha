@@ -45,13 +45,17 @@ that host root through `sorafs_sites.json`.
 - `taira-canary-client.example.toml`: runtime-only example signer config for
   the signed rollout canary.
 - `build_taira_rollout_bundle.sh`: packages the exact checked-out `irohad` /
-  `iroha` build plus the checked-in Taira config bundle into one timestamped
+  `iroha` / `sorafs_manifest_stub` / `sorafs_tx_stdin_builder` build plus the
+  checked-in Taira config bundle into one timestamped
   rollout artifact and records the git revision in `rollout.manifest.json`.
 - `check_mcp_rollout.sh`: smoke script for the local and public `/v1/mcp`
   checks used by the Taira Codex rollout, including the optional signed write
   canary for final public cutover.
+- `check_sorafs_rollout.sh`: public SoraFS surface + signed capacity-declaration
+  canary that catches stale validators still missing the capacity/order ISI
+  dispatch table.
 - `verify_soraswap_rollout.sh`: post-upgrade wrapper that runs the public MCP
-  canary, the SoraSwap nested-call probe, and then the optional
+  canary, the SoraFS capacity canary, the SoraSwap nested-call probe, and then the optional
   `deploy-testnet` / signed `smoke-testnet` / `release-checklist` chain in the
   canonical order.
 - `bootstrap_kaigi_localnet.sh`: local-only relay bootstrap that re-signs the
@@ -258,6 +262,23 @@ For final public rollout, do not stop at MCP discovery. Run the repo smoke with
 both the public endpoint and a runtime-only canary signer config:
 
 - `bash configs/soranexus/taira/check_mcp_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
+
+Then gate the SoraFS path on the same public node:
+
+- `bash configs/soranexus/taira/check_sorafs_rollout.sh --public-root "${PUBLIC_TORII_ROOT}" --write-config /run/secrets/taira-canary-client.toml`
+
+Expected result:
+
+- `POST /v1/sorafs/pin/register`, `POST /v1/sorafs/capacity/declare`, and
+  `POST /v1/sorafs/capacity/schedule` return `HTTP 400` for an empty JSON body,
+  not `HTTP 405`
+- the signed capacity canary lands and becomes visible in
+  `GET /v1/sorafs/capacity/state`
+
+If the canary fails with `Unknown instruction type`, the served validator build
+is stale and missing the SoraFS capacity/order entries in
+`iroha_core`'s instruction dispatch table even if the Torii route surface is
+otherwise up.
 
 On a freshly reset local bundle, the same signed canary now tolerates the brief
 startup window where `/status` has no commit QC yet, submits the first

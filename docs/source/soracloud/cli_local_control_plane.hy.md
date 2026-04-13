@@ -27,7 +27,7 @@ Soracloud v1-ը հեղինակավոր, միայն IVM գործարկման ժա
   հեղինակավոր համաշխարհային պետություն գումարած ներդրված Soracloud գործարկման մենեջերը:
 
 ## Runtime Scope- Soracloud v1-ն ընդունում է միայն `SoraContainerRuntimeV1::Ivm`:
-- `NativeProcess` մնում է մերժված:
+- Hosted HTTP: `execution_plane = HttpService`, `runtime = Inrou`.
 - Պատվիրված փոստարկղի կատարումն իրականացվում է անմիջապես IVM կառավարիչների կողմից:
 - Խոնավացումը և նյութականացումը գալիս են ավելի շուտ պարտավորված SoraFS/DA բովանդակությունից
   քան սինթետիկ տեղական snapshots.

@@ -77,8 +77,9 @@ async fn npos_prf_collectors_track_endpoint() -> eyre::Result<()> {
         &http,
         &collectors_url,
         snapshot_initial.plan_height,
+        snapshot_initial.plan_view,
         Duration::from_millis(250),
-        20,
+        80,
     )
     .await?;
     verify_snapshot(&topology, &snapshot_next)?;
@@ -155,23 +156,33 @@ async fn retry_collectors_until_height(
     http: &reqwest::Client,
     url: &reqwest::Url,
     min_height: u64,
+    min_view: u64,
     interval: Duration,
     attempts: usize,
 ) -> eyre::Result<CollectorsSnapshot> {
     let mut last_snapshot = fetch_collectors_snapshot(http, url).await?;
-    if last_snapshot.plan_height > min_height {
+    if collectors_snapshot_advanced(&last_snapshot, min_height, min_view) {
         return Ok(last_snapshot);
     }
     for _ in 0..attempts {
         sleep(interval).await;
         last_snapshot = fetch_collectors_snapshot(http, url).await?;
-        if last_snapshot.plan_height > min_height {
+        if collectors_snapshot_advanced(&last_snapshot, min_height, min_view) {
             return Ok(last_snapshot);
         }
     }
     eyre::bail!(
-        "collector snapshot did not advance height beyond {min_height} after {attempts} attempts"
+        "collector snapshot did not advance beyond height {min_height} / view {min_view} after {attempts} attempts"
     )
+}
+
+fn collectors_snapshot_advanced(
+    snapshot: &CollectorsSnapshot,
+    min_height: u64,
+    min_view: u64,
+) -> bool {
+    snapshot.plan_height > min_height
+        || (snapshot.plan_height == min_height && snapshot.plan_view > min_view)
 }
 
 #[derive(Clone, Debug)]
@@ -264,6 +275,22 @@ async fn fetch_collectors_snapshot(
         collectors_k,
         collector_peer_ids,
     })
+}
+
+#[test]
+fn collectors_snapshot_advanced_accepts_same_height_with_higher_view() {
+    let snapshot = CollectorsSnapshot {
+        mode: ConsensusMode::Npos,
+        plan_height: 5,
+        plan_view: 2,
+        epoch_seed: [0; 32],
+        collectors_k: 2,
+        collector_peer_ids: Vec::new(),
+    };
+
+    assert!(collectors_snapshot_advanced(&snapshot, 5, 1));
+    assert!(collectors_snapshot_advanced(&snapshot, 4, 99));
+    assert!(!collectors_snapshot_advanced(&snapshot, 5, 2));
 }
 
 fn parse_seed(hex_str: &str) -> eyre::Result<[u8; 32]> {

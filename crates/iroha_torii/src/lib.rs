@@ -219,7 +219,7 @@ use iroha_core::{
     query::store::LiveQueryStoreHandle,
     queue::{self, Queue, RoutingDecision},
     soracloud_runtime::{
-        SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1, SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
+        SORACLOUD_LOCAL_READ_PROXY_REQUEST_VERSION_V1,
         SORACLOUD_LOCAL_READ_PROXY_RESPONSE_VERSION_V1, SharedSoracloudRuntime,
         SoracloudHostedHttpReplicaRuntimeStateV1, SoracloudHostedHttpRuntimeStateV1,
         SoracloudLocalReadProxyOutcomeV1, SoracloudLocalReadProxyRequestV1,
@@ -15428,43 +15428,6 @@ fn soracloud_public_runtime_unavailable(message: impl Into<String>) -> Response 
 }
 
 #[cfg(feature = "app_api")]
-fn load_hosted_http_runtime_state(
-    plan: &iroha_core::soracloud_runtime::SoracloudRuntimeServicePlan,
-) -> Result<SoracloudHostedHttpRuntimeStateV1, SoracloudRuntimeExecutionError> {
-    let materialization_dir = PathBuf::from(&plan.materialization_dir);
-    let state_path = materialization_dir.join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1);
-    let payload = fs::read(&state_path).map_err(|error| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Unavailable,
-            format!(
-                "failed to read hosted Soracloud runtime state {}: {error}",
-                state_path.display()
-            ),
-        )
-    })?;
-    norito::json::from_slice::<SoracloudHostedHttpRuntimeStateV1>(&payload).map_err(|error| {
-        SoracloudRuntimeExecutionError::new(
-            SoracloudRuntimeExecutionErrorKind::Internal,
-            format!(
-                "failed to decode hosted Soracloud runtime state {}: {error}",
-                state_path.display()
-            ),
-        )
-    })
-}
-
-#[cfg(feature = "app_api")]
-fn hosted_http_plan_uses_legacy_runtime_state(
-    plan: &iroha_core::soracloud_runtime::SoracloudRuntimeServicePlan,
-) -> bool {
-    (plan.desired_replica_count == 0
-        && plan.local_replica_slots.is_empty()
-        && plan.local_replicas.is_empty())
-        || (!plan.local_replica_slots.is_empty()
-            && plan.local_replicas.len() < plan.local_replica_slots.len())
-}
-
-#[cfg(feature = "app_api")]
 fn hosted_http_request_hash(
     scope: &str,
     service_name: &str,
@@ -15514,43 +15477,6 @@ fn select_hosted_http_replica_plan(
     uri: &axum::http::Uri,
 ) -> Option<SoracloudRuntimeReplicaPlan> {
     let healthy_replicas = replicas
-        .iter()
-        .filter(|replica| {
-            replica.health_status == iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy
-                && replica.listen_base_url.is_some()
-        })
-        .cloned()
-        .collect::<Vec<_>>();
-    if healthy_replicas.is_empty() {
-        return None;
-    }
-    if healthy_replicas.len() == 1 {
-        return healthy_replicas.into_iter().next();
-    }
-
-    let digest = hosted_http_request_hash(
-        "soracloud:hosted-http-replica:v1",
-        service_name,
-        Some(service_version),
-        remote_ip,
-        method,
-        uri,
-    );
-    let index = usize::from(u16::from_le_bytes([digest[0], digest[1]])) % healthy_replicas.len();
-    healthy_replicas.into_iter().nth(index)
-}
-
-#[cfg(feature = "app_api")]
-fn select_hosted_http_replica_runtime_state(
-    service_name: &str,
-    service_version: &str,
-    runtime_state: &SoracloudHostedHttpRuntimeStateV1,
-    remote_ip: Option<IpAddr>,
-    method: &axum::http::Method,
-    uri: &axum::http::Uri,
-) -> Option<SoracloudHostedHttpReplicaRuntimeStateV1> {
-    let healthy_replicas = runtime_state
-        .replicas
         .iter()
         .filter(|replica| {
             replica.health_status == iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy
@@ -15740,40 +15666,17 @@ fn resolve_hosted_http_runtime_target(
         {
             continue;
         }
-        let runtime_state = if hosted_http_plan_uses_legacy_runtime_state(plan) {
-            let Ok(mut runtime_state) = load_hosted_http_runtime_state(plan) else {
-                continue;
-            };
-            if runtime_state.health_status
-                != iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy
-            {
-                continue;
-            }
-            if let Some(replica_state) = select_hosted_http_replica_runtime_state(
-                &service_name,
-                service_version,
-                &runtime_state,
-                remote_ip,
-                method,
-                uri,
-            ) {
-                runtime_state.listen_base_url = replica_state.listen_base_url;
-                runtime_state.pid = replica_state.pid;
-            }
-            runtime_state
-        } else {
-            let Some(replica_plan) = select_hosted_http_replica_plan(
-                &service_name,
-                service_version,
-                &plan.local_replicas,
-                remote_ip,
-                method,
-                uri,
-            ) else {
-                continue;
-            };
-            hosted_http_runtime_state_from_plan(plan, replica_plan)
+        let Some(replica_plan) = select_hosted_http_replica_plan(
+            &service_name,
+            service_version,
+            &plan.local_replicas,
+            remote_ip,
+            method,
+            uri,
+        ) else {
+            continue;
         };
+        let runtime_state = hosted_http_runtime_state_from_plan(plan, replica_plan);
         if runtime_state.listen_base_url.is_none() {
             continue;
         }
@@ -36188,53 +36091,6 @@ pub(crate) mod tests_runtime_handlers {
         (world, service_name_string, service_version)
     }
 
-    fn write_hosted_http_runtime_state(
-        materialization_dir: &Path,
-        service_name: &str,
-        service_version: &str,
-        health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
-        listen_base_url: Option<&str>,
-    ) {
-        write_hosted_http_runtime_state_with_replicas(
-            materialization_dir,
-            service_name,
-            service_version,
-            health_status,
-            listen_base_url,
-            Vec::new(),
-        );
-    }
-
-    fn write_hosted_http_runtime_state_with_replicas(
-        materialization_dir: &Path,
-        service_name: &str,
-        service_version: &str,
-        health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1,
-        listen_base_url: Option<&str>,
-        replicas: Vec<SoracloudHostedHttpReplicaRuntimeStateV1>,
-    ) {
-        fs::create_dir_all(materialization_dir).expect("materialization dir");
-        let runtime_state = SoracloudHostedHttpRuntimeStateV1 {
-            schema_version:
-                iroha_core::soracloud_runtime::SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_VERSION_V1,
-            service_name: service_name.to_owned(),
-            service_version: service_version.to_owned(),
-            process_generation: 1,
-            health_status,
-            listen_base_url: listen_base_url.map(ToOwned::to_owned),
-            pid: Some(1),
-            accounted_egress_bytes: 0,
-            replicas,
-            last_error: None,
-            updated_at_ms: 1,
-        };
-        fs::write(
-            materialization_dir.join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1),
-            norito::json::to_json(&runtime_state).expect("runtime state json"),
-        )
-        .expect("runtime state write");
-    }
-
     fn hosted_http_runtime_plan(
         materialization_dir: &Path,
         service_name: &str,
@@ -36530,21 +36386,7 @@ pub(crate) mod tests_runtime_handlers {
             );
 
         let baseline_dir = temp.path().join("service-baseline");
-        write_hosted_http_runtime_state(
-            &baseline_dir,
-            service_name,
-            baseline_version,
-            baseline_health,
-            Some("http://127.0.0.1:18080"),
-        );
         let candidate_dir = temp.path().join("service-canary");
-        write_hosted_http_runtime_state(
-            &candidate_dir,
-            service_name,
-            candidate_version,
-            candidate_health,
-            Some("http://127.0.0.1:18081"),
-        );
 
         let mut snapshot = iroha_core::soracloud_runtime::SoracloudRuntimeSnapshot::default();
         snapshot.local_peer_id = snapshot_local_peer_id;
@@ -36748,13 +36590,6 @@ pub(crate) mod tests_runtime_handlers {
         let temp = tempfile::tempdir().expect("tempdir");
         let listen_base_url = format!("http://{addr}");
         let live_materialization_dir = temp.path().join("travel-ops-live");
-        write_hosted_http_runtime_state(
-            &live_materialization_dir,
-            "travel_ops_live",
-            "2026.04.0",
-            iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-            Some(listen_base_url.as_str()),
-        );
 
         let mut world = seed_public_soracloud_world();
         let seed_bundle = world
@@ -37013,13 +36848,6 @@ pub(crate) mod tests_runtime_handlers {
         let temp = tempfile::tempdir().expect("tempdir");
         let listen_base_url = format!("http://{addr}");
         let live_materialization_dir = temp.path().join("travel-ops-live");
-        write_hosted_http_runtime_state(
-            &live_materialization_dir,
-            "travel_ops_live",
-            "2026.04.0",
-            iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-            Some(listen_base_url.as_str()),
-        );
 
         let mut world = seed_public_soracloud_world();
         let seed_bundle = world
@@ -37481,25 +37309,7 @@ pub(crate) mod tests_runtime_handlers {
         let temp = tempfile::tempdir().expect("tempdir");
         let materialization_dir = temp.path().join("service");
         fs::create_dir_all(&materialization_dir).expect("materialization dir");
-        let runtime_state = SoracloudHostedHttpRuntimeStateV1 {
-            schema_version:
-                iroha_core::soracloud_runtime::SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_VERSION_V1,
-            service_name: "web_portal".to_owned(),
-            service_version: "2026.02.0".to_owned(),
-            process_generation: 1,
-            health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-            listen_base_url: Some(format!("http://{addr}")),
-            pid: Some(1),
-            accounted_egress_bytes: 0,
-            replicas: Vec::new(),
-            last_error: None,
-            updated_at_ms: 1,
-        };
-        fs::write(
-            materialization_dir.join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1),
-            norito::json::to_json(&runtime_state).expect("runtime state json"),
-        )
-        .expect("runtime state write");
+        let listen_base_url = format!("http://{addr}");
 
         let mut world = seed_public_soracloud_world();
         let mut bundle = world
@@ -37604,9 +37414,20 @@ pub(crate) mod tests_runtime_handlers {
                     bundle_cache_path: temp.path().join("bundle.tar.gz").display().to_string(),
                     bundle_available_locally: true,
                     process_generation: Some(1),
-                    desired_replica_count: 2,
-                    local_replica_slots: vec![1, 2],
-                    local_replicas: Vec::new(),
+                    desired_replica_count: 1,
+                    local_replica_slots: vec![1],
+                    local_replicas: vec![SoracloudRuntimeReplicaPlan {
+                        replica_slot: 1,
+                        materialization_dir: materialization_dir
+                            .join("replicas/replica-0001")
+                            .display()
+                            .to_string(),
+                        health_status:
+                            iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+                        listen_base_url: Some(listen_base_url.clone()),
+                        pid: Some(101),
+                        last_error: None,
+                    }],
                     health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
                     load_factor_bps: 0,
                     reported_pending_mailbox_messages: 0,
@@ -37717,51 +37538,6 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(second_chunk.as_ref(), b"data: {\"id\":\"search_1\"}\n\n");
 
         upstream_task.abort();
-    }
-
-    #[test]
-    fn load_hosted_http_runtime_state_reads_canonical_state_filename() {
-        let temp = tempfile::tempdir().expect("tempdir");
-        let materialization_dir = temp.path().join("hosted-http-service");
-        fs::create_dir_all(&materialization_dir).expect("materialization dir");
-        let runtime_state = SoracloudHostedHttpRuntimeStateV1 {
-            schema_version:
-                iroha_core::soracloud_runtime::SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_VERSION_V1,
-            service_name: "web_portal".to_owned(),
-            service_version: "2026.02.0".to_owned(),
-            process_generation: 1,
-            health_status: iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-            listen_base_url: Some("http://127.0.0.1:18080".to_owned()),
-            pid: Some(1),
-            accounted_egress_bytes: 0,
-            replicas: Vec::new(),
-            last_error: None,
-            updated_at_ms: 1,
-        };
-        fs::write(
-            materialization_dir.join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1),
-            norito::json::to_json(&runtime_state).expect("runtime state json"),
-        )
-        .expect("runtime state write");
-
-        let plan = hosted_http_runtime_plan(
-            &materialization_dir,
-            "web_portal",
-            "2026.02.0",
-            iroha_core::soracloud_runtime::SoracloudRuntimeRevisionRole::Active,
-            100,
-            iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
-            Vec::new(),
-        );
-
-        let loaded = super::load_hosted_http_runtime_state(&plan)
-            .expect("canonical hosted-http runtime state should load");
-        assert_eq!(loaded.service_name, "web_portal");
-        assert_eq!(loaded.service_version, "2026.02.0");
-        assert_eq!(
-            loaded.listen_base_url.as_deref(),
-            Some("http://127.0.0.1:18080")
-        );
     }
 
     #[tokio::test]
@@ -38066,7 +37842,7 @@ pub(crate) mod tests_runtime_handlers {
     }
 
     #[tokio::test]
-    async fn resolve_hosted_http_runtime_target_uses_snapshot_replica_targets_without_runtime_state_file()
+    async fn resolve_hosted_http_runtime_target_uses_snapshot_replica_targets_without_runtime_state_files()
      {
         let temp = tempfile::tempdir().expect("tempdir");
         let app = seed_public_hosted_http_rollout_app(
@@ -38074,18 +37850,6 @@ pub(crate) mod tests_runtime_handlers {
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
             iroha_data_model::soracloud::SoraServiceHealthStatusV1::Unavailable,
         );
-        fs::remove_file(
-            temp.path()
-                .join("service-baseline")
-                .join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1),
-        )
-        .expect("remove baseline runtime state");
-        fs::remove_file(
-            temp.path()
-                .join("service-canary")
-                .join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1),
-        )
-        .expect("remove canary runtime state");
 
         let route_match =
             match soracloud::resolve_public_route(&app, "portal.sora", "GET", "/app/v1/health")
@@ -38111,6 +37875,44 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             runtime_state.listen_base_url.as_deref(),
             Some("http://127.0.0.1:18080")
+        );
+    }
+
+    #[tokio::test]
+    async fn resolve_hosted_http_runtime_target_fails_closed_without_snapshot_replica_targets() {
+        let temp = tempfile::tempdir().expect("tempdir");
+        let app = seed_public_hosted_http_rollout_app_with_local_replicas(
+            &temp,
+            iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+            iroha_data_model::soracloud::SoraServiceHealthStatusV1::Healthy,
+            Vec::new(),
+            Vec::new(),
+        );
+        let route_match =
+            match soracloud::resolve_public_route(&app, "portal.sora", "GET", "/app/v1/health")
+                .expect("hosted route")
+            {
+                soracloud::PublicRouteMatch::HostedHttp(route_match) => route_match,
+                other => panic!("expected hosted route match, got {other:?}"),
+            };
+        let method = HttpMethod::GET;
+        let uri: axum::http::Uri = "/app/v1/health".parse().expect("uri");
+
+        let error = super::resolve_hosted_http_runtime_target(
+            &app,
+            &route_match,
+            Some(IpAddr::from([203, 0, 113, 77])),
+            &method,
+            &uri,
+        )
+        .expect_err("runtime snapshot without local replicas must fail closed");
+        assert_eq!(error.kind, SoracloudRuntimeExecutionErrorKind::Unavailable);
+        assert!(
+            error
+                .message
+                .contains("no healthy hosted Soracloud revision"),
+            "unexpected error: {}",
+            error.message
         );
     }
 
@@ -41767,6 +41569,79 @@ pub(crate) mod tests_runtime_handlers {
             .expect("response");
 
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+
+    #[cfg(feature = "app_api")]
+    #[tokio::test]
+    async fn sccp_recent_messages_route_survives_soracloud_fallback() {
+        use http_body_util::BodyExt as _;
+        use tower::ServiceExt as _;
+
+        let cfg = crate::test_utils::mk_minimal_root_cfg();
+        let (kiso, _child) = KisoHandle::start(cfg.clone());
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(IrohaState::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+        let queue_cfg = iroha_config::parameters::actual::Queue {
+            capacity: NonZeroUsize::new(100).expect("queue capacity non-zero"),
+            capacity_per_user: NonZeroUsize::new(100).expect("queue per-user capacity non-zero"),
+            transaction_time_to_live: Duration::from_secs(60),
+            ..Default::default()
+        };
+        let queue_events: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+        let queue = Arc::new(Queue::from_config(queue_cfg, queue_events));
+        let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+        let _ = peers_tx;
+        let torii = Torii::new_with_handle(
+            ChainId::from("sccp-recent-route-test"),
+            kiso,
+            cfg.torii.clone(),
+            queue,
+            tokio::sync::broadcast::channel(1).0,
+            LiveQueryStore::start_test(),
+            kura,
+            state,
+            cfg.common.key_pair.clone(),
+            OnlinePeersProvider::new(peers_rx),
+            None,
+            routing::MaybeTelemetry::disabled(),
+        );
+
+        let mut request = Request::builder()
+            .method(Method::GET)
+            .uri("/v1/sccp/messages/recent")
+            .header(axum::http::header::ACCEPT, "application/json")
+            .body(Body::empty())
+            .expect("request");
+        request
+            .extensions_mut()
+            .insert(axum::extract::ConnectInfo(SocketAddr::from((
+                [127, 0, 0, 1],
+                0,
+            ))));
+
+        let response = torii
+            .api_router_for_tests()
+            .oneshot(request)
+            .await
+            .expect("response");
+
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let text = String::from_utf8(body.to_vec()).expect("utf8");
+        assert!(
+            text.contains("\"items\""),
+            "expected SCCP recent-messages JSON payload, got: {text}"
+        );
     }
 
     #[test]

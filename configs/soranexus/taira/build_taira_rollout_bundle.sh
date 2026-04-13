@@ -19,8 +19,10 @@ result can be tied to one exact git revision.
 
 The bundle contains:
   - `irohad` and `iroha` from `target/<profile>/`
+  - `sorafs_manifest_stub` and `sorafs_tx_stdin_builder` from `target/<profile>/`
   - the checked-in `configs/soranexus/taira/` operator bundle
   - `scripts/render_taira_validator_bundle.py`
+  - `scripts/taira_faucet_canary.py`
   - `rollout.manifest.json`
   - `sha256sums.txt`
   - `<bundle>.tar.gz`
@@ -104,17 +106,20 @@ binary_dir="${REPO_ROOT}/target/${PROFILE}"
 mkdir -p "$bundle_dir/bin" "$bundle_dir/configs/soranexus" "$bundle_dir/scripts"
 
 if [[ $SKIP_BUILD -ne 1 ]]; then
-  build_args=(build -p irohad -p iroha_cli --bin irohad --bin iroha)
+  core_build_args=(build -p irohad -p iroha_cli --bin irohad --bin iroha)
+  sorafs_build_args=(build -p sorafs_car --features cli --bin sorafs_manifest_stub --bin sorafs_tx_stdin_builder)
   if [[ "$PROFILE" == "release" ]]; then
-    build_args+=(--release)
+    core_build_args+=(--release)
+    sorafs_build_args+=(--release)
   fi
   (
     cd "$REPO_ROOT"
-    cargo "${build_args[@]}"
+    cargo "${core_build_args[@]}"
+    cargo "${sorafs_build_args[@]}"
   )
 fi
 
-for binary in irohad iroha; do
+for binary in irohad iroha sorafs_manifest_stub sorafs_tx_stdin_builder; do
   if [[ ! -x "${binary_dir}/${binary}" ]]; then
     echo "missing built binary: ${binary_dir}/${binary}" >&2
     echo "run without --skip-build or build the ${PROFILE} profile first" >&2
@@ -125,6 +130,7 @@ done
 
 cp -R "${REPO_ROOT}/configs/soranexus/taira" "${bundle_dir}/configs/soranexus/"
 cp "${REPO_ROOT}/scripts/render_taira_validator_bundle.py" "${bundle_dir}/scripts/"
+cp "${REPO_ROOT}/scripts/taira_faucet_canary.py" "${bundle_dir}/scripts/"
 
 manifest_path="${bundle_dir}/rollout.manifest.json"
 checksums_path="${bundle_dir}/sha256sums.txt"
@@ -158,14 +164,18 @@ payload = {
     "binaries": [
         "bin/irohad",
         "bin/iroha",
+        "bin/sorafs_manifest_stub",
+        "bin/sorafs_tx_stdin_builder",
     ],
     "included_paths": [
         "configs/soranexus/taira/",
         "scripts/render_taira_validator_bundle.py",
+        "scripts/taira_faucet_canary.py",
     ],
     "required_followup": [
         "install the bundled binaries/config on each public Taira validator",
         "restart the validator with the shipped taira-irohad.service or equivalent",
+        "run configs/soranexus/taira/check_sorafs_rollout.sh after the node is back",
         "run configs/soranexus/taira/verify_soraswap_rollout.sh after the node is back",
     ],
 }

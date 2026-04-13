@@ -584,6 +584,70 @@ final class ToriiOfflineCashEndpointsTests: XCTestCase {
         XCTAssertEqual(Set(requestIds).count, requestIds.count)
         XCTAssertTrue(requestIds.allSatisfy { !$0.isEmpty })
     }
+
+    func testAuthorizationCanonicalPayloadPreservesNilIosBindingFieldsAsNull() throws {
+        let authorization = ToriiOfflineSpendAuthorization(
+            authorizationId: "authorization-1",
+            lineageId: "lineage-1",
+            accountId: "account-1",
+            verdictId: "verdict-1",
+            policyMaxBalance: "1000000",
+            policyMaxTxValue: "1000000",
+            issuedAtMs: 1_776_040_130_220,
+            refreshAtMs: 1_776_083_330_220,
+            expiresAtMs: 1_776_126_530_220,
+            deviceBinding: ToriiOfflineDeviceBinding(
+                platform: "ios",
+                attestationKeyId: "boM+kn3kpykutMrFQOam4/PhsK2WJah8wWJBNAaDMWo=",
+                deviceId: "30A7BB8C-C3B2-4321-9E57-9E8AECB12D51",
+                offlinePublicKey: "BDlEb0SFGGA9Y4LGOvj8zGBULbarNb975avP0b9uhaGTdHhPPZMX6KDjVh5A48rL6LNMLZF/tLrjz32bs2odZTQ=",
+                attestationReportBase64: ""
+            ),
+            issuerSignatureBase64: "ignored"
+        )
+
+        let payload = try ToriiOfflineCashCodec.authorizationUnsignedPayload(authorization)
+        let rawJSON = try XCTUnwrap(String(data: payload, encoding: .utf8))
+
+        XCTAssertTrue(rawJSON.contains("\"ios_bundle_id\":null"))
+        XCTAssertTrue(rawJSON.contains("\"ios_environment\":null"))
+        XCTAssertTrue(rawJSON.contains("\"ios_team_id\":null"))
+    }
+
+    func testAuthorizationSignatureVerifiesForLiveIosFixtureWithNilBindingOptionals() throws {
+        let fixtureJSON = #"""
+        {
+          "authorization_id": "authorization_b9faaf81e8f788b0a0a1dd80a2555aebbf52481f87b1ce0a4c926b7a8af748e4",
+          "lineage_id": "lineage_b70a95d4e5da112c50a36c3270e0282b2f79bdd29f216d4cfffb7aef3e2154d7",
+          "account_id": "sorauロ1PリhワAリキwモ5ePXツfXR5dQbヘ2ヤN22Wムn2gタDヌYロセ1J8NG4W",
+          "verdict_id": "verdict_d8faf3ca1a7beb981edc7b883feb8f76e5a6cf5b37a4af7dcf66a420f0d0b691",
+          "max_balance": "1000000",
+          "max_tx_value": "1000000",
+          "issued_at_ms": 1776040130220,
+          "refresh_at_ms": 1776083330220,
+          "expires_at_ms": 1776126530220,
+          "device_binding": {
+            "platform": "ios",
+            "attestation_key_id": "boM+kn3kpykutMrFQOam4/PhsK2WJah8wWJBNAaDMWo=",
+            "device_id": "30A7BB8C-C3B2-4321-9E57-9E8AECB12D51",
+            "offline_public_key": "BDlEb0SFGGA9Y4LGOvj8zGBULbarNb975avP0b9uhaGTdHhPPZMX6KDjVh5A48rL6LNMLZF/tLrjz32bs2odZTQ=",
+            "attestation_report_base64": ""
+          },
+          "issuer_signature_base64": "lHMMogLtd1estr3Z/CAOMC3jj+QxUIpiGzqvkbY47y1CnICGdBhnMa0zS0WXILIJte+T9WZufWky/h63ozDWCQ=="
+        }
+        """#
+        let authorization = try JSONDecoder().decode(
+            ToriiOfflineSpendAuthorization.self,
+            from: Data(fixtureJSON.utf8)
+        )
+
+        XCTAssertNoThrow(
+            try ToriiOfflineCashCodec.verifyIssuerSignature(
+                authorization: authorization,
+                issuerPublicKeyBase64: "zn+kbJ3OfqSxJeLja9tj6jMHPnWQrJKBauHoYbcEiwM="
+            )
+        )
+    }
 }
 
 @available(iOS 15.0, macOS 12.0, *)

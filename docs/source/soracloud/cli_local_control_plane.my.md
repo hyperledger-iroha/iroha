@@ -27,7 +27,7 @@ Soracloud v1 သည် တရားဝင်သော၊ IVM သီးသန့�
   တရားဝင်ကမ္ဘာ့အခြေအနေနှင့် မြှုပ်ထားသော Soracloud runtime မန်နေဂျာ။
 
 ## Runtime Scope- Soracloud v1 သည် `SoraContainerRuntimeV1::Ivm` ကိုသာ လက်ခံသည်။
-- `NativeProcess` ကို ပယ်ချခဲ့သည်။
+- Hosted HTTP: `execution_plane = HttpService`, `runtime = Inrou`.
 - အမိန့်ပေးစာတိုက်ပုံးကို ကွပ်မျက်ခြင်းလုပ်ငန်းသည် IVM ကိုင်တွယ်သူများကို တိုက်ရိုက်လက်ခံခဲ့သည်။
 - ရေဓါတ်နှင့် ရုပ်လုံးပေါ်လာခြင်းသည် SoraFS/DA ပါဝင်မှုအစား ကတိက၀တ်မှ လာပါသည်။
   ဓာတုဒေသခံ လျှပ်တစ်ပြက်များထက်။

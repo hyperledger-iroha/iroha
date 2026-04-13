@@ -221,13 +221,12 @@ fn advance_to_height(
 fn posting_structurally_invalid_evidence_is_rejected() -> Result<()> {
     init_instruction_registry();
 
-    let Some((network, runtime)) = start_network(stringify!(
+    let Some((network, _runtime)) = start_network(stringify!(
         posting_structurally_invalid_evidence_is_rejected
     ))?
     else {
         return Ok(());
     };
-    runtime.block_on(network.ensure_blocks_with(|height| height.total >= 2))?;
     let client = network.client();
 
     let before = evidence_count(&client.get_sumeragi_evidence_count_json()?);
@@ -266,13 +265,12 @@ fn posting_structurally_invalid_evidence_is_rejected() -> Result<()> {
 fn posting_evidence_with_mismatched_signer_is_rejected() -> Result<()> {
     init_instruction_registry();
 
-    let Some((network, runtime)) = start_network(stringify!(
+    let Some((network, _runtime)) = start_network(stringify!(
         posting_evidence_with_mismatched_signer_is_rejected
     ))?
     else {
         return Ok(());
     };
-    runtime.block_on(network.ensure_blocks_with(|height| height.total >= 2))?;
     let client = network.client();
 
     let v1 = make_vote(0x11);
@@ -298,13 +296,12 @@ fn posting_evidence_with_mismatched_signer_is_rejected() -> Result<()> {
 fn posting_evidence_with_kind_payload_mismatch_is_rejected() -> Result<()> {
     init_instruction_registry();
 
-    let Some((network, runtime)) = start_network(stringify!(
+    let Some((network, _runtime)) = start_network(stringify!(
         posting_evidence_with_kind_payload_mismatch_is_rejected
     ))?
     else {
         return Ok(());
     };
-    runtime.block_on(network.ensure_blocks_with(|height| height.total >= 2))?;
     let client = network.client();
 
     let v1 = make_vote(0x51);
@@ -329,13 +326,12 @@ fn posting_evidence_with_kind_payload_mismatch_is_rejected() -> Result<()> {
 fn posting_evidence_with_conflicting_height_is_rejected() -> Result<()> {
     init_instruction_registry();
 
-    let Some((network, runtime)) = start_network(stringify!(
+    let Some((network, _runtime)) = start_network(stringify!(
         posting_evidence_with_conflicting_height_is_rejected
     ))?
     else {
         return Ok(());
     };
-    runtime.block_on(network.ensure_blocks_with(|height| height.total >= 2))?;
     let client = network.client();
 
     let v1 = make_vote(0x21);
@@ -361,13 +357,12 @@ fn posting_evidence_with_conflicting_height_is_rejected() -> Result<()> {
 fn posting_evidence_with_conflicting_view_is_rejected() -> Result<()> {
     init_instruction_registry();
 
-    let Some((network, runtime)) = start_network(stringify!(
+    let Some((network, _runtime)) = start_network(stringify!(
         posting_evidence_with_conflicting_view_is_rejected
     ))?
     else {
         return Ok(());
     };
-    runtime.block_on(network.ensure_blocks_with(|height| height.total >= 2))?;
     let client = network.client();
 
     let v1 = make_vote(0x31);
@@ -393,13 +388,12 @@ fn posting_evidence_with_conflicting_view_is_rejected() -> Result<()> {
 fn posting_evidence_with_conflicting_epoch_is_rejected() -> Result<()> {
     init_instruction_registry();
 
-    let Some((network, runtime)) = start_network(stringify!(
+    let Some((network, _runtime)) = start_network(stringify!(
         posting_evidence_with_conflicting_epoch_is_rejected
     ))?
     else {
         return Ok(());
     };
-    runtime.block_on(network.ensure_blocks_with(|height| height.total >= 2))?;
     let client = network.client();
 
     let mut v1 = make_vote(0x35);
@@ -426,13 +420,12 @@ fn posting_evidence_with_conflicting_epoch_is_rejected() -> Result<()> {
 fn posting_evidence_with_missing_signature_is_rejected() -> Result<()> {
     init_instruction_registry();
 
-    let Some((network, runtime)) = start_network(stringify!(
+    let Some((network, _runtime)) = start_network(stringify!(
         posting_evidence_with_missing_signature_is_rejected
     ))?
     else {
         return Ok(());
     };
-    runtime.block_on(network.ensure_blocks_with(|height| height.total >= 2))?;
     let client = network.client();
 
     let mut v1 = make_vote(0x41);
@@ -464,7 +457,6 @@ fn mode_activation_height_requires_next_mode_and_future_height() -> Result<()> {
     else {
         return Ok(());
     };
-    runtime.block_on(network.ensure_blocks_with(|height| height.total >= 2))?;
     let client = network.client();
 
     let err = client
@@ -544,7 +536,6 @@ fn joint_consensus_switches_mode_at_activation_height() -> Result<()> {
     else {
         return Ok(());
     };
-    runtime.block_on(network.ensure_blocks_with(|height| height.total >= 2))?;
     let client = network.client();
 
     let initial = client.get_sumeragi_collectors_json()?;
@@ -633,13 +624,12 @@ fn posting_stale_evidence_is_not_persisted() -> Result<()> {
 fn posting_valid_double_vote_evidence_is_persisted_for_slashing() -> Result<()> {
     init_instruction_registry();
 
-    let Some((network, runtime)) = start_network(stringify!(
+    let Some((network, _runtime)) = start_network(stringify!(
         posting_valid_double_vote_evidence_is_persisted_for_slashing
     ))?
     else {
         return Ok(());
     };
-    runtime.block_on(network.ensure_blocks_with(|height| height.total >= 2))?;
     let client = network.client();
 
     let before = evidence_count(&client.get_sumeragi_evidence_count_json()?);
@@ -793,14 +783,6 @@ fn start_network(context: &'static str) -> Result<Option<(sandbox::SerializedNet
     else {
         return Ok(None);
     };
-    let client = network.client();
-    advance_to_height(
-        &runtime,
-        &network,
-        &client,
-        2,
-        "sumeragi negative bootstrap",
-    )?;
     Ok(Some((network, runtime)))
 }
 

@@ -20,7 +20,8 @@ use iroha::{
         consensus::Qc,
         isi::{Log, SetParameter, Unregister},
         parameter::{
-            Parameter, SumeragiParameter, TransactionParameter, system::SumeragiNposParameters,
+            Parameter, Parameters, SumeragiParameter, TransactionParameter,
+            system::SumeragiNposParameters,
         },
         prelude::{HashOf, QueryBuilderExt},
         query::block::prelude::FindBlocks,
@@ -793,7 +794,7 @@ async fn sumeragi_da_kura_eviction_rehydrates_from_da_store() -> Result<()> {
         let status_timeout = da_commit_wait_timeout();
         client.transaction_status_timeout = status_timeout;
         client.transaction_ttl = Some(status_timeout.saturating_add(Duration::from_secs(30)));
-        set_sumeragi_parameter(&client, SumeragiParameter::DaEnabled(true)).await?;
+        configure_runtime_da(&client).await?;
 
         let peers = network.peers();
         let peer = peers
@@ -1046,7 +1047,7 @@ async fn sumeragi_rbc_recovers_after_peer_restart() -> Result<()> {
             .collect();
 
         let client = primary_peer.client();
-        set_sumeragi_parameter(&client, SumeragiParameter::DaEnabled(true)).await?;
+        configure_runtime_da(&client).await?;
         let torii_primary = client.torii_url.clone();
         let status_before = fetch_status(&client).await?;
         let expected_height = status_before.blocks + 1;
@@ -2721,12 +2722,7 @@ where
     client.transaction_status_timeout = status_timeout;
     client.transaction_ttl = Some(status_timeout.saturating_add(Duration::from_secs(30)));
     // When Torii websockets are blocked by the environment, bail out early as a sandbox skip.
-    if sandbox::handle_result(
-        set_sumeragi_parameter(&client, SumeragiParameter::DaEnabled(true)).await,
-        scenario_name,
-    )?
-    .is_none()
-    {
+    if sandbox::handle_result(configure_runtime_da(&client).await, scenario_name)?.is_none() {
         return Ok(());
     }
     let status_before = fetch_status(&client).await?;
@@ -3214,6 +3210,20 @@ async fn run_sumeragi_da_scenario(
     .await
 }
 
+async fn configure_runtime_da(client: &Client) -> Result<()> {
+    let parameters = {
+        let client = client.clone();
+        tokio::task::spawn_blocking(move || client.get_parameters())
+            .await
+            .wrap_err("join get_parameters task")?
+            .wrap_err("fetch runtime parameters")?
+    };
+    if !runtime_da_configuration_required(&parameters) {
+        return Ok(());
+    }
+    set_sumeragi_parameter(client, SumeragiParameter::DaEnabled(true)).await
+}
+
 async fn set_sumeragi_parameter(client: &Client, parameter: SumeragiParameter) -> Result<()> {
     let submit_client = client.clone();
     tokio::task::spawn_blocking(move || {
@@ -3222,6 +3232,10 @@ async fn set_sumeragi_parameter(client: &Client, parameter: SumeragiParameter) -
     .await
     .wrap_err("join SetParameter task")??;
     Ok(())
+}
+
+fn runtime_da_configuration_required(parameters: &Parameters) -> bool {
+    !parameters.sumeragi().da_enabled
 }
 
 async fn fetch_status(client: &Client) -> Result<Status> {
@@ -3348,6 +3362,22 @@ fn da_commit_wait_timeout_is_reasonable() {
     assert_eq!(
         da_commit_wait_timeout(),
         Duration::from_secs(DA_COMMIT_WAIT_TIMEOUT_SECS)
+    );
+}
+
+#[test]
+fn runtime_da_configuration_required_only_when_da_is_disabled() {
+    let default_parameters = Parameters::default();
+    assert!(
+        !runtime_da_configuration_required(&default_parameters),
+        "default DA scenarios already seed DA/RBC enabled in genesis"
+    );
+
+    let mut disabled_parameters = Parameters::default();
+    disabled_parameters.set_parameter(Parameter::Sumeragi(SumeragiParameter::DaEnabled(false)));
+    assert!(
+        runtime_da_configuration_required(&disabled_parameters),
+        "runtime DA reconfiguration should only be required when DA is disabled"
     );
 }
 
@@ -4023,7 +4053,7 @@ async fn sumeragi_da_eviction_rehydrates_block_bodies() -> Result<()> {
         let status_timeout = da_commit_wait_timeout();
         client.transaction_status_timeout = status_timeout;
         client.transaction_ttl = Some(status_timeout.saturating_add(Duration::from_secs(30)));
-        set_sumeragi_parameter(&client, SumeragiParameter::DaEnabled(true)).await?;
+        configure_runtime_da(&client).await?;
         let kura_root = primary_peer.kura_store_dir();
 
         let status_before = fetch_status(&client).await?;

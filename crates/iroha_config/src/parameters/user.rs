@@ -19136,8 +19136,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
     #[test]
     fn soracloud_runtime_json_deserialize_rejects_removed_legacy_runtime_field() {
         let removed_field = ["native", "process"].join("_");
-        let json = format!(
-            r#"{{
+        let json = r#"{
             "state_dir":"./runtime/json",
             "reconcile_interval_ms":2500,
             "hydration_concurrency":7,
@@ -19149,7 +19148,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "model_artifact_bytes":5120,
                 "model_weight_bytes":6144
             },
-            "{removed_field}":{{}},
+            "__REMOVED_FIELD__":{},
             "inrou":{
                 "max_concurrent_vms":5,
                 "start_grace_ms":7500,
@@ -19175,7 +19174,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 "import_file_allowlist":["config.json","*.safetensors"],
                 "inference_token":"secret-token"
             }
-        }}"#
+        }"#
+        .replace(
+            "\"__REMOVED_FIELD__\":{}",
+            &format!("\"{removed_field}\":{{}}"),
         );
 
         let error = norito::json::from_json::<SoracloudRuntime>(&json)

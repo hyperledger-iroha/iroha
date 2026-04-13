@@ -9804,13 +9804,26 @@ fn project_hosted_http_replica_plan(
         .insert("SORACLOUD_REPLICA_SLOT".to_owned(), replica_slot.to_string());
     for volume in &mut replica_plan.lease_volumes {
         if volume.kind.is_per_replica() {
-            volume.local_materialization_dir = PathBuf::from(&volume.local_materialization_dir)
-                .join(hosted_http_replica_slot_dir_name(replica_slot))
-                .display()
-                .to_string();
+            volume.local_materialization_dir = hosted_http_per_replica_volume_materialization_dir(
+                &PathBuf::from(&volume.local_materialization_dir),
+                replica_slot,
+            )
+            .display()
+            .to_string();
         }
     }
     replica_plan
+}
+
+fn hosted_http_per_replica_volume_materialization_dir(
+    volume_dir: &Path,
+    replica_slot: u16,
+) -> PathBuf {
+    let replica_dir_name = hosted_http_replica_slot_dir_name(replica_slot);
+    match (volume_dir.parent(), volume_dir.file_name()) {
+        (Some(parent), Some(volume_name)) => parent.join(replica_dir_name).join(volume_name),
+        _ => volume_dir.join(replica_dir_name),
+    }
 }
 
 fn build_hosted_http_service_volume_dir(
@@ -9825,8 +9838,6 @@ fn build_hosted_http_service_volume_dir(
         .join(sanitize_path_component(service_version))
         .join("volumes")
         .join(if volume_kind.is_per_replica() {
-            // TODO: add a replica slot path segment here once multiple local replicas of the
-            // same revision are materialized concurrently.
             "per-replica"
         } else {
             "shared"
@@ -16040,6 +16051,23 @@ mod tests {
         bundle.service.state_bindings.clear();
         bundle.service.handlers.clear();
         bundle.service.artifacts.clear();
+        bundle.service.lease_volumes = vec![
+            iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
+                volume_name: "root_disk".parse().expect("volume"),
+                kind: SoraLeaseVolumeKindV1::PersistentRootLeaseVolume,
+                storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+                mount_path: "/".to_owned(),
+                max_total_bytes: std::num::NonZeroU64::new(8 * 1024 * 1024 * 1024)
+                    .expect("bytes"),
+            },
+            iroha_data_model::soracloud::SoraLeaseVolumeBindingV1 {
+                volume_name: "index_state".parse().expect("volume"),
+                kind: SoraLeaseVolumeKindV1::ServiceLeaseVolume,
+                storage_class: iroha_data_model::sorafs::pin_registry::StorageClass::Warm,
+                mount_path: "/var/lib/ton-indexer".to_owned(),
+                max_total_bytes: std::num::NonZeroU64::new(1024 * 1024).expect("bytes"),
+            },
+        ];
 
         let bundle_bytes = simple_soracloud_contract_artifact(&["entry_active"]);
         bundle.container.bundle_hash = Hash::new(&bundle_bytes);
@@ -16124,6 +16152,53 @@ mod tests {
                 .join("replicas/replica-0002")
                 .join(SORACLOUD_HOSTED_HTTP_RUNTIME_STATE_FILE_V1)
                 .exists()
+        );
+        let replica_one_plan: SoracloudRuntimeServicePlan = read_json_optional(
+            service_dir.join("replicas/replica-0001/runtime_plan.json").as_path(),
+        )?
+        .expect("replica one runtime plan");
+        let replica_two_plan: SoracloudRuntimeServicePlan = read_json_optional(
+            service_dir.join("replicas/replica-0002/runtime_plan.json").as_path(),
+        )?
+        .expect("replica two runtime plan");
+        let replica_one_root = replica_one_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .expect("replica one root volume");
+        let replica_two_root = replica_two_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+            .expect("replica two root volume");
+        let replica_one_shared = replica_one_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::ServiceLeaseVolume)
+            .expect("replica one shared service volume");
+        let replica_two_shared = replica_two_plan
+            .lease_volumes
+            .iter()
+            .find(|volume| volume.kind == SoraLeaseVolumeKindV1::ServiceLeaseVolume)
+            .expect("replica two shared service volume");
+        assert!(
+            replica_one_root
+                .local_materialization_dir
+                .ends_with("service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0001/root_disk")
+        );
+        assert!(
+            replica_two_root
+                .local_materialization_dir
+                .ends_with("service_data/web_portal/revisions/2026.02.0/volumes/per-replica/replica-0002/root_disk")
+        );
+        assert_eq!(
+            replica_one_shared.local_materialization_dir,
+            replica_two_shared.local_materialization_dir
+        );
+        assert!(
+            replica_one_shared
+                .local_materialization_dir
+                .ends_with("service_data/web_portal/revisions/2026.02.0/volumes/shared/index_state")
         );
         Ok(())
     }

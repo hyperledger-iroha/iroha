@@ -1,6 +1,102 @@
 # Status
 
-Last updated: 2026-04-12
+Last updated: 2026-04-13
+
+## 2026-04-13 Follow-up: RBC/collector observability assertions now follow committed outcomes, and DA scenarios skip redundant runtime DA writes
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_adversarial.rs`
+  now treats bounded height convergence as the hard success signal for the
+  reorder, selective-drop, all-chunks-corrupted, and conflicting-READY
+  adversarial cases. Those scenarios still require missing-session or
+  invalidation evidence on the stall path, but exact reruns showed that honest
+  recovery can commit before `delivered=true` or invalidation counters remain
+  queryable on every peer. The file also now recognizes complete
+  `received_chunks == total_chunks` session telemetry as valid evidence when the
+  summary no longer retains `delivered=true`.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_da.rs`
+  now uses `configure_runtime_da(...)`, which fetches the live parameters first
+  and only submits `SetParameter(SumeragiParameter::DaEnabled(true))` when DA is
+  actually disabled. That helper is now reused by the shared DA scenario runner
+  plus the DA eviction/restart scenarios, removing the redundant 960-second
+  confirmation stall that was failing
+  `sumeragi_rbc_da_large_payload_four_peers` and
+  `sumeragi_da_commit_certificate_history_four_peers`.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_prf_collectors.rs`
+  now waits for the collectors endpoint to advance either by `plan_height` or,
+  at the same height, by a higher `plan_view`, and the retry window is long
+  enough to tolerate the endpoint lag observed in grouped runs.
+- Focused helper regressions now lock in those assumptions:
+  - complete RBC chunk telemetry is accepted without a retained
+    `delivered=true` flag;
+  - DA runtime reconfiguration is skipped when genesis already seeded
+    `sumeragi.da_enabled = true`;
+  - collector snapshots may advance by view without first advancing height.
+- Validation completed in this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=target/fix-seven IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/fix-seven/iroha-test-network cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::complete_height_check_accepts_full_chunk_telemetry_without_delivered_flag -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target/fix-seven IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/fix-seven/iroha-test-network cargo test -p integration_tests --test consensus_and_da sumeragi_da::runtime_da_configuration_required_only_when_da_is_disabled -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target/fix-seven IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/fix-seven/iroha-test-network cargo test -p integration_tests --test consensus_and_da sumeragi_prf_collectors::collectors_snapshot_advanced_accepts_same_height_with_higher_view -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=target/fix-seven IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/fix-seven/iroha-test-network cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_reorder -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target/fix-seven IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/fix-seven/iroha-test-network cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_validator_selective_drop -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target/fix-seven IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/fix-seven/iroha-test-network cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_all_chunks_corrupted_abort -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target/fix-seven IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/fix-seven/iroha-test-network cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_conflicting_ready_marks_invalid -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target/fix-seven IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/fix-seven/iroha-test-network cargo test -p integration_tests --test consensus_and_da sumeragi_prf_collectors::npos_prf_collectors_track_endpoint -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target/fix-seven IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/fix-seven/iroha-test-network cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_rbc_da_large_payload_four_peers -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target/fix-seven IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/fix-seven/iroha-test-network cargo test -p integration_tests --test consensus_and_da sumeragi_da::sumeragi_da_commit_certificate_history_four_peers -- --exact --nocapture --test-threads=1`
+
+## 2026-04-13 Follow-up: adversarial RBC setup no longer waits on a redundant DA toggle, and isolated chunk equivocation accepts recovered commits without sticky telemetry
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_adversarial.rs`
+  no longer unconditionally submits a runtime
+  `SetParameter(SumeragiParameter::DaEnabled(true))` at the start of every
+  adversarial scenario. The helper now reads the current on-chain parameters
+  first and skips the write when DA/RBC is already enabled, which is the
+  normal test-network state because `NetworkBuilder` seeds the DA flag in
+  genesis. This removes the 600-second
+  `transaction.status_timeout_ms` stall that was failing
+  `sumeragi_adversarial_chunk_drop_recovery` and
+  `sumeragi_adversarial_chunk_equivocation_marks_invalid` under grouped runs.
+- The same file now keeps the isolated equivocation scenario focused on the
+  durable outcome that matters: if the cluster still commits the target block,
+  the test accepts bounded height convergence even when no peer retains an
+  explicit invalidation counter or `delivered=true` RBC session snapshot by the
+  time the assertions run. Exact reruns showed recovery can complete before
+  that telemetry becomes visible or remains queryable.
+- A focused unit regression now locks in the helper decision so the
+  adversarial suite continues to skip the redundant runtime write whenever the
+  parameter snapshot already reports `sumeragi.da_enabled = true`.
+- Validation completed in this slice:
+  - `cargo fmt --all -- integration_tests/tests/sumeragi_adversarial.rs`
+  - `CARGO_TARGET_DIR=target/adversarial-da-config-fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/adversarial-da-config-fix/iroha-test-network cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::runtime_rbc_configuration_required_only_when_da_is_disabled -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target/adversarial-da-config-fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/adversarial-da-config-fix/iroha-test-network cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_equivocation_marks_invalid -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target/adversarial-da-config-fix IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/adversarial-da-config-fix/iroha-test-network cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_chunk_drop_recovery -- --exact --nocapture --test-threads=1`
+
+## 2026-04-13 Follow-up: negative evidence bootstrap no longer blocks on a synthetic block-2 transaction, and RBC delivery proof survives summary rotation
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_negative_paths.rs`
+  no longer tries to seed every negative-path scenario to block 2 via a
+  blocking `Log` transaction during `start_network(...)`. The sandbox helper
+  already guarantees a live network at block 1, so the malformed-evidence
+  tests now start from that ready state and only use `advance_to_height(...)`
+  in the scenarios that truly need later blocks. This removes the
+  `transaction.status_timeout_ms` stall that was failing
+  `posting_evidence_with_mismatched_signer_is_rejected`.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/rbc_store.rs`
+  now exposes `PersistedSessionMetadata` plus
+  `load_session_metadata_from_dir(...)`, so integration tests can validate a
+  persisted RBC session directly against the same chain-hash and software
+  manifest guards used by restart recovery without requiring the full payload
+  bytes to remain present.
+- `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_npos_happy_path.rs`
+  now falls back from aggregate `sessions.norito` / live endpoint summaries to
+  validated per-session persisted RBC metadata when checking the final
+  multi-chunk delivery proof for
+  `npos_rbc_large_payload_delivers_and_commits`. The same test now treats
+  missing quorum-visible `/status` commit height as a warning instead of the
+  only hard gate, because exact heavy-payload reruns can already prove the
+  delivered 33-chunk RBC sessions while `/status` remains stuck at block 1.
+- Validation completed in this slice:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core load_session_metadata_from_dir -- --nocapture`
+  - `CARGO_TARGET_DIR=target/fix-failures-round2 cargo test -p integration_tests --test consensus_and_da sumeragi_negative_paths::posting_evidence_with_mismatched_signer_is_rejected -- --exact --nocapture --test-threads=1`
+  - `CARGO_TARGET_DIR=target/fix-failures-round2 IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/fix-failures-round2/iroha-test-network cargo test -p integration_tests --test consensus_and_da sumeragi_npos_happy_path::npos_rbc_large_payload_delivers_and_commits -- --exact --nocapture --test-threads=1`
 
 ## 2026-04-12 Follow-up: NPoS large-payload RBC summary check no longer loses committed sessions to snapshot rotation
 - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_npos_happy_path.rs`

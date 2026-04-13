@@ -27,7 +27,7 @@ Soracloud v1 הוא זמן ריצה סמכותי, IVM בלבד.
   מצב עולמי סמכותי בתוספת מנהל זמן הריצה של Soracloud המוטבע.
 
 ## היקף זמן ריצה- Soracloud v1 מקבל רק `SoraContainerRuntimeV1::Ivm`.
-- `NativeProcess` נותר נדחה.
+- Hosted HTTP: `execution_plane = HttpService`, `runtime = Inrou`.
 - ביצוע הזמנה בתיבת דואר מריץ מטפלי IVM שהתקבלו ישירות.
 - הידרציה והתממשות מגיעים מתוכן מחויב SoraFS/DA במקום זאת
   מאשר צילומי מצב סינתטיים מקומיים.

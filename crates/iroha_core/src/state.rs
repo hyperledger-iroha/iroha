@@ -27708,6 +27708,27 @@ pub(crate) mod deserialize {
         )
     }
 
+    fn take_optional_default_lossy<T>(
+        map: &mut json::native::Map,
+        key: &str,
+    ) -> Result<T, json::Error>
+    where
+        T: JsonDeserialize + Default,
+    {
+        map.remove(key).map_or_else(
+            || Ok(T::default()),
+            |value| match json::value::from_value(value) {
+                Ok(parsed) => Ok(parsed),
+                Err(err) => {
+                    eprintln!(
+                        "snapshot compatibility: discarding persisted `{key}` value because it could not be decoded: {err}"
+                    );
+                    Ok(T::default())
+                }
+            },
+        )
+    }
+
     fn take_parameters_cell(
         map: &mut json::native::Map,
         key: &str,
@@ -27840,7 +27861,7 @@ pub(crate) mod deserialize {
         let contract_instances = take_optional_default(&mut map, "contract_instances")?;
         let smart_contract_state = take_optional_default(&mut map, "smart_contract_state")?;
         let soracloud_service_revisions =
-            take_optional_default(&mut map, "soracloud_service_revisions")?;
+            take_optional_default_lossy(&mut map, "soracloud_service_revisions")?;
         let soracloud_service_deployments =
             take_optional_default(&mut map, "soracloud_service_deployments")?;
         let soracloud_service_runtime =

@@ -150,7 +150,9 @@ if [[ $SKIP_PUBLIC -eq 0 && -z "$WRITE_CONFIG" && $SKIP_WRITE_CANARY -eq 0 ]]; t
 fi
 
 if [[ -z "$IROHA_BIN" ]]; then
-  if [[ -x "${REPO_ROOT}/target/debug/iroha" ]]; then
+  if [[ -x "${REPO_ROOT}/bin/iroha" ]]; then
+    IROHA_BIN="${REPO_ROOT}/bin/iroha"
+  elif [[ -x "${REPO_ROOT}/target/debug/iroha" ]]; then
     IROHA_BIN="${REPO_ROOT}/target/debug/iroha"
   elif [[ -x "${REPO_ROOT}/target/release/iroha" ]]; then
     IROHA_BIN="${REPO_ROOT}/target/release/iroha"
