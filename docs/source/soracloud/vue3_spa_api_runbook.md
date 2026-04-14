@@ -143,17 +143,18 @@ cargo xtask soracloud-inrou-smoke mixed-host --inventory ./fixtures/soracloud/in
 ```
 
 That validation path exercises the real `HttpService + Inrou` runtime, not the
-local `dev.sh` shim. `PortableVm` mounts shared lease storage through
-`virtio-fs` in unprivileged userspace, while the Linux/KVM fast path keeps the
-Firecracker NFS transport adapter behind the same LeaseFs authority. The mixed
-gate is expected to cover one Linux Firecracker host, one non-Linux
-PortableVm host, and one proxy-only validator that publishes zero hosted
-capacity while still proxying routed hosted-HTTP traffic correctly.
+local `dev.sh` shim. `PortableVm` attaches shared lease storage as persistent
+block devices in unprivileged userspace, while the Linux/KVM fast path keeps
+the Firecracker NFS transport adapter. The mixed gate is expected to cover one
+Linux Firecracker host, one non-Linux PortableVm host, and one proxy-only
+validator that publishes zero hosted capacity while still proxying routed
+hosted-HTTP traffic correctly.
 
 Portable smoke uses `IROHA_INROU_PORTABLE_KERNEL_IMAGE`,
 `IROHA_INROU_PORTABLE_ROOTFS_IMAGE`, and optional
-`IROHA_INROU_PORTABLE_INITRD_IMAGE`. Firecracker smoke uses the corresponding
-`IROHA_INROU_LINUX_KVM_*` environment variables.
+`IROHA_INROU_PORTABLE_INITRD_IMAGE`, plus optional
+`IROHA_INROU_PORTABLE_ACCEL=auto|tcg|kvm|hvf|whpx`. Firecracker smoke uses the
+corresponding `IROHA_INROU_LINUX_KVM_*` environment variables.
 
 The same `--container` plus `--service` manifest pair also works for other
 service-bound Soracloud commands such as `hf-deploy`, `hf-status`, `hf-lease-renew`,

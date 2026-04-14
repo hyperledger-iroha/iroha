@@ -31878,6 +31878,12 @@ mod tx_query_integration_smoke {
         dm::Log::new(dm::Level::INFO, "test".to_string()).into()
     }
 
+    fn account_with_key() -> (dm::AccountId, KeyPair) {
+        let kp = KeyPair::random();
+        let account = dm::AccountId::new(kp.public_key().clone());
+        (account, kp)
+    }
+
     #[tokio::test]
     async fn handle_v1_account_transactions_returns_empty_on_blank_state() {
         // Minimal in-memory state: no blocks yet

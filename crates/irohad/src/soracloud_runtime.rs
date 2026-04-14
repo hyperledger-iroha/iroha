@@ -308,20 +308,50 @@ fn portable_vm_guest_machine_profile(
     match guest_isa {
         SoraInrouGuestIsaV1::X8664 => PortableVmGuestMachineProfile {
             emulator_candidates: &["qemu-system-x86_64"],
-            machine: "q35,accel=tcg",
+            machine_type: "q35",
             serial_console: "ttyS0",
             block_device: "virtio-blk-pci",
             net_device: "virtio-net-pci",
-            fs_device: "vhost-user-fs-pci",
         },
         SoraInrouGuestIsaV1::Aarch64 => PortableVmGuestMachineProfile {
             emulator_candidates: &["qemu-system-aarch64"],
-            machine: "virt,accel=tcg",
+            machine_type: "virt",
             serial_console: "ttyAMA0",
             block_device: "virtio-blk-device",
             net_device: "virtio-net-device",
-            fs_device: "vhost-user-fs-device",
         },
+    }
+}
+
+fn default_portable_vm_accel() -> &'static str {
+    #[cfg(target_os = "linux")]
+    {
+        if Path::new("/dev/kvm").exists() {
+            return "kvm";
+        }
+    }
+    #[cfg(target_os = "macos")]
+    {
+        return "hvf";
+    }
+    #[cfg(target_os = "windows")]
+    {
+        return "whpx";
+    }
+    "tcg"
+}
+
+fn portable_vm_accel() -> eyre::Result<String> {
+    let configured = std::env::var("IROHA_INROU_PORTABLE_ACCEL")
+        .unwrap_or_else(|_| "auto".to_owned())
+        .trim()
+        .to_owned();
+    match configured.as_str() {
+        "" | "auto" => Ok(default_portable_vm_accel().to_owned()),
+        "tcg" | "kvm" | "hvf" | "whpx" => Ok(configured),
+        other => eyre::bail!(
+            "unsupported IROHA_INROU_PORTABLE_ACCEL `{other}`; expected one of auto, tcg, kvm, hvf, whpx"
+        ),
     }
 }
 
@@ -329,7 +359,6 @@ fn portable_vm_backend_is_available() -> bool {
     let profile = portable_vm_guest_machine_profile(current_host_inrou_guest_isa());
     resolve_executable_candidates(profile.emulator_candidates).is_some()
         && resolve_inrou_qemu_img_executable().is_some()
-        && resolve_inrou_virtiofsd_executable().is_some()
 }
 
 fn firecracker_kvm_backend_is_available() -> bool {
@@ -2246,18 +2275,12 @@ enum HostedHttpWorkerAttachment {
 
 struct PortableVmAttachment {
     metadata_server: Option<PortableVmMetadataServer>,
-    leasefs_processes: Vec<PortableVmLeaseFsProcess>,
 }
 
 struct PortableVmMetadataServer {
     bind_addr: SocketAddr,
     shutdown_tx: Option<mpsc::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
-}
-
-struct PortableVmLeaseFsProcess {
-    child: std::process::Child,
-    socket_path: PathBuf,
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
@@ -3582,11 +3605,6 @@ impl SoracloudRuntimeManager {
         })?;
         let qemu_img = resolve_inrou_qemu_img_executable()
             .ok_or_else(|| eyre::eyre!("Inrou PortableVm execution requires `qemu-img` on PATH"))?;
-        let virtiofsd = resolve_inrou_virtiofsd_executable().ok_or_else(|| {
-            eyre::eyre!(
-                "Inrou PortableVm execution requires `virtiofsd` or `qemu-virtiofsd` on PATH"
-            )
-        })?;
 
         let materialization_dir = PathBuf::from(&plan.materialization_dir);
         fs::create_dir_all(&materialization_dir)
@@ -3654,10 +3672,9 @@ impl SoracloudRuntimeManager {
             }
             None => eyre::bail!("Inrou runtime requires one PersistentRootLeaseVolume"),
         };
-        let leasefs_exports =
-            ensure_inrou_leasefs_exports(plan).wrap_err("prepare LeaseFs exports")?;
-        let shared_filesystem_mounts =
-            build_inrou_portable_shared_filesystem_mounts(&leasefs_exports);
+        let lease_disks = ensure_inrou_portable_lease_disks(&qemu_img, plan)
+            .wrap_err("prepare PortableVm lease disks")?;
+        let shared_filesystem_mounts = build_inrou_portable_shared_filesystem_mounts(&lease_disks);
         let network_plan = build_portable_vm_network_plan(guest_port, &firewall_plan)
             .wrap_err("prepare PortableVm user-mode networking")?;
         let hosts_overlay =
@@ -3681,17 +3698,15 @@ impl SoracloudRuntimeManager {
         let metadata_server = start_portable_vm_metadata_server(&cloud_init_root)
             .wrap_err("start PortableVm cloud-init metadata server")?;
         let datasource_base_url = metadata_server.datasource_base_url();
-        let leasefs_processes = start_inrou_portable_leasefs_processes(
-            &virtiofsd,
-            &materialization_dir,
-            &leasefs_exports,
-        )
-        .wrap_err("start PortableVm LeaseFs supervisors")?;
         let mut portable_attachment = PortableVmAttachment {
             metadata_server: Some(metadata_server),
-            leasefs_processes,
         };
         let memory_mib = portable_vm_memory_mib(&bundle.container.resources);
+        let machine_arg = format!(
+            "{},accel={},memory-backend=vmmem",
+            profile.machine_type,
+            portable_vm_accel()?
+        );
 
         let mut command = Command::new(&qemu);
         command
@@ -3701,7 +3716,7 @@ impl SoracloudRuntimeManager {
                 memory_mib
             ))
             .arg("-machine")
-            .arg(format!("{},memory-backend=vmmem", profile.machine))
+            .arg(machine_arg)
             .arg("-cpu")
             .arg("max")
             .arg("-smp")
@@ -3738,23 +3753,17 @@ impl SoracloudRuntimeManager {
             false,
             true,
         );
-        for (index, mount) in shared_filesystem_mounts.iter().enumerate() {
-            if let InrouSharedFilesystemMountKind::VirtioFs { mount_tag, .. } = &mount.kind {
-                let process = portable_attachment
-                    .leasefs_processes
-                    .get(index)
-                    .ok_or_else(|| {
-                        eyre::eyre!("missing PortableVm LeaseFs process for mount `{mount_tag}`")
-                    })?;
-                let fs_id = format!("leasefs{index}");
-                append_portable_vm_virtiofs_mount(
-                    &mut command,
-                    profile,
-                    &fs_id,
-                    &process.socket_path,
-                    mount_tag,
-                )?;
-            }
+        for (index, disk) in lease_disks.iter().enumerate() {
+            append_portable_vm_drive_with_serial(
+                &mut command,
+                profile,
+                &format!("lease{index}"),
+                &disk.image_path,
+                disk.image_format,
+                false,
+                true,
+                Some(&disk.device_serial),
+            );
         }
 
         let mut child = match command.spawn() {
@@ -10404,10 +10413,6 @@ impl HostedHttpWorkerAttachment {
 
 impl PortableVmAttachment {
     fn cleanup(&mut self) {
-        for process in self.leasefs_processes.iter_mut().rev() {
-            process.cleanup();
-        }
-        self.leasefs_processes.clear();
         if let Some(mut metadata_server) = self.metadata_server.take() {
             metadata_server.cleanup();
         }
@@ -10431,14 +10436,6 @@ impl PortableVmMetadataServer {
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
-    }
-}
-
-impl PortableVmLeaseFsProcess {
-    fn cleanup(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
-        let _ = fs::remove_file(&self.socket_path);
     }
 }
 
@@ -10801,8 +10798,9 @@ enum InrouSharedFilesystemMountKind {
         guest_mount_source: String,
         mount_options: String,
     },
-    VirtioFs {
-        mount_tag: String,
+    BlockDevice {
+        device_serial: String,
+        filesystem_type: String,
         mount_options: String,
     },
 }
@@ -10810,7 +10808,15 @@ enum InrouSharedFilesystemMountKind {
 struct InrouLeaseFsExport {
     mount_path: String,
     host_path: PathBuf,
-    portable_mount_tag: String,
+}
+
+struct PortableVmLeaseDisk {
+    mount_path: String,
+    image_path: PathBuf,
+    image_format: &'static str,
+    device_serial: String,
+    filesystem_type: String,
+    mount_options: String,
 }
 
 struct PortableVmNetworkPlan {
@@ -10822,11 +10828,10 @@ struct PortableVmNetworkPlan {
 #[derive(Clone, Copy)]
 struct PortableVmGuestMachineProfile {
     emulator_candidates: &'static [&'static str],
-    machine: &'static str,
+    machine_type: &'static str,
     serial_console: &'static str,
     block_device: &'static str,
     net_device: &'static str,
-    fs_device: &'static str,
 }
 
 #[cfg(target_os = "linux")]
@@ -10892,17 +10897,6 @@ fn resolve_inrou_mke2fs_executable() -> Option<PathBuf> {
 
 fn resolve_inrou_qemu_img_executable() -> Option<PathBuf> {
     resolve_executable_candidates(&["qemu-img"])
-}
-
-fn resolve_inrou_virtiofsd_executable() -> Option<PathBuf> {
-    resolve_executable_candidates(&["virtiofsd", "qemu-virtiofsd"]).or_else(|| {
-        [
-            PathBuf::from("/opt/homebrew/libexec/virtiofsd"),
-            PathBuf::from("/usr/local/libexec/virtiofsd"),
-        ]
-        .into_iter()
-        .find(|candidate| is_resolved_executable(candidate))
-    })
 }
 
 #[cfg(target_os = "linux")]
@@ -11145,31 +11139,80 @@ fn ensure_inrou_leasefs_exports(
 
         exports.push(InrouLeaseFsExport {
             mount_path: volume.mount_path.clone(),
-            portable_mount_tag: portable_vm_mount_tag(&volume.volume_name),
             host_path: volume_dir,
         });
     }
     Ok(exports)
 }
 
-fn build_inrou_portable_shared_filesystem_mounts(
-    leasefs_exports: &[InrouLeaseFsExport],
-) -> Vec<InrouSharedFilesystemMount> {
-    leasefs_exports
+fn ensure_inrou_portable_lease_disks(
+    qemu_img: &Path,
+    plan: &SoracloudRuntimeServicePlan,
+) -> eyre::Result<Vec<PortableVmLeaseDisk>> {
+    let mut disks = Vec::new();
+    for volume in plan
+        .lease_volumes
         .iter()
-        .map(|export| InrouSharedFilesystemMount {
-            mount_path: export.mount_path.clone(),
-            kind: InrouSharedFilesystemMountKind::VirtioFs {
-                mount_tag: export.portable_mount_tag.clone(),
-                mount_options: "rw,nofail".to_owned(),
+        .filter(|volume| volume.kind != SoraLeaseVolumeKindV1::PersistentRootLeaseVolume)
+    {
+        let volume_dir = PathBuf::from(&volume.local_materialization_dir);
+        fs::create_dir_all(&volume_dir)
+            .wrap_err_with(|| format!("create {}", volume_dir.display()))?;
+        let image_path = volume_dir.join("lease.raw");
+        if !image_path.exists() {
+            run_host_command(
+                qemu_img,
+                &[
+                    "create",
+                    "-q",
+                    "-f",
+                    "raw",
+                    image_path
+                        .to_str()
+                        .ok_or_else(|| eyre::eyre!("non-utf8 path"))?,
+                    &volume.max_total_bytes.to_string(),
+                ],
+            )
+            .wrap_err_with(|| {
+                format!(
+                    "create PortableVm lease disk {} for volume `{}`",
+                    image_path.display(),
+                    volume.volume_name
+                )
+            })?;
+        }
+
+        disks.push(PortableVmLeaseDisk {
+            mount_path: volume.mount_path.clone(),
+            image_path,
+            image_format: "raw",
+            device_serial: portable_vm_block_device_serial(&volume.volume_name),
+            filesystem_type: "ext4".to_owned(),
+            mount_options: "rw,nofail".to_owned(),
+        });
+    }
+    Ok(disks)
+}
+
+fn build_inrou_portable_shared_filesystem_mounts(
+    lease_disks: &[PortableVmLeaseDisk],
+) -> Vec<InrouSharedFilesystemMount> {
+    lease_disks
+        .iter()
+        .map(|disk| InrouSharedFilesystemMount {
+            mount_path: disk.mount_path.clone(),
+            kind: InrouSharedFilesystemMountKind::BlockDevice {
+                device_serial: disk.device_serial.clone(),
+                filesystem_type: disk.filesystem_type.clone(),
+                mount_options: disk.mount_options.clone(),
             },
         })
         .collect()
 }
 
-fn portable_vm_mount_tag(volume_name: &str) -> String {
+fn portable_vm_block_device_serial(volume_name: &str) -> String {
     let sanitized = sanitize_path_component(volume_name);
-    format!("soracloud-{sanitized}").chars().take(31).collect()
+    format!("sora-{sanitized}").chars().take(20).collect()
 }
 
 fn build_portable_vm_network_plan(
@@ -11342,81 +11385,6 @@ fn portable_vm_metadata_base_url(port: u16) -> String {
     format!("http://10.0.2.2:{port}/")
 }
 
-fn start_inrou_portable_leasefs_processes(
-    virtiofsd: &Path,
-    materialization_dir: &Path,
-    leasefs_exports: &[InrouLeaseFsExport],
-) -> eyre::Result<Vec<PortableVmLeaseFsProcess>> {
-    let mut processes = Vec::new();
-    for (index, export) in leasefs_exports.iter().enumerate() {
-        let socket_path = materialization_dir.join(format!("leasefs-{index}.sock"));
-        if socket_path.exists() {
-            fs::remove_file(&socket_path)
-                .wrap_err_with(|| format!("remove stale {}", socket_path.display()))?;
-        }
-        let stderr_log_path = materialization_dir.join(format!("leasefs-{index}.stderr.log"));
-        let stderr = fs::OpenOptions::new()
-            .create(true)
-            .truncate(true)
-            .write(true)
-            .open(&stderr_log_path)
-            .wrap_err_with(|| format!("open {}", stderr_log_path.display()))?;
-        let mut child = Command::new(virtiofsd)
-            .arg("--socket-path")
-            .arg(&socket_path)
-            .arg("--shared-dir")
-            .arg(&export.host_path)
-            .arg("--sandbox=none")
-            .stdout(Stdio::null())
-            .stderr(Stdio::from(stderr))
-            .spawn()
-            .wrap_err_with(|| {
-                format!(
-                    "spawn PortableVm LeaseFs supervisor {} for {}",
-                    virtiofsd.display(),
-                    export.host_path.display()
-                )
-            })?;
-        let started_at = std::time::Instant::now();
-        loop {
-            if socket_path.exists() {
-                break;
-            }
-            if let Some(status) = child
-                .try_wait()
-                .wrap_err("poll PortableVm LeaseFs supervisor during startup")?
-            {
-                let stderr = stderr_log_excerpt(&stderr_log_path);
-                eyre::bail!(
-                    "PortableVm LeaseFs supervisor exited during startup with status {status}{}",
-                    if stderr.is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {stderr}")
-                    }
-                );
-            }
-            if started_at.elapsed() > Duration::from_secs(5) {
-                let _ = child.kill();
-                let _ = child.wait();
-                let stderr = stderr_log_excerpt(&stderr_log_path);
-                eyre::bail!(
-                    "PortableVm LeaseFs supervisor did not publish {} within startup timeout{}",
-                    socket_path.display(),
-                    if stderr.is_empty() {
-                        String::new()
-                    } else {
-                        format!(": {stderr}")
-                    }
-                );
-            }
-            thread::sleep(Duration::from_millis(50));
-        }
-        processes.push(PortableVmLeaseFsProcess { child, socket_path });
-    }
-    Ok(processes)
-}
-
 fn build_portable_vm_allowlist_hosts_overlay(
     allowlist_hosts: &[(String, Ipv4Addr)],
 ) -> Option<String> {
@@ -11459,6 +11427,33 @@ fn append_portable_vm_drive(
     read_only: bool,
     discard_on_unmap: bool,
 ) {
+    append_portable_vm_drive_with_serial(
+        command,
+        profile,
+        drive_id,
+        file_path,
+        format,
+        read_only,
+        discard_on_unmap,
+        None,
+    );
+}
+
+fn append_portable_vm_drive_with_serial(
+    command: &mut Command,
+    profile: PortableVmGuestMachineProfile,
+    drive_id: &str,
+    file_path: &Path,
+    format: &str,
+    read_only: bool,
+    discard_on_unmap: bool,
+    serial: Option<&str>,
+) {
+    let mut device = format!("{},drive={drive_id}", profile.block_device);
+    if let Some(serial) = serial {
+        device.push_str(",serial=");
+        device.push_str(serial);
+    }
     command
         .arg("-drive")
         .arg(format!(
@@ -11468,28 +11463,7 @@ fn append_portable_vm_drive(
             file_path.display(),
         ))
         .arg("-device")
-        .arg(format!("{},drive={drive_id}", profile.block_device));
-}
-
-fn append_portable_vm_virtiofs_mount(
-    command: &mut Command,
-    profile: PortableVmGuestMachineProfile,
-    fs_id: &str,
-    socket_path: &Path,
-    mount_tag: &str,
-) -> eyre::Result<()> {
-    let socket_path = socket_path
-        .to_str()
-        .ok_or_else(|| eyre::eyre!("non-utf8 LeaseFs socket path {}", socket_path.display()))?;
-    command
-        .arg("-chardev")
-        .arg(format!("socket,id={fs_id},path={socket_path}"))
-        .arg("-device")
-        .arg(format!(
-            "{},chardev={fs_id},tag={mount_tag}",
-            profile.fs_device
-        ));
-    Ok(())
+        .arg(device);
 }
 
 #[cfg(target_os = "linux")]
@@ -12089,14 +12063,52 @@ fn build_inrou_user_data(
                     prepare_script.push_str(&shell_single_quote(&mount.mount_path));
                     prepare_script.push('\n');
                 }
-                InrouSharedFilesystemMountKind::VirtioFs {
-                    mount_tag,
+                InrouSharedFilesystemMountKind::BlockDevice {
+                    device_serial,
+                    filesystem_type,
                     mount_options,
                 } => {
-                    prepare_script.push_str("  mount -t virtiofs -o ");
+                    prepare_script.push_str("  device_path=");
+                    prepare_script.push_str(&shell_single_quote(&format!(
+                        "/dev/disk/by-id/virtio-{device_serial}"
+                    )));
+                    prepare_script.push('\n');
+                    prepare_script.push_str("  attempt=0\n");
+                    prepare_script.push_str(
+                        "  while [ ! -b \"$device_path\" ] && [ \"$attempt\" -lt 50 ]; do\n",
+                    );
+                    prepare_script.push_str("    attempt=$((attempt + 1))\n");
+                    prepare_script.push_str("    sleep 0.2\n");
+                    prepare_script.push_str("  done\n");
+                    prepare_script.push_str("  if [ ! -b \"$device_path\" ]; then\n");
+                    prepare_script.push_str(
+                        "    echo \"Inrou PortableVm volume device not found: $device_path\" >&2\n",
+                    );
+                    prepare_script.push_str("    exit 1\n");
+                    prepare_script.push_str("  fi\n");
+                    prepare_script.push_str("  if ! command -v blkid >/dev/null 2>&1; then\n");
+                    prepare_script.push_str(
+                        "    echo 'Inrou PortableVm block volumes require blkid in the guest image' >&2\n",
+                    );
+                    prepare_script.push_str("    exit 1\n");
+                    prepare_script.push_str("  fi\n");
+                    prepare_script
+                        .push_str("  if ! blkid \"$device_path\" >/dev/null 2>&1; then\n");
+                    prepare_script
+                        .push_str("    if ! command -v mkfs.ext4 >/dev/null 2>&1; then\n");
+                    prepare_script.push_str(
+                        "      echo 'Inrou PortableVm block volumes require mkfs.ext4 in the guest image' >&2\n",
+                    );
+                    prepare_script.push_str("      exit 1\n");
+                    prepare_script.push_str("    fi\n");
+                    prepare_script.push_str("    mkfs.ext4 -F \"$device_path\"\n");
+                    prepare_script.push_str("  fi\n");
+                    prepare_script.push_str("  mount -t ");
+                    prepare_script.push_str(&shell_single_quote(filesystem_type));
+                    prepare_script.push_str(" -o ");
                     prepare_script.push_str(&shell_single_quote(mount_options));
                     prepare_script.push(' ');
-                    prepare_script.push_str(&shell_single_quote(mount_tag));
+                    prepare_script.push_str("\"$device_path\"");
                     prepare_script.push(' ');
                     prepare_script.push_str(&shell_single_quote(&mount.mount_path));
                     prepare_script.push('\n');
@@ -12396,10 +12408,29 @@ fn executable_candidate_names(program: &str) -> Vec<String> {
 }
 
 fn known_host_executable_directories() -> Vec<PathBuf> {
-    let mut directories = vec![
-        PathBuf::from("/opt/homebrew/bin"),
-        PathBuf::from("/usr/local/bin"),
-    ];
+    let mut directories = Vec::new();
+
+    #[cfg(not(windows))]
+    {
+        directories.push(PathBuf::from("/opt/homebrew/bin"));
+        directories.push(PathBuf::from("/usr/local/bin"));
+    }
+
+    #[cfg(windows)]
+    {
+        for env_var in ["ProgramW6432", "ProgramFiles", "ProgramFiles(x86)"] {
+            if let Some(root) = std::env::var_os(env_var) {
+                directories.push(PathBuf::from(root).join("qemu"));
+                directories.push(PathBuf::from(root).join("QEMU"));
+            }
+        }
+        directories.push(PathBuf::from(r"C:\Program Files\qemu"));
+        directories.push(PathBuf::from(r"C:\Program Files\QEMU"));
+        directories.push(PathBuf::from(r"C:\Program Files (x86)\qemu"));
+        directories.push(PathBuf::from(r"C:\Program Files (x86)\QEMU"));
+        directories.push(PathBuf::from(r"C:\msys64\ucrt64\bin"));
+        directories.push(PathBuf::from(r"C:\msys64\mingw64\bin"));
+    }
 
     if let Some(android_sdk_root) = std::env::var_os("ANDROID_SDK_ROOT") {
         directories.push(PathBuf::from(android_sdk_root.clone()).join("emulator/bin64"));
@@ -12416,7 +12447,11 @@ fn known_host_executable_directories() -> Vec<PathBuf> {
 fn known_host_executable_paths(program: &str) -> Vec<PathBuf> {
     known_host_executable_directories()
         .into_iter()
-        .map(|directory| directory.join(program))
+        .flat_map(|directory| {
+            executable_candidate_names(program)
+                .into_iter()
+                .map(move |candidate| directory.join(candidate))
+        })
         .collect()
 }
 
@@ -12992,6 +13027,7 @@ mod tests {
     use iroha_primitives::json::Json;
     use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID};
     use iroha_torii::sorafs::AdmissionRegistry;
+    use serial_test::serial;
     use sorafs_car::CarBuildPlan;
     use sorafs_chunker::ChunkProfile;
     use sorafs_manifest::{
@@ -13541,11 +13577,6 @@ mod tests {
             if resolve_executable_on_path(program).is_none() {
                 eyre::bail!("PortableVm Inrou smoke test requires `{program}` on PATH");
             }
-        }
-        if resolve_inrou_virtiofsd_executable().is_none() {
-            eyre::bail!(
-                "PortableVm Inrou smoke test requires `virtiofsd` or `qemu-virtiofsd` on PATH"
-            );
         }
         Ok(())
     }
@@ -20058,14 +20089,42 @@ mod tests {
     }
 
     #[test]
-    fn build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay() -> Result<()> {
+    #[serial]
+    fn portable_vm_accel_accepts_explicit_override() -> Result<()> {
+        let previous = std::env::var_os("IROHA_INROU_PORTABLE_ACCEL");
+        unsafe { std::env::set_var("IROHA_INROU_PORTABLE_ACCEL", "tcg") };
+        let result = portable_vm_accel();
+        match previous {
+            Some(value) => unsafe { std::env::set_var("IROHA_INROU_PORTABLE_ACCEL", value) },
+            None => unsafe { std::env::remove_var("IROHA_INROU_PORTABLE_ACCEL") },
+        }
+        assert_eq!(result?, "tcg");
+        Ok(())
+    }
+
+    #[test]
+    #[serial]
+    fn portable_vm_accel_rejects_unknown_override() {
+        let previous = std::env::var_os("IROHA_INROU_PORTABLE_ACCEL");
+        unsafe { std::env::set_var("IROHA_INROU_PORTABLE_ACCEL", "nope") };
+        let result = portable_vm_accel();
+        match previous {
+            Some(value) => unsafe { std::env::set_var("IROHA_INROU_PORTABLE_ACCEL", value) },
+            None => unsafe { std::env::remove_var("IROHA_INROU_PORTABLE_ACCEL") },
+        }
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay() -> Result<()> {
         let bundle = sample_inrou_test_bundle()?;
         let (_temp_dir, replica_plan, cache_key) =
             materialize_inrou_replica_plan_for_tests(&bundle)?;
         let shared_mounts = vec![InrouSharedFilesystemMount {
             mount_path: "/var/lib/ton-indexer".to_owned(),
-            kind: InrouSharedFilesystemMountKind::VirtioFs {
-                mount_tag: "soracloud-index_state".to_owned(),
+            kind: InrouSharedFilesystemMountKind::BlockDevice {
+                device_serial: "sora-index_state".to_owned(),
+                filesystem_type: "ext4".to_owned(),
                 mount_options: "rw,nofail".to_owned(),
             },
         }];
@@ -20090,10 +20149,11 @@ mod tests {
         assert!(user_data.contains(
             "grep -qxF \"$line\" /tmp/soracloud-hosts || echo \"$line\" >> /tmp/soracloud-hosts"
         ));
-        assert!(user_data.contains("mount -t virtiofs -o 'rw,nofail'"));
-        assert!(user_data.contains("'soracloud-index_state' '/var/lib/ton-indexer'"));
+        assert!(user_data.contains("/dev/disk/by-id/virtio-sora-index_state"));
+        assert!(user_data.contains("mkfs.ext4 -F \"$device_path\""));
+        assert!(user_data.contains("mount -t 'ext4' -o 'rw,nofail' \"$device_path\""));
         assert!(!user_data.contains("mount.nfs"));
-        assert!(!user_data.contains("nfs-common"));
+        assert!(!user_data.contains("virtiofs"));
         Ok(())
     }
 
@@ -20312,6 +20372,46 @@ mod tests {
         assert!(args.contains("raw"));
         assert!(args.contains(base_rootfs_image_path.display().to_string().as_str()));
         assert!(args.contains(root_disk_path.display().to_string().as_str()));
+        Ok(())
+    }
+
+    #[cfg(not(windows))]
+    #[test]
+    fn ensure_inrou_portable_lease_disks_create_reusable_raw_images() -> Result<()> {
+        let bundle = sample_inrou_test_bundle()?;
+        let (temp_dir, replica_plan, _cache_key) =
+            materialize_inrou_replica_plan_for_tests(&bundle)?;
+        let qemu_img = temp_dir.path().join("qemu-img");
+        let args_log = temp_dir.path().join("qemu-img.args");
+        fs::write(
+            &qemu_img,
+            format!(
+                "#!/bin/sh\nprintf '%s\\n' \"$@\" >> {}\nprev=\"\"\nout=\"\"\nfor arg in \"$@\"; do out=\"$prev\"; prev=\"$arg\"; done\nif [ -n \"$out\" ]; then : > \"$out\"; fi\n",
+                args_log.display()
+            ),
+        )?;
+        fs::set_permissions(&qemu_img, fs::Permissions::from_mode(0o755))?;
+
+        let disks = ensure_inrou_portable_lease_disks(&qemu_img, &replica_plan)?;
+        assert_eq!(disks.len(), 1);
+        assert_eq!(
+            disks[0]
+                .image_path
+                .file_name()
+                .and_then(|name| name.to_str()),
+            Some("lease.raw")
+        );
+        assert_eq!(disks[0].device_serial, "sora-index_state");
+        let first_args = fs::read_to_string(&args_log)?;
+        assert!(first_args.contains("create"));
+        assert!(first_args.contains("-f"));
+        assert!(first_args.contains("raw"));
+        assert!(first_args.contains(disks[0].image_path.display().to_string().as_str()));
+
+        fs::write(&args_log, "")?;
+        let second_disks = ensure_inrou_portable_lease_disks(&qemu_img, &replica_plan)?;
+        assert_eq!(second_disks[0].image_path, disks[0].image_path);
+        assert!(fs::read_to_string(&args_log)?.is_empty());
         Ok(())
     }
 

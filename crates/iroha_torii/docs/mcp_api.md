@@ -170,6 +170,9 @@ Result:
 Notes:
 - Non-numeric `cursor` falls back to `0`.
 - Effective page size is `max(1, torii.mcp.max_tools_per_list)`.
+- `inputSchema` is sanitized before publication so OpenAI-compatible MCP clients
+  always see a top-level object schema and never a top-level
+  `anyOf`/`oneOf`/`allOf`/`enum`/`not` keyword.
 
 ### `tools/call`
 Executes one tool.

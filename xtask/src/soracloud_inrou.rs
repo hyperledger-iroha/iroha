@@ -57,7 +57,7 @@ fn run_portable_local() -> Result<(), Box<dyn Error>> {
             "embedded-soracloud-runtime",
             "--bin",
             "irohad",
-            "build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay",
+            "build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay",
             "--",
             "--nocapture",
         ],

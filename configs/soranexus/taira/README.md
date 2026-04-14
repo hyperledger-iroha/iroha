@@ -247,7 +247,8 @@ redeployed with the shipped `[torii.mcp]` block from `config.toml`:
 
 This intentionally exposes only curated `iroha.*` tools on the public network
 so Codex sees the stable live-network aliases and not the full raw `torii.*`
-OpenAPI-derived surface.
+OpenAPI-derived surface. The rollout smoke now also rejects any advertised MCP
+tool whose top-level `inputSchema` is not an OpenAI-compatible object schema.
 
 After rollout, verify the chosen public node directly:
 
@@ -261,6 +262,12 @@ The `notifications/initialized` probe should return `HTTP 202 Accepted` with
 an empty body. A `200` JSON-RPC error there means the endpoint advertises MCP
 but still fails the standard post-initialize handshake that Codex and other
 streamable-HTTP MCP clients require.
+
+The `tools/list` payload must also keep every tool's `inputSchema` as a
+top-level `"type": "object"` schema without top-level `anyOf`, `oneOf`,
+`allOf`, `enum`, or `not`. If a live node still advertises an invalid schema
+for tools such as `iroha.connect.session.delete`, `check_mcp_rollout.sh` now
+fails the rollout immediately instead of letting Codex discover the breakage.
 
 The repo-local Codex plugin and Taira skill now expect an explicit direct-node
 MCP URL rather than a canonical committed live host. Future Nexus/Torii
