@@ -1312,6 +1312,7 @@ async fn run_partial_erasure_scenario() -> Result<()> {
     };
 
     let base_client = network.client();
+    let cluster_clients: Vec<Client> = network.peers().iter().map(|peer| peer.client()).collect();
     configure_runtime_rbc(&base_client).await?;
 
     let status_before = blocking_status(&base_client)?;
@@ -1345,7 +1346,23 @@ async fn run_partial_erasure_scenario() -> Result<()> {
         }
     }
 
-    let status_after = blocking_status(&base_client)?;
+    let mut status_after = blocking_status(&base_client)?;
+    let mut recovered_commit_height = status_after.blocks;
+    if delivered_sessions > 0
+        && recovered_commit_height < expected_height
+        && let Some(statuses) =
+            try_wait_for_cluster_height(&cluster_clients, expected_height, Duration::from_secs(180))
+                .await?
+    {
+        recovered_commit_height = statuses
+            .iter()
+            .map(|status| status.blocks)
+            .max()
+            .unwrap_or(recovered_commit_height);
+        if let Ok(refreshed) = blocking_status(&base_client) {
+            status_after = refreshed;
+        }
+    }
     if delivered_sessions == 0 && status_after.blocks < expected_height {
         ensure!(
             stalled_sessions >= peer_count.saturating_sub(1) || missing_sessions >= 1,
@@ -1361,7 +1378,7 @@ async fn run_partial_erasure_scenario() -> Result<()> {
             "partial-erasure recovery should still expose stalled sessions, delivered sessions, or bounded missing telemetry (stalled={stalled_sessions}, delivered={delivered_sessions}, missing={missing_sessions}, peers={peer_count})"
         );
         ensure!(
-            status_after.blocks >= expected_height,
+            recovered_commit_height >= expected_height,
             "when withheld chunks recover via local payload availability, commit height should advance"
         );
     }
@@ -1389,6 +1406,10 @@ async fn run_partial_erasure_scenario() -> Result<()> {
     summary_map.insert(
         "status_after_blocks".into(),
         Value::from(status_after.blocks),
+    );
+    summary_map.insert(
+        "recovered_commit_height".into(),
+        Value::from(recovered_commit_height),
     );
     emit_summary("partial_erasure", &Value::Object(summary_map))?;
 

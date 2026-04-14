@@ -64625,6 +64625,121 @@ async fn force_view_change_if_idle_records_missing_qc_and_advances_view() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn force_view_change_if_idle_defers_contiguous_frontier_after_lock_lag_prune() {
+    use std::borrow::Cow;
+
+    let _guard = super::status::view_change_cause_test_guard();
+    super::status::reset_view_change_cause_counters_for_tests();
+
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.consensus_mode = ConsensusMode::Permissioned;
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    actor.config.recovery.max_forced_proposal_attempts_per_view = 0;
+
+    let tx = sample_transaction();
+    actor
+        .queue
+        .push(
+            AcceptedTransaction::new_unchecked(Cow::Owned(tx)),
+            actor.state.view(),
+        )
+        .expect("push tx");
+
+    let frontier_height = seed_lock_lag_frontier_for_tests(actor, 0xA6, 5);
+    let current_view = 0_u64;
+    let now = Instant::now();
+    let timeout = super::idle_view_timeout(
+        false,
+        actor.commit_quorum_timeout(),
+        actor.subsystems.propose.pacemaker.propose_interval,
+        actor.runtime_da_enabled(),
+    );
+    let initial_frontier_proposal_grace =
+        super::saturating_mul_duration(actor.rebroadcast_cooldown(), 4)
+            .max(Duration::from_millis(500));
+    let start = now
+        .checked_sub(
+            timeout
+                .saturating_add(initial_frontier_proposal_grace)
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or(now);
+    actor
+        .phase_tracker
+        .on_view_change(frontier_height, current_view, start);
+    actor.queue_ready_since = Some(super::QueueReadySince {
+        height: frontier_height,
+        view: current_view,
+        since: start,
+    });
+    actor.subsystems.propose.last_pacemaker_attempt = Some(now);
+    actor.slot_tracker.proposals_seen.clear();
+    actor.pending.pending_blocks.clear();
+    actor.pending.missing_block_requests.clear();
+
+    let _ =
+        insert_unresolved_missing_request_for_tests(actor, 0xA7, frontier_height, 1, start, start);
+    let far_height = frontier_height.saturating_add(3);
+    let far_parent =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0xA8; Hash::LENGTH]));
+    let far_block = sample_block(far_height, 0, Some(far_parent));
+    let far_hash = far_block.hash();
+    actor.pending.pending_blocks.insert(
+        far_hash,
+        PendingBlock::new(
+            far_block.clone(),
+            Hash::new(super::proposals::block_payload_bytes(&far_block)),
+            far_height,
+            0,
+        ),
+    );
+
+    assert!(
+        actor.lock_lag_catchup_frontier_height() == Some(frontier_height),
+        "test setup should expose a lock-lag catch-up frontier"
+    );
+    assert!(
+        !actor.force_view_change_if_idle(now),
+        "lock-lag pruning should give committed-anchor catch-up a turn before rotating"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(frontier_height),
+        Some(current_view),
+        "view should not advance in the same tick that prunes lock-lag future state"
+    );
+    assert!(
+        !actor.pending.pending_blocks.contains_key(&far_hash),
+        "far-future pending state should still be pruned"
+    );
+    let second_tick = now + Duration::from_millis(1);
+    assert!(
+        actor.lock_lag_prune_cooldown_active_for_height(frontier_height, second_tick),
+        "prune should establish a cooldown for the catch-up frontier"
+    );
+    assert!(
+        !actor.force_view_change_if_idle(second_tick),
+        "lock-lag prune cooldown should keep contiguous-frontier catch-up from rotating on the next idle tick"
+    );
+    assert_eq!(
+        actor.phase_tracker.current_view(frontier_height),
+        Some(current_view),
+        "view should not advance while lock-lag prune cooldown is active"
+    );
+    assert_eq!(
+        super::status::snapshot()
+            .view_change_causes
+            .missing_qc_total,
+        0,
+        "deferral must not count a missing-QC rotation"
+    );
+
+    super::status::reset_view_change_cause_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn force_view_change_if_idle_suppresses_missing_qc_when_matching_frontier_pending_exists() {
     use std::borrow::Cow;
 
