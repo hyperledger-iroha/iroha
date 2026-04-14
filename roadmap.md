@@ -2,6 +2,35 @@
 
 Last updated: 2026-04-14
 
+Latest sync (2026-04-14 Taira rollout now rejects invalid MCP tool schemas before clients hit them):
+the repo-side schema-compatibility work for the reported
+`iroha.connect.session.delete` failure is now fully guarded in-tree. Torii was
+already sanitizing exported MCP `inputSchema` values into OpenAI-compatible
+top-level object schemas, but the rollout path was not enforcing that contract
+against live nodes. `configs/soranexus/taira/check_mcp_rollout.sh` now parses
+`tools/list` and fails if any advertised tool still exposes a top-level
+`anyOf`, `oneOf`, `allOf`, `enum`, or `not`, or if the top-level schema type
+is not `object`. `crates/iroha_torii/tests/mcp_endpoints.rs` also now has a
+full-surface regression that checks every published tool descriptor rather than
+only a few hand-picked aliases, and the public docs/runbook now call the schema
+requirement out explicitly.
+
+- shipped in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/tests/mcp_endpoints.rs`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/check_mcp_rollout.sh`
+  - `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/README.md`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/docs/mcp_api.md`
+  - `/Users/takemiyamakoto/dev/iroha/status.md`
+  - `/Users/takemiyamakoto/dev/iroha/roadmap.md`
+- verified in this slice:
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mcp-schema cargo test -p iroha_torii --test mcp_endpoints mcp_connect_session_delete_tools_publish_openai_compatible_schema -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mcp-schema cargo test -p iroha_torii --test mcp_endpoints mcp_all_published_tool_schemas_are_openai_compatible_top_level_objects -- --exact --nocapture`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary`
+- open work after this slice:
+  - keep the rollout guard wired into future public Torii releases so schema
+    drift is caught before Codex or other MCP clients discover it.
+
 Latest sync (2026-04-14 Torii MCP now accepts `notifications/initialized` and exposes a real lifecycle `ping`):
 the repo-side MCP compatibility fix for Codex startup is now in tree.
 `crates/iroha_torii/src/lib.rs` accepts the post-`initialize`
@@ -156,7 +185,7 @@ features.
   - pin the same public-safe defaults and route limits on the shipped public
     Taira profile without downstream wrapper tuning.
 
-Latest sync (2026-04-14 host-agnostic Inrou redesign now uses strict LeaseFs + virtio-fs and repo-native smoke commands):
+Latest sync (2026-04-14 host-agnostic Inrou redesign now uses block-backed PortableVm lease volumes plus repo-native smoke commands):
 the earlier Inrou storage/harness gap is now materially smaller in-tree. The
 public dual-ISA contract, backend-neutral executor model, `PortableVm`
 userspace QEMU path, Linux/KVM `FirecrackerKvm` preference, authoritative host
@@ -182,10 +211,10 @@ gathering real-host acceptance evidence on publish-grade assets.
   - `CARGO_TARGET_DIR=/tmp/iroha-portable-check cargo check -p irohad --bin irohad --message-format short`
   - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test --no-run -p irohad --features embedded-soracloud-runtime --bin irohad`
   - fresh-target exact-test builds completed for:
-    - `CARGO_TARGET_DIR=/tmp/iroha-verify-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay -- --exact`
+    - `CARGO_TARGET_DIR=/tmp/iroha-verify-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay -- --exact`
     - `CARGO_TARGET_DIR=/tmp/iroha-verify-torii cargo test -p iroha_torii soracloud_hosted_http_topology_section_reports_authoritative_counts -- --exact`
   - focused PortableVm runtime tests now pass directly:
-    - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud_runtime::tests::build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay -- --exact --nocapture`
+    - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud_runtime::tests::build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay -- --exact --nocapture`
     - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud_runtime::tests::ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file -- --exact --nocapture`
   - grouped Soracloud CLI integration coverage is buildable again after
     dropping an unnecessary `Debug` derive from `ContractActivityIndex` in

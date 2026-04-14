@@ -2077,6 +2077,14 @@ fn contracts_paths() -> Map {
             "Read smart contract state by exact path, path list, or prefix.",
             "#/components/schemas/JsonValue",
             vec![
+                string_query_param(
+                    "contract_address",
+                    "Optional contract address used to scope logical state paths.",
+                ),
+                string_query_param(
+                    "contract_alias",
+                    "Optional contract alias used to scope logical state paths.",
+                ),
                 string_query_param("path", "Exact state key path (Name)."),
                 string_query_param("paths", "Comma-separated list of state key paths (Names)."),
                 string_query_param("prefix", "Prefix for state key paths (Name)."),

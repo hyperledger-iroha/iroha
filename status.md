@@ -30,6 +30,50 @@ Last updated: 2026-04-14
   - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::block_sync_update_contiguous_frontier_bypasses_higher_validation_deferral -- --exact --nocapture`
   - `cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --exact --nocapture --test-threads=1`
 
+## 2026-04-14 Follow-up: Torii MCP delete-session schema regression is green in integration coverage
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/mcp.rs` now keeps the
+  OpenAI-compatible schema sanitizer in the published MCP descriptor path and
+  the curated `connect.session.delete` / `iroha.connect.session.delete` tools
+  continue to advertise only flat `sid` / `session_id` arguments while still
+  accepting legacy `path.sid` and `path.session_id` during dispatch.
+- The new sanitizer-focused unit coverage in the same file had one compile bug
+  of its own: it borrowed `inputSchema` from a temporary `descriptor()` value.
+  That test now binds the descriptor first, so the MCP regression coverage
+  itself compiles cleanly.
+- Focused verification for this slice:
+  - `rustfmt --edition 2024 --check crates/iroha_torii/src/mcp.rs crates/iroha_torii/tests/mcp_endpoints.rs`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-mcp cargo test -p iroha_torii --test mcp_endpoints mcp_connect_session_delete_tools_publish_openai_compatible_schema -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-codex-target-mcp cargo test -p iroha_torii --test mcp_endpoints mcp_all_published_tool_schemas_are_openai_compatible_top_level_objects -- --nocapture`
+- Residual validation note: full `cargo test -p iroha_torii ...` is still
+  blocked by unrelated pre-existing compile failures in
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs`
+  test code (`account_with_key`, missing `ConstVec`, and follow-on inference
+  errors). That is separate from the MCP schema fix.
+
+## 2026-04-14 Follow-up: Taira rollout now fails fast on invalid MCP tool schemas
+- The Torii MCP surface in `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii`
+  was already sanitizing exported `inputSchema` values into OpenAI-compatible
+  top-level object schemas, including the `iroha.connect.session.delete` alias
+  that Codex reported as invalid on the live Taira endpoint.
+- The remaining repo-side gap was rollout detection, so
+  `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/check_mcp_rollout.sh`
+  now parses `tools/list` and fails if any advertised tool still exposes a
+  top-level `anyOf`, `oneOf`, `allOf`, `enum`, or `not`, or if the top-level
+  schema type is not `object`.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/tests/mcp_endpoints.rs`
+  now also has a full `tools/list` regression that checks every published tool
+  descriptor, not just a few hand-picked aliases.
+- `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/README.md` and
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/docs/mcp_api.md` now
+  document that rollout expectation explicitly.
+- Focused verification for this slice:
+  - `bash -n configs/soranexus/taira/check_mcp_rollout.sh`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mcp-schema cargo test -p iroha_torii --test mcp_endpoints mcp_connect_session_delete_tools_publish_openai_compatible_schema -- --exact --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha-mcp-schema cargo test -p iroha_torii --test mcp_endpoints mcp_all_published_tool_schemas_are_openai_compatible_top_level_objects -- --exact --nocapture`
+  - `bash configs/soranexus/taira/check_mcp_rollout.sh --skip-local --public-root https://taira.sora.org --skip-write-canary`
+- Live public verification now passes as well, so the repo-side schema guard and
+  the deployed Taira public MCP endpoint are aligned again.
+
 ## 2026-04-14 Follow-up: Torii MCP now completes the standard post-initialize handshake
 - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs` now treats
   the MCP `notifications/initialized` payload as a real notification instead of
@@ -155,7 +199,7 @@ Last updated: 2026-04-14
   - `cargo check -p iroha_sccp --features serde --message-format short`
   - `cargo test -p iroha_sccp destination_ -- --nocapture`
 
-## 2026-04-14 Follow-up: host-agnostic Inrou now uses LeaseFs + virtio-fs on PortableVm, with repo-native smoke entrypoints
+## 2026-04-14 Follow-up: host-agnostic Inrou now uses block-backed lease volumes on PortableVm, with repo-native smoke entrypoints
 - `/Users/takemiyamakoto/dev/iroha/crates/irohad/src/soracloud_runtime.rs`
   now closes the remaining runtime-side work from the earlier dual-ISA Inrou
   contract rewrite:
@@ -166,9 +210,10 @@ Last updated: 2026-04-14
     unprivileged userspace, uses user-mode networking plus host-loopback
     forwarding, and applies the same health/entrypoint/bootstrap contract as
     Firecracker;
-  - shared replica data now flows through a backend-neutral LeaseFs authority:
-    Firecracker keeps the NFS transport adapter, while PortableVm exports the
-    same guest-visible semantics through `virtio-fs`; and
+  - shared replica data now keeps backend-neutral guest-visible semantics:
+    Firecracker keeps the NFS transport adapter, while PortableVm attaches the
+    same leases as persistent virtio block devices that the guest formats and
+    mounts on first boot; and
   - PortableVm root storage now uses sparse `qemu-img` qcow2 overlays over the
     immutable guest rootfs instead of copying raw ext4 roots on every replica;
   - allowlist networking on PortableVm now projects resolved hostname overlays
@@ -190,7 +235,7 @@ Last updated: 2026-04-14
   current tree without changing runtime behavior.
 - Regression coverage and smoke entrypoints added in:
   - `/Users/takemiyamakoto/dev/iroha/crates/irohad/src/soracloud_runtime.rs`
-    for the portable virtio-fs/allowlist rendering path, qcow2 root overlays,
+    for the portable block-volume/allowlist rendering path, qcow2 root overlays,
     and the ignored PortableVm guest smoke, with the portable smoke scaffolding
     now compiling on Linux, macOS, and Windows hosts instead of only Unix
     shells;
@@ -206,10 +251,10 @@ Last updated: 2026-04-14
   - `CARGO_TARGET_DIR=/tmp/iroha-portable-check cargo check -p irohad --bin irohad --message-format short`
   - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test --no-run -p irohad --features embedded-soracloud-runtime --bin irohad`
   - fresh-target exact-test builds completed successfully for:
-    - `CARGO_TARGET_DIR=/tmp/iroha-verify-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay -- --exact`
+    - `CARGO_TARGET_DIR=/tmp/iroha-verify-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay -- --exact`
     - `CARGO_TARGET_DIR=/tmp/iroha-verify-torii cargo test -p iroha_torii soracloud_hosted_http_topology_section_reports_authoritative_counts -- --exact`
   - focused PortableVm runtime tests now pass directly:
-    - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud_runtime::tests::build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay -- --exact --nocapture`
+    - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud_runtime::tests::build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay -- --exact --nocapture`
     - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud_runtime::tests::ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file -- --exact --nocapture`
   - grouped integration coverage is now buildable again, and the lightweight
     Soracloud CLI guardrail slice passes against the grouped `core_api` target:
