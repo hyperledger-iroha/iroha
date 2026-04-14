@@ -21647,6 +21647,84 @@ async fn known_block_commit_qc_recovery_stall_enters_frontier_deep_catchup() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn known_block_commit_qc_stall_uses_fallback_reanchor_when_primary_is_in_cooldown() {
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(actor.state.as_ref());
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let local_height = actor.committed_height_snapshot();
+    let view = 0_u64;
+    let block =
+        nonempty_block_for_actor(actor, &harness.key_pairs, height, view, Some(parent_hash));
+    let block_hash = insert_validated_pending(actor, block);
+    let targets = actor.effective_commit_topology();
+
+    assert!(
+        actor.maybe_request_known_block_commit_qc_recovery(
+            block_hash,
+            height,
+            view,
+            &targets,
+            None,
+            "test_known_block_exact_frontier_commit_qc_fallback_seed",
+        ),
+        "frontier known-block recovery should seed exact block-body repair before stall fallback"
+    );
+
+    let stale_at = Instant::now()
+        .checked_sub(
+            actor
+                .frontier_slot_lag_window()
+                .checked_mul(2)
+                .unwrap_or_else(|| actor.frontier_slot_lag_window())
+                .saturating_add(Duration::from_millis(1)),
+        )
+        .unwrap_or_else(Instant::now);
+    let request = actor
+        .pending
+        .missing_commit_qc_requests
+        .get_mut(&block_hash)
+        .expect("known-block commit-QC request retained");
+    request.first_seen = stale_at;
+    request.last_dependency_progress = stale_at;
+    request.last_requested = stale_at;
+
+    let primary_deadline = Instant::now()
+        .checked_add(Duration::from_secs(60))
+        .unwrap_or_else(Instant::now);
+    for peer in actor.range_pull_targets_for_height(height) {
+        actor.range_pull_escalation_cooldowns.insert(
+            (peer, local_height, height, "frontier_stall_reset"),
+            primary_deadline,
+        );
+    }
+
+    assert!(
+        actor.retry_known_block_commit_qc_requests(Instant::now(), None),
+        "stalled known-block commit-QC recovery should still make progress when the primary reanchor is in cooldown"
+    );
+    assert!(
+        actor
+            .range_pull_escalation_cooldowns
+            .keys()
+            .any(|(_, _, cooldown_height, reason)| {
+                *cooldown_height == height && *reason == "frontier_stall_reset_fallback"
+            }),
+        "stalled known-block commit-QC recovery should spend the fallback reanchor budget when the primary budget is unavailable"
+    );
+    assert!(
+        actor
+            .frontier_slot
+            .as_ref()
+            .is_some_and(|slot| matches!(slot.mode, super::FrontierSlotMode::PassiveCatchup)),
+        "fallback reanchor should hand same-height ownership to passive catch-up"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn block_body_response_retains_same_height_known_block_commit_qc_repair_after_frontier_view_advances()
  {
     let mut harness = test_actor_harness(4).await;
@@ -113431,6 +113509,69 @@ async fn block_sync_update_contiguous_frontier_routes_unknown_block_through_bloc
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_contiguous_frontier_bypasses_higher_validation_deferral() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let height = actor.committed_height_snapshot().saturating_add(1);
+
+    let block = nonempty_block_for_actor(actor, &harness.key_pairs, height, 0, Some(genesis_hash));
+    let block_hash = block.hash();
+    let future_height = height.saturating_add(2);
+    let future_parent =
+        HashOf::<BlockHeader>::from_untyped_unchecked(Hash::prehashed([0x5A; Hash::LENGTH]));
+    let future_block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        future_height,
+        0,
+        Some(future_parent),
+    );
+    let future_hash = future_block.hash();
+    let future_payload_hash = Hash::new(super::proposals::block_payload_bytes(&future_block));
+    actor.pending.pending_blocks.insert(
+        future_hash,
+        PendingBlock::new(future_block, future_payload_hash, future_height, 0),
+    );
+    actor.subsystems.validation.inflight.insert(
+        future_hash,
+        super::ValidationInFlight {
+            id: 1,
+            started_at: Instant::now(),
+            frontier_generation: None,
+        },
+    );
+
+    let update = super::message::BlockSyncUpdate::from(&block);
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+
+    assert!(
+        actor.block_known_locally(block_hash),
+        "next-height update should not be deferred behind higher-height validation"
+    );
+    assert!(
+        !actor
+            .deferred_block_sync_updates
+            .contains_key(&(height, 0, block_hash)),
+        "next-height update should be processed instead of deferred"
+    );
+    assert!(
+        actor
+            .subsystems
+            .validation
+            .inflight
+            .contains_key(&future_hash),
+        "unrelated higher-height validation should remain in flight"
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn keep_exact_frontier_block_sync_repair_in_slot_clears_generic_missing_request() {
     let _guard = super::status::missing_block_fetch_test_guard();
     super::status::reset_missing_block_fetch_counters_for_tests();
@@ -114023,6 +114164,49 @@ async fn block_sync_update_drops_stale_view_without_missing_request() {
             .pending
             .missing_block_requests
             .contains_key(&block_hash)
+    );
+
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn block_sync_update_accepts_stale_exact_frontier_payload_repair_with_da() {
+    let mut consensus_cfg = test_sumeragi_config();
+    consensus_cfg.da.enabled = true;
+    let mut harness = test_actor_harness_with_config(4, consensus_cfg, None).await;
+    let actor = &mut harness.actor;
+
+    let genesis_hash = seed_genesis_block_for_state(&actor.state);
+    let height = actor.committed_height_snapshot().saturating_add(1);
+    let stale_view = 0;
+    let local_view = 1;
+    let now = Instant::now();
+    actor.phase_tracker.start_new_round(height, now);
+    actor.phase_tracker.on_view_change(height, local_view, now);
+
+    let block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        height,
+        stale_view,
+        Some(genesis_hash),
+    );
+    let block_hash = block.hash();
+
+    let update = super::message::BlockSyncUpdate::from(&block);
+    actor
+        .handle_block_sync_update(update, None)
+        .expect("block sync update");
+
+    assert!(
+        actor.block_known_locally(block_hash),
+        "stale exact-frontier payload repair should hydrate the missing contiguous block"
+    );
+    assert!(
+        !actor
+            .deferred_block_sync_updates
+            .contains_key(&(height, stale_view, block_hash)),
+        "stale exact-frontier repair should be processed immediately"
     );
 
     harness.shutdown.send();

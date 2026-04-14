@@ -25052,6 +25052,8 @@ impl Actor {
                 anchor_latest_hash,
                 BTreeSet::new(),
             );
+            self.frontier_block_sync_hint
+                .record_direct_block_sync_response_permit(peer.clone(), now);
             self.network.post(Post {
                 data: NetworkMessage::BlockSync(Box::new(
                     crate::block_sync::message::Message::GetBlocksAfter(request),
@@ -28652,6 +28654,8 @@ impl Actor {
                 anchor_latest_hash,
                 BTreeSet::new(),
             );
+            self.frontier_block_sync_hint
+                .record_direct_block_sync_response_permit(peer.clone(), now);
             self.network.post(Post {
                 data: NetworkMessage::BlockSync(Box::new(
                     crate::block_sync::message::Message::GetBlocksAfter(request),

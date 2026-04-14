@@ -47,6 +47,12 @@ const DEFAULT_SUMERAGI_STACK_SIZE_BYTES: usize = 256 * 1024 * 1024;
 const MIN_SUMERAGI_STACK_SIZE_BYTES: usize = 64 * 1024 * 1024;
 const SUMERAGI_STACK_SIZE_ENV: &str = "IROHA_SUMERAGI_STACK_SIZE_BYTES";
 const WORKER_WAKE_CHANNEL_CAP: usize = 1;
+const DIRECT_BLOCK_SYNC_RESPONSE_PERMIT_TTL_SECS: u64 = 120;
+const DIRECT_BLOCK_SYNC_RESPONSE_PERMIT_MAX_PENDING: u8 = 8;
+
+fn direct_block_sync_response_permit_ttl() -> Duration {
+    Duration::from_secs(DIRECT_BLOCK_SYNC_RESPONSE_PERMIT_TTL_SECS)
+}
 
 fn sumeragi_stack_size_bytes() -> usize {
     std::env::var(SUMERAGI_STACK_SIZE_ENV)
@@ -9838,6 +9844,7 @@ struct FrontierBlockSyncHint {
     contiguous_frontier_pressure_active: AtomicBool,
     frontier_lane_active: AtomicBool,
     initialized: AtomicBool,
+    direct_response_permits: Mutex<BTreeMap<PeerId, DirectBlockSyncResponsePermit>>,
 }
 
 impl Default for FrontierBlockSyncHint {
@@ -9846,8 +9853,15 @@ impl Default for FrontierBlockSyncHint {
             contiguous_frontier_pressure_active: AtomicBool::new(false),
             frontier_lane_active: AtomicBool::new(false),
             initialized: AtomicBool::new(true),
+            direct_response_permits: Mutex::new(BTreeMap::new()),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DirectBlockSyncResponsePermit {
+    last_request: Instant,
+    pending: u8,
 }
 
 impl FrontierBlockSyncHint {
@@ -9870,6 +9884,56 @@ impl FrontierBlockSyncHint {
                 .contiguous_frontier_pressure_active
                 .load(Ordering::Relaxed)
             || self.frontier_lane_active.load(Ordering::Relaxed)
+    }
+
+    fn record_direct_block_sync_response_permit(&self, peer_id: PeerId, now: Instant) {
+        let mut permits = self
+            .direct_response_permits
+            .lock()
+            .expect("direct block sync response permits poisoned");
+        Self::prune_direct_block_sync_response_permits(&mut permits, now);
+        let entry = permits
+            .entry(peer_id)
+            .or_insert(DirectBlockSyncResponsePermit {
+                last_request: now,
+                pending: 0,
+            });
+        entry.last_request = now;
+        entry.pending = entry
+            .pending
+            .saturating_add(1)
+            .min(DIRECT_BLOCK_SYNC_RESPONSE_PERMIT_MAX_PENDING);
+    }
+
+    fn allow_direct_block_sync_response(&self, peer_id: &PeerId, now: Instant) -> bool {
+        let mut permits = self
+            .direct_response_permits
+            .lock()
+            .expect("direct block sync response permits poisoned");
+        Self::prune_direct_block_sync_response_permits(&mut permits, now);
+        let Some(entry) = permits.get_mut(peer_id) else {
+            return false;
+        };
+        if now.saturating_duration_since(entry.last_request)
+            > direct_block_sync_response_permit_ttl()
+            || entry.pending == 0
+        {
+            permits.remove(peer_id);
+            return false;
+        }
+        entry.pending = entry.pending.saturating_sub(1);
+        if entry.pending == 0 {
+            permits.remove(peer_id);
+        }
+        true
+    }
+
+    fn prune_direct_block_sync_response_permits(
+        permits: &mut BTreeMap<PeerId, DirectBlockSyncResponsePermit>,
+        now: Instant,
+    ) {
+        let ttl = direct_block_sync_response_permit_ttl();
+        permits.retain(|_, permit| now.saturating_duration_since(permit.last_request) <= ttl);
     }
 }
 
@@ -9943,6 +10007,21 @@ impl SumeragiHandle {
 
     pub(crate) fn should_pause_block_sync_latest_gossip(&self) -> bool {
         self.frontier_block_sync_hint.should_pause_latest_gossip()
+    }
+
+    pub(crate) fn allow_direct_block_sync_response(&self, peer_id: &PeerId, now: Instant) -> bool {
+        self.frontier_block_sync_hint
+            .allow_direct_block_sync_response(peer_id, now)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn record_direct_block_sync_response_permit_for_tests(
+        &self,
+        peer_id: PeerId,
+        now: Instant,
+    ) {
+        self.frontier_block_sync_hint
+            .record_direct_block_sync_response_permit(peer_id, now);
     }
 
     #[cfg(test)]
@@ -10994,7 +11073,12 @@ pub(crate) fn test_sumeragi_handle_with_payload_cap(
 
 #[cfg(test)]
 mod frontier_block_sync_hint_tests {
-    use super::FrontierBlockSyncHint;
+    use std::time::{Duration, Instant};
+
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::peer::PeerId;
+
+    use super::{FrontierBlockSyncHint, direct_block_sync_response_permit_ttl};
 
     #[test]
     fn latest_gossip_pauses_until_initialized() {
@@ -11014,6 +11098,37 @@ mod frontier_block_sync_hint_tests {
         assert!(
             !hint.should_pause_latest_gossip(),
             "clearing the startup gate should restore normal latest-gossip behavior",
+        );
+    }
+
+    #[test]
+    fn direct_block_sync_response_permits_are_single_use_and_expire() {
+        let hint = FrontierBlockSyncHint::default();
+        let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+        let now = Instant::now();
+
+        assert!(
+            !hint.allow_direct_block_sync_response(&peer_id, now),
+            "responses without a direct recovery request must remain unsolicited"
+        );
+
+        hint.record_direct_block_sync_response_permit(peer_id.clone(), now);
+        assert!(
+            hint.allow_direct_block_sync_response(&peer_id, now),
+            "a direct recovery request should permit one ShareBlocks response"
+        );
+        assert!(
+            !hint.allow_direct_block_sync_response(&peer_id, now),
+            "a direct recovery response permit should be consumed exactly once"
+        );
+
+        hint.record_direct_block_sync_response_permit(peer_id.clone(), now);
+        let expired = now
+            .checked_add(direct_block_sync_response_permit_ttl() + Duration::from_millis(1))
+            .unwrap_or(now);
+        assert!(
+            !hint.allow_direct_block_sync_response(&peer_id, expired),
+            "stale direct recovery response permits should expire"
         );
     }
 }

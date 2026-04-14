@@ -5533,10 +5533,14 @@ pub mod message {
                 }) => {
                     use crate::sumeragi::message::BlockSyncUpdate;
 
-                    if !block_sync
-                        .request_tracker
-                        .allow_response(peer_id, Instant::now())
-                    {
+                    let now = Instant::now();
+                    let solicited_by_gossip =
+                        block_sync.request_tracker.allow_response(peer_id, now);
+                    let solicited_by_recovery = !solicited_by_gossip
+                        && block_sync
+                            .sumeragi
+                            .allow_direct_block_sync_response(peer_id, now);
+                    if !solicited_by_gossip && !solicited_by_recovery {
                         debug!(
                             peer = %peer_id,
                             total = blocks.len(),
@@ -6064,6 +6068,148 @@ pub mod message {
                     block_sync.seen_blocks.is_empty(),
                     "uncommitted blocks should not be marked seen"
                 );
+            });
+        }
+
+        #[test]
+        fn share_blocks_accepts_direct_recovery_response_permit() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("tokio runtime");
+
+            runtime.block_on(async {
+                let (sumeragi, block_payload_rx) = test_sumeragi_handle_with_payload_cap(1, 0);
+                let kura = Kura::blank_kura_for_testing();
+                let state = Arc::new(State::new_for_testing(
+                    World::new(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                ));
+                let peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer = Peer::new(
+                    "127.0.0.1:0".parse().expect("valid socket address"),
+                    peer_id,
+                );
+                let sender_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let mut block_sync = BlockSynchronizer {
+                    sumeragi,
+                    kura,
+                    peer,
+                    trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
+                    gossip_period: Duration::from_secs(1),
+                    gossip_max_period: Duration::from_secs(1),
+                    gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
+                    gossip_backoff: Duration::from_secs(1),
+                    gossip_next_deadline: Instant::now(),
+                    network: crate::IrohaNetwork::closed_for_tests(),
+                    relay_ttl: 1,
+                    block_sync_frame_cap: 1024,
+                    state,
+                    telemetry: None,
+                    seen_blocks: BTreeSet::new(),
+                    unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
+                    request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
+                        Duration::from_secs(1),
+                        Duration::from_secs(1),
+                    )),
+                    latest_height: 0,
+                    last_peers: BTreeSet::new(),
+                    last_drop_count: 0,
+                    last_drop_at: None,
+                    fallback_consensus_mode: ConsensusMode::Permissioned,
+                };
+                block_sync
+                    .sumeragi
+                    .record_direct_block_sync_response_permit_for_tests(
+                        sender_peer_id.clone(),
+                        Instant::now(),
+                    );
+
+                let validator = KeyPair::random();
+                let validator_peer = PeerId::new(validator.public_key().clone());
+                let header = BlockHeader {
+                    height: NonZeroU64::new(1).expect("non-zero"),
+                    prev_block_hash: None,
+                    merkle_root: None,
+                    result_merkle_root: None,
+                    da_proof_policies_hash: None,
+                    da_commitments_hash: None,
+                    da_pin_intents_hash: None,
+                    prev_roster_evidence_hash: None,
+                    sccp_commitment_root: None,
+                    creation_time_ms: 0,
+                    view_change_index: 0,
+                    confidential_features: None,
+                };
+                let block_signature = BlockSignature::new(
+                    0,
+                    SignatureOf::from_hash(validator.private_key(), header.hash()),
+                );
+                let block =
+                    SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
+                let block_hash = block.hash();
+                let validator_set = vec![validator_peer];
+                let signers_bitmap = vec![0b0000_0001];
+                let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+                let commit_qc = Qc {
+                    phase: Phase::Commit,
+                    subject_block_hash: block_hash,
+                    parent_state_root: zero_root,
+                    post_state_root: zero_root,
+                    height: 1,
+                    view: 0,
+                    epoch: 0,
+                    mode_tag: PERMISSIONED_TAG.to_string(),
+                    highest_qc: None,
+                    validator_set_hash: HashOf::new(&validator_set),
+                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set: validator_set.clone(),
+                    aggregate: QcAggregate {
+                        signers_bitmap: signers_bitmap.clone(),
+                        bls_aggregate_signature: vec![0xAB; 96],
+                    },
+                };
+                let checkpoint = ValidatorSetCheckpoint::new(
+                    1,
+                    0,
+                    block_hash,
+                    zero_root,
+                    zero_root,
+                    validator_set,
+                    signers_bitmap,
+                    vec![0xAB; 96],
+                    VALIDATOR_SET_HASH_VERSION_V1,
+                    None,
+                );
+                let msg = message::Message::ShareBlocks(message::ShareBlocks::new(
+                    vec![block],
+                    sender_peer_id.clone(),
+                    vec![None],
+                    vec![RosterMetadata {
+                        commit_qc: Some(commit_qc),
+                        validator_checkpoint: Some(checkpoint),
+                        stake_snapshot: None,
+                    }],
+                ));
+
+                msg.handle_message(&mut block_sync).await;
+
+                assert!(
+                    !block_sync
+                        .request_tracker
+                        .allow_response(&sender_peer_id, Instant::now()),
+                    "direct recovery response permits must not mutate the proactive gossip tracker"
+                );
+                let queued = block_payload_rx
+                    .try_recv()
+                    .expect("direct recovery permit should allow one block-sync update");
+                let BlockMessage::BlockSyncUpdate(update) = queued.message() else {
+                    panic!("expected block sync update");
+                };
+                assert_eq!(update.block.hash(), block_hash);
             });
         }
 

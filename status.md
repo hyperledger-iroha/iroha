@@ -2,6 +2,34 @@
 
 Last updated: 2026-04-14
 
+## 2026-04-14 Follow-up: Sumeragi block-sync recovery accepts stale exact-frontier repairs
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/mod.rs`,
+  `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`,
+  and `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/block_sync.rs`
+  now track short-lived direct block-sync response permits for range-pull
+  recovery requests, so the requested peer's `ShareBlocks` response is accepted
+  as solicited recovery traffic without relaxing unsolicited gossip filtering.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/commit.rs`
+  now falls back to a bounded committed-anchor range pull when known-block
+  commit-QC recovery stalls but the primary frontier stall-reset reanchor path
+  is still in cooldown.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop/block_sync.rs`
+  now treats DA-enabled block-sync updates that exactly extend the committed tip
+  as recovery traffic before stale-view filtering, and no longer defers such
+  contiguous frontier repairs behind unrelated higher-height validation work.
+  This fixes restarted-peer catch-up stalling at height 5 while payload-only
+  height-6 view-0 repair traffic arrives after the local view has advanced.
+- Focused validation for this unblocker:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_core --lib sumeragi::frontier_block_sync_hint_tests::direct_block_sync_response_permits_are_single_use_and_expire -- --exact --nocapture`
+  - `cargo test -p iroha_core --lib share_blocks_accepts_direct_recovery_response_permit -- --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::known_block_commit_qc_stall_uses_fallback_reanchor_when_primary_is_in_cooldown -- --exact --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::block_sync_update_accepts_stale_exact_frontier_payload_repair_with_da -- --exact --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::block_sync_update_drops_stale_view_without_missing_request -- --exact --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::block_sync_update_tracks_missing_qc_for_unknown_frontier_vote_only_update -- --exact --nocapture`
+  - `cargo test -p iroha_core --lib sumeragi::main_loop::tests::block_sync_update_contiguous_frontier_bypasses_higher_validation_deferral -- --exact --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --exact --nocapture --test-threads=1`
+
 ## 2026-04-14 Follow-up: Torii MCP now completes the standard post-initialize handshake
 - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs` now treats
   the MCP `notifications/initialized` payload as a real notification instead of
