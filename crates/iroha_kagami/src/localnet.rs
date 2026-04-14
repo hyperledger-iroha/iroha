@@ -2283,23 +2283,22 @@ fn append_localnet_contract_permissions(genesis: RawGenesisTransaction) -> RawGe
         .append_instruction(Grant::account_permission(
             manage_offline_escrow.clone(),
             ALICE_ID.clone(),
-        ));
-    if client_account_id != ALICE_ID.clone() {
-        builder = builder.append_instruction(Grant::account_permission(
-            manage_offline_escrow,
-            client_account_id.clone(),
-        ));
-    }
-    builder
+        ))
         .append_instruction(Grant::account_permission(
             manage_account_alias,
             client_account_id.clone(),
         ))
         .append_instruction(Grant::account_permission(
             publish_manifest,
+            client_account_id.clone(),
+        ));
+    if client_account_id != *ALICE_ID {
+        builder = builder.append_instruction(Grant::account_permission(
+            manage_offline_escrow,
             client_account_id,
-        ))
-        .build_raw()
+        ));
+    }
+    builder.build_raw()
 }
 
 struct BootstrapRegistrations {

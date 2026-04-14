@@ -71,7 +71,8 @@ static GOOGLE_ATTESTATION_ROOT_ECDSA: &[u8] = include_bytes!(concat!(
 ));
 static ANDROID_ROOT_ANCHORS: LazyLock<Box<[&'static [u8]]>> =
     LazyLock::new(|| Box::new([GOOGLE_ATTESTATION_ROOT_RSA, GOOGLE_ATTESTATION_ROOT_ECDSA]));
-const OFFLINE_CASH_TX_COMMIT_TIMEOUT: Duration = Duration::from_secs(5);
+const OFFLINE_CASH_TX_COMMIT_TIMEOUT_FLOOR: Duration = Duration::from_secs(5);
+const OFFLINE_CASH_TX_COMMIT_TIMEOUT_EMERGENCY_FALLBACK: Duration = Duration::from_secs(12);
 const OFFLINE_SETTLEMENT_PROOF_BACKEND: &str = "stark/fri/sha256-goldilocks";
 const OFFLINE_SETTLEMENT_CIRCUIT_ID: &str = "offline-bearer-settlement-v1";
 const OFFLINE_REDEEM_REQUEST_CIRCUIT_ID: &str = "offline-bearer-redeem-request-v1";
@@ -3742,22 +3743,24 @@ async fn wait_for_transaction_approval(
     endpoint: &'static str,
     duplicate_submission: bool,
 ) -> Result<(), Error> {
+    let timeout_budget = offline_cash_tx_commit_timeout(app);
     let start = tokio::time::Instant::now();
-    let mut saw_committed = false;
     loop {
-        if !saw_committed && app.state.has_committed_transaction(tx_hash.clone()) {
-            saw_committed = true;
+        // A committed transaction is already authoritative even if the matching
+        // Approved pipeline event was missed or delayed on this subscriber.
+        if app.state.has_committed_transaction(tx_hash.clone()) {
+            return Ok(());
         }
-        let remaining = OFFLINE_CASH_TX_COMMIT_TIMEOUT.saturating_sub(start.elapsed());
+        let remaining = timeout_budget.saturating_sub(start.elapsed());
         if remaining.is_zero() {
-            let timeout_context = if saw_committed || duplicate_submission {
-                "committed without an approved pipeline event"
+            let timeout_context = if duplicate_submission {
+                "did not reach a fresh approved pipeline event or committed state"
             } else {
-                "did not reach an approved pipeline event"
+                "did not reach an approved pipeline event or committed state"
             };
             return Err(conversion_error(format!(
                 "offline cash transaction {timeout_context} within {}ms for {endpoint}: {tx_hash}",
-                OFFLINE_CASH_TX_COMMIT_TIMEOUT.as_millis(),
+                timeout_budget.as_millis(),
             )));
         }
         match tokio::time::timeout(remaining, events_rx.recv()).await {
@@ -3791,6 +3794,65 @@ async fn wait_for_transaction_approval(
             Err(_) => continue,
         }
     }
+}
+
+fn offline_cash_tx_commit_timeout(app: &AppState) -> Duration {
+    let state_view = app.state.view();
+    let params = state_view.world().parameters().sumeragi();
+    let live_commit_quorum_timeout = app
+        .sumeragi
+        .as_ref()
+        .map(|_| iroha_core::sumeragi::status_snapshot().effective_commit_quorum_timeout_ms)
+        .filter(|timeout_ms| *timeout_ms > 0)
+        .map(Duration::from_millis);
+    if let Some(commit_quorum_timeout) = live_commit_quorum_timeout {
+        return offline_cash_tx_commit_timeout_from_params(params, commit_quorum_timeout);
+    }
+    offline_cash_tx_commit_timeout_without_live_signal(params)
+}
+
+fn offline_cash_commit_quorum_timeout_from_params(
+    params: &iroha_data_model::parameter::system::SumeragiParameters,
+) -> Duration {
+    let block_time = params.effective_block_time();
+    let commit_time = params.effective_commit_time();
+    if commit_time == Duration::ZERO {
+        return block_time.max(Duration::from_millis(1));
+    }
+
+    let base = if params.da_enabled() {
+        block_time.max(commit_time.saturating_mul(2))
+    } else {
+        block_time.max(commit_time)
+    };
+    let scaled = if params.da_enabled() {
+        base.saturating_mul(
+            iroha_config::parameters::defaults::sumeragi::DA_QUORUM_TIMEOUT_MULTIPLIER.max(1),
+        )
+    } else {
+        base
+    };
+    scaled.max(Duration::from_millis(1))
+}
+
+fn offline_cash_tx_commit_timeout_from_params(
+    params: &iroha_data_model::parameter::system::SumeragiParameters,
+    commit_quorum_timeout: Duration,
+) -> Duration {
+    let proposal_slack = params
+        .effective_block_time()
+        .saturating_add(params.effective_commit_time());
+    commit_quorum_timeout
+        .saturating_add(proposal_slack)
+        .max(OFFLINE_CASH_TX_COMMIT_TIMEOUT_FLOOR)
+}
+
+fn offline_cash_tx_commit_timeout_without_live_signal(
+    params: &iroha_data_model::parameter::system::SumeragiParameters,
+) -> Duration {
+    let commit_quorum_timeout = offline_cash_commit_quorum_timeout_from_params(params);
+    offline_cash_tx_commit_timeout_from_params(params, commit_quorum_timeout)
+        .max(OFFLINE_CASH_TX_COMMIT_TIMEOUT_EMERGENCY_FALLBACK)
 }
 
 fn issuer_public_key_base64(issuer: &OfflineIssuerSigner) -> String {
@@ -4894,6 +4956,13 @@ fn operation_key(kind: &str, operation_id: &str) -> String {
 mod tests {
     use super::*;
 
+    use std::{collections::HashSet, num::NonZeroU64, num::NonZeroUsize};
+
+    use iroha_crypto::KeyPair;
+    use iroha_data_model::prelude::{Level, Log, TransactionBuilder};
+
+    use crate::tests_runtime_handlers::mk_app_state_for_tests;
+
     const TEST_ACCOUNT_I105: &str =
         "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
     const TEST_COUNTERPARTY_ACCOUNT_I105: &str =
@@ -5161,6 +5230,74 @@ mod tests {
             panic!("unexpected error: {err:?}");
         };
         assert!(message.contains("canonical Base58 asset definition id"));
+    }
+
+    #[test]
+    fn offline_cash_wait_timeout_allows_one_proposal_window_after_quorum_timeout() {
+        let params = iroha_data_model::parameter::system::SumeragiParameters::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+        let quorum_timeout = offline_cash_commit_quorum_timeout_from_params(&params);
+        assert_eq!(quorum_timeout, Duration::from_secs(4));
+        assert_eq!(
+            offline_cash_tx_commit_timeout_from_params(&params, quorum_timeout),
+            Duration::from_secs(6),
+        );
+    }
+
+    #[test]
+    fn offline_cash_wait_timeout_uses_conservative_fallback_without_live_signal() {
+        let params = iroha_data_model::parameter::system::SumeragiParameters::new(
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+            Duration::from_secs(1),
+        );
+        assert_eq!(
+            offline_cash_tx_commit_timeout_without_live_signal(&params),
+            Duration::from_secs(12),
+        );
+    }
+
+    #[tokio::test]
+    async fn transaction_approval_accepts_committed_state_without_pipeline_event() {
+        let app = mk_app_state_for_tests();
+        let keypair = KeyPair::random();
+        let authority = AccountId::new(keypair.public_key().clone());
+        let tx = TransactionBuilder::new((*app.chain_id).clone(), authority)
+            .with_instructions([Log::new(
+                Level::INFO,
+                "offline-cash-commit-regression".to_owned(),
+            )])
+            .sign(keypair.private_key());
+        let tx_hash = tx.hash();
+
+        let header = iroha_data_model::block::BlockHeader::new(
+            NonZeroU64::new(1).expect("non-zero height"),
+            None,
+            None,
+            None,
+            0,
+            0,
+        );
+        let mut block = app.state.block(header);
+        block.transactions.insert_block(
+            HashSet::from([tx_hash.clone()]),
+            NonZeroUsize::new(1).expect("non-zero block count"),
+        );
+        block.commit().expect("commit tx height");
+
+        let mut events_rx = app.events.subscribe();
+        wait_for_transaction_approval(
+            &app,
+            &mut events_rx,
+            tx_hash,
+            "/v1/offline/cash/load",
+            false,
+        )
+        .await
+        .expect("committed transaction should satisfy approval wait");
     }
 }
 
