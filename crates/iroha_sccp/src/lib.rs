@@ -1120,8 +1120,8 @@ impl core::str::FromStr for SccpDestinationVerifierPlanV1 {
 }
 
 #[cfg(feature = "std")]
-impl norito::json::JsonSerialize for SccpDestinationVerifierPlanV1 {
-    fn json_serialize(&self, out: &mut String) {
+impl norito::json::FastJsonWrite for SccpDestinationVerifierPlanV1 {
+    fn write_json(&self, out: &mut String) {
         norito::json::write_json_string(self.as_str(), out);
     }
 }
@@ -5856,6 +5856,17 @@ mod tests {
         );
         assert_eq!(decoded.blockers, rollout.blockers);
         assert_eq!(decoded, rollout);
+    }
+
+    #[test]
+    fn destination_verifier_plan_json_roundtrip_uses_stable_string_label() {
+        let plan = SccpDestinationVerifierPlanV1::TonContractNativeRecursive;
+        let json = norito::json::to_json(&plan).expect("plan json");
+        let decoded: SccpDestinationVerifierPlanV1 =
+            norito::json::from_str(&json).expect("decoded plan");
+
+        assert_eq!(json, "\"TonContractNativeRecursive\"");
+        assert_eq!(decoded, plan);
     }
 
     #[test]

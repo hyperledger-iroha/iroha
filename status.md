@@ -2,6 +2,19 @@
 
 Last updated: 2026-04-14
 
+## 2026-04-14 Follow-up: SCCP destination rollout JSON derives are green again
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_sccp/src/lib.rs`
+  now implements `norito::json::FastJsonWrite` for
+  `SccpDestinationVerifierPlanV1` instead of a direct `JsonSerialize` impl, so
+  derive-generated SCCP rollout JSON writers can satisfy the trait bounds they
+  actually require without changing the on-wire JSON shape.
+- The same SCCP test module now locks in the stable string form for that enum
+  directly, alongside the existing destination-rollout JSON roundtrip.
+- Focused validation for this unblocker:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_sccp --features serde --message-format short`
+  - `cargo test -p iroha_sccp destination_ -- --nocapture`
+
 ## 2026-04-14 Follow-up: host-agnostic Inrou now uses LeaseFs + virtio-fs on PortableVm, with repo-native smoke entrypoints
 - `/Users/takemiyamakoto/dev/iroha/crates/irohad/src/soracloud_runtime.rs`
   now closes the remaining runtime-side work from the earlier dual-ISA Inrou
