@@ -190,6 +190,8 @@ pub mod soracloud_runtime {
     pub const MODEL_WEIGHT_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(4_096_u64 * 1024 * 1024);
     /// Default concurrent Inrou microVMs allowed on one node.
     pub const INROU_MAX_CONCURRENT_VMS: NonZeroUsize = nonzero!(8_usize);
+    /// Default hosted-runtime posture for Inrou nodes.
+    pub const INROU_PROXY_ONLY: bool = false;
     /// Default startup grace window in milliseconds for Inrou microVMs.
     pub const INROU_START_GRACE_MS: u64 = 30_000;
     /// Default shutdown grace window in milliseconds for Inrou microVMs.
@@ -1697,6 +1699,10 @@ pub mod torii {
     pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(10);
     /// Time to ban IPs that exceed pre-auth rate limits.
     pub const PREAUTH_BAN_DURATION: Duration = Duration::from_mins(1);
+    /// Enable app-facing webhook routes and workers. Disabled by default.
+    pub const WEBHOOKS_ENABLED: bool = false;
+    /// Enable app-facing ZK attachment routes and workers. Disabled by default.
+    pub const ZK_ATTACHMENTS_ENABLED: bool = false;
     /// Default TTL for app API ZK attachments (seconds)
     pub const ATTACHMENTS_TTL_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
     /// Default maximum size per ZK attachment (bytes)

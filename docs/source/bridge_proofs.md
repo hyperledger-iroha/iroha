@@ -95,6 +95,10 @@ Torii now exposes three live SCCP bundle families:
   - the canonical public inputs (`message_id`, `payload_hash`, `target_domain`, `commitment_root`, `finality_height`, `finality_block_hash`);
   - `proof_bytes` containing a real Norito-encoded `OpenVerifyEnvelope` over
     the canonical SCCP statement batch derived from the bundle and manifest;
+  - JSON responses for this route also expose `proof_envelope_summary`, which
+    reports the decoded open-verify backend, circuit id, verifier commitment
+    hash, schema hash, public-input column/word counts, and wrapper/backend
+    proof lengths without changing the underlying Norito wire artifact;
   - a generated `submission_package` carrying the target verifier entrypoint,
     envelope encoding, raw argument blobs, prebuilt relayer envelope bytes, and
     a typed `platform_payload` view for that lane:
@@ -121,6 +125,9 @@ Torii now exposes three live SCCP bundle families:
   - the generated `submission_package` for the chain-specific relayer/verifier
     lane, including the same typed `platform_payload` projection surfaced on the
     artifact route; and
+  - JSON responses for this route also expose `proof_envelope_summary`, derived
+    from the canonical native SCCP proof for the bundled message so workers can
+    inspect the bound circuit/verifier/schema metadata before submission; and
   - the original typed Nexus SCCP message bundle so a prover worker can keep both the normalized view and the canonical committed preimage in one document.
   - client helpers now exist for that route directly:
     - Rust: `iroha::client::Client::get_sccp_message_proof_job_json(...)` and `get_sccp_message_proof_job(...)`;

@@ -102,7 +102,9 @@ use iroha_data_model::{
         SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraDecryptionRequestRecordV1,
         SoraDeploymentBundleV1, SoraHfPlacementRecordV1, SoraHfSharedLeaseAuditEventV1,
         SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSourceRecordV1,
-        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
+        SoraInrouHostCapabilityRecordV1, SoraInrouReplicaRuntimeStateV1,
+        SoraInrouServicePlacementRecordV1, SoraModelArtifactAuditEventV1,
+        SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
         SoraModelHostViolationEvidenceRecordV1, SoraModelRegistryV1, SoraModelWeightAuditEventV1,
         SoraModelWeightVersionRecordV1, SoraPrivateCompileProfileV1,
         SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1,
@@ -423,6 +425,7 @@ macro_rules! build_world_block {
             soracloud_service_revisions: $state.soracloud_service_revisions.$method(),
             soracloud_service_deployments: $state.soracloud_service_deployments.$method(),
             soracloud_service_runtime: $state.soracloud_service_runtime.$method(),
+            soracloud_inrou_replica_runtime: $state.soracloud_inrou_replica_runtime.$method(),
             soracloud_service_audit_events: $state.soracloud_service_audit_events.$method(),
             soracloud_service_state_entries: $state.soracloud_service_state_entries.$method(),
             soracloud_decryption_request_records: $state
@@ -455,6 +458,7 @@ macro_rules! build_world_block {
                 .soracloud_private_inference_checkpoints
                 .$method(),
             soracloud_model_host_capabilities: $state.soracloud_model_host_capabilities.$method(),
+            soracloud_inrou_host_capabilities: $state.soracloud_inrou_host_capabilities.$method(),
             soracloud_hf_sources: $state.soracloud_hf_sources.$method(),
             soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.$method(),
             soracloud_hf_shared_lease_members: $state.soracloud_hf_shared_lease_members.$method(),
@@ -465,6 +469,7 @@ macro_rules! build_world_block {
                 .soracloud_model_host_violation_evidence
                 .$method(),
             soracloud_hf_placements: $state.soracloud_hf_placements.$method(),
+            soracloud_inrou_service_placements: $state.soracloud_inrou_service_placements.$method(),
             soracloud_mailbox_messages: $state.soracloud_mailbox_messages.$method(),
             soracloud_runtime_receipts: $state.soracloud_runtime_receipts.$method(),
             capacity_declarations: $state.capacity_declarations.$method(),
@@ -610,6 +615,7 @@ macro_rules! build_world_transaction {
             soracloud_service_revisions: $state.soracloud_service_revisions.transaction(),
             soracloud_service_deployments: $state.soracloud_service_deployments.transaction(),
             soracloud_service_runtime: $state.soracloud_service_runtime.transaction(),
+            soracloud_inrou_replica_runtime: $state.soracloud_inrou_replica_runtime.transaction(),
             soracloud_service_audit_events: $state.soracloud_service_audit_events.transaction(),
             soracloud_service_state_entries: $state.soracloud_service_state_entries.transaction(),
             soracloud_decryption_request_records: $state
@@ -646,6 +652,9 @@ macro_rules! build_world_transaction {
             soracloud_model_host_capabilities: $state
                 .soracloud_model_host_capabilities
                 .transaction(),
+            soracloud_inrou_host_capabilities: $state
+                .soracloud_inrou_host_capabilities
+                .transaction(),
             soracloud_hf_sources: $state.soracloud_hf_sources.transaction(),
             soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.transaction(),
             soracloud_hf_shared_lease_members: $state
@@ -658,6 +667,9 @@ macro_rules! build_world_transaction {
                 .soracloud_model_host_violation_evidence
                 .transaction(),
             soracloud_hf_placements: $state.soracloud_hf_placements.transaction(),
+            soracloud_inrou_service_placements: $state
+                .soracloud_inrou_service_placements
+                .transaction(),
             soracloud_mailbox_messages: $state.soracloud_mailbox_messages.transaction(),
             soracloud_runtime_receipts: $state.soracloud_runtime_receipts.transaction(),
             capacity_declarations: $state.capacity_declarations.transaction(),
@@ -1636,6 +1648,9 @@ pub struct World {
     pub(crate) soracloud_service_deployments: Storage<Name, SoraServiceDeploymentStateV1>,
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime: Storage<Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime:
+        Storage<(String, String, String), SoraInrouReplicaRuntimeStateV1>,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events: Storage<u64, SoraServiceAuditEventV1>,
     /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
@@ -1679,6 +1694,9 @@ pub struct World {
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         Storage<AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        Storage<AccountId, SoraInrouHostCapabilityRecordV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: Storage<Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -1693,6 +1711,9 @@ pub struct World {
         Storage<Hash, SoraModelHostViolationEvidenceRecordV1>,
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements: Storage<Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        Storage<(String, String), SoraInrouServicePlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by deterministic message id.
     pub(crate) soracloud_mailbox_messages: Storage<Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by deterministic receipt id.
@@ -2050,6 +2071,9 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, Name, SoraServiceDeploymentStateV1>,
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime: StorageBlock<'world, Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime:
+        StorageBlock<'world, (String, String, String), SoraInrouReplicaRuntimeStateV1>,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events: StorageBlock<'world, u64, SoraServiceAuditEventV1>,
     /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
@@ -2102,6 +2126,9 @@ pub struct WorldBlock<'world> {
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         StorageBlock<'world, AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        StorageBlock<'world, AccountId, SoraInrouHostCapabilityRecordV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: StorageBlock<'world, Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -2117,6 +2144,9 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, Hash, SoraModelHostViolationEvidenceRecordV1>,
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements: StorageBlock<'world, Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        StorageBlock<'world, (String, String), SoraInrouServicePlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by message id.
     pub(crate) soracloud_mailbox_messages: StorageBlock<'world, Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by receipt id.
@@ -2650,6 +2680,13 @@ pub struct WorldTransaction<'block, 'world> {
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime:
         StorageTransaction<'block, 'world, Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime: StorageTransaction<
+        'block,
+        'world,
+        (String, String, String),
+        SoraInrouReplicaRuntimeStateV1,
+    >,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events:
         StorageTransaction<'block, 'world, u64, SoraServiceAuditEventV1>,
@@ -2708,6 +2745,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         StorageTransaction<'block, 'world, AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        StorageTransaction<'block, 'world, AccountId, SoraInrouHostCapabilityRecordV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: StorageTransaction<'block, 'world, Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -2725,6 +2765,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements:
         StorageTransaction<'block, 'world, Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        StorageTransaction<'block, 'world, (String, String), SoraInrouServicePlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by message id.
     pub(crate) soracloud_mailbox_messages:
         StorageTransaction<'block, 'world, Hash, SoraServiceMailboxMessageV1>,
@@ -3413,6 +3456,9 @@ pub struct WorldView<'world> {
         StorageView<'world, Name, SoraServiceDeploymentStateV1>,
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime: StorageView<'world, Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime:
+        StorageView<'world, (String, String, String), SoraInrouReplicaRuntimeStateV1>,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events: StorageView<'world, u64, SoraServiceAuditEventV1>,
     /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
@@ -3465,6 +3511,9 @@ pub struct WorldView<'world> {
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         StorageView<'world, AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        StorageView<'world, AccountId, SoraInrouHostCapabilityRecordV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: StorageView<'world, Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -3480,6 +3529,9 @@ pub struct WorldView<'world> {
         StorageView<'world, Hash, SoraModelHostViolationEvidenceRecordV1>,
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements: StorageView<'world, Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        StorageView<'world, (String, String), SoraInrouServicePlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by message id.
     pub(crate) soracloud_mailbox_messages: StorageView<'world, Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by receipt id.
@@ -10809,6 +10861,13 @@ impl World {
         &mut self.soracloud_service_runtime
     }
 
+    /// Provides mutable access to placed Inrou replica runtime state for tests and API scaffolding.
+    pub fn soracloud_inrou_replica_runtime_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String, String), SoraInrouReplicaRuntimeStateV1> {
+        &mut self.soracloud_inrou_replica_runtime
+    }
+
     /// Provides mutable access to Soracloud audit events for tests and API scaffolding.
     pub fn soracloud_service_audit_events_mut_for_testing(
         &mut self,
@@ -10942,6 +11001,13 @@ impl World {
         &mut self.soracloud_model_host_capabilities
     }
 
+    /// Provides mutable access to authoritative Inrou host adverts for tests and API scaffolding.
+    pub fn soracloud_inrou_host_capabilities_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<AccountId, SoraInrouHostCapabilityRecordV1> {
+        &mut self.soracloud_inrou_host_capabilities
+    }
+
     /// Provides mutable access to HF shared-lease pools for tests and API scaffolding.
     pub fn soracloud_hf_shared_lease_pools_mut_for_testing(
         &mut self,
@@ -10954,6 +11020,13 @@ impl World {
         &mut self,
     ) -> &mut Storage<Hash, SoraHfPlacementRecordV1> {
         &mut self.soracloud_hf_placements
+    }
+
+    /// Provides mutable access to active Inrou placement records for tests and API scaffolding.
+    pub fn soracloud_inrou_service_placements_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraInrouServicePlacementRecordV1> {
+        &mut self.soracloud_inrou_service_placements
     }
 
     /// Provides mutable access to HF shared-lease memberships for tests and API scaffolding.
@@ -11687,6 +11760,7 @@ impl World {
             soracloud_service_revisions: self.soracloud_service_revisions.view(),
             soracloud_service_deployments: self.soracloud_service_deployments.view(),
             soracloud_service_runtime: self.soracloud_service_runtime.view(),
+            soracloud_inrou_replica_runtime: self.soracloud_inrou_replica_runtime.view(),
             soracloud_service_audit_events: self.soracloud_service_audit_events.view(),
             soracloud_service_state_entries: self.soracloud_service_state_entries.view(),
             soracloud_decryption_request_records: self.soracloud_decryption_request_records.view(),
@@ -11711,6 +11785,7 @@ impl World {
                 .soracloud_private_inference_checkpoints
                 .view(),
             soracloud_model_host_capabilities: self.soracloud_model_host_capabilities.view(),
+            soracloud_inrou_host_capabilities: self.soracloud_inrou_host_capabilities.view(),
             soracloud_hf_sources: self.soracloud_hf_sources.view(),
             soracloud_hf_shared_lease_pools: self.soracloud_hf_shared_lease_pools.view(),
             soracloud_hf_shared_lease_members: self.soracloud_hf_shared_lease_members.view(),
@@ -11721,6 +11796,7 @@ impl World {
                 .soracloud_model_host_violation_evidence
                 .view(),
             soracloud_hf_placements: self.soracloud_hf_placements.view(),
+            soracloud_inrou_service_placements: self.soracloud_inrou_service_placements.view(),
             soracloud_mailbox_messages: self.soracloud_mailbox_messages.view(),
             soracloud_runtime_receipts: self.soracloud_runtime_receipts.view(),
             capacity_declarations: self.capacity_declarations.view(),
@@ -12121,6 +12197,10 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<Name, SoraServiceDeploymentStateV1>;
     /// Active Soracloud runtime state keyed by service name (read-only).
     fn soracloud_service_runtime(&self) -> &impl StorageReadOnly<Name, SoraServiceRuntimeStateV1>;
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)` (read-only).
+    fn soracloud_inrou_replica_runtime(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String, String), SoraInrouReplicaRuntimeStateV1>;
     /// Soracloud lifecycle audit events keyed by deterministic sequence (read-only).
     fn soracloud_service_audit_events(&self)
     -> &impl StorageReadOnly<u64, SoraServiceAuditEventV1>;
@@ -12192,6 +12272,10 @@ pub trait WorldReadOnly {
     fn soracloud_model_host_capabilities(
         &self,
     ) -> &impl StorageReadOnly<AccountId, SoraModelHostCapabilityRecordV1>;
+    /// Active Inrou validator-host capability adverts keyed by validator account id (read-only).
+    fn soracloud_inrou_host_capabilities(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, SoraInrouHostCapabilityRecordV1>;
     /// Canonical Hugging Face sources keyed by source identifier (read-only).
     fn soracloud_hf_sources(&self) -> &impl StorageReadOnly<Hash, SoraHfSourceRecordV1>;
     /// HF shared-lease pools keyed by canonical pool identifier (read-only).
@@ -12212,6 +12296,10 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<Hash, SoraModelHostViolationEvidenceRecordV1>;
     /// Active HF placement records keyed by shared-lease pool identifier (read-only).
     fn soracloud_hf_placements(&self) -> &impl StorageReadOnly<Hash, SoraHfPlacementRecordV1>;
+    /// Active Inrou placement records keyed by `(service_name, service_version)` (read-only).
+    fn soracloud_inrou_service_placements(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraInrouServicePlacementRecordV1>;
     /// Ordered Soracloud mailbox messages keyed by message id (read-only).
     fn soracloud_mailbox_messages(
         &self,
@@ -13221,6 +13309,11 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<Name, SoraServiceRuntimeStateV1> {
                 &self.soracloud_service_runtime
             }
+            fn soracloud_inrou_replica_runtime(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String, String), SoraInrouReplicaRuntimeStateV1> {
+                &self.soracloud_inrou_replica_runtime
+            }
             fn soracloud_service_audit_events(
                 &self,
             ) -> &impl StorageReadOnly<u64, SoraServiceAuditEventV1> {
@@ -13312,6 +13405,11 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<AccountId, SoraModelHostCapabilityRecordV1> {
                 &self.soracloud_model_host_capabilities
             }
+            fn soracloud_inrou_host_capabilities(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, SoraInrouHostCapabilityRecordV1> {
+                &self.soracloud_inrou_host_capabilities
+            }
             fn soracloud_hf_sources(&self) -> &impl StorageReadOnly<Hash, SoraHfSourceRecordV1> {
                 &self.soracloud_hf_sources
             }
@@ -13337,6 +13435,11 @@ macro_rules! impl_world_ro {
             }
             fn soracloud_hf_placements(&self) -> &impl StorageReadOnly<Hash, SoraHfPlacementRecordV1> {
                 &self.soracloud_hf_placements
+            }
+            fn soracloud_inrou_service_placements(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraInrouServicePlacementRecordV1> {
+                &self.soracloud_inrou_service_placements
             }
             fn soracloud_mailbox_messages(
                 &self,
@@ -13772,6 +13875,7 @@ impl<'world> WorldBlock<'world> {
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_service_runtime,
+            soracloud_inrou_replica_runtime,
             soracloud_service_audit_events,
             soracloud_service_state_entries,
             soracloud_decryption_request_records,
@@ -13790,12 +13894,14 @@ impl<'world> WorldBlock<'world> {
             soracloud_private_inference_sessions,
             soracloud_private_inference_checkpoints,
             soracloud_model_host_capabilities,
+            soracloud_inrou_host_capabilities,
             soracloud_hf_sources,
             soracloud_hf_shared_lease_pools,
             soracloud_hf_shared_lease_members,
             soracloud_hf_shared_lease_audit_events,
             soracloud_model_host_violation_evidence,
             soracloud_hf_placements,
+            soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             capacity_declarations,
@@ -13881,6 +13987,7 @@ impl<'world> WorldBlock<'world> {
         soracloud_service_revisions.commit();
         soracloud_service_deployments.commit();
         soracloud_service_runtime.commit();
+        soracloud_inrou_replica_runtime.commit();
         soracloud_service_audit_events.commit();
         soracloud_service_state_entries.commit();
         soracloud_decryption_request_records.commit();
@@ -13899,12 +14006,14 @@ impl<'world> WorldBlock<'world> {
         soracloud_private_inference_sessions.commit();
         soracloud_private_inference_checkpoints.commit();
         soracloud_model_host_capabilities.commit();
+        soracloud_inrou_host_capabilities.commit();
         soracloud_hf_sources.commit();
         soracloud_hf_shared_lease_pools.commit();
         soracloud_hf_shared_lease_members.commit();
         soracloud_hf_shared_lease_audit_events.commit();
         soracloud_model_host_violation_evidence.commit();
         soracloud_hf_placements.commit();
+        soracloud_inrou_service_placements.commit();
         soracloud_mailbox_messages.commit();
         soracloud_runtime_receipts.commit();
         capacity_disputes.commit();
@@ -14932,6 +15041,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_service_runtime,
+            soracloud_inrou_replica_runtime,
             soracloud_service_audit_events,
             soracloud_service_state_entries,
             soracloud_decryption_request_records,
@@ -14950,12 +15060,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             soracloud_private_inference_sessions,
             soracloud_private_inference_checkpoints,
             soracloud_model_host_capabilities,
+            soracloud_inrou_host_capabilities,
             soracloud_hf_sources,
             soracloud_hf_shared_lease_pools,
             soracloud_hf_shared_lease_members,
             soracloud_hf_shared_lease_audit_events,
             soracloud_model_host_violation_evidence,
             soracloud_hf_placements,
+            soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             capacity_declarations,
@@ -15027,6 +15139,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         soracloud_service_revisions.apply();
         soracloud_service_deployments.apply();
         soracloud_service_runtime.apply();
+        soracloud_inrou_replica_runtime.apply();
         soracloud_service_audit_events.apply();
         soracloud_service_state_entries.apply();
         soracloud_decryption_request_records.apply();
@@ -15045,12 +15158,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         soracloud_private_inference_sessions.apply();
         soracloud_private_inference_checkpoints.apply();
         soracloud_model_host_capabilities.apply();
+        soracloud_inrou_host_capabilities.apply();
         soracloud_hf_sources.apply();
         soracloud_hf_shared_lease_pools.apply();
         soracloud_hf_shared_lease_members.apply();
         soracloud_hf_shared_lease_audit_events.apply();
         soracloud_model_host_violation_evidence.apply();
         soracloud_hf_placements.apply();
+        soracloud_inrou_service_placements.apply();
         soracloud_mailbox_messages.apply();
         soracloud_runtime_receipts.apply();
         capacity_disputes.apply();
@@ -27866,6 +27981,8 @@ pub(crate) mod deserialize {
             take_optional_default(&mut map, "soracloud_service_deployments")?;
         let soracloud_service_runtime =
             take_optional_default(&mut map, "soracloud_service_runtime")?;
+        let soracloud_inrou_replica_runtime =
+            take_optional_default(&mut map, "soracloud_inrou_replica_runtime")?;
         let soracloud_service_audit_events =
             take_optional_default(&mut map, "soracloud_service_audit_events")?;
         let soracloud_service_state_entries =
@@ -27901,6 +28018,8 @@ pub(crate) mod deserialize {
             take_optional_default(&mut map, "soracloud_private_inference_checkpoints")?;
         let soracloud_model_host_capabilities =
             take_optional_default(&mut map, "soracloud_model_host_capabilities")?;
+        let soracloud_inrou_host_capabilities =
+            take_optional_default(&mut map, "soracloud_inrou_host_capabilities")?;
         let soracloud_hf_sources = take_optional_default(&mut map, "soracloud_hf_sources")?;
         let soracloud_hf_shared_lease_pools =
             take_optional_default(&mut map, "soracloud_hf_shared_lease_pools")?;
@@ -27911,6 +28030,8 @@ pub(crate) mod deserialize {
         let soracloud_model_host_violation_evidence =
             take_optional_default(&mut map, "soracloud_model_host_violation_evidence")?;
         let soracloud_hf_placements = take_optional_default(&mut map, "soracloud_hf_placements")?;
+        let soracloud_inrou_service_placements =
+            take_optional_default(&mut map, "soracloud_inrou_service_placements")?;
         let soracloud_mailbox_messages =
             take_optional_default(&mut map, "soracloud_mailbox_messages")?;
         let soracloud_runtime_receipts =
@@ -28028,6 +28149,7 @@ pub(crate) mod deserialize {
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_service_runtime,
+            soracloud_inrou_replica_runtime,
             soracloud_service_audit_events,
             soracloud_service_state_entries,
             soracloud_decryption_request_records,
@@ -28046,12 +28168,14 @@ pub(crate) mod deserialize {
             soracloud_private_inference_sessions,
             soracloud_private_inference_checkpoints,
             soracloud_model_host_capabilities,
+            soracloud_inrou_host_capabilities,
             soracloud_hf_sources,
             soracloud_hf_shared_lease_pools,
             soracloud_hf_shared_lease_members,
             soracloud_hf_shared_lease_audit_events,
             soracloud_model_host_violation_evidence,
             soracloud_hf_placements,
+            soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             capacity_declarations: Storage::default(),

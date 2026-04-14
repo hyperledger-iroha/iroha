@@ -419,6 +419,24 @@ impl From<crate::isi::soracloud::ReconcileSoracloudModelHosts> for InstructionBo
     }
 }
 
+impl From<crate::isi::soracloud::AdvertiseSoracloudInrouHost> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AdvertiseSoracloudInrouHost) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::WithdrawSoracloudInrouHost> for InstructionBox {
+    fn from(i: crate::isi::soracloud::WithdrawSoracloudInrouHost) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::ReconcileSoracloudInrouPlacements> for InstructionBox {
+    fn from(i: crate::isi::soracloud::ReconcileSoracloudInrouPlacements) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::soracloud::ReportSoracloudModelHostViolation> for InstructionBox {
     fn from(i: crate::isi::soracloud::ReportSoracloudModelHostViolation) -> Self {
         InstructionBox(Box::new(i))
@@ -583,6 +601,18 @@ impl From<crate::isi::soracloud::AdvanceSoracloudRollout> for InstructionBox {
 
 impl From<crate::isi::soracloud::SetSoracloudRuntimeState> for InstructionBox {
     fn from(i: crate::isi::soracloud::SetSoracloudRuntimeState) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::SetSoracloudInrouReplicaRuntimeState> for InstructionBox {
+    fn from(i: crate::isi::soracloud::SetSoracloudInrouReplicaRuntimeState) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState> for InstructionBox {
+    fn from(i: crate::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState) -> Self {
         InstructionBox(Box::new(i))
     }
 }

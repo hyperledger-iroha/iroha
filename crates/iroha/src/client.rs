@@ -169,6 +169,9 @@ pub struct SccpCounterpartyCapability {
     pub counterparty_account_codec: u8,
     /// Stable logical codec key expected for remote account payloads.
     pub counterparty_account_codec_key: String,
+    /// Per-family destination verifier rollout state for this lane family.
+    #[norito(default)]
+    pub destination_rollout: iroha_sccp::SccpDestinationRolloutV1,
     /// Whether the current lane is safe to use for production proof generation and consumption.
     pub production_ready: bool,
     /// Explanation for why the lane is disabled when `production_ready` is false.
@@ -9860,6 +9863,59 @@ impl Client {
         Ok(norito::json::from_slice(resp.body())?)
     }
 
+    /// POST `/v1/contracts/deploy-bundle` with a JSON bundle body.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
+    pub fn post_contract_deploy_bundle_json(
+        &self,
+        bundle: &norito::json::Value,
+        dry_run: bool,
+    ) -> Result<norito::json::Value> {
+        let path = if dry_run {
+            "v1/contracts/deploy-bundle?dry_run=true"
+        } else {
+            "v1/contracts/deploy-bundle"
+        };
+        let url = join_torii_url(&self.torii_url, path);
+        let body = norito::json::to_vec(bundle)?;
+        let resp = self
+            .default_request(HttpMethod::POST, url)
+            .header("Content-Type", APPLICATION_JSON)
+            .body(body)
+            .build()?
+            .send()?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to deploy contract bundle: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        Ok(norito::json::from_slice(resp.body())?)
+    }
+
+    /// GET `/v1/contracts/deploy-bundles/{bundle_digest}`.
+    ///
+    /// # Errors
+    /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
+    pub fn get_contract_deploy_bundle_status_json(
+        &self,
+        bundle_digest: &str,
+    ) -> Result<norito::json::Value> {
+        let path = format!("v1/contracts/deploy-bundles/{bundle_digest}");
+        let url = join_torii_url(&self.torii_url, &path);
+        let resp = self.send_builder(self.default_request(HttpMethod::GET, url))?;
+        if resp.status() != StatusCode::OK {
+            return Err(eyre!(
+                "Failed to get contract bundle status: {} {}",
+                resp.status(),
+                std::str::from_utf8(resp.body()).unwrap_or("")
+            ));
+        }
+        Ok(norito::json::from_slice(resp.body())?)
+    }
+
     /// POST `/v1/contracts/call` with a JSON body.
     ///
     /// # Errors
@@ -18644,9 +18700,17 @@ mod tests {
                     registry_backend: "bridge/sccp/registry-v1/ton".to_owned(),
                     counterparty_account_codec: iroha_sccp::SCCP_CODEC_TON_RAW,
                     counterparty_account_codec_key: "ton_raw".to_owned(),
+                    destination_rollout: iroha_sccp::sccp_destination_rollout_for_domain(
+                        iroha_sccp::SCCP_DOMAIN_TON,
+                    )
+                    .expect("ton destination rollout"),
                     production_ready: false,
                     disabled_reason: Some(
-                        iroha_sccp::SCCP_PRODUCTION_DISABLED_REASON_V1.to_owned(),
+                        iroha_sccp::sccp_lane_disabled_reason_for_domain(
+                            iroha_sccp::SCCP_DOMAIN_TON,
+                        )
+                        .expect("ton disabled reason")
+                        .to_owned(),
                     ),
                 },
                 SccpCounterpartyCapability {
@@ -18660,9 +18724,17 @@ mod tests {
                     registry_backend: "bridge/sccp/registry-v1/eth".to_owned(),
                     counterparty_account_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
                     counterparty_account_codec_key: "evm_hex".to_owned(),
+                    destination_rollout: iroha_sccp::sccp_destination_rollout_for_domain(
+                        iroha_sccp::SCCP_DOMAIN_ETH,
+                    )
+                    .expect("eth destination rollout"),
                     production_ready: false,
                     disabled_reason: Some(
-                        iroha_sccp::SCCP_PRODUCTION_DISABLED_REASON_V1.to_owned(),
+                        iroha_sccp::sccp_lane_disabled_reason_for_domain(
+                            iroha_sccp::SCCP_DOMAIN_ETH,
+                        )
+                        .expect("eth disabled reason")
+                        .to_owned(),
                     ),
                 },
             ],

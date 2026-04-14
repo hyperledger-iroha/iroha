@@ -101,8 +101,12 @@ pub const SORA_PRIVATE_INFERENCE_CHECKPOINT_VERSION_V1: u16 = 1;
 pub const SORA_HF_SOURCE_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraModelHostCapabilityRecordV1`].
 pub const SORA_MODEL_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraInrouHostCapabilityRecordV1`].
+pub const SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHfPlacementRecordV1`].
 pub const SORA_HF_PLACEMENT_RECORD_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraInrouServicePlacementRecordV1`].
+pub const SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHfSharedLeasePoolV1`].
 pub const SORA_HF_SHARED_LEASE_POOL_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraHfSharedLeaseMemberV1`].
@@ -117,6 +121,8 @@ pub const SORA_AGENT_APARTMENT_RECORD_VERSION_V1: u16 = 1;
 pub const SORA_AGENT_APARTMENT_AUDIT_EVENT_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceRuntimeStateV1`].
 pub const SORA_SERVICE_RUNTIME_STATE_VERSION_V1: u16 = 1;
+/// Schema version for [`SoraInrouReplicaRuntimeStateV1`].
+pub const SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraServiceMailboxMessageV1`].
 pub const SORA_SERVICE_MAILBOX_MESSAGE_VERSION_V1: u16 = 1;
 /// Schema version for [`SoraRuntimeReceiptV1`].
@@ -282,7 +288,101 @@ pub enum SoraInrouGuestOsV1 {
     DebianSlim,
 }
 
-/// Explicit Inrou microVM metadata carried by hosted HTTP container manifests.
+/// Guest ISA profile admitted for an Inrou VM image.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "guest_isa", content = "value"))]
+pub enum SoraInrouGuestIsaV1 {
+    /// Native 64-bit x86 guest image.
+    #[cfg_attr(feature = "json", norito(rename = "x86_64"))]
+    X8664,
+    /// Native 64-bit Arm guest image.
+    #[cfg_attr(feature = "json", norito(rename = "aarch64"))]
+    Aarch64,
+}
+
+impl SoraInrouGuestIsaV1 {
+    /// Canonical JSON/object-key label for the guest ISA profile.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::X8664 => "x86_64",
+            Self::Aarch64 => "aarch64",
+        }
+    }
+
+    /// Parse a canonical guest ISA label from JSON/object-key text.
+    #[must_use]
+    pub fn parse_key(value: &str) -> Option<Self> {
+        match value {
+            "x86_64" => Some(Self::X8664),
+            "aarch64" => Some(Self::Aarch64),
+            _ => None,
+        }
+    }
+}
+
+/// Runtime backend used to materialize an Inrou hosted HTTP replica.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+#[cfg_attr(feature = "json", norito(tag = "backend", content = "value"))]
+pub enum SoraInrouRuntimeBackendV1 {
+    /// Portable full-system VM running entirely in unprivileged userspace.
+    PortableVm,
+    /// Linux/KVM-accelerated Firecracker fast path.
+    FirecrackerKvm,
+}
+
+/// Guest-image asset paths for one admitted Inrou ISA profile.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraInrouGuestImageV1 {
+    /// Kernel image path inside the signed Soracloud VM artifact bundle.
+    pub kernel_image_path: String,
+    /// Root filesystem image path inside the signed Soracloud VM artifact bundle.
+    pub rootfs_image_path: String,
+    /// Optional initrd image path inside the signed Soracloud VM artifact bundle.
+    #[norito(default)]
+    pub initrd_image_path: Option<String>,
+}
+
+impl SoraInrouGuestImageV1 {
+    /// Validate Inrou guest-image bundle member paths.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when one or more image paths are invalid.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        validate_bundle_absolute_path(
+            "sora inrou guest image",
+            "kernel_image_path",
+            &self.kernel_image_path,
+        )?;
+        validate_bundle_absolute_path(
+            "sora inrou guest image",
+            "rootfs_image_path",
+            &self.rootfs_image_path,
+        )?;
+        if let Some(initrd_image_path) = self.initrd_image_path.as_ref() {
+            validate_bundle_absolute_path(
+                "sora inrou guest image",
+                "initrd_image_path",
+                initrd_image_path,
+            )?;
+        }
+        Ok(())
+    }
+}
+
+/// Explicit Inrou VM metadata carried by hosted HTTP container manifests.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
     feature = "json",
@@ -293,13 +393,12 @@ pub struct SoraInrouManifestV1 {
     pub schema_version: u16,
     /// Guest userspace contract expected by the runtime.
     pub guest_os: SoraInrouGuestOsV1,
-    /// Kernel image path inside the signed Soracloud VM artifact bundle.
-    pub kernel_image_path: String,
-    /// Root filesystem image path inside the signed Soracloud VM artifact bundle.
-    pub rootfs_image_path: String,
-    /// Optional initrd image path inside the signed Soracloud VM artifact bundle.
-    #[norito(default)]
-    pub initrd_image_path: Option<String>,
+    /// Admitted guest image assets keyed by guest ISA. Both x86_64 and aarch64 are required.
+    #[cfg_attr(
+        feature = "json",
+        norito(with = "crate::json_helpers::sora_inrou_guest_images_map")
+    )]
+    pub guest_images: BTreeMap<SoraInrouGuestIsaV1, SoraInrouGuestImageV1>,
     /// Optional user-data overlay path copied into the bootstrap seed drive.
     #[norito(default)]
     pub bootstrap_user_data_path: Option<String>,
@@ -323,22 +422,23 @@ impl SoraInrouManifestV1 {
             });
         }
 
-        validate_bundle_absolute_path(
-            "sora inrou manifest",
-            "kernel_image_path",
-            &self.kernel_image_path,
-        )?;
-        validate_bundle_absolute_path(
-            "sora inrou manifest",
-            "rootfs_image_path",
-            &self.rootfs_image_path,
-        )?;
-        if let Some(initrd_image_path) = self.initrd_image_path.as_ref() {
-            validate_bundle_absolute_path(
-                "sora inrou manifest",
-                "initrd_image_path",
-                initrd_image_path,
-            )?;
+        for required_isa in [SoraInrouGuestIsaV1::X8664, SoraInrouGuestIsaV1::Aarch64] {
+            if !self.guest_images.contains_key(&required_isa) {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora inrou manifest",
+                    field: "guest_images",
+                    reason: format!(
+                        "must include a `{}` guest image profile",
+                        match required_isa {
+                            SoraInrouGuestIsaV1::X8664 => "x86_64",
+                            SoraInrouGuestIsaV1::Aarch64 => "aarch64",
+                        }
+                    ),
+                });
+            }
+        }
+        for guest_image in self.guest_images.values() {
+            guest_image.validate()?;
         }
         if let Some(bootstrap_user_data_path) = self.bootstrap_user_data_path.as_ref() {
             validate_bundle_absolute_path(
@@ -6996,6 +7096,266 @@ impl SoraModelHostCapabilityRecordV1 {
     }
 }
 
+/// Active opt-in validator host capability advert for authoritative Inrou placement.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraInrouHostCapabilityRecordV1 {
+    /// Schema version; must equal [`SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1`].
+    pub schema_version: u16,
+    /// Validator account that owns this host advert.
+    pub validator_account_id: AccountId,
+    /// Peer identifier used for Torii routing.
+    pub peer_id: String,
+    /// Supported local runtime backends.
+    pub supported_backends: BTreeSet<SoraInrouRuntimeBackendV1>,
+    /// Supported guest ISAs for locally materialized replicas.
+    pub supported_guest_isas: BTreeSet<SoraInrouGuestIsaV1>,
+    /// Maximum number of concurrently hosted placed replicas.
+    pub max_hosted_replica_capacity: u16,
+    /// Maximum aggregate hosted CPU budget in millicores.
+    pub max_cpu_millis: u32,
+    /// Maximum aggregate hosted memory budget in bytes.
+    pub max_memory_bytes: u64,
+    /// Maximum aggregate hosted writable storage budget in bytes.
+    pub max_storage_bytes: u64,
+    /// Whether this validator intentionally participates as a proxy/control-plane node only.
+    #[cfg_attr(feature = "json", norito(default))]
+    pub proxy_only: bool,
+    /// Timestamp when the advert was last refreshed.
+    pub advertised_at_ms: u64,
+    /// Timestamp after which the advert is no longer eligible without a refresh.
+    pub heartbeat_expires_at_ms: u64,
+}
+
+impl SoraInrouHostCapabilityRecordV1 {
+    /// Validate the authoritative Inrou host advert.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when required fields are empty or capacity
+    /// invariants are inconsistent.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "sora inrou host capability record",
+                expected: SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.peer_id.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "sora inrou host capability record",
+                field: "peer_id",
+            });
+        }
+        if self.supported_backends.is_empty() {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora inrou host capability record",
+                field: "supported_backends",
+                reason: "must not be empty".to_string(),
+            });
+        }
+        if self.supported_guest_isas.is_empty() {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora inrou host capability record",
+                field: "supported_guest_isas",
+                reason: "must not be empty".to_string(),
+            });
+        }
+        if self.advertised_at_ms == 0 || self.heartbeat_expires_at_ms == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora inrou host capability record",
+                field: "advertised_at_ms",
+                reason: "advertised_at_ms and heartbeat_expires_at_ms must be greater than zero"
+                    .to_string(),
+            });
+        }
+        if self.heartbeat_expires_at_ms <= self.advertised_at_ms {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora inrou host capability record",
+                field: "heartbeat_expires_at_ms",
+                reason: "must be greater than advertised_at_ms".to_string(),
+            });
+        }
+        let capacities_are_zero = self.max_hosted_replica_capacity == 0
+            && self.max_cpu_millis == 0
+            && self.max_memory_bytes == 0
+            && self.max_storage_bytes == 0;
+        if self.proxy_only {
+            if !capacities_are_zero {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora inrou host capability record",
+                    field: "proxy_only",
+                    reason:
+                        "proxy_only adverts must publish zero replica, CPU, memory, and storage capacity"
+                            .to_string(),
+                });
+            }
+        } else {
+            for (field, value) in [
+                (
+                    "max_hosted_replica_capacity",
+                    u64::from(self.max_hosted_replica_capacity),
+                ),
+                ("max_cpu_millis", u64::from(self.max_cpu_millis)),
+                ("max_memory_bytes", self.max_memory_bytes),
+                ("max_storage_bytes", self.max_storage_bytes),
+            ] {
+                if value == 0 {
+                    return Err(SoraCloudManifestError::InvalidField {
+                        manifest: "sora inrou host capability record",
+                        field,
+                        reason: "must be greater than zero".to_string(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Return whether the advert remains eligible at the supplied timestamp.
+    #[must_use]
+    pub fn is_active_at(&self, now_ms: u64) -> bool {
+        self.heartbeat_expires_at_ms > now_ms
+    }
+
+    /// Return whether the advert may host placed replicas at the supplied timestamp.
+    #[must_use]
+    pub fn can_host_replicas_at(&self, now_ms: u64) -> bool {
+        self.is_active_at(now_ms) && !self.proxy_only && self.max_hosted_replica_capacity > 0
+    }
+}
+
+/// Authoritative host assignment for one placed Inrou replica slot.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraInrouReplicaPlacementV1 {
+    /// One-based replica slot within the selected service revision.
+    pub replica_slot: u16,
+    /// Validator assigned to materialize the replica.
+    pub validator_account_id: AccountId,
+    /// Peer identifier used for Torii proxy routing.
+    pub peer_id: String,
+    /// Backend selected locally on the assigned host.
+    pub selected_backend: SoraInrouRuntimeBackendV1,
+    /// Guest ISA selected locally on the assigned host.
+    pub selected_guest_isa: SoraInrouGuestIsaV1,
+}
+
+impl SoraInrouReplicaPlacementV1 {
+    /// Validate one placed Inrou replica assignment.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when required routing metadata is empty.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.replica_slot == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora inrou replica placement",
+                field: "replica_slot",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.peer_id.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "sora inrou replica placement",
+                field: "peer_id",
+            });
+        }
+        Ok(())
+    }
+}
+
+/// Authoritative per-revision placement record for hosted Inrou replicas.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraInrouServicePlacementRecordV1 {
+    /// Schema version; must equal [`SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1`].
+    pub schema_version: u16,
+    /// Service whose placed replicas are being tracked.
+    pub service_name: Name,
+    /// Service revision/version covered by this record.
+    pub service_version: String,
+    /// Desired replica count declared by the admitted service manifest.
+    pub desired_replica_count: u16,
+    /// Number of currently active eligible validators considered during reconciliation.
+    pub eligible_validator_count: u32,
+    /// Assigned replica placements in deterministic slot order.
+    #[norito(default)]
+    pub placements: Vec<SoraInrouReplicaPlacementV1>,
+    /// Timestamp of the last placement reconciliation.
+    pub reconciled_at_ms: u64,
+    /// Latest placement error, when not all requested slots could be assigned.
+    #[norito(default)]
+    pub last_error: Option<String>,
+}
+
+impl SoraInrouServicePlacementRecordV1 {
+    /// Validate the authoritative Inrou placement record.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch or slot
+    /// assignments are malformed.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "sora inrou service placement record",
+                expected: SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.service_version.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "sora inrou service placement record",
+                field: "service_version",
+            });
+        }
+        if self.desired_replica_count == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora inrou service placement record",
+                field: "desired_replica_count",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.reconciled_at_ms == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora inrou service placement record",
+                field: "reconciled_at_ms",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        let mut seen_slots = BTreeSet::new();
+        for placement in &self.placements {
+            placement.validate()?;
+            if placement.replica_slot > self.desired_replica_count {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora inrou service placement record",
+                    field: "placements",
+                    reason: format!(
+                        "replica_slot {} exceeds desired_replica_count {}",
+                        placement.replica_slot, self.desired_replica_count
+                    ),
+                });
+            }
+            if !seen_slots.insert(placement.replica_slot) {
+                return Err(SoraCloudManifestError::InvalidField {
+                    manifest: "sora inrou service placement record",
+                    field: "placements",
+                    reason: format!("duplicate replica_slot {}", placement.replica_slot),
+                });
+            }
+        }
+        Ok(())
+    }
+}
+
 /// Placement lifecycle state for the active HF compute reservation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -8951,6 +9311,101 @@ impl SoraServiceRuntimeStateV1 {
     }
 }
 
+/// Authoritative runtime state for one placed Inrou replica slot.
+#[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(
+    feature = "json",
+    derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+)]
+pub struct SoraInrouReplicaRuntimeStateV1 {
+    /// Schema version; must equal [`SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1`].
+    pub schema_version: u16,
+    /// Service whose placed replica is being tracked.
+    pub service_name: Name,
+    /// Service revision currently materialized for the placed replica.
+    pub service_version: String,
+    /// One-based placed replica slot.
+    pub replica_slot: u16,
+    /// Validator currently hosting the replica.
+    pub validator_account_id: AccountId,
+    /// Peer identifier currently hosting the replica.
+    pub peer_id: String,
+    /// Backend currently materializing the replica.
+    pub selected_backend: SoraInrouRuntimeBackendV1,
+    /// Guest ISA currently materializing the replica.
+    pub selected_guest_isa: SoraInrouGuestIsaV1,
+    /// Current health classification for the placed replica.
+    pub health_status: SoraServiceHealthStatusV1,
+    /// Load factor in basis points (`0..=10_000`) for the placed replica.
+    pub load_factor_bps: u16,
+    /// Active materialized bundle hash.
+    pub materialized_bundle_hash: Hash,
+    /// Total authoritative egress bytes accounted for the placed replica so far.
+    #[norito(default)]
+    pub accounted_egress_bytes: u64,
+    /// Pending ordered mailbox messages projected for the placed replica.
+    pub pending_mailbox_message_count: u32,
+    /// Optional last emitted runtime receipt identifier.
+    #[norito(default)]
+    pub last_receipt_id: Option<Hash>,
+    /// Timestamp when this replica state was last refreshed.
+    pub updated_at_ms: u64,
+    /// Human-readable last runtime error, when present.
+    #[norito(default)]
+    pub last_error: Option<String>,
+}
+
+impl SoraInrouReplicaRuntimeStateV1 {
+    /// Validate per-replica runtime-state bounds and formatting.
+    ///
+    /// # Errors
+    /// Returns [`SoraCloudManifestError`] when schema versions mismatch or
+    /// runtime-state fields are out of range.
+    pub fn validate(&self) -> Result<(), SoraCloudManifestError> {
+        if self.schema_version != SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1 {
+            return Err(SoraCloudManifestError::UnsupportedVersion {
+                manifest: "sora inrou replica runtime state",
+                expected: SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
+                found: self.schema_version,
+            });
+        }
+        if self.service_version.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "sora inrou replica runtime state",
+                field: "service_version",
+            });
+        }
+        if self.replica_slot == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora inrou replica runtime state",
+                field: "replica_slot",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        if self.peer_id.trim().is_empty() {
+            return Err(SoraCloudManifestError::EmptyField {
+                manifest: "sora inrou replica runtime state",
+                field: "peer_id",
+            });
+        }
+        if self.load_factor_bps > 10_000 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora inrou replica runtime state",
+                field: "load_factor_bps",
+                reason: "must be within 0..=10_000".to_string(),
+            });
+        }
+        if self.updated_at_ms == 0 {
+            return Err(SoraCloudManifestError::InvalidField {
+                manifest: "sora inrou replica runtime state",
+                field: "updated_at_ms",
+                reason: "must be greater than zero".to_string(),
+            });
+        }
+        Ok(())
+    }
+}
+
 /// Ordered asynchronous mailbox message used for replicated cross-service calls.
 #[derive(Clone, Debug, PartialEq, Eq, Encode, Decode, IntoSchema)]
 #[cfg_attr(
@@ -10389,6 +10844,31 @@ pub fn encode_model_host_withdraw_provenance_payload(
     norito::to_bytes(validator_account_id)
 }
 
+/// Encode the canonical provenance signature payload for Inrou host adverts.
+///
+/// The payload layout is the canonical Norito encoding of
+/// [`SoraInrouHostCapabilityRecordV1`].
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_inrou_host_advertise_provenance_payload(
+    capability: &SoraInrouHostCapabilityRecordV1,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(capability)
+}
+
+/// Encode the canonical provenance signature payload for Inrou host withdrawals.
+///
+/// The payload layout is the canonical Norito encoding of `validator_account_id`.
+///
+/// # Errors
+/// Returns an encoding error when Norito serialization fails.
+pub fn encode_inrou_host_withdraw_provenance_payload(
+    validator_account_id: &AccountId,
+) -> Result<Vec<u8>, norito::Error> {
+    norito::to_bytes(validator_account_id)
+}
+
 /// Encode the canonical provenance signature payload for FHE job execution.
 ///
 /// The payload layout is a Norito tuple in this exact field order:
@@ -10680,6 +11160,57 @@ mod tests {
         }
     }
 
+    fn sample_inrou_host_capability_record() -> SoraInrouHostCapabilityRecordV1 {
+        SoraInrouHostCapabilityRecordV1 {
+            schema_version: SORA_INROU_HOST_CAPABILITY_RECORD_VERSION_V1,
+            validator_account_id: sample_account_id(0xD1),
+            peer_id: "12D3KooWInrouHost".to_string(),
+            supported_backends: BTreeSet::from([
+                SoraInrouRuntimeBackendV1::PortableVm,
+                SoraInrouRuntimeBackendV1::FirecrackerKvm,
+            ]),
+            supported_guest_isas: BTreeSet::from([
+                SoraInrouGuestIsaV1::X8664,
+                SoraInrouGuestIsaV1::Aarch64,
+            ]),
+            max_hosted_replica_capacity: 4,
+            max_cpu_millis: 4_000,
+            max_memory_bytes: 16 * 1024 * 1024 * 1024,
+            max_storage_bytes: 64 * 1024 * 1024 * 1024,
+            proxy_only: false,
+            advertised_at_ms: 100_000,
+            heartbeat_expires_at_ms: 160_000,
+        }
+    }
+
+    fn sample_inrou_service_placement_record() -> SoraInrouServicePlacementRecordV1 {
+        SoraInrouServicePlacementRecordV1 {
+            schema_version: SORA_INROU_SERVICE_PLACEMENT_RECORD_VERSION_V1,
+            service_name: sample_name("portal"),
+            service_version: "2026.4".to_string(),
+            desired_replica_count: 2,
+            eligible_validator_count: 3,
+            placements: vec![
+                SoraInrouReplicaPlacementV1 {
+                    replica_slot: 1,
+                    validator_account_id: sample_account_id(0xD1),
+                    peer_id: "12D3KooWInrouPrimary".to_string(),
+                    selected_backend: SoraInrouRuntimeBackendV1::FirecrackerKvm,
+                    selected_guest_isa: SoraInrouGuestIsaV1::X8664,
+                },
+                SoraInrouReplicaPlacementV1 {
+                    replica_slot: 2,
+                    validator_account_id: sample_account_id(0xD2),
+                    peer_id: "12D3KooWInrouReplica".to_string(),
+                    selected_backend: SoraInrouRuntimeBackendV1::PortableVm,
+                    selected_guest_isa: SoraInrouGuestIsaV1::Aarch64,
+                },
+            ],
+            reconciled_at_ms: 125_000,
+            last_error: None,
+        }
+    }
+
     fn sample_hf_placement_record() -> SoraHfPlacementRecordV1 {
         SoraHfPlacementRecordV1 {
             schema_version: SORA_HF_PLACEMENT_RECORD_VERSION_V1,
@@ -10710,6 +11241,27 @@ mod tests {
             total_reservation_fee_nanos: 50_000,
             last_rebalance_at_ms: 110_000,
             last_error: Some("replica warming".to_string()),
+        }
+    }
+
+    fn sample_inrou_replica_runtime_state() -> SoraInrouReplicaRuntimeStateV1 {
+        SoraInrouReplicaRuntimeStateV1 {
+            schema_version: SORA_INROU_REPLICA_RUNTIME_STATE_VERSION_V1,
+            service_name: sample_name("portal"),
+            service_version: "2026.4".to_string(),
+            replica_slot: 1,
+            validator_account_id: sample_account_id(0xD1),
+            peer_id: "12D3KooWInrouPrimary".to_string(),
+            selected_backend: SoraInrouRuntimeBackendV1::FirecrackerKvm,
+            selected_guest_isa: SoraInrouGuestIsaV1::X8664,
+            health_status: SoraServiceHealthStatusV1::Healthy,
+            load_factor_bps: 375,
+            materialized_bundle_hash: sample_hash(28),
+            accounted_egress_bytes: 4_096,
+            pending_mailbox_message_count: 2,
+            last_receipt_id: Some(sample_hash(29)),
+            updated_at_ms: 130_000,
+            last_error: None,
         }
     }
 
@@ -11478,6 +12030,24 @@ mod tests {
     }
 
     #[test]
+    fn inrou_host_advertise_provenance_payload_encodes_canonical_layout() {
+        let capability = sample_inrou_host_capability_record();
+        let encoded =
+            encode_inrou_host_advertise_provenance_payload(&capability).expect("encode payload");
+        let expected = norito::to_bytes(&capability).expect("encode capability");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
+    fn inrou_host_withdraw_provenance_payload_encodes_account_id() {
+        let validator_account_id = sample_account_id(0xD1);
+        let encoded = encode_inrou_host_withdraw_provenance_payload(&validator_account_id)
+            .expect("encode payload");
+        let expected = norito::to_bytes(&validator_account_id).expect("encode account id");
+        assert_eq!(encoded, expected);
+    }
+
+    #[test]
     fn fhe_job_run_provenance_payload_encodes_canonical_tuple() {
         let job = sample_fhe_job_spec();
         let policy = sample_fhe_execution_policy();
@@ -11596,9 +12166,24 @@ mod tests {
         SoraInrouManifestV1 {
             schema_version: SORA_INROU_MANIFEST_VERSION_V1,
             guest_os: SoraInrouGuestOsV1::DebianSlim,
-            kernel_image_path: "/inrou/vmlinux".to_string(),
-            rootfs_image_path: "/inrou/rootfs.ext4".to_string(),
-            initrd_image_path: None,
+            guest_images: BTreeMap::from([
+                (
+                    SoraInrouGuestIsaV1::X8664,
+                    SoraInrouGuestImageV1 {
+                        kernel_image_path: "/inrou/x86_64/vmlinux".to_string(),
+                        rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_string(),
+                        initrd_image_path: None,
+                    },
+                ),
+                (
+                    SoraInrouGuestIsaV1::Aarch64,
+                    SoraInrouGuestImageV1 {
+                        kernel_image_path: "/inrou/aarch64/vmlinux".to_string(),
+                        rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_string(),
+                        initrd_image_path: None,
+                    },
+                ),
+            ]),
             bootstrap_user_data_path: None,
             ssh_authorized_keys: vec!["ssh-ed25519 test-key soracloud-tests".to_string()],
         }
@@ -12616,6 +13201,36 @@ mod tests {
     }
 
     #[test]
+    fn inrou_manifest_validate_accepts_dual_arch_guest_images() {
+        let manifest = sample_inrou_manifest();
+
+        assert!(
+            manifest.validate().is_ok(),
+            "dual-arch guest image profiles should validate"
+        );
+    }
+
+    #[test]
+    fn inrou_manifest_validate_rejects_missing_required_guest_isa() {
+        let mut manifest = sample_inrou_manifest();
+        manifest
+            .guest_images
+            .remove(&SoraInrouGuestIsaV1::X8664)
+            .expect("fixture x86_64 guest image");
+
+        let error = manifest
+            .validate()
+            .expect_err("both required guest ISA profiles must be present");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "guest_images",
+                ..
+            }
+        ));
+    }
+
+    #[test]
     fn deployment_bundle_validate_rejects_http_service_without_shared_lease_volume() {
         let mut container = sample_container();
         container.runtime = SoraContainerRuntimeV1::Inrou;
@@ -12892,6 +13507,64 @@ mod tests {
             error,
             SoraCloudManifestError::InvalidField {
                 field: "load_factor_bps",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn inrou_host_capability_record_validate_accepts_hosting_advert() {
+        sample_inrou_host_capability_record()
+            .validate()
+            .expect("valid Inrou host capability advert should pass");
+    }
+
+    #[test]
+    fn inrou_host_capability_record_validate_rejects_proxy_only_nonzero_capacity() {
+        let mut capability = sample_inrou_host_capability_record();
+        capability.proxy_only = true;
+
+        let error = capability
+            .validate()
+            .expect_err("proxy-only adverts must not expose hosting capacity");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "proxy_only",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn inrou_service_placement_record_validate_rejects_duplicate_slots() {
+        let mut placement = sample_inrou_service_placement_record();
+        placement.placements.push(placement.placements[0].clone());
+
+        let error = placement
+            .validate()
+            .expect_err("duplicate replica slots must fail validation");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::InvalidField {
+                field: "placements",
+                ..
+            }
+        ));
+    }
+
+    #[test]
+    fn inrou_replica_runtime_state_validate_rejects_missing_peer_id() {
+        let mut runtime_state = sample_inrou_replica_runtime_state();
+        runtime_state.peer_id.clear();
+
+        let error = runtime_state
+            .validate()
+            .expect_err("empty peer_id must fail validation");
+        assert!(matches!(
+            error,
+            SoraCloudManifestError::EmptyField {
+                field: "peer_id",
                 ..
             }
         ));

@@ -264,6 +264,9 @@ enum Command {
     /// App API helpers and product tooling
     #[command(subcommand)]
     App(app::Command),
+    /// Contract app bundles, deploys, calls, and alias tooling
+    #[command(subcommand, alias = "contracts")]
+    Contract(crate::contracts::Command),
     /// Developer utilities and diagnostics
     #[command(subcommand)]
     Tools(tools::Command),
@@ -522,6 +525,7 @@ impl Run for Command {
             Ops(variant) => Run::run(variant, context),
             Offline(variant) => Run::run(variant, context),
             App(variant) => Run::run(variant, context),
+            Contract(variant) => Run::run(variant, context),
             Tools(variant) => Run::run(variant, context),
         }
     }

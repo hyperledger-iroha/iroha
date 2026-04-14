@@ -362,6 +362,7 @@ seiyaku ContractViewAccountIdTest {
 
 fn contract_test_app(
     state: Arc<State>,
+    kura: Arc<Kura>,
     queue: Arc<Queue>,
     chain_id: iroha_data_model::ChainId,
     telemetry: iroha_torii::MaybeTelemetry,
@@ -371,6 +372,7 @@ fn contract_test_app(
             "/v1/contracts/deploy",
             post({
                 let chain_id = Arc::new(chain_id.clone());
+                let kura = kura.clone();
                 let queue = queue.clone();
                 let state = state.clone();
                 let telemetry = telemetry.clone();
@@ -379,6 +381,7 @@ fn contract_test_app(
                 >| async move {
                     iroha_torii::handle_post_contract_deploy(
                         chain_id.clone(),
+                        kura.clone(),
                         queue.clone(),
                         state.clone(),
                         telemetry.clone(),
@@ -492,7 +495,7 @@ async fn contracts_call_enqueues_transaction() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -505,6 +508,7 @@ async fn contracts_call_enqueues_transaction() {
 
     let app = contract_test_app(
         state.clone(),
+        kura.clone(),
         queue.clone(),
         chain_id.clone(),
         telemetry.clone(),
@@ -771,7 +775,7 @@ async fn contracts_view_surfaces_source_path_in_vm_diagnostic() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -784,6 +788,7 @@ async fn contracts_view_surfaces_source_path_in_vm_diagnostic() {
 
     let app = contract_test_app(
         state.clone(),
+        kura.clone(),
         queue.clone(),
         chain_id.clone(),
         telemetry.clone(),
@@ -859,7 +864,7 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -872,6 +877,7 @@ async fn contracts_view_decodes_literal_and_persisted_bytes_returns() {
 
     let app = contract_test_app(
         state.clone(),
+        kura.clone(),
         queue.clone(),
         chain_id.clone(),
         telemetry.clone(),
@@ -966,7 +972,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -979,6 +985,7 @@ async fn contracts_call_honors_requested_entrypoint_and_payload() {
 
     let app = contract_test_app(
         state.clone(),
+        kura.clone(),
         queue.clone(),
         chain_id.clone(),
         telemetry.clone(),
@@ -1100,7 +1107,7 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -1113,6 +1120,7 @@ async fn contracts_view_roundtrips_account_id_literals_and_persisted_state() {
 
     let app = contract_test_app(
         state.clone(),
+        kura.clone(),
         queue.clone(),
         chain_id.clone(),
         telemetry.clone(),
@@ -1232,7 +1240,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -1245,6 +1253,7 @@ async fn contracts_call_persists_declared_state_fields_across_calls() {
 
     let app = contract_test_app(
         state.clone(),
+        kura.clone(),
         queue.clone(),
         chain_id.clone(),
         telemetry.clone(),
@@ -1392,7 +1401,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -1405,6 +1414,7 @@ async fn contracts_call_persists_declared_state_after_emitting_isi() {
 
     let app = contract_test_app(
         state.clone(),
+        kura.clone(),
         queue.clone(),
         chain_id.clone(),
         telemetry.clone(),
@@ -1500,7 +1510,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
 
     let asset_definition_id = AssetDefinitionId::new(
@@ -1536,6 +1546,7 @@ async fn contracts_call_persists_declared_state_after_mint_asset() {
 
     let app = contract_test_app(
         state.clone(),
+        kura.clone(),
         queue.clone(),
         chain_id.clone(),
         telemetry.clone(),
@@ -1635,7 +1646,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
 
     let asset_definition_id = AssetDefinitionId::new(
@@ -1671,6 +1682,7 @@ async fn contracts_call_persists_n3x_like_state_after_mint_asset() {
 
     let app = contract_test_app(
         state.clone(),
+        kura.clone(),
         queue.clone(),
         chain_id.clone(),
         telemetry.clone(),
@@ -1785,7 +1797,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
 
     let asset_definition_id = AssetDefinitionId::new(
@@ -1821,6 +1833,7 @@ async fn contracts_call_executes_n3x_like_burn_after_mint_asset() {
 
     let app = contract_test_app(
         state.clone(),
+        kura.clone(),
         queue.clone(),
         chain_id.clone(),
         telemetry.clone(),
@@ -1978,7 +1991,7 @@ async fn contracts_call_preserves_root_and_nested_transfer_authorities() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
 
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
@@ -1992,6 +2005,7 @@ async fn contracts_call_preserves_root_and_nested_transfer_authorities() {
 
     let app = contract_test_app(
         state.clone(),
+        kura.clone(),
         queue.clone(),
         chain_id.clone(),
         telemetry.clone(),

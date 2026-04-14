@@ -16,14 +16,23 @@ use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
-    isi::staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+    asset::AssetDefinitionAlias,
+    isi::{
+        SetAssetDefinitionAlias,
+        staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+    },
+    nexus::DataSpaceId,
     parameter::system::{
         SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter, SumeragiParameters,
     },
     peer::PeerId,
     prelude::*,
 };
-use iroha_executor_data_model::permission::governance::CanEnactGovernance;
+use iroha_executor_data_model::permission::{
+    account::{AccountAliasPermissionScope, CanManageAccountAlias},
+    governance::CanEnactGovernance,
+    nexus::CanPublishSpaceDirectoryManifest,
+};
 use iroha_genesis::{
     GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, init_instruction_registry,
 };
@@ -93,6 +102,10 @@ pub struct AssetSpec {
     pub id: String,
     /// Human-readable display name for the asset definition.
     pub name: String,
+    /// Optional leased alias binding to attach after registration.
+    pub alias: Option<String>,
+    /// Account that should own the asset definition after genesis completes.
+    pub owned_by: AccountId,
     /// Account that should receive the minted supply.
     pub mint_to: AccountId,
     /// Quantity to mint for this asset definition.
@@ -426,6 +439,10 @@ const LOCALNET_UNIVERSAL_DOMAIN: &str = "universal.universal";
 const LOCALNET_STAKE_ASSET_NAME: &str = "xor";
 const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland.universal";
 pub(crate) const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
+const LOCALNET_OFFLINE_CASH_ASSET_ID: &str = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
+const LOCALNET_OFFLINE_CASH_ASSET_NAME: &str = "usd";
+const LOCALNET_OFFLINE_CASH_ASSET_ALIAS: &str = "usd#wonderland";
+const LOCALNET_OFFLINE_CASH_INITIAL_QUANTITY: u64 = 100;
 const LOCALNET_GAS_ACCOUNT_SEED: &[u8] = b"localnet-gas-account";
 /// Default localnet client TTL (ms) to keep stress submissions from expiring prematurely.
 const LOCALNET_CLIENT_TTL_MS: u64 = 600_000;
@@ -483,6 +500,36 @@ fn localnet_fee_asset_literal() -> String {
 
 fn localnet_sample_asset_literal() -> String {
     canonical_asset_definition_literal(LOCALNET_SAMPLE_ASSET_DOMAIN, LOCALNET_SAMPLE_ASSET_NAME)
+}
+
+fn localnet_offline_cash_asset_literal() -> String {
+    LOCALNET_OFFLINE_CASH_ASSET_ID.to_owned()
+}
+
+fn localnet_offline_cash_asset_spec() -> AssetSpec {
+    let client_account_id = localnet_client_account_id();
+    AssetSpec {
+        id: localnet_offline_cash_asset_literal(),
+        name: LOCALNET_OFFLINE_CASH_ASSET_NAME.to_owned(),
+        alias: Some(LOCALNET_OFFLINE_CASH_ASSET_ALIAS.to_owned()),
+        owned_by: client_account_id.clone(),
+        mint_to: client_account_id,
+        quantity: LOCALNET_OFFLINE_CASH_INITIAL_QUANTITY,
+    }
+}
+
+fn effective_localnet_assets(extra_assets: &[AssetSpec]) -> Vec<AssetSpec> {
+    let mut assets = Vec::with_capacity(extra_assets.len() + 1);
+    let mut seen_asset_ids = BTreeSet::new();
+    let built_in = localnet_offline_cash_asset_spec();
+    seen_asset_ids.insert(built_in.id.clone());
+    assets.push(built_in);
+    for asset in extra_assets {
+        if seen_asset_ids.insert(asset.id.clone()) {
+            assets.push(asset.clone());
+        }
+    }
+    assets
 }
 
 /// Generate a bare-metal local network (no Docker): genesis, per-peer configs, start/stop scripts.
@@ -590,6 +637,8 @@ impl<T: Write> RunArgs<T> for Args {
                 vec![AssetSpec {
                     id: localnet_sample_asset_literal(),
                     name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
+                    alias: None,
+                    owned_by: ALICE_ID.clone(),
                     mint_to: ALICE_ID.clone(),
                     quantity: 100,
                 }]
@@ -797,6 +846,10 @@ fn account_literal_for_chain_discriminant(raw: &str, chain_discriminant: u16) ->
     account_id_runtime_literal(&account_id, Some(chain_discriminant))
 }
 
+fn localnet_client_account_literal(chain_discriminant: Option<u16>) -> String {
+    account_id_runtime_literal(&localnet_client_account_id(), chain_discriminant)
+}
+
 #[allow(clippy::too_many_lines)]
 fn generate_localnet_with_line<T: Write>(
     opts: &LocalnetOptions,
@@ -865,6 +918,8 @@ fn generate_localnet_with_line<T: Write>(
     let commit_inflight_timeout_ms =
         localnet_commit_inflight_timeout_ms(block_time_ms, commit_time_ms);
     let (genesis_public_key, genesis_private) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
+    let genesis_account_id = AccountId::new(genesis_public_key.clone());
+    let assets = effective_localnet_assets(&opts.assets);
     let gas_account_id = if npos_bootstrap {
         Some(localnet_gas_account_id(&genesis_public_key))
     } else {
@@ -878,8 +933,14 @@ fn generate_localnet_with_line<T: Write>(
         &chain_id,
         build_line,
     )?;
-    if opts.extra_accounts > 0 || !opts.assets.is_empty() {
-        genesis = extend_genesis(genesis, seed_bytes, opts.extra_accounts, &opts.assets)?;
+    if opts.extra_accounts > 0 || !assets.is_empty() {
+        genesis = extend_genesis(
+            genesis,
+            &genesis_account_id,
+            seed_bytes,
+            opts.extra_accounts,
+            &assets,
+        )?;
     }
     genesis = apply_parameter_overrides(
         genesis,
@@ -1015,6 +1076,7 @@ fn generate_localnet_with_line<T: Write>(
         &client_config_path,
         &start_path,
         &stop_path,
+        &account_id_runtime_literal(&localnet_client_account_id(), chain_discriminant),
     )?;
     tui::success("Localnet ready");
 
@@ -1240,6 +1302,7 @@ fn render_peer_config(
         npos_bootstrap,
         da_rbc_enabled,
     } = features;
+    let localnet_client_account = localnet_client_account_literal(chain_discriminant);
 
     let trusted_list = trusted_peers
         .iter()
@@ -1802,6 +1865,82 @@ fn render_peer_config(
         );
         torii.insert("mcp".into(), Value::Table(mcp));
     }
+    let mut onboarding = Table::new();
+    onboarding.insert("enabled".into(), Value::Boolean(true));
+    onboarding.insert(
+        "authority".into(),
+        Value::String(localnet_client_account.clone()),
+    );
+    onboarding.insert(
+        "private_key".into(),
+        Value::String(CLIENT_ACCOUNT_PRIVATE.to_owned()),
+    );
+    onboarding.insert("allowed_permissions".into(), Value::Array(Vec::new()));
+    torii.insert("onboarding".into(), Value::Table(onboarding));
+
+    let mut offline_lineage_policy = Table::new();
+    offline_lineage_policy.insert(
+        "max_balance".into(),
+        Value::String(
+            iroha_config::parameters::defaults::torii::offline_issuer::RESERVE_MAX_BALANCE
+                .to_owned(),
+        ),
+    );
+    offline_lineage_policy.insert(
+        "max_tx_value".into(),
+        Value::String(
+            iroha_config::parameters::defaults::torii::offline_issuer::RESERVE_MAX_TX_VALUE
+                .to_owned(),
+        ),
+    );
+    offline_lineage_policy.insert(
+        "authorization_ttl_ms".into(),
+        Value::Integer(
+            i64::try_from(
+                iroha_config::parameters::defaults::torii::offline_issuer::RESERVE_AUTHORIZATION_TTL_MS,
+            )
+            .expect("authorization ttl fits i64"),
+        ),
+    );
+    offline_lineage_policy.insert(
+        "authorization_refresh_ms".into(),
+        Value::Integer(
+            i64::try_from(
+                iroha_config::parameters::defaults::torii::offline_issuer::RESERVE_AUTHORIZATION_REFRESH_MS,
+            )
+            .expect("authorization refresh fits i64"),
+        ),
+    );
+    offline_lineage_policy.insert(
+        "revocation_ttl_ms".into(),
+        Value::Integer(
+            i64::try_from(
+                iroha_config::parameters::defaults::torii::offline_issuer::RESERVE_REVOCATION_TTL_MS,
+            )
+            .expect("revocation ttl fits i64"),
+        ),
+    );
+
+    let mut offline_issuer = Table::new();
+    offline_issuer.insert("enabled".into(), Value::Boolean(true));
+    offline_issuer.insert(
+        "operator_authority".into(),
+        Value::String(localnet_client_account.clone()),
+    );
+    offline_issuer.insert(
+        "operator_private_key".into(),
+        Value::String(CLIENT_ACCOUNT_PRIVATE.to_owned()),
+    );
+    offline_issuer.insert(
+        "legacy_operator_private_keys".into(),
+        Value::Array(Vec::new()),
+    );
+    offline_issuer.insert("allowed_controllers".into(), Value::Array(Vec::new()));
+    offline_issuer.insert(
+        "lineage_policy".into(),
+        Value::Table(offline_lineage_policy),
+    );
+    torii.insert("offline_issuer".into(), Value::Table(offline_issuer));
     // torii.transport.norito_rpc
     let mut norito_rpc = Table::new();
     norito_rpc.insert("enabled".into(), Value::Boolean(true));
@@ -1815,6 +1954,21 @@ fn render_peer_config(
     transport.insert("norito_rpc".into(), Value::Table(norito_rpc));
     torii.insert("transport".into(), Value::Table(transport));
     root.insert("torii".into(), Value::Table(torii));
+
+    let mut settlement_offline_escrow_accounts = Table::new();
+    settlement_offline_escrow_accounts.insert(
+        localnet_offline_cash_asset_literal(),
+        Value::String(localnet_client_account),
+    );
+    let mut settlement_offline = Table::new();
+    settlement_offline.insert("skip_platform_attestation".into(), Value::Boolean(true));
+    settlement_offline.insert(
+        "escrow_accounts".into(),
+        Value::Table(settlement_offline_escrow_accounts),
+    );
+    let mut settlement = Table::new();
+    settlement.insert("offline".into(), Value::Table(settlement_offline));
+    root.insert("settlement".into(), Value::Table(settlement));
 
     toml::to_string(&Value::Table(root)).expect("serializing peer config to TOML")
 }
@@ -1846,29 +2000,55 @@ fn generate_raw_genesis(
 
 fn extend_genesis(
     genesis: RawGenesisTransaction,
+    genesis_account_id: &AccountId,
     seed_bytes: Option<&[u8]>,
     extra_accounts: u16,
     assets: &[AssetSpec],
 ) -> Result<RawGenesisTransaction> {
+    let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
     let mut builder = genesis.into_builder().next_transaction();
 
     for idx in 0..extra_accounts {
         let (pk, _) = generate_account_key_pair(seed_bytes, &format!("acct{idx}").into_bytes());
-        builder =
-            builder.append_instruction(Register::account(Account::new(AccountId::new(pk.clone()))));
+        let account_id = AccountId::new(pk.clone());
+        if registrations.accounts.insert(account_id.clone()) {
+            builder = builder.append_instruction(Register::account(Account::new(account_id)));
+        }
     }
 
     for asset in assets {
+        if registrations.accounts.insert(asset.owned_by.clone()) {
+            builder =
+                builder.append_instruction(Register::account(Account::new(asset.owned_by.clone())));
+        }
+        if registrations.accounts.insert(asset.mint_to.clone()) {
+            builder =
+                builder.append_instruction(Register::account(Account::new(asset.mint_to.clone())));
+        }
         let asset_def = AssetDefinitionId::parse_address_literal(&asset.id)
             .wrap_err("invalid asset definition id")?;
         let definition = AssetDefinition::new(asset_def.clone(), NumericSpec::default())
             .with_name(asset.name.clone())
             .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
+        if let Some(alias_literal) = asset.alias.as_deref() {
+            let alias = alias_literal
+                .parse::<AssetDefinitionAlias>()
+                .wrap_err("invalid asset definition alias")?;
+            builder =
+                builder.append_instruction(SetAssetDefinitionAlias::bind(asset_def.clone(), alias, None));
+        }
         if asset.quantity > 0 {
             builder = builder.append_instruction(Mint::asset_numeric(
                 asset.quantity,
-                AssetId::new(asset_def, asset.mint_to.clone()),
+                AssetId::new(asset_def.clone(), asset.mint_to.clone()),
+            ));
+        }
+        if asset.owned_by != *genesis_account_id {
+            builder = builder.append_instruction(Transfer::asset_definition(
+                genesis_account_id.clone(),
+                asset_def,
+                asset.owned_by.clone(),
             ));
         }
     }
@@ -2081,6 +2261,15 @@ fn append_peer_pop(genesis: RawGenesisTransaction, peers: &[Peer]) -> RawGenesis
 fn append_localnet_contract_permissions(genesis: RawGenesisTransaction) -> RawGenesisTransaction {
     let enact_governance: Permission = CanEnactGovernance.into();
     let manage_offline_escrow = Permission::new("CanManageOfflineEscrow".into(), Json::new(()));
+    let client_account_id = localnet_client_account_id();
+    let manage_account_alias: Permission = CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+    }
+    .into();
+    let publish_manifest: Permission = CanPublishSpaceDirectoryManifest {
+        dataspace: DataSpaceId::GLOBAL,
+    }
+    .into();
     genesis
         .into_builder()
         .append_instruction(Grant::account_permission(
@@ -2090,6 +2279,18 @@ fn append_localnet_contract_permissions(genesis: RawGenesisTransaction) -> RawGe
         .append_instruction(Grant::account_permission(
             manage_offline_escrow,
             ALICE_ID.clone(),
+        ))
+        .append_instruction(Grant::account_permission(
+            Permission::new("CanManageOfflineEscrow".into(), Json::new(())),
+            client_account_id.clone(),
+        ))
+        .append_instruction(Grant::account_permission(
+            manage_account_alias,
+            client_account_id.clone(),
+        ))
+        .append_instruction(Grant::account_permission(
+            publish_manifest,
+            client_account_id,
         ))
         .build_raw()
 }
@@ -2571,6 +2772,7 @@ fn write_localnet_readme(
     client_config_path: &Path,
     start_path: &Path,
     stop_path: &Path,
+    client_account_id: &str,
 ) -> Result<()> {
     let readme_path = out_dir.join("README.md");
     let seed_line = seed
@@ -2588,6 +2790,11 @@ fn write_localnet_readme(
             "- Genesis JSON: `{genesis_json}`\n",
             "- Signed genesis: `{genesis_signed}`\n",
             "- Client config: `{client_config}`\n\n",
+            "## Built-in App API bootstrap\n\n",
+            "- Offline-cash asset definition: `{offline_cash_asset}`\n",
+            "- Offline-cash alias: `{offline_cash_alias}`\n",
+            "- Localnet app authority / escrow account: `{client_account_id}`\n",
+            "- Generated peer configs enable `torii.onboarding`, `torii.offline_issuer`, and local-only `settlement.offline.skip_platform_attestation = true`\n\n",
             "- Start script: `{start_script}`\n",
             "- Stop script: `{stop_script}`\n\n",
             "## Next steps\n\n",
@@ -2608,6 +2815,9 @@ fn write_localnet_readme(
         genesis_json = genesis_json_path.display(),
         genesis_signed = genesis_signed_path.display(),
         client_config = client_config_path.display(),
+        offline_cash_asset = LOCALNET_OFFLINE_CASH_ASSET_ID,
+        offline_cash_alias = LOCALNET_OFFLINE_CASH_ASSET_ALIAS,
+        client_account_id = client_account_id,
         start_script = start_path.display(),
         stop_script = stop_path.display(),
         out_dir = out_dir.display(),
@@ -2685,6 +2895,8 @@ mod tests {
         });
         let requested_stake_amount = perf_spec.map(|spec| spec.stake_amount);
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
+        let genesis_account_id = AccountId::new(genesis_public_key.clone());
+        let assets = effective_localnet_assets(&opts.assets);
         let mut genesis = generate_raw_genesis(
             &genesis_public_key,
             opts.consensus_mode,
@@ -2694,9 +2906,15 @@ mod tests {
             opts.build_line,
         )
         .expect("generate raw genesis");
-        if opts.extra_accounts > 0 || !opts.assets.is_empty() {
-            genesis = extend_genesis(genesis, seed_bytes, opts.extra_accounts, &opts.assets)
-                .expect("extend genesis");
+        if opts.extra_accounts > 0 || !assets.is_empty() {
+            genesis = extend_genesis(
+                genesis,
+                &genesis_account_id,
+                seed_bytes,
+                opts.extra_accounts,
+                &assets,
+            )
+            .expect("extend genesis");
         }
         genesis = apply_parameter_overrides(
             genesis,
@@ -2794,6 +3012,8 @@ mod tests {
             assets: vec![AssetSpec {
                 id: localnet_sample_asset_literal(),
                 name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
+                alias: None,
+                owned_by: ALICE_ID.clone(),
                 mint_to: ALICE_ID.clone(),
                 quantity: 100,
             }],
@@ -3633,6 +3853,8 @@ mod tests {
             assets: vec![AssetSpec {
                 id: localnet_sample_asset_literal(),
                 name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
+                alias: None,
+                owned_by: ALICE_ID.clone(),
                 mint_to: ALICE_ID.clone(),
                 quantity: 100,
             }],
@@ -4511,10 +4733,12 @@ mod tests {
             &tmp.path().join("client.toml"),
             &tmp.path().join("start.sh"),
             &tmp.path().join("stop.sh"),
+            &localnet_client_account_literal(None),
         )
         .expect("write readme");
         let contents = fs::read_to_string(tmp.path().join("README.md")).expect("read readme");
         assert!(contents.contains("- Base seed: `Iroha`"));
+        assert!(contents.contains(LOCALNET_OFFLINE_CASH_ASSET_ALIAS));
     }
 
     #[test]

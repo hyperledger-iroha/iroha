@@ -129,6 +129,9 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<soracloud::HeartbeatSoracloudModelHost>,
     InstructionRegistry::register::<soracloud::WithdrawSoracloudModelHost>,
     InstructionRegistry::register::<soracloud::ReconcileSoracloudModelHosts>,
+    InstructionRegistry::register::<soracloud::AdvertiseSoracloudInrouHost>,
+    InstructionRegistry::register::<soracloud::WithdrawSoracloudInrouHost>,
+    InstructionRegistry::register::<soracloud::ReconcileSoracloudInrouPlacements>,
     InstructionRegistry::register::<soracloud::ReportSoracloudModelHostViolation>,
     InstructionRegistry::register::<soracloud::DeploySoracloudAgentApartment>,
     InstructionRegistry::register::<soracloud::RenewSoracloudAgentLease>,
@@ -157,6 +160,8 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<soracloud::RecordSoracloudPrivateInferenceCheckpoint>,
     InstructionRegistry::register::<soracloud::AdvanceSoracloudRollout>,
     InstructionRegistry::register::<soracloud::SetSoracloudRuntimeState>,
+    InstructionRegistry::register::<soracloud::SetSoracloudInrouReplicaRuntimeState>,
+    InstructionRegistry::register::<soracloud::ClearSoracloudInrouReplicaRuntimeState>,
     InstructionRegistry::register::<soracloud::ReportSoracloudServiceLeaseUsage>,
     InstructionRegistry::register::<soracloud::RecordSoracloudMailboxMessage>,
     InstructionRegistry::register::<soracloud::RecordSoracloudRuntimeReceipt>,
@@ -365,6 +370,15 @@ fn with_soracloud_stable_ids(mut registry: InstructionRegistry) -> InstructionRe
     registry = registry.register_with_id::<soracloud::WithdrawSoracloudModelHost>(
         "soracloud::WithdrawSoracloudModelHost",
     );
+    registry = registry.register_with_id::<soracloud::AdvertiseSoracloudInrouHost>(
+        "soracloud::AdvertiseSoracloudInrouHost",
+    );
+    registry = registry.register_with_id::<soracloud::WithdrawSoracloudInrouHost>(
+        "soracloud::WithdrawSoracloudInrouHost",
+    );
+    registry = registry.register_with_id::<soracloud::ReconcileSoracloudInrouPlacements>(
+        "soracloud::ReconcileSoracloudInrouPlacements",
+    );
     registry = registry.register_with_id::<soracloud::DeploySoracloudAgentApartment>(
         "soracloud::DeploySoracloudAgentApartment",
     );
@@ -445,6 +459,12 @@ fn with_soracloud_stable_ids(mut registry: InstructionRegistry) -> InstructionRe
     );
     registry = registry.register_with_id::<soracloud::SetSoracloudRuntimeState>(
         "soracloud::SetSoracloudRuntimeState",
+    );
+    registry = registry.register_with_id::<soracloud::SetSoracloudInrouReplicaRuntimeState>(
+        "soracloud::SetSoracloudInrouReplicaRuntimeState",
+    );
+    registry = registry.register_with_id::<soracloud::ClearSoracloudInrouReplicaRuntimeState>(
+        "soracloud::ClearSoracloudInrouReplicaRuntimeState",
     );
     registry = registry.register_with_id::<soracloud::ReportSoracloudServiceLeaseUsage>(
         "soracloud::ReportSoracloudServiceLeaseUsage",

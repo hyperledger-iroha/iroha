@@ -2,6 +2,205 @@
 
 Last updated: 2026-04-14
 
+## 2026-04-14 Follow-up: host-agnostic Inrou now has a real PortableVm executor path, backend-neutral shared storage, and authoritative topology reporting
+- `/Users/takemiyamakoto/dev/iroha/crates/irohad/src/soracloud_runtime.rs`
+  now closes the remaining runtime-side work from the earlier dual-ISA Inrou
+  contract rewrite:
+  - `PortableVm` is a real executor backend instead of a stub;
+  - Linux/KVM still prefers `FirecrackerKvm`, but backend choice is host-local
+    and private to the runtime;
+  - the portable path boots the selected guest ISA through QEMU TCG in
+    unprivileged userspace, uses user-mode networking plus host-loopback
+    forwarding, and applies the same health/entrypoint/bootstrap contract as
+    Firecracker;
+  - shared replica data now flows through a backend-neutral mount layer:
+    Firecracker keeps the NFS transport adapter, while PortableVm exports the
+    same guest-visible semantics through virtio-9p shared mounts; and
+  - allowlist networking on PortableVm now projects resolved hostname overlays
+    into the guest so restricted user-mode networking still preserves expected
+    name resolution.
+- The same `irohad` slice now fully advertises the host-agnostic placement
+  model at runtime: local capability adverts can publish `PortableVm` and/or
+  `FirecrackerKvm`, automatic zero-capacity `proxy_only` adverts kick in when
+  no hosted backend is available, and placed-replica runtime state continues
+  to publish selected backend / guest ISA only from assigned hosts.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs` now exposes
+  the authoritative hosted-HTTP topology summary in public Soracloud status:
+  active Inrou capability adverts, placed host count, hosted replica count,
+  proxy-only validator count, and backend mix (`portable_vm` /
+  `firecracker_kvm`).
+- Regression coverage added in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/irohad/src/soracloud_runtime.rs`
+    for the portable 9p/allowlist cloud-init rendering path; and
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs`
+    for the authoritative hosted-HTTP topology counters.
+- Focused validation status for this slice:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha-portable-check cargo check -p irohad --bin irohad --message-format short`
+  - fresh-target exact-test builds completed successfully for:
+    - `CARGO_TARGET_DIR=/tmp/iroha-verify-irohad cargo test -p irohad --bin irohad build_inrou_user_data_projects_virtio9p_mounts_and_allowlist_overlay -- --exact`
+    - `CARGO_TARGET_DIR=/tmp/iroha-verify-torii cargo test -p iroha_torii soracloud_hosted_http_topology_section_reports_authoritative_counts -- --exact`
+  - on this macOS host, the compiled libtest binaries then hung before
+    emitting `--list` output or a final pass/fail line; sampling the stuck
+    Torii test binary points at pre-main `dyld` startup rather than a failure
+    inside the new test bodies, so the harness-startup hang is being treated
+    as an environment issue rather than a regression in the landed code.
+
+## 2026-04-14 Follow-up: same-height known-block missing-commit-QC stalls now hand off to canonical passive catch-up
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  now treats stale contiguous-frontier `missing_commit_qc_requests` as a
+  frontier-stall signal, not just stale `missing_block_requests`. When the
+  exact-height payload is already local and the commit-QC repair request has
+  aged out, frontier-stall reset now spends the bounded committed-anchor
+  range-pull budget and converts the same-height slot into
+  `PassiveCatchup`, which drops active-owner churn instead of letting a stale
+  branch keep retrying forever.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/qc.rs`
+  now keeps known-block commit-QC recovery on the exact-body path until an
+  actual peer `BlockBodyResponse` arrives. A locally cached payload no longer
+  marks the slot body as available at route time for this recovery class,
+  which preserves the existing exact-frontier deep-catchup path while still
+  allowing the new passive-handoff path once peer body/QC repair has stalled.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/kiso.rs` now includes
+  the newly required Torii feature-gating fields
+  `webhooks_enabled` and `zk_attachments_enabled` in its test/runtime config
+  constructor so the focused `iroha_core` / integration build path is clean
+  again on the current tree.
+- Regression coverage added in
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop/tests.rs`
+  now locks in the body-present known-block commit-QC stall handoff to passive
+  catch-up, while the existing exact-body/deep-catchup and passive-handoff
+  tests still pass on the updated lib test binary.
+- Focused validation status for this slice:
+  - `cargo fmt --all`
+  - direct lib-test-binary reruns:
+    - `sumeragi::main_loop::tests::known_block_commit_qc_recovery_routes_frontier_fetch_through_exact_block_body`
+    - `sumeragi::main_loop::tests::known_block_commit_qc_recovery_stall_enters_frontier_deep_catchup`
+    - `sumeragi::main_loop::tests::frontier_stall_reanchors_body_present_known_block_commit_qc_repair`
+    - `sumeragi::main_loop::tests::frontier_stall_reset_handoff_enters_passive_catchup_and_suppresses_repeat_quorum_timeout_churn`
+  - `CARGO_HOME=/tmp/iroha-cargo-clone CARGO_TARGET_DIR=/tmp/iroha-it-consensus-helpers IROHA_TEST_TARGET_DIR=/Users/takemiyamakoto/dev/iroha/target/iroha-it-consensus-helpers cargo test --offline -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --exact --nocapture --test-threads=1`
+
+## 2026-04-14 Follow-up: contract app bundles are now first-class on the Torii/CLI surface, and SoraSwap consumes the manifest-driven deploy path
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs` now
+  carries a first-class contract bundle planner/executor for
+  `DeployContractBundleDto`, deterministic bundle digests, staged resumable
+  receipts keyed by `bundle_digest + chain_fingerprint`, and additive handlers
+  for `POST /v1/contracts/deploy-bundle` plus
+  `GET /v1/contracts/deploy-bundles/{bundle_digest}`. The legacy
+  `POST /v1/contracts/deploy` path now reuses the same deploy helper used by
+  the bundle executor instead of carrying a separate code path.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs` now treats
+  the public contract deploy/call/view/state surfaces as permissionless by
+  default for the app-facing Torii slice: those routes keep rate limiting and
+  body caps, but they no longer require Torii API tokens just to reach the
+  on-chain signature-and-fee admission path. The additive bundle routes are
+  wired into the same hardened public contract route group. The same Torii
+  slice now also makes webhook and ZK attachment surfaces explicit opt-ins via
+  `torii.webhooks_enabled` and `torii.zk_attachments_enabled`, both disabled by
+  default so the public contract surface no longer drags those app-facing
+  routes/workers along with it.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha/src/client.rs`,
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/contracts.rs`, and
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/main_shared.rs` now add
+  the app-bundle client/CLI surface:
+  - `iroha contract app build`
+  - `iroha contract app plan`
+  - `iroha contract app deploy`
+  - `iroha contract app resume`
+  The CLI now reads `iroha.app.toml`, compiles or loads the declared contract
+  artifacts, resolves default dataspace aliases, and submits the compiled
+  bundle over the new Torii route.
+- `/Users/takemiyamakoto/dev/soraswap/iroha.app.toml`,
+  `/Users/takemiyamakoto/dev/soraswap/scripts/common.sh`,
+  `/Users/takemiyamakoto/dev/soraswap/scripts/deploy_local.sh`, and
+  `/Users/takemiyamakoto/dev/soraswap/scripts/deploy_public.sh` now treat
+  SoraSwap as a reference consumer of that platform flow. The repo wrappers no
+  longer plan per-contract deploy nonces themselves; they compile the manifest,
+  call `iroha contract app deploy`, persist the bundle receipt, and only
+  materialize the per-contract deployment records still needed by the existing
+  bootstrap/smoke evidence flow.
+- Focused validation status for this slice:
+  - `zsh -n /Users/takemiyamakoto/dev/soraswap/scripts/common.sh`
+  - `zsh -n /Users/takemiyamakoto/dev/soraswap/scripts/deploy_local.sh`
+  - `zsh -n /Users/takemiyamakoto/dev/soraswap/scripts/deploy_public.sh`
+  - isolated `cargo check` / test verification for the touched `iroha_torii`
+    and `iroha_cli` slices is still in progress on the current dirty tree
+    while unrelated background Cargo work is active
+- Remaining follow-up in this slice:
+  - finish the focused Rust verification and fix any residual compile/test
+    fallout in the new bundle planner/CLI path;
+  - add broader Torii route and CLI integration coverage once the current tree
+    is back to a clean focused-verify state; and
+  - pin the same public-safe defaults on the real shipped Taira profile after
+    the current dirty-tree verification pass is unblocked.
+
+## 2026-04-14 Follow-up: Inrou now uses the dual-ISA guest-image contract, and runtime planning selects a host-local guest profile
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/src/soracloud.rs`
+  now treats `SoraInrouManifestV1` as the clean first-release hosted-HTTP VM
+  contract: `guest_os = DebianSlim`, `guest_images` keyed by guest ISA, and
+  both `x86_64` and `aarch64` guest image profiles required for admission. Each
+  guest profile now carries its own kernel/rootfs/initrd paths while the
+  existing bootstrap overlay, SSH authorized keys, and entrypoint semantics
+  remain intact.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/soracloud_runtime.rs`
+  now records the selected guest ISA in the node-local Inrou runtime plan, and
+  `/Users/takemiyamakoto/dev/iroha/crates/irohad/src/soracloud_runtime.rs`
+  now chooses the host-local guest profile when projecting that plan and uses
+  the selected guest-image paths when starting the Linux Firecracker path. This
+  keeps backend choice private to the runtime plan instead of exposing it
+  through the public service contract.
+- Fixture/template fallout is updated in:
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/soracloud.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/smartcontracts/isi/soracloud.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs`
+  - `/Users/takemiyamakoto/dev/iroha/crates/irohad/src/soracloud_runtime.rs`
+  so the default Soracloud manifests and Linux/KVM smoke fixtures all emit the
+  new dual-ISA guest-image shape.
+- Focused validation completed for the matching ton-indexer bundle/tooling
+  slice in `/Users/takemiyamakoto/dev/tonswap_web`:
+  - `npm run test:unit -- tests/soracloudTonIndexerManifest.test.ts tests/soracloudTonIndexerBundle.test.ts`
+- Focused Rust verification status for this slice:
+  - `CARGO_TARGET_DIR=/tmp/iroha-inrou-redesign-check cargo check -p iroha_data_model -p iroha_core --message-format short`
+  - an isolated
+    `CARGO_TARGET_DIR=/tmp/iroha-inrou-redesign-check cargo check -p iroha_data_model -p iroha_core -p iroha_cli -p iroha_torii -p irohad --message-format short`
+    run reached the touched Inrou contract/runtime files and then failed in
+    unrelated dirty-worktree code under
+    `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/contracts.rs` and
+    `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs`.
+- The larger backend-neutral Inrou redesign was still open at the time of this
+  earlier dual-ISA-only slice and is now closed by the later 2026-04-14
+  PortableVm / authoritative-placement follow-up above.
+
+## 2026-04-14 Follow-up: SCCP proof inspection surfaces now expose bound open-verify metadata without weakening verifier strictness
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_sccp/src/lib.rs` now exposes
+  `SccpOpenVerifyEnvelopeSummaryV1` plus helper builders for typed SCCP
+  artifacts and bundles. The summary path now decodes the outer
+  `OpenVerifyEnvelope` and `StarkFriOpenProofV1` to surface bound metadata even
+  when the embedded backend proof bytes are not themselves decoded for
+  inspection, while the actual SCCP verifier path remains strict and still
+  requires the embedded FASTPQ proof to decode and verify successfully.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs` now adds
+  `proof_envelope_summary` to SCCP artifact/job JSON responses and keeps
+  `artifact_verified` separate when projecting bridge proof records into JSON.
+  The enriched SCCP JSON view no longer depends on Norito `JsonSerialize` for
+  these typed artifact/job payloads.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_cli/src/bridge.rs` now prints
+  the open-verify backend/circuit/vk/schema summary in text mode for SCCP
+  artifacts and jobs. The CLI mock HTTP server used by the SCCP bridge tests
+  now flushes and closes the write side explicitly after each response so the
+  text-summary tests are deterministic.
+- `/Users/takemiyamakoto/dev/iroha/javascript/iroha_js/src/toriiClient.js` and
+  `/Users/takemiyamakoto/dev/iroha/javascript/iroha_js/test/toriiClient.test.js`
+  now normalize `proofEnvelopeSummary` on SCCP artifact/job responses, and
+  `/Users/takemiyamakoto/dev/iroha/docs/source/bridge_proofs.md` documents the
+  new inspection field for both routes.
+- Validation for this slice:
+  - `cargo fmt --all`
+  - `CARGO_HOME=/tmp/iroha-cargo-clone CARGO_TARGET_DIR=/tmp/iroha-sccp-summary2 cargo test --offline -p iroha_sccp transparent_fastpq_open_verify_ -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-clone CARGO_TARGET_DIR=/tmp/iroha-torii-open-verify2 cargo test --offline -p iroha_torii open_verify_summary -- --nocapture`
+  - `CARGO_HOME=/tmp/iroha-cargo-clone CARGO_TARGET_DIR=/tmp/iroha-cli-bridge2 cargo test --offline -p iroha_cli --features bridge sccp_ -- --nocapture`
+  - `IROHA_JS_DISABLE_NATIVE=1 node --test test/toriiClient.test.js`
+
 ## 2026-04-14 Follow-up: grouped consensus helper paths now force fresh heights and tolerate lagged catch-up telemetry
 - `/Users/takemiyamakoto/dev/iroha/integration_tests/tests/sumeragi_prf_collectors.rs`
   now drives the network with plain submits plus explicit total-height waits and
@@ -26,12 +225,11 @@ Last updated: 2026-04-14
     of the endpoint plan; and
   - the restarted-peer catch-up helpers that accept total-height growth and use
     the hard-timeout-only path for the combined-pressure catch-up context.
-- Validation for this slice is currently blocked by unrelated dirty-worktree
-  SCCP/Torii edits outside these files: rebuilding `integration_tests` now
-  fails in `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs`
-  because `NexusSccpMessageTransparentProofV1` and
-  `SccpCounterpartyProofJobV1` do not satisfy the `JsonSerialize` bound
-  required by `norito::json::value::to_value(...)`.
+- The temporary unrelated SCCP/Torii JSON compile blocker mentioned earlier is
+  resolved on the current tree. The exact `integration_tests` reruns for this
+  helper slice are still outstanding because the follow-up work here continued
+  on SCCP proof surfaces rather than returning to the heavier integration test
+  crate.
 
 ## 2026-04-14 Follow-up: Swift offline cash helpers restored after merged `#5570`
 - `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Sources/IrohaSwift/OfflineNoritoDecoding.swift`

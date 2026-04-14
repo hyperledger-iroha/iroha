@@ -172,6 +172,14 @@ const SCCP_VERIFIER_TARGET_VALUES = new Set([
   "TronContract",
   "SubstrateRuntime",
 ]);
+const SCCP_DESTINATION_VERIFIER_PLAN_VALUES = new Set([
+  "Unknown",
+  "EvmGroth16Bn254Adapter",
+  "SolanaProgramNativeRecursive",
+  "TonContractNativeRecursive",
+  "TronContractNativeRecursive",
+  "SubstrateRuntimeNativeRecursive",
+]);
 const SCCP_HUB_MESSAGE_KIND_VALUES = new Set([
   "Burn",
   "TokenAdd",
@@ -13273,10 +13281,49 @@ function normalizeSccpCounterpartyCapability(value, context) {
       record.counterparty_account_codec_key,
       `${context}.counterparty_account_codec_key`,
     ),
+    destinationRollout:
+      record.destination_rollout == null
+        ? null
+        : normalizeSccpDestinationRollout(
+            record.destination_rollout,
+            `${context}.destination_rollout`,
+          ),
     productionReady: requireBooleanLike(record.production_ready, `${context}.production_ready`),
     disabledReason: optionalString(
       record.disabled_reason ?? null,
       `${context}.disabled_reason`,
+    ),
+  };
+}
+
+function normalizeSccpDestinationRollout(value, context) {
+  const record = ensureRecord(value, context);
+  const verifierPlan = requireNonEmptyString(record.verifier_plan, `${context}.verifier_plan`);
+  if (!SCCP_DESTINATION_VERIFIER_PLAN_VALUES.has(verifierPlan)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.verifier_plan must be a supported SCCP destination verifier plan`,
+      `${context}.verifier_plan`,
+    );
+  }
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    verifierPlan,
+    immutableVerifierReady: requireBooleanLike(
+      record.immutable_verifier_ready,
+      `${context}.immutable_verifier_ready`,
+    ),
+    anchorsReady: requireBooleanLike(record.anchors_ready, `${context}.anchors_ready`),
+    verifierIdentity: optionalString(record.verifier_identity ?? null, `${context}.verifier_identity`),
+    verifierCodeHash: optionalString(
+      record.verifier_code_hash ?? null,
+      `${context}.verifier_code_hash`,
+    ),
+    anchorId: optionalString(record.anchor_id ?? null, `${context}.anchor_id`),
+    blockers: parseStringArray(record.blockers ?? [], `${context}.blockers`).map((entry, index) =>
+      requireNonEmptyString(entry, `${context}.blockers[${index}]`),
     ),
   };
 }
@@ -13610,6 +13657,13 @@ function normalizeSccpProofManifest(value, context) {
     ).map((entry, index) =>
       requireNonEmptyString(entry, `${context}.message_payload_kinds[${index}]`),
     ),
+    destinationRollout:
+      record.destination_rollout == null
+        ? null
+        : normalizeSccpDestinationRollout(
+            record.destination_rollout,
+            `${context}.destination_rollout`,
+          ),
     productionReady: requireBooleanLike(record.production_ready, `${context}.production_ready`),
     disabledReason: optionalString(
       record.disabled_reason ?? null,

@@ -1421,6 +1421,13 @@ impl Actor {
         }
 
         let now = Instant::now();
+        let known_block_commit_qc_repair = self.missing_commit_qc_repair_active_for_round(
+            block_hash,
+            height,
+            view,
+            self.committed_height_snapshot(),
+            now,
+        );
         let mut targets = super::missing_block_request_targets_without_local(
             &self.common_config.peer.id,
             targets,
@@ -1439,7 +1446,7 @@ impl Actor {
                 requester: None,
             },
         );
-        if self.frontier_block_materialized_locally(block_hash) {
+        if self.frontier_block_materialized_locally(block_hash) && !known_block_commit_qc_repair {
             let _ = self.handle_frontier_slot_event(
                 now,
                 super::FrontierSlotEvent::OnBodyAvailable {

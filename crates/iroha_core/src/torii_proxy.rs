@@ -131,6 +131,10 @@ pub struct ToriiReadProxyRequestV1 {
 pub struct ToriiHostedHttpProxyRequestV1 {
     /// Soracloud service name already resolved from the public route.
     pub service_name: String,
+    /// Exact service revision selected by the ingress node.
+    pub service_version: String,
+    /// Exact authoritative replica slot selected by the ingress node.
+    pub replica_slot: u16,
     /// Request path relative to the admitted public route prefix.
     pub request_path: String,
     /// Original client HTTP method.

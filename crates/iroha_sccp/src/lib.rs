@@ -1074,6 +1074,66 @@ pub enum SccpAnchorGovernanceV1 {
     SoraParliament,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub enum SccpDestinationVerifierPlanV1 {
+    #[default]
+    Unknown,
+    EvmGroth16Bn254Adapter,
+    SolanaProgramNativeRecursive,
+    TonContractNativeRecursive,
+    TronContractNativeRecursive,
+    SubstrateRuntimeNativeRecursive,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::JsonSerialize, norito::derive::JsonDeserialize)
+)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(
+    feature = "std",
+    derive(norito::derive::NoritoSerialize, norito::derive::NoritoDeserialize)
+)]
+pub struct SccpDestinationRolloutV1 {
+    pub version: u8,
+    pub verifier_plan: SccpDestinationVerifierPlanV1,
+    pub immutable_verifier_ready: bool,
+    pub anchors_ready: bool,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "std", norito(default))]
+    pub verifier_identity: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "std", norito(default))]
+    pub verifier_code_hash: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "std", norito(default))]
+    pub anchor_id: Option<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "std", norito(default))]
+    pub blockers: Vec<String>,
+}
+
+impl Default for SccpDestinationRolloutV1 {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            verifier_plan: SccpDestinationVerifierPlanV1::Unknown,
+            immutable_verifier_ready: false,
+            anchors_ready: false,
+            verifier_identity: None,
+            verifier_code_hash: None,
+            anchor_id: None,
+            blockers: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(
     feature = "std",
@@ -1377,6 +1437,9 @@ pub struct SccpProofManifestV1 {
     pub manifest_seed: String,
     pub required_public_inputs: Vec<String>,
     pub message_payload_kinds: Vec<String>,
+    #[cfg_attr(feature = "serde", serde(default))]
+    #[cfg_attr(feature = "std", norito(default))]
+    pub destination_rollout: SccpDestinationRolloutV1,
     pub production_ready: bool,
     #[cfg_attr(feature = "serde", serde(default))]
     #[cfg_attr(feature = "std", norito(default))]
@@ -1593,6 +1656,97 @@ pub fn sccp_anchor_governance_v1() -> SccpAnchorGovernanceV1 {
     SccpAnchorGovernanceV1::SoraParliament
 }
 
+fn sccp_destination_verifier_plan_for_domain(
+    domain: u32,
+) -> Option<SccpDestinationVerifierPlanV1> {
+    match domain {
+        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => {
+            Some(SccpDestinationVerifierPlanV1::EvmGroth16Bn254Adapter)
+        }
+        SCCP_DOMAIN_SOL => Some(SccpDestinationVerifierPlanV1::SolanaProgramNativeRecursive),
+        SCCP_DOMAIN_TON => Some(SccpDestinationVerifierPlanV1::TonContractNativeRecursive),
+        SCCP_DOMAIN_TRON => Some(SccpDestinationVerifierPlanV1::TronContractNativeRecursive),
+        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => {
+            Some(SccpDestinationVerifierPlanV1::SubstrateRuntimeNativeRecursive)
+        }
+        _ => None,
+    }
+}
+
+fn sccp_destination_rollout_blockers_for_domain(domain: u32) -> Option<Vec<String>> {
+    let blockers = match domain {
+        SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => vec![
+            "immutable EVM verifier contract is not deployed for this SCCP lane".to_owned(),
+            "Sora Parliament anchor set is not approved for this SCCP lane".to_owned(),
+            "Groth16/bn254 adapter proof submission is not wired into the SCCP relayer path"
+                .to_owned(),
+        ],
+        SCCP_DOMAIN_SOL => vec![
+            "immutable Solana verifier program is not deployed for this SCCP lane".to_owned(),
+            "Sora Parliament anchor set is not approved for this SCCP lane".to_owned(),
+            "native recursive verifier program submission is not wired into the SCCP relayer path"
+                .to_owned(),
+        ],
+        SCCP_DOMAIN_TON => vec![
+            "immutable TON verifier contract is not deployed for this SCCP lane".to_owned(),
+            "Sora Parliament anchor set is not approved for this SCCP lane".to_owned(),
+            "native recursive verifier contract submission is not wired into the SCCP relayer path"
+                .to_owned(),
+        ],
+        SCCP_DOMAIN_TRON => vec![
+            "immutable TRON verifier contract is not deployed for this SCCP lane".to_owned(),
+            "Sora Parliament anchor set is not approved for this SCCP lane".to_owned(),
+            "native recursive verifier contract submission is not wired into the SCCP relayer path"
+                .to_owned(),
+        ],
+        SCCP_DOMAIN_SORA_KUSAMA | SCCP_DOMAIN_SORA_POLKADOT | SCCP_DOMAIN_SORA2 => vec![
+            "immutable Substrate runtime verifier call is not deployed for this SCCP lane"
+                .to_owned(),
+            "Sora Parliament anchor set is not approved for this SCCP lane".to_owned(),
+            "native recursive runtime-call submission is not wired into the SCCP relayer path"
+                .to_owned(),
+        ],
+        _ => return None,
+    };
+    Some(blockers)
+}
+
+pub fn sccp_destination_rollout_for_domain(domain: u32) -> Option<SccpDestinationRolloutV1> {
+    Some(SccpDestinationRolloutV1 {
+        version: 1,
+        verifier_plan: sccp_destination_verifier_plan_for_domain(domain)?,
+        immutable_verifier_ready: false,
+        anchors_ready: false,
+        verifier_identity: None,
+        verifier_code_hash: None,
+        anchor_id: None,
+        blockers: sccp_destination_rollout_blockers_for_domain(domain)?,
+    })
+}
+
+fn sccp_lane_disabled_reason_for_plan(
+    plan: SccpDestinationVerifierPlanV1,
+) -> &'static str {
+    match plan {
+        SccpDestinationVerifierPlanV1::EvmGroth16Bn254Adapter => {
+            "disabled until the immutable EVM Groth16/bn254 SCCP verifier and Sora Parliament anchors are live for this lane"
+        }
+        SccpDestinationVerifierPlanV1::SolanaProgramNativeRecursive => {
+            "disabled until the immutable Solana recursive SCCP verifier and Sora Parliament anchors are live for this lane"
+        }
+        SccpDestinationVerifierPlanV1::TonContractNativeRecursive => {
+            "disabled until the immutable TON recursive SCCP verifier and Sora Parliament anchors are live for this lane"
+        }
+        SccpDestinationVerifierPlanV1::TronContractNativeRecursive => {
+            "disabled until the immutable TRON recursive SCCP verifier and Sora Parliament anchors are live for this lane"
+        }
+        SccpDestinationVerifierPlanV1::SubstrateRuntimeNativeRecursive => {
+            "disabled until the immutable Substrate runtime SCCP verifier and Sora Parliament anchors are live for this lane"
+        }
+        SccpDestinationVerifierPlanV1::Unknown => SCCP_PRODUCTION_DISABLED_REASON_V1,
+    }
+}
+
 pub fn sccp_destination_binding_key_for_domain(domain: u32) -> Option<String> {
     let chain = sccp_chain_key_for_domain(domain)?;
     let verifier_backend = sccp_verifier_backend_for_domain(domain)?;
@@ -1652,13 +1806,18 @@ pub fn sccp_destination_binding_for_domain(domain: u32) -> Option<SccpDestinatio
 pub const SCCP_PRODUCTION_DISABLED_REASON_V1: &str = "disabled until immutable destination verifiers validate recursive SCCP proofs under Sora Parliament-governed trust anchors";
 
 pub fn sccp_lane_production_ready_for_domain(domain: u32) -> bool {
-    let _ = domain;
-    false
+    sccp_destination_rollout_for_domain(domain).is_some_and(|rollout| {
+        rollout.immutable_verifier_ready
+            && rollout.anchors_ready
+            && rollout.verifier_identity.is_some()
+            && rollout.verifier_code_hash.is_some()
+            && rollout.anchor_id.is_some()
+    })
 }
 
 pub fn sccp_lane_disabled_reason_for_domain(domain: u32) -> Option<&'static str> {
-    is_supported_domain(domain)
-        .then_some(SCCP_PRODUCTION_DISABLED_REASON_V1)
+    sccp_destination_rollout_for_domain(domain)
+        .map(|rollout| sccp_lane_disabled_reason_for_plan(rollout.verifier_plan))
         .filter(|_| !sccp_lane_production_ready_for_domain(domain))
 }
 
@@ -1822,6 +1981,7 @@ pub fn sccp_proof_manifest_for_domain(domain: u32) -> Option<SccpProofManifestV1
         manifest_seed: sccp_manifest_seed_for_domain(domain)?,
         required_public_inputs: sccp_required_public_inputs_v1(),
         message_payload_kinds: sccp_message_payload_kind_keys_v1(),
+        destination_rollout: sccp_destination_rollout_for_domain(domain)?,
         production_ready: sccp_lane_production_ready_for_domain(domain),
         disabled_reason: sccp_lane_disabled_reason_for_domain(domain).map(str::to_owned),
         submission_template: sccp_submission_template_for_domain(domain)?,
@@ -3138,13 +3298,9 @@ fn saturating_u32(value: usize) -> u32 {
 }
 
 #[cfg(feature = "std")]
-fn decode_sccp_message_transparent_open_verify_proof(
+fn decode_sccp_message_transparent_open_verify_envelope(
     proof_bytes: &[u8],
-) -> Option<(
-    OpenVerifyEnvelope,
-    StarkFriOpenProofV1,
-    fastpq_prover::Proof,
-)> {
+) -> Option<(OpenVerifyEnvelope, StarkFriOpenProofV1)> {
     let env: OpenVerifyEnvelope = norito::decode_from_bytes(proof_bytes).ok()?;
     if env.backend != BackendTag::Stark {
         return None;
@@ -3153,6 +3309,18 @@ fn decode_sccp_message_transparent_open_verify_proof(
     if open.version != 1 {
         return None;
     }
+    Some((env, open))
+}
+
+#[cfg(feature = "std")]
+fn decode_sccp_message_transparent_open_verify_proof(
+    proof_bytes: &[u8],
+) -> Option<(
+    OpenVerifyEnvelope,
+    StarkFriOpenProofV1,
+    fastpq_prover::Proof,
+)> {
+    let (env, open) = decode_sccp_message_transparent_open_verify_envelope(proof_bytes)?;
     let proof: fastpq_prover::Proof = norito::decode_from_bytes(&open.envelope_bytes).ok()?;
     Some((env, open, proof))
 }
@@ -3161,7 +3329,7 @@ fn decode_sccp_message_transparent_open_verify_proof(
 pub fn summarize_sccp_message_transparent_open_verify_proof(
     proof_bytes: &[u8],
 ) -> Option<SccpOpenVerifyEnvelopeSummaryV1> {
-    let (env, open, _) = decode_sccp_message_transparent_open_verify_proof(proof_bytes)?;
+    let (env, open) = decode_sccp_message_transparent_open_verify_envelope(proof_bytes)?;
     let public_input_word_count = open.public_inputs.iter().map(Vec::len).sum::<usize>();
     Some(SccpOpenVerifyEnvelopeSummaryV1 {
         version: 1,
@@ -5133,6 +5301,51 @@ mod tests {
             build_sccp_message_transparent_open_verify_summary_from_bundle(&bundle),
             Some(summary)
         );
+    }
+
+    #[test]
+    fn transparent_fastpq_open_verify_summary_allows_metadata_only_envelopes() {
+        let open = StarkFriOpenProofV1 {
+            version: 1,
+            public_inputs: vec![vec![[0x55; 32]]],
+            envelope_bytes: vec![0xAA, 0xBB, 0xCC],
+        };
+        let open_proof_bytes = norito::to_bytes(&open).expect("encode open proof");
+        let proof_bytes = norito::to_bytes(&OpenVerifyEnvelope {
+            backend: BackendTag::Stark,
+            circuit_id: SCCP_TRANSPARENT_OPEN_VERIFY_CIRCUIT_ID_V1.to_owned(),
+            vk_hash: [0x66; 32],
+            public_inputs: vec![0x77, 0x88, 0x99],
+            proof_bytes: open_proof_bytes.clone(),
+            aux: vec![0xDE, 0xAD],
+        })
+        .expect("encode envelope");
+
+        let summary = summarize_sccp_message_transparent_open_verify_proof(&proof_bytes)
+            .expect("proof summary");
+
+        assert_eq!(summary.backend, "stark");
+        assert_eq!(
+            summary.circuit_id,
+            SCCP_TRANSPARENT_OPEN_VERIFY_CIRCUIT_ID_V1
+        );
+        assert_eq!(summary.vk_hash, [0x66; 32]);
+        assert_eq!(
+            summary.public_inputs_schema_hash,
+            prefixed_blake2b(
+                SCCP_TRANSPARENT_OPEN_VERIFY_SCHEMA_HASH_PREFIX_V1,
+                &[0x77, 0x88, 0x99]
+            )
+        );
+        assert_eq!(summary.public_inputs_schema_len_bytes, 3);
+        assert_eq!(summary.public_input_column_count, 1);
+        assert_eq!(summary.public_input_word_count, 1);
+        assert_eq!(
+            summary.open_proof_len_bytes as usize,
+            open_proof_bytes.len()
+        );
+        assert_eq!(summary.backend_proof_len_bytes, 3);
+        assert_eq!(summary.aux_len_bytes, 2);
     }
 
     #[test]

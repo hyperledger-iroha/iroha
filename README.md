@@ -97,6 +97,23 @@ See the full endpoint reference in:
 - [`docs/source/telemetry.md`](./docs/source/telemetry.md)
 - [`docs/portal/docs/reference/README.md`](./docs/portal/docs/reference/README.md)
 
+For contract apps, Torii now exposes both single-contract deploy and bundle
+deploy surfaces. The maintained public path is:
+
+- `iroha contract app build|plan|deploy|resume` for `iroha.app.toml` bundles
+- `POST /v1/contracts/deploy-bundle` for compiled bundle deploys (`?dry_run=true`
+  for deterministic planning)
+- `GET /v1/contracts/deploy-bundles/{bundle_digest}` for receipt/status lookup
+- `POST /v1/contracts/deploy` for the single-contract path, implemented through
+  the same planner/executor as a one-contract bundle
+
+For the public-safe Torii posture, contract deploy/call/view/status routes stay
+public, while higher-risk app-facing surfaces are opt-in:
+
+- `torii.webhooks_enabled = false` by default
+- `torii.zk_attachments_enabled = false` by default
+- enable them explicitly when the node is meant to expose those app features
+
 ## Codex Integration
 
 This repo includes two Codex-facing Taira surfaces:

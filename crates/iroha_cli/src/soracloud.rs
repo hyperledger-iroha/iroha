@@ -320,12 +320,8 @@ impl AppCommand {
             Self::LocalPlan(args) => context.print_data(&args.run()?),
             Self::LocalDev(args) => context.print_data(&args.run()?),
             Self::BuildAndSync(args) => context.print_data(&args.run()?),
-            Self::DeployWorkspace(args) => {
-                context.print_data(&args.run(MutationMode::Deploy)?)
-            }
-            Self::UpgradeWorkspace(args) => {
-                context.print_data(&args.run(MutationMode::Upgrade)?)
-            }
+            Self::DeployWorkspace(args) => context.print_data(&args.run(MutationMode::Deploy)?),
+            Self::UpgradeWorkspace(args) => context.print_data(&args.run(MutationMode::Upgrade)?),
             Self::Deploy(args) => {
                 let output = args.run(
                     MutationMode::Deploy,
@@ -358,9 +354,7 @@ impl Run for Command {
             Command::LocalPlan(args) => context.print_data(&args.run()?),
             Command::LocalDev(args) => context.print_data(&args.run()?),
             Command::BuildAndSync(args) => context.print_data(&args.run()?),
-            Command::DeployWorkspace(args) => {
-                context.print_data(&args.run(MutationMode::Deploy)?)
-            }
+            Command::DeployWorkspace(args) => context.print_data(&args.run(MutationMode::Deploy)?),
             Command::UpgradeWorkspace(args) => {
                 context.print_data(&args.run(MutationMode::Upgrade)?)
             }
@@ -775,7 +769,8 @@ impl LocalDevArgs {
             workspace_scripts,
             notes,
         } = plan;
-        let script_path = resolve_service_workspace_script(&self.container, &self.service, "local-dev.sh")?;
+        let script_path =
+            resolve_service_workspace_script(&self.container, &self.service, "local-dev.sh")?;
         let working_dir = script_path
             .parent()
             .map(Path::to_path_buf)
@@ -976,9 +971,7 @@ impl BuildAndSyncArgs {
         }
 
         let mut notes = notes;
-        notes.push(
-            "build-and-sync completed through the manifest-adjacent root script".to_owned(),
-        );
+        notes.push("build-and-sync completed through the manifest-adjacent root script".to_owned());
         Ok(ServiceWorkspaceScriptOutput {
             service_name,
             container_manifest_path: self.container.to_string_lossy().into_owned(),
@@ -1054,20 +1047,17 @@ impl WorkspaceMutationArgs {
             notes: plan_notes,
         } = plan;
         let script_name = mode.workspace_script_name();
-        let script_path = resolve_service_workspace_script(&self.container, &self.service, script_name)?;
+        let script_path =
+            resolve_service_workspace_script(&self.container, &self.service, script_name)?;
         let working_dir = script_path
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
-        let initial_configs = canonicalize_cli_arg_path(
-            self.initial_configs.as_deref(),
-            "--initial-configs",
-        )?;
-        let initial_secrets = canonicalize_cli_arg_path(
-            self.initial_secrets.as_deref(),
-            "--initial-secrets",
-        )?;
+        let initial_configs =
+            canonicalize_cli_arg_path(self.initial_configs.as_deref(), "--initial-configs")?;
+        let initial_secrets =
+            canonicalize_cli_arg_path(self.initial_secrets.as_deref(), "--initial-secrets")?;
         let command = build_service_workspace_mutation_command(
             script_name,
             self.timeout_secs,
@@ -1115,7 +1105,9 @@ impl WorkspaceMutationArgs {
         }
 
         let mut process = ProcessCommand::new(&script_path);
-        process.current_dir(&working_dir).env("TORII_URL", &torii_url);
+        process
+            .current_dir(&working_dir)
+            .env("TORII_URL", &torii_url);
         if let Some(api_token) = self.api_token.as_deref() {
             process.env("API_TOKEN", api_token);
         }
@@ -1125,7 +1117,9 @@ impl WorkspaceMutationArgs {
         if let Some(path) = initial_secrets.as_deref() {
             process.arg("--initial-secrets").arg(path);
         }
-        process.arg("--timeout-secs").arg(self.timeout_secs.to_string());
+        process
+            .arg("--timeout-secs")
+            .arg(self.timeout_secs.to_string());
         let status = process.status().wrap_err_with(|| {
             format!(
                 "failed to run {} script `{}` resolved from `{}` and `{}`",
@@ -1457,16 +1451,13 @@ impl AppDeployArgs {
             .to_path_buf();
         let manifest: SoracloudAppManifestV1 = load_json(&manifest_path)?;
         manifest.validate()?;
-        let frontend =
-            build_app_frontend_projection(&manifest.public_url, manifest.static_site.as_ref(), &manifest_path)?;
+        let root = build_app_root_projection(&manifest_path, &manifest.public_url)?;
+        let frontend = build_app_frontend_projection(
+            &manifest.public_url,
+            manifest.static_site.as_ref(),
+            &manifest_path,
+        )?;
         let routes = build_app_local_plan_output(&manifest_path)?.routes;
-        let workspace_dir = manifest_dir.to_string_lossy().into_owned();
-        let workspace_scripts = AppLocalWorkspaceScriptsOutput {
-            local_dev: workspace_script_path_if_exists(&manifest_dir, "local-dev.sh"),
-            build_and_sync: workspace_script_path_if_exists(&manifest_dir, "build-and-sync.sh"),
-            deploy: workspace_script_path_if_exists(&manifest_dir, "deploy.sh"),
-            upgrade: workspace_script_path_if_exists(&manifest_dir, "upgrade.sh"),
-        };
         let synced_manifests = sync_app_manifest_service_refs(&manifest, &manifest_dir)
             .wrap_err("failed to sync app service manifests before deployment")?;
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
@@ -1518,12 +1509,12 @@ impl AppDeployArgs {
                 service: service_manifest_payload,
             };
             bundle.validate_for_admission()?;
-            let is_hosted_http =
-                bundle.service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
-                    && bundle.container.runtime == SoraContainerRuntimeV1::Inrou;
-            let is_deterministic =
-                bundle.service.execution_plane == SoraServiceExecutionPlaneV1::DeterministicService
-                    && bundle.container.runtime == SoraContainerRuntimeV1::Ivm;
+            let is_hosted_http = bundle.service.execution_plane
+                == SoraServiceExecutionPlaneV1::HttpService
+                && bundle.container.runtime == SoraContainerRuntimeV1::Inrou;
+            let is_deterministic = bundle.service.execution_plane
+                == SoraServiceExecutionPlaneV1::DeterministicService
+                && bundle.container.runtime == SoraContainerRuntimeV1::Ivm;
             if is_hosted_http {
                 hosted_http_service_count += 1;
             }
@@ -1540,7 +1531,11 @@ impl AppDeployArgs {
             let workspace_scripts = app_service_workspace_scripts(service_workspace_dir.as_deref());
             let execution_plane = format!("{:?}", bundle.service.execution_plane);
             let runtime = format!("{:?}", bundle.container.runtime);
-            let route_host = bundle.service.route.as_ref().map(|route| route.host.clone());
+            let route_host = bundle
+                .service
+                .route
+                .as_ref()
+                .map(|route| route.host.clone());
             let route_path_prefix = bundle
                 .service
                 .route
@@ -1633,10 +1628,11 @@ impl AppDeployArgs {
 
         Ok(AppMutationOutput {
             app_name: manifest.app_name,
-            manifest_path: manifest_path.to_string_lossy().into_owned(),
-            public_url: manifest.public_url,
-            workspace_dir,
-            workspace_scripts,
+            manifest_path: root.manifest_path,
+            public_url: root.public_url,
+            hostname: root.hostname,
+            workspace_dir: root.workspace_dir,
+            workspace_scripts: root.workspace_scripts,
             mode: mode_label,
             has_mixed_planes,
             hosted_http_service_count,
@@ -1678,16 +1674,13 @@ impl AppStatusArgs {
             .to_path_buf();
         let manifest: SoracloudAppManifestV1 = load_json(&manifest_path)?;
         manifest.validate()?;
-        let frontend =
-            build_app_frontend_projection(&manifest.public_url, manifest.static_site.as_ref(), &manifest_path)?;
+        let root = build_app_root_projection(&manifest_path, &manifest.public_url)?;
+        let frontend = build_app_frontend_projection(
+            &manifest.public_url,
+            manifest.static_site.as_ref(),
+            &manifest_path,
+        )?;
         let routes = build_app_local_plan_output(&manifest_path)?.routes;
-        let workspace_dir = manifest_dir.to_string_lossy().into_owned();
-        let workspace_scripts = AppLocalWorkspaceScriptsOutput {
-            local_dev: workspace_script_path_if_exists(&manifest_dir, "local-dev.sh"),
-            build_and_sync: workspace_script_path_if_exists(&manifest_dir, "build-and-sync.sh"),
-            deploy: workspace_script_path_if_exists(&manifest_dir, "deploy.sh"),
-            upgrade: workspace_script_path_if_exists(&manifest_dir, "upgrade.sh"),
-        };
         for service_ref in &manifest.services {
             let service_path = resolve_manifest_path(&manifest_dir, &service_ref.service_manifest);
             let service_manifest: SoraServiceManifestV1 = load_json(&service_path)?;
@@ -1725,7 +1718,8 @@ impl AppStatusArgs {
         let mut hosted_http_service_count = 0_u32;
         let mut deterministic_service_count = 0_u32;
         for service_ref in &manifest.services {
-            let container_path = resolve_manifest_path(&manifest_dir, &service_ref.container_manifest);
+            let container_path =
+                resolve_manifest_path(&manifest_dir, &service_ref.container_manifest);
             let service_path = resolve_manifest_path(&manifest_dir, &service_ref.service_manifest);
             let container: SoraContainerManifestV1 = load_json(&container_path)?;
             let service: SoraServiceManifestV1 = load_json(&service_path)?;
@@ -1736,11 +1730,12 @@ impl AppStatusArgs {
             )?;
 
             let service_name = service.service_name.to_string();
-            let is_hosted_http = service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
+            let is_hosted_http = service.execution_plane
+                == SoraServiceExecutionPlaneV1::HttpService
                 && container.runtime == SoraContainerRuntimeV1::Inrou;
-            let is_deterministic =
-                service.execution_plane == SoraServiceExecutionPlaneV1::DeterministicService
-                    && container.runtime == SoraContainerRuntimeV1::Ivm;
+            let is_deterministic = service.execution_plane
+                == SoraServiceExecutionPlaneV1::DeterministicService
+                && container.runtime == SoraContainerRuntimeV1::Ivm;
             if is_hosted_http {
                 hosted_http_service_count += 1;
             }
@@ -1752,13 +1747,12 @@ impl AppStatusArgs {
             let mut notes = Vec::new();
             if is_hosted_http {
                 notes.push(
-                    "app service targets the hosted HttpService + Inrou production plane".to_owned(),
+                    "app service targets the hosted HttpService + Inrou production plane"
+                        .to_owned(),
                 );
             }
             if is_deterministic {
-                notes.push(
-                    "app service targets the deterministic IVM production plane".to_owned(),
-                );
+                notes.push("app service targets the deterministic IVM production plane".to_owned());
             }
             let live_status = control_plane_services.get(service_name.as_str()).cloned();
             if live_status.is_none() {
@@ -1768,8 +1762,7 @@ impl AppStatusArgs {
                 );
             }
 
-            let workspace_scripts =
-                app_service_workspace_scripts(service_workspace_dir.as_deref());
+            let workspace_scripts = app_service_workspace_scripts(service_workspace_dir.as_deref());
 
             services.push(AppServiceStatusOutput {
                 service_name,
@@ -1808,10 +1801,11 @@ impl AppStatusArgs {
 
         Ok(AppStatusOutput {
             app_name: manifest.app_name,
-            manifest_path: manifest_path.to_string_lossy().into_owned(),
-            public_url: manifest.public_url,
-            workspace_dir,
-            workspace_scripts,
+            manifest_path: root.manifest_path,
+            public_url: root.public_url,
+            hostname: root.hostname,
+            workspace_dir: root.workspace_dir,
+            workspace_scripts: root.workspace_scripts,
             source: "torii_control_plane".to_owned(),
             torii_endpoint: Some(endpoint),
             static_site: manifest.static_site,
@@ -1865,7 +1859,10 @@ impl AppLocalDevArgs {
             return Ok(AppLocalDevOutput {
                 app_name: plan.app_name,
                 public_url: plan.public_url,
+                hostname: plan.hostname.clone(),
                 manifest_path: self.manifest.to_string_lossy().into_owned(),
+                workspace_dir: plan.workspace_dir.clone(),
+                workspace_scripts: plan.workspace_scripts.clone(),
                 working_dir: working_dir.to_string_lossy().into_owned(),
                 script_path: script_path.to_string_lossy().into_owned(),
                 mode: "dry_run".to_owned(),
@@ -1901,7 +1898,10 @@ impl AppLocalDevArgs {
             return Ok(AppLocalDevOutput {
                 app_name: plan.app_name,
                 public_url: plan.public_url,
+                hostname: plan.hostname.clone(),
                 manifest_path: self.manifest.to_string_lossy().into_owned(),
+                workspace_dir: plan.workspace_dir.clone(),
+                workspace_scripts: plan.workspace_scripts.clone(),
                 working_dir: working_dir.to_string_lossy().into_owned(),
                 script_path: script_path.to_string_lossy().into_owned(),
                 mode: "interrupted".to_owned(),
@@ -1929,7 +1929,10 @@ impl AppLocalDevArgs {
         Ok(AppLocalDevOutput {
             app_name: plan.app_name,
             public_url: plan.public_url,
+            hostname: plan.hostname.clone(),
             manifest_path: self.manifest.to_string_lossy().into_owned(),
+            workspace_dir: plan.workspace_dir.clone(),
+            workspace_scripts: plan.workspace_scripts.clone(),
             working_dir: working_dir.to_string_lossy().into_owned(),
             script_path: script_path.to_string_lossy().into_owned(),
             mode: "completed".to_owned(),
@@ -1971,7 +1974,10 @@ impl AppBuildAndSyncArgs {
             return Ok(AppBuildAndSyncOutput {
                 app_name: plan.app_name,
                 public_url: plan.public_url,
+                hostname: plan.hostname.clone(),
                 manifest_path: self.manifest.to_string_lossy().into_owned(),
+                workspace_dir: plan.workspace_dir.clone(),
+                workspace_scripts: plan.workspace_scripts.clone(),
                 working_dir: working_dir.to_string_lossy().into_owned(),
                 script_path: script_path.to_string_lossy().into_owned(),
                 mode: "dry_run".to_owned(),
@@ -2009,13 +2015,14 @@ impl AppBuildAndSyncArgs {
         }
 
         let mut notes = plan.notes;
-        notes.push(
-            "build-and-sync completed through the manifest-adjacent root script".to_owned(),
-        );
+        notes.push("build-and-sync completed through the manifest-adjacent root script".to_owned());
         Ok(AppBuildAndSyncOutput {
             app_name: plan.app_name,
             public_url: plan.public_url,
+            hostname: plan.hostname.clone(),
             manifest_path: self.manifest.to_string_lossy().into_owned(),
+            workspace_dir: plan.workspace_dir.clone(),
+            workspace_scripts: plan.workspace_scripts.clone(),
             working_dir: working_dir.to_string_lossy().into_owned(),
             script_path: script_path.to_string_lossy().into_owned(),
             mode: "completed".to_owned(),
@@ -2062,8 +2069,7 @@ impl AppWorkspaceMutationArgs {
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
         let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
-        let command =
-            build_app_workspace_mutation_command(script_name, self.timeout_secs);
+        let command = build_app_workspace_mutation_command(script_name, self.timeout_secs);
         let mut notes = plan.notes;
         notes.push(format!(
             "{} will run through the manifest-adjacent root script after exporting TORII_URL",
@@ -2080,7 +2086,10 @@ impl AppWorkspaceMutationArgs {
             return Ok(AppWorkspaceMutationScriptOutput {
                 app_name: plan.app_name,
                 public_url: plan.public_url,
+                hostname: plan.hostname.clone(),
                 manifest_path: self.manifest.to_string_lossy().into_owned(),
+                workspace_dir: plan.workspace_dir.clone(),
+                workspace_scripts: plan.workspace_scripts.clone(),
                 working_dir: working_dir.to_string_lossy().into_owned(),
                 script_path: script_path.to_string_lossy().into_owned(),
                 script_name: script_name.to_owned(),
@@ -2100,11 +2109,15 @@ impl AppWorkspaceMutationArgs {
         }
 
         let mut process = ProcessCommand::new(&script_path);
-        process.current_dir(&working_dir).env("TORII_URL", &torii_url);
+        process
+            .current_dir(&working_dir)
+            .env("TORII_URL", &torii_url);
         if let Some(api_token) = self.api_token.as_deref() {
             process.env("API_TOKEN", api_token);
         }
-        process.arg("--timeout-secs").arg(self.timeout_secs.to_string());
+        process
+            .arg("--timeout-secs")
+            .arg(self.timeout_secs.to_string());
         let status = process.status().wrap_err_with(|| {
             format!(
                 "failed to run {} script `{}` resolved from `{}`",
@@ -2132,7 +2145,10 @@ impl AppWorkspaceMutationArgs {
         Ok(AppWorkspaceMutationScriptOutput {
             app_name: plan.app_name,
             public_url: plan.public_url,
+            hostname: plan.hostname.clone(),
             manifest_path: self.manifest.to_string_lossy().into_owned(),
+            workspace_dir: plan.workspace_dir.clone(),
+            workspace_scripts: plan.workspace_scripts.clone(),
             working_dir: working_dir.to_string_lossy().into_owned(),
             script_path: script_path.to_string_lossy().into_owned(),
             script_name: script_name.to_owned(),
@@ -2165,8 +2181,12 @@ fn resolve_app_root_script(manifest_path: &Path, script_name: &str) -> Result<Pa
             manifest_path.display()
         ));
     }
-    fs::canonicalize(&script_path)
-        .wrap_err_with(|| format!("failed to canonicalize app-local script {}", script_path.display()))
+    fs::canonicalize(&script_path).wrap_err_with(|| {
+        format!(
+            "failed to canonicalize app-local script {}",
+            script_path.display()
+        )
+    })
 }
 
 fn canonicalize_cli_arg_path(path: Option<&Path>, flag_name: &str) -> Result<Option<PathBuf>> {
@@ -2305,14 +2325,15 @@ fn resolve_request_payload_service_name_name(
         command_name,
     )?;
     resolved_service_name.parse().wrap_err_with(|| {
-        format!("resolved service name `{resolved_service_name}` is not a valid Soracloud service name")
+        format!(
+            "resolved service name `{resolved_service_name}` is not a valid Soracloud service name"
+        )
     })
 }
 
 fn workspace_script_path_if_exists(workspace_dir: &Path, script_name: &str) -> Option<String> {
     let path = workspace_dir.join(script_name);
-    path.is_file()
-        .then(|| path.to_string_lossy().into_owned())
+    path.is_file().then(|| path.to_string_lossy().into_owned())
 }
 
 fn app_service_workspace_dir(
@@ -2418,16 +2439,12 @@ fn build_service_workspace_plan(
     if service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
         && container.runtime == SoraContainerRuntimeV1::Inrou
     {
-        notes.push(
-            "workspace targets the hosted HttpService + Inrou production plane".to_owned(),
-        );
+        notes.push("workspace targets the hosted HttpService + Inrou production plane".to_owned());
     }
     if service.execution_plane == SoraServiceExecutionPlaneV1::DeterministicService
         && container.runtime == SoraContainerRuntimeV1::Ivm
     {
-        notes.push(
-            "workspace targets the deterministic IVM production plane".to_owned(),
-        );
+        notes.push("workspace targets the deterministic IVM production plane".to_owned());
     }
     let route_host = service.route.as_ref().map(|route| route.host.clone());
     let route_path_prefix = service
@@ -2590,12 +2607,9 @@ fn maybe_service_local_plan(
     service_manifest: Option<&Path>,
 ) -> Result<Option<ServiceLocalPlanOutput>> {
     match (container_manifest, service_manifest) {
-        (Some(container_manifest), Some(service_manifest)) => {
-            Ok(Some(build_service_local_plan_output(
-                container_manifest,
-                service_manifest,
-            )?))
-        }
+        (Some(container_manifest), Some(service_manifest)) => Ok(Some(
+            build_service_local_plan_output(container_manifest, service_manifest)?,
+        )),
         _ => Ok(None),
     }
 }
@@ -2607,12 +2621,12 @@ fn build_app_frontend_projection(
 ) -> Result<Option<AppLocalFrontendPlanOutput>> {
     let public_origin = normalize_app_public_origin_url(public_url, manifest_path)?;
     Ok(static_site.map(|static_site| {
-        let cid_gateway_url_template =
-            (static_site.publish_mode == APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY)
-                .then(|| format!("{public_origin}sorafs/cid/<cid>/"));
-        let root_binding_url =
-            (static_site.publish_mode == APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING)
-                .then(|| public_origin.to_string());
+        let cid_gateway_url_template = (static_site.publish_mode
+            == APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY)
+            .then(|| format!("{public_origin}sorafs/cid/<cid>/"));
+        let root_binding_url = (static_site.publish_mode
+            == APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING)
+            .then(|| public_origin.to_string());
         AppLocalFrontendPlanOutput {
             dist_dir: static_site.dist_dir.clone(),
             mount_path: static_site.mount_path.clone(),
@@ -2624,22 +2638,54 @@ fn build_app_frontend_projection(
     }))
 }
 
-fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutput> {
-    let manifest: SoracloudAppManifestV1 = load_json(manifest_path)?;
-    manifest.validate()?;
+#[derive(Clone, Debug)]
+struct AppRootProjection {
+    manifest_path: String,
+    public_url: String,
+    hostname: String,
+    workspace_dir: String,
+    workspace_scripts: AppLocalWorkspaceScriptsOutput,
+}
 
+fn build_app_root_projection(manifest_path: &Path, public_url: &str) -> Result<AppRootProjection> {
     let manifest_dir = manifest_path
         .parent()
         .map(Path::to_path_buf)
         .unwrap_or_else(|| PathBuf::from("."));
-    let public_origin = normalize_app_public_origin_url(&manifest.public_url, manifest_path)?;
+    let public_origin = normalize_app_public_origin_url(public_url, manifest_path)?;
     let hostname = public_origin
         .host_str()
         .ok_or_else(|| eyre!("app manifest public_url must include a hostname"))?
         .to_owned();
 
-    let frontend =
-        build_app_frontend_projection(&manifest.public_url, manifest.static_site.as_ref(), manifest_path)?;
+    Ok(AppRootProjection {
+        manifest_path: manifest_path.to_string_lossy().into_owned(),
+        public_url: public_url.to_owned(),
+        hostname,
+        workspace_dir: manifest_dir.to_string_lossy().into_owned(),
+        workspace_scripts: AppLocalWorkspaceScriptsOutput {
+            local_dev: workspace_script_path_if_exists(&manifest_dir, "local-dev.sh"),
+            build_and_sync: workspace_script_path_if_exists(&manifest_dir, "build-and-sync.sh"),
+            deploy: workspace_script_path_if_exists(&manifest_dir, "deploy.sh"),
+            upgrade: workspace_script_path_if_exists(&manifest_dir, "upgrade.sh"),
+        },
+    })
+}
+
+fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutput> {
+    let manifest: SoracloudAppManifestV1 = load_json(manifest_path)?;
+    manifest.validate()?;
+    let manifest_dir = manifest_path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let root = build_app_root_projection(manifest_path, &manifest.public_url)?;
+
+    let frontend = build_app_frontend_projection(
+        &manifest.public_url,
+        manifest.static_site.as_ref(),
+        manifest_path,
+    )?;
 
     let mut services = Vec::with_capacity(manifest.services.len());
     let mut routes = Vec::new();
@@ -2671,9 +2717,9 @@ fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutpu
 
         let is_hosted_http = service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
             && container.runtime == SoraContainerRuntimeV1::Inrou;
-        let is_deterministic =
-            service.execution_plane == SoraServiceExecutionPlaneV1::DeterministicService
-                && container.runtime == SoraContainerRuntimeV1::Ivm;
+        let is_deterministic = service.execution_plane
+            == SoraServiceExecutionPlaneV1::DeterministicService
+            && container.runtime == SoraContainerRuntimeV1::Ivm;
         if is_hosted_http {
             hosted_http_service_count += 1;
         }
@@ -2769,25 +2815,18 @@ fn build_app_local_plan_output(manifest_path: &Path) -> Result<AppLocalPlanOutpu
                 .to_owned(),
         );
     }
-    let workspace_dir = manifest_dir.to_string_lossy().into_owned();
-    let workspace_scripts = AppLocalWorkspaceScriptsOutput {
-        local_dev: workspace_script_path_if_exists(&manifest_dir, "local-dev.sh"),
-        build_and_sync: workspace_script_path_if_exists(&manifest_dir, "build-and-sync.sh"),
-        deploy: workspace_script_path_if_exists(&manifest_dir, "deploy.sh"),
-        upgrade: workspace_script_path_if_exists(&manifest_dir, "upgrade.sh"),
-    };
 
     Ok(AppLocalPlanOutput {
         app_name: manifest.app_name,
-        manifest_path: manifest_path.to_string_lossy().into_owned(),
-        public_url: manifest.public_url,
-        hostname,
+        manifest_path: root.manifest_path,
+        public_url: root.public_url,
+        hostname: root.hostname,
         has_mixed_planes,
         hosted_http_service_count,
         deterministic_service_count,
         frontend,
-        workspace_dir,
-        workspace_scripts,
+        workspace_dir: root.workspace_dir,
+        workspace_scripts: root.workspace_scripts,
         services,
         routes,
         notes,
@@ -2963,9 +3002,9 @@ pub struct StatusArgs {
 impl StatusArgs {
     fn run(self) -> Result<StatusOutput> {
         let service_plan = match (self.container.as_deref(), self.service.as_deref()) {
-            (Some(container_manifest), Some(service_manifest)) => {
-                Some(build_service_local_plan_output(container_manifest, service_manifest)?)
-            }
+            (Some(container_manifest), Some(service_manifest)) => Some(
+                build_service_local_plan_output(container_manifest, service_manifest)?,
+            ),
             _ => None,
         };
         let service_filter = resolve_optional_workspace_service_name(
@@ -3019,10 +3058,8 @@ pub struct ConfigSetArgs {
 
 impl ConfigSetArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let service_plan = maybe_service_local_plan(
-            self.container.as_deref(),
-            self.service.as_deref(),
-        )?;
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -3080,10 +3117,8 @@ pub struct ConfigDeleteArgs {
 
 impl ConfigDeleteArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let service_plan = maybe_service_local_plan(
-            self.container.as_deref(),
-            self.service.as_deref(),
-        )?;
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -3138,10 +3173,8 @@ pub struct ConfigStatusArgs {
 
 impl ConfigStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
-        let service_plan = maybe_service_local_plan(
-            self.container.as_deref(),
-            self.service.as_deref(),
-        )?;
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -3193,10 +3226,8 @@ pub struct SecretSetArgs {
 
 impl SecretSetArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let service_plan = maybe_service_local_plan(
-            self.container.as_deref(),
-            self.service.as_deref(),
-        )?;
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -3254,10 +3285,8 @@ pub struct SecretDeleteArgs {
 
 impl SecretDeleteArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
-        let service_plan = maybe_service_local_plan(
-            self.container.as_deref(),
-            self.service.as_deref(),
-        )?;
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -3312,10 +3341,8 @@ pub struct SecretStatusArgs {
 
 impl SecretStatusArgs {
     fn run(self) -> Result<norito::json::Value> {
-        let service_plan = maybe_service_local_plan(
-            self.container.as_deref(),
-            self.service.as_deref(),
-        )?;
+        let service_plan =
+            maybe_service_local_plan(self.container.as_deref(), self.service.as_deref())?;
         let service_name = resolve_required_workspace_service_name(
             self.service_name,
             self.container.as_deref(),
@@ -3365,9 +3392,9 @@ pub struct RollbackArgs {
 impl RollbackArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan = match (self.container.as_deref(), self.service.as_deref()) {
-            (Some(container_manifest), Some(service_manifest)) => {
-                Some(build_service_local_plan_output(container_manifest, service_manifest)?)
-            }
+            (Some(container_manifest), Some(service_manifest)) => Some(
+                build_service_local_plan_output(container_manifest, service_manifest)?,
+            ),
             _ => None,
         };
         let service_name = resolve_required_workspace_service_name(
@@ -3441,9 +3468,9 @@ pub struct RolloutArgs {
 impl RolloutArgs {
     fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<norito::json::Value> {
         let service_plan = match (self.container.as_deref(), self.service.as_deref()) {
-            (Some(container_manifest), Some(service_manifest)) => {
-                Some(build_service_local_plan_output(container_manifest, service_manifest)?)
-            }
+            (Some(container_manifest), Some(service_manifest)) => Some(
+                build_service_local_plan_output(container_manifest, service_manifest)?,
+            ),
             _ => None,
         };
         let service_name = resolve_required_workspace_service_name(
@@ -5536,8 +5563,11 @@ impl ModelPublishPrivateArgs {
         let plan = match pending_input {
             PendingPrivateModelPublishInput::Plan(plan) => plan,
             PendingPrivateModelPublishInput::Draft(draft_path, draft) => {
-                let plan =
-                    prepare_private_model_publish_plan_from_draft(&draft_path, draft, recipient.clone())?;
+                let plan = prepare_private_model_publish_plan_from_draft(
+                    &draft_path,
+                    draft,
+                    recipient.clone(),
+                )?;
                 if let Some(path) = emit_plan_file.as_deref() {
                     write_json(path, &plan)?;
                     prepared_plan_path = Some(path.display().to_string());
@@ -6486,6 +6516,7 @@ struct AppMutationOutput {
     app_name: String,
     manifest_path: String,
     public_url: String,
+    hostname: String,
     workspace_dir: String,
     workspace_scripts: AppLocalWorkspaceScriptsOutput,
     mode: String,
@@ -6703,6 +6734,7 @@ struct AppStatusOutput {
     app_name: String,
     manifest_path: String,
     public_url: String,
+    hostname: String,
     workspace_dir: String,
     workspace_scripts: AppLocalWorkspaceScriptsOutput,
     source: String,
@@ -6791,7 +6823,10 @@ struct AppLocalWorkspaceScriptsOutput {
 struct AppLocalDevOutput {
     app_name: String,
     public_url: String,
+    hostname: String,
     manifest_path: String,
+    workspace_dir: String,
+    workspace_scripts: AppLocalWorkspaceScriptsOutput,
     working_dir: String,
     script_path: String,
     mode: String,
@@ -6817,7 +6852,10 @@ struct AppLocalDevOutput {
 struct AppBuildAndSyncOutput {
     app_name: String,
     public_url: String,
+    hostname: String,
     manifest_path: String,
+    workspace_dir: String,
+    workspace_scripts: AppLocalWorkspaceScriptsOutput,
     working_dir: String,
     script_path: String,
     mode: String,
@@ -6843,7 +6881,10 @@ struct AppBuildAndSyncOutput {
 struct AppWorkspaceMutationScriptOutput {
     app_name: String,
     public_url: String,
+    hostname: String,
     manifest_path: String,
+    workspace_dir: String,
+    workspace_scripts: AppLocalWorkspaceScriptsOutput,
     working_dir: String,
     script_path: String,
     script_name: String,
@@ -13763,9 +13804,24 @@ fn default_inrou_manifest() -> SoraInrouManifestV1 {
     SoraInrouManifestV1 {
         schema_version: SORA_INROU_MANIFEST_VERSION_V1,
         guest_os: SoraInrouGuestOsV1::DebianSlim,
-        kernel_image_path: "/inrou/vmlinux".to_owned(),
-        rootfs_image_path: "/inrou/rootfs.ext4".to_owned(),
-        initrd_image_path: None,
+        guest_images: std::collections::BTreeMap::from([
+            (
+                iroha_data_model::soracloud::SoraInrouGuestIsaV1::X8664,
+                iroha_data_model::soracloud::SoraInrouGuestImageV1 {
+                    kernel_image_path: "/inrou/x86_64/vmlinux".to_owned(),
+                    rootfs_image_path: "/inrou/x86_64/rootfs.ext4".to_owned(),
+                    initrd_image_path: None,
+                },
+            ),
+            (
+                iroha_data_model::soracloud::SoraInrouGuestIsaV1::Aarch64,
+                iroha_data_model::soracloud::SoraInrouGuestImageV1 {
+                    kernel_image_path: "/inrou/aarch64/vmlinux".to_owned(),
+                    rootfs_image_path: "/inrou/aarch64/rootfs.ext4".to_owned(),
+                    initrd_image_path: None,
+                },
+            ),
+        ]),
         bootstrap_user_data_path: None,
         ssh_authorized_keys: vec!["ssh-ed25519 CHANGE_ME soracloud-inrou-template".to_owned()],
     }
@@ -19062,10 +19118,10 @@ Then inspect the mixed route split from the app manifest:
 iroha app soracloud app local-plan --manifest ./app_manifest.json
 ```
 
-`app local-plan` prints the root `manifest_path`, then each service's resolved
-`container_manifest_path`, `service_manifest_path`, child `workspace_dir`, and
-child service scripts, which you can feed directly into service-scoped
-Soracloud commands.
+`app local-plan` prints the root `manifest_path`, root `hostname`, then each
+service's resolved `container_manifest_path`, `service_manifest_path`, child
+`workspace_dir`, and child service scripts, which you can feed directly into
+service-scoped Soracloud commands.
 
 ## Build everything
 
@@ -19104,9 +19160,10 @@ step refreshes both `container.bundle_hash` and the referenced service
 container hash before deploy.
 
 Direct `iroha app soracloud app deploy` responses keep the root
-`manifest_path`, root `workspace_dir`, root `workspace_scripts`, the frontend
-publish projection, one manifest-derived child service entry per app service,
-and the top-level mixed `routes` split that `app local-plan` reports.
+`manifest_path`, root `hostname`, root `workspace_dir`, root
+`workspace_scripts`, the frontend publish projection, one manifest-derived
+child service entry per app service, and the top-level mixed `routes` split
+that `app local-plan` reports.
 
 ## Upgrade the mixed app
 
@@ -19120,8 +19177,8 @@ iroha app soracloud app upgrade-workspace --manifest ./app_manifest.json --torii
 `iroha app soracloud app upgrade`.
 
 Direct `iroha app soracloud app upgrade` responses keep the same root
-manifest/workspace metadata, frontend, service, and top-level `routes`
-projection as app deploy.
+manifest/hostname/workspace metadata, frontend, service, and top-level
+`routes` projection as app deploy.
 
 ## Inspect deployed status
 
@@ -19130,10 +19187,10 @@ iroha app soracloud app status --manifest ./app_manifest.json --torii-url http:/
 ```
 
 `app status` keeps one entry per child service manifest and reports the child
-manifest paths, the root `manifest_path`, root `workspace_dir`, root
-`workspace_scripts`, plane/runtime, route prefix, the top-level `routes`
-split, the frontend publish projection, and the matched Torii control-plane
-status when present.
+manifest paths, the root `manifest_path`, root `hostname`, root
+`workspace_dir`, root `workspace_scripts`, plane/runtime, route prefix, the
+top-level `routes` split, the frontend publish projection, and the matched
+Torii control-plane status when present.
 
 Service-scoped Soracloud commands still operate on the child service manifests:
 
@@ -19449,8 +19506,8 @@ iroha app soracloud app local-dev --manifest ./app_manifest.json
 ```
 
 `iroha app soracloud app local-plan --manifest ./app_manifest.json` also prints
-the root `manifest_path`, the resolved child manifest paths, child
-`workspace_dir`, and child service scripts for service-scoped Soracloud
+the root `manifest_path`, root `hostname`, the resolved child manifest paths,
+child `workspace_dir`, and child service scripts for service-scoped Soracloud
 commands.
 
 ## Build everything
@@ -19476,9 +19533,10 @@ iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-
 ```
 
 Direct `iroha app soracloud app deploy` responses keep the root
-`manifest_path`, root `workspace_dir`, root `workspace_scripts`, the frontend
-publish projection, one manifest-derived child service entry per app service,
-and the top-level `routes` split that `app local-plan` reports.
+`manifest_path`, root `hostname`, root `workspace_dir`, root
+`workspace_scripts`, the frontend publish projection, one manifest-derived
+child service entry per app service, and the top-level `routes` split that
+`app local-plan` reports.
 
 ## Upgrade
 
@@ -19489,8 +19547,8 @@ iroha app soracloud app upgrade-workspace --manifest ./app_manifest.json --torii
 ```
 
 Direct `iroha app soracloud app upgrade` responses keep the same root
-manifest/workspace metadata, frontend, service, and top-level `routes`
-projection as app deploy.
+manifest/hostname/workspace metadata, frontend, service, and top-level
+`routes` projection as app deploy.
 
 ## Inspect deployed status
 
@@ -19499,10 +19557,10 @@ iroha app soracloud app status --manifest ./app_manifest.json --torii-url http:/
 ```
 
 `app status` keeps one entry per child service manifest and reports the child
-manifest paths, the root `manifest_path`, root `workspace_dir`, root
-`workspace_scripts`, plane/runtime, route prefix, the top-level mixed `routes`
-split, the frontend publish projection, and the matched Torii control-plane
-status when present.
+manifest paths, the root `manifest_path`, root `hostname`, root
+`workspace_dir`, root `workspace_scripts`, plane/runtime, route prefix, the
+top-level mixed `routes` split, the frontend publish projection, and the
+matched Torii control-plane status when present.
 
 Service-scoped Soracloud commands still operate on the child API manifests at
 `services/api/container_manifest.json` plus `services/api/service_manifest.json`.
@@ -19771,14 +19829,16 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("/api/v1")
         );
-        assert!(output
-            .get("service_plan")
-            .and_then(norito::json::Value::as_object)
-            .and_then(|plan| plan.get("workspace_scripts"))
-            .and_then(norito::json::Value::as_object)
-            .and_then(|scripts| scripts.get("local_dev"))
-            .and_then(norito::json::Value::as_str)
-            .is_some_and(|path| path.ends_with("local-dev.sh")));
+        assert!(
+            output
+                .get("service_plan")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|plan| plan.get("workspace_scripts"))
+                .and_then(norito::json::Value::as_object)
+                .and_then(|scripts| scripts.get("local_dev"))
+                .and_then(norito::json::Value::as_str)
+                .is_some_and(|path| path.ends_with("local-dev.sh"))
+        );
     }
 
     fn fixture_container() -> SoraContainerManifestV1 {
@@ -20561,7 +20621,10 @@ mod tests {
         assert_eq!(output.services[0].current_version, "1.2.3");
         assert_eq!(output.services[0].revision_count, 4);
         assert_eq!(
-            output.services[0].latest_revision.as_ref().map(|revision| revision.sequence),
+            output.services[0]
+                .latest_revision
+                .as_ref()
+                .map(|revision| revision.sequence),
             Some(7)
         );
         assert_eq!(
@@ -20594,9 +20657,11 @@ mod tests {
             None,
         )
         .expect_err("malformed embedded service snapshot must fail");
-        assert!(error
-            .to_string()
-            .contains("failed to decode embedded Soracloud service status"));
+        assert!(
+            error
+                .to_string()
+                .contains("failed to decode embedded Soracloud service status")
+        );
     }
 
     #[test]
@@ -20679,7 +20744,8 @@ mod tests {
         .run()
         .expect("http-service init should succeed");
 
-        let status_payload = mock_control_plane_status_payload(&["echo_console", "unrelated_service"]);
+        let status_payload =
+            mock_control_plane_status_payload(&["echo_console", "unrelated_service"]);
         let server = MockHttpServer::start(BTreeMap::from([(
             "/v1/soracloud/status".to_owned(),
             MockHttpResponse {
@@ -20724,11 +20790,13 @@ mod tests {
         assert_eq!(service_plan.execution_plane, "HttpService");
         assert_eq!(service_plan.runtime, "Inrou");
         assert_eq!(service_plan.route_path_prefix.as_deref(), Some("/api/v1"));
-        assert!(service_plan
-            .workspace_scripts
-            .local_dev
-            .as_deref()
-            .is_some_and(|path| path.ends_with("local-dev.sh")));
+        assert!(
+            service_plan
+                .workspace_scripts
+                .local_dev
+                .as_deref()
+                .is_some_and(|path| path.ends_with("local-dev.sh"))
+        );
     }
 
     #[test]
@@ -20802,7 +20870,8 @@ mod tests {
             ]
         });
         let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/service/config/status?service_name=echo_console&config_name=demo_config".to_owned(),
+            "/v1/soracloud/service/config/status?service_name=echo_console&config_name=demo_config"
+                .to_owned(),
             MockHttpResponse {
                 content_type: "application/json",
                 body: json::to_vec(&response).expect("encode config status response"),
@@ -20835,14 +20904,16 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("/api/v1")
         );
-        assert!(output
-            .get("service_plan")
-            .and_then(norito::json::Value::as_object)
-            .and_then(|plan| plan.get("workspace_scripts"))
-            .and_then(norito::json::Value::as_object)
-            .and_then(|scripts| scripts.get("build_and_sync"))
-            .and_then(norito::json::Value::as_str)
-            .is_some_and(|path| path.ends_with("build-and-sync.sh")));
+        assert!(
+            output
+                .get("service_plan")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|plan| plan.get("workspace_scripts"))
+                .and_then(norito::json::Value::as_object)
+                .and_then(|scripts| scripts.get("build_and_sync"))
+                .and_then(norito::json::Value::as_str)
+                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
+        );
         let request = server
             .requests()
             .into_iter()
@@ -20876,7 +20947,8 @@ mod tests {
             ]
         });
         let server = MockHttpServer::start(BTreeMap::from([(
-            "/v1/soracloud/service/secret/status?service_name=echo_console&secret_name=demo_secret".to_owned(),
+            "/v1/soracloud/service/secret/status?service_name=echo_console&secret_name=demo_secret"
+                .to_owned(),
             MockHttpResponse {
                 content_type: "application/json",
                 body: json::to_vec(&response).expect("encode secret status response"),
@@ -20909,14 +20981,16 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("/api/v1")
         );
-        assert!(output
-            .get("service_plan")
-            .and_then(norito::json::Value::as_object)
-            .and_then(|plan| plan.get("workspace_scripts"))
-            .and_then(norito::json::Value::as_object)
-            .and_then(|scripts| scripts.get("upgrade"))
-            .and_then(norito::json::Value::as_str)
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert!(
+            output
+                .get("service_plan")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|plan| plan.get("workspace_scripts"))
+                .and_then(norito::json::Value::as_object)
+                .and_then(|scripts| scripts.get("upgrade"))
+                .and_then(norito::json::Value::as_str)
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
         let request = server
             .requests()
             .into_iter()
@@ -20989,14 +21063,16 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("/api/v1")
         );
-        assert!(output
-            .get("service_plan")
-            .and_then(norito::json::Value::as_object)
-            .and_then(|plan| plan.get("workspace_scripts"))
-            .and_then(norito::json::Value::as_object)
-            .and_then(|scripts| scripts.get("local_dev"))
-            .and_then(norito::json::Value::as_str)
-            .is_some_and(|path| path.ends_with("local-dev.sh")));
+        assert!(
+            output
+                .get("service_plan")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|plan| plan.get("workspace_scripts"))
+                .and_then(norito::json::Value::as_object)
+                .and_then(|scripts| scripts.get("local_dev"))
+                .and_then(norito::json::Value::as_str)
+                .is_some_and(|path| path.ends_with("local-dev.sh"))
+        );
         let rollback_request = server
             .requests()
             .into_iter()
@@ -21103,14 +21179,16 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("/api/v1")
         );
-        assert!(output
-            .get("service_plan")
-            .and_then(norito::json::Value::as_object)
-            .and_then(|plan| plan.get("workspace_scripts"))
-            .and_then(norito::json::Value::as_object)
-            .and_then(|scripts| scripts.get("upgrade"))
-            .and_then(norito::json::Value::as_str)
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert!(
+            output
+                .get("service_plan")
+                .and_then(norito::json::Value::as_object)
+                .and_then(|plan| plan.get("workspace_scripts"))
+                .and_then(norito::json::Value::as_object)
+                .and_then(|scripts| scripts.get("upgrade"))
+                .and_then(norito::json::Value::as_str)
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
         let rollout_request = server
             .requests()
             .into_iter()
@@ -21267,9 +21345,7 @@ mod tests {
 
         assert_manifest_pair_service_plan(&output);
         assert_eq!(
-            output
-                .get("repo_id")
-                .and_then(norito::json::Value::as_str),
+            output.get("repo_id").and_then(norito::json::Value::as_str),
             Some("openai/gpt-oss")
         );
         let request = server
@@ -21574,8 +21650,7 @@ mod tests {
             .requests()
             .into_iter()
             .find(|request| {
-                request.method == "POST"
-                    && request.path == "/v1/soracloud/training/job/checkpoint"
+                request.method == "POST" && request.path == "/v1/soracloud/training/job/checkpoint"
             })
             .expect("training job checkpoint request");
         let body: norito::json::Value =
@@ -21750,8 +21825,7 @@ mod tests {
             .requests()
             .into_iter()
             .find(|request| {
-                request.method == "POST"
-                    && request.path == "/v1/soracloud/model/artifact/register"
+                request.method == "POST" && request.path == "/v1/soracloud/model/artifact/register"
             })
             .expect("model artifact register request");
         let body: norito::json::Value =
@@ -22233,7 +22307,9 @@ mod tests {
         let request = server
             .requests()
             .into_iter()
-            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/model/compile")
+            .find(|request| {
+                request.method == "POST" && request.path == "/v1/soracloud/model/compile"
+            })
             .expect("model compile request");
         let body: norito::json::Value =
             json::from_slice(&request.body).expect("decode model compile request");
@@ -22398,7 +22474,9 @@ mod tests {
         let request = server
             .requests()
             .into_iter()
-            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/model/upload/init")
+            .find(|request| {
+                request.method == "POST" && request.path == "/v1/soracloud/model/upload/init"
+            })
             .expect("model upload init request");
         let body: norito::json::Value =
             json::from_slice(&request.body).expect("decode model upload init request");
@@ -22451,10 +22529,12 @@ mod tests {
         .expect("model-upload-encryption-recipient should succeed");
 
         assert_manifest_pair_service_plan(&output);
-        assert!(output
-            .get("recipient")
-            .and_then(norito::json::Value::as_object)
-            .is_some());
+        assert!(
+            output
+                .get("recipient")
+                .and_then(norito::json::Value::as_object)
+                .is_some()
+        );
         let request = server
             .requests()
             .into_iter()
@@ -22522,8 +22602,7 @@ mod tests {
             .next()
             .expect("sample chunk");
         chunk.service_name = "echo_console".parse().expect("service name");
-        fs::write(&chunk_file, json::to_vec(&chunk).expect("encode chunk"))
-            .expect("write chunk");
+        fs::write(&chunk_file, json::to_vec(&chunk).expect("encode chunk")).expect("write chunk");
 
         let response = norito::json!({ "tx_instructions": [] });
         let server = MockHttpServer::start(BTreeMap::from([(
@@ -22553,7 +22632,9 @@ mod tests {
         let request = server
             .requests()
             .into_iter()
-            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/model/upload/chunk")
+            .find(|request| {
+                request.method == "POST" && request.path == "/v1/soracloud/model/upload/chunk"
+            })
             .expect("model upload chunk request");
         let body: norito::json::Value =
             json::from_slice(&request.body).expect("decode model upload chunk request");
@@ -22618,7 +22699,9 @@ mod tests {
         let request = server
             .requests()
             .into_iter()
-            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/model/upload/finalize")
+            .find(|request| {
+                request.method == "POST" && request.path == "/v1/soracloud/model/upload/finalize"
+            })
             .expect("model upload finalize request");
         let body: norito::json::Value =
             json::from_slice(&request.body).expect("decode model upload finalize request");
@@ -22647,8 +22730,11 @@ mod tests {
         let session_file = dir.join("private_inference_session.json");
         let mut session = sample_private_inference_session();
         session.service_name = "echo_console".parse().expect("service name");
-        fs::write(&session_file, json::to_vec(&session).expect("encode session"))
-            .expect("write session");
+        fs::write(
+            &session_file,
+            json::to_vec(&session).expect("encode session"),
+        )
+        .expect("write session");
 
         let response = norito::json!({ "tx_instructions": [] });
         let status_response = norito::json!({
@@ -22699,7 +22785,9 @@ mod tests {
         let request = server
             .requests()
             .into_iter()
-            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/model/run-private")
+            .find(|request| {
+                request.method == "POST" && request.path == "/v1/soracloud/model/run-private"
+            })
             .expect("model run-private request");
         let body: norito::json::Value =
             json::from_slice(&request.body).expect("decode model run-private request");
@@ -22763,7 +22851,10 @@ mod tests {
             .into_iter()
             .find(|request| request.method == "GET")
             .expect("model run-status request");
-        assert_eq!(request.path, "/v1/soracloud/model/run-status?session_id=session-1");
+        assert_eq!(
+            request.path,
+            "/v1/soracloud/model/run-status?session_id=session-1"
+        );
     }
 
     #[test]
@@ -22874,8 +22965,11 @@ mod tests {
             &mut rng,
         )
         .expect("prepare publish plan");
-        fs::write(&plan_file, json::to_vec(&plan).expect("encode publish plan"))
-            .expect("write publish plan");
+        fs::write(
+            &plan_file,
+            json::to_vec(&plan).expect("encode publish plan"),
+        )
+        .expect("write publish plan");
 
         let mut compile_status_url =
             reqwest::Url::parse("http://127.0.0.1:1").expect("compile status base URL");
@@ -22996,7 +23090,9 @@ mod tests {
         let request = server
             .requests()
             .into_iter()
-            .find(|request| request.method == "POST" && request.path == "/v1/soracloud/model/upload/init")
+            .find(|request| {
+                request.method == "POST" && request.path == "/v1/soracloud/model/upload/init"
+            })
             .expect("model upload init request");
         let body: norito::json::Value =
             json::from_slice(&request.body).expect("decode model upload init request");
@@ -23032,8 +23128,11 @@ mod tests {
                 path: "model".to_owned(),
             },
         ));
-        fs::write(&draft_file, json::to_vec(&draft).expect("encode publish draft"))
-            .expect("write publish draft");
+        fs::write(
+            &draft_file,
+            json::to_vec(&draft).expect("encode publish draft"),
+        )
+        .expect("write publish draft");
 
         let key_pair = KeyPair::random();
         let authority = AccountId::new(key_pair.public_key().clone());
@@ -24892,15 +24991,19 @@ mod tests {
         assert_eq!(output.torii_url, server.base_url);
         assert!(output.uses_api_token);
         assert!(output.workspace_dir.contains("deploy_service_projection"));
-        assert!(output
-            .workspace_scripts
-            .local_dev
-            .as_deref()
-            .is_some_and(|path| path.ends_with("local-dev.sh")));
-        assert!(output
-            .routes
-            .iter()
-            .any(|route| route.route_kind == "hosted_http_prefix" && route.path == "/api/v1"));
+        assert!(
+            output
+                .workspace_scripts
+                .local_dev
+                .as_deref()
+                .is_some_and(|path| path.ends_with("local-dev.sh"))
+        );
+        assert!(
+            output
+                .routes
+                .iter()
+                .any(|route| route.route_kind == "hosted_http_prefix" && route.path == "/api/v1")
+        );
         assert_eq!(
             output
                 .response
@@ -24915,10 +25018,12 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("1.0.0")
         );
-        assert!(output
-            .notes
-            .iter()
-            .any(|note| note.contains("live Torii status")));
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("live Torii status"))
+        );
     }
 
     #[test]
@@ -24977,15 +25082,19 @@ mod tests {
         assert_eq!(output.torii_url, server.base_url);
         assert!(!output.uses_api_token);
         assert!(output.workspace_dir.contains("upgrade_service_projection"));
-        assert!(output
-            .workspace_scripts
-            .upgrade
-            .as_deref()
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
-        assert!(output
-            .routes
-            .iter()
-            .any(|route| route.route_kind == "hosted_http_prefix" && route.path == "/api/v1"));
+        assert!(
+            output
+                .workspace_scripts
+                .upgrade
+                .as_deref()
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
+        assert!(
+            output
+                .routes
+                .iter()
+                .any(|route| route.route_kind == "hosted_http_prefix" && route.path == "/api/v1")
+        );
         assert_eq!(
             output
                 .response
@@ -25000,10 +25109,12 @@ mod tests {
                 .and_then(norito::json::Value::as_str),
             Some("1.0.0")
         );
-        assert!(output
-            .notes
-            .iter()
-            .any(|note| note.contains("live Torii status")));
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("live Torii status"))
+        );
     }
 
     #[test]
@@ -25095,9 +25206,7 @@ mod tests {
         assert!(readme.contains(
             "iroha app soracloud local-dev --container ./container_manifest.json --service ./service_manifest.json"
         ));
-        assert!(readme.contains(
-            "wrappers return the same route, handler-count, replica, and"
-        ));
+        assert!(readme.contains("wrappers return the same route, handler-count, replica, and"));
         assert!(readme.contains(
             "iroha app soracloud build-and-sync --container ./container_manifest.json --service ./service_manifest.json"
         ));
@@ -25108,9 +25217,11 @@ mod tests {
         assert!(readme.contains(
             "iroha app soracloud deploy --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080"
         ));
-        assert!(readme.contains(
-            "direct `iroha app soracloud deploy` and `upgrade` commands also keep the"
-        ));
+        assert!(
+            readme.contains(
+                "direct `iroha app soracloud deploy` and `upgrade` commands also keep the"
+            )
+        );
         assert!(readme.contains("TORII_URL=http://127.0.0.1:8080 ./upgrade.sh"));
         assert!(readme.contains(
             "iroha app soracloud upgrade-workspace --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080"
@@ -25121,9 +25232,7 @@ mod tests {
         assert!(readme.contains(
             "iroha app soracloud status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080"
         ));
-        assert!(readme.contains(
-            "status` is driven from `--container` plus `--service`"
-        ));
+        assert!(readme.contains("status` is driven from `--container` plus `--service`"));
         assert!(readme.contains("## Service control-plane commands"));
         assert!(readme.contains("`service_plan` projection that `local-plan` reports"));
         assert!(readme.contains(
@@ -25390,36 +25499,46 @@ main().catch((error) => {
         assert_eq!(output.lease_volume_count, 2);
         assert_eq!(output.handler_count, 0);
         assert!(output.workspace_dir.contains("http_service_local_plan"));
-        assert!(output
-            .workspace_scripts
-            .local_dev
-            .as_deref()
-            .is_some_and(|path| path.ends_with("local-dev.sh")));
-        assert!(output
-            .workspace_scripts
-            .build_and_sync
-            .as_deref()
-            .is_some_and(|path| path.ends_with("build-and-sync.sh")));
-        assert!(output
-            .workspace_scripts
-            .deploy
-            .as_deref()
-            .is_some_and(|path| path.ends_with("deploy.sh")));
-        assert!(output
-            .workspace_scripts
-            .upgrade
-            .as_deref()
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert!(
+            output
+                .workspace_scripts
+                .local_dev
+                .as_deref()
+                .is_some_and(|path| path.ends_with("local-dev.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .build_and_sync
+                .as_deref()
+                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .deploy
+                .as_deref()
+                .is_some_and(|path| path.ends_with("deploy.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .upgrade
+                .as_deref()
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
         assert!(
             output
                 .routes
                 .iter()
                 .any(|route| route.route_kind == "hosted_http_prefix" && route.path == "/api/v1")
         );
-        assert!(output
-            .notes
-            .iter()
-            .any(|note| note.contains("hosted HttpService + Inrou")));
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("hosted HttpService + Inrou"))
+        );
     }
 
     #[test]
@@ -25454,22 +25573,24 @@ main().catch((error) => {
         assert_eq!(output.workspace_scripts.build_and_sync, None);
         assert_eq!(output.workspace_scripts.deploy, None);
         assert_eq!(output.workspace_scripts.upgrade, None);
-        assert!(output
-            .routes
-            .iter()
-            .any(|route| route.route_kind == "service_prefix" && route.path == "/api"));
         assert!(
-            output.routes.iter().any(|route| {
-                route.route_kind == "handler"
-                    && route.handler_name.as_deref() == Some("healthz")
-                    && route.path == "/api/healthz"
-                    && route.handler_class.as_deref() == Some("Query")
-            })
+            output
+                .routes
+                .iter()
+                .any(|route| route.route_kind == "service_prefix" && route.path == "/api")
         );
-        assert!(output
-            .notes
-            .iter()
-            .any(|note| note.contains("deterministic IVM")));
+        assert!(output.routes.iter().any(|route| {
+            route.route_kind == "handler"
+                && route.handler_name.as_deref() == Some("healthz")
+                && route.path == "/api/healthz"
+                && route.handler_class.as_deref() == Some("Query")
+        }));
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("deterministic IVM"))
+        );
     }
 
     #[test]
@@ -25498,23 +25619,33 @@ main().catch((error) => {
         assert_eq!(output.runtime, "Inrou");
         assert_eq!(output.command, vec!["./local-dev.sh".to_owned()]);
         assert!(output.script_path.ends_with("local-dev.sh"));
-        assert!(output.working_dir.contains("http_service_local_dev_dry_run"));
+        assert!(
+            output
+                .working_dir
+                .contains("http_service_local_dev_dry_run")
+        );
         assert_eq!(output.route_path_prefix.as_deref(), Some("/api/v1"));
         assert_eq!(output.replica_count, 1);
         assert_eq!(output.lease_volume_count, 2);
-        assert!(output
-            .workspace_scripts
-            .local_dev
-            .as_deref()
-            .is_some_and(|path| path.ends_with("local-dev.sh")));
-        assert!(output
-            .routes
-            .iter()
-            .any(|route| route.route_kind == "hosted_http_prefix" && route.path == "/api/v1"));
-        assert!(output
-            .notes
-            .iter()
-            .any(|note| note.contains("hosted HttpService + Inrou")));
+        assert!(
+            output
+                .workspace_scripts
+                .local_dev
+                .as_deref()
+                .is_some_and(|path| path.ends_with("local-dev.sh"))
+        );
+        assert!(
+            output
+                .routes
+                .iter()
+                .any(|route| route.route_kind == "hosted_http_prefix" && route.path == "/api/v1")
+        );
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("hosted HttpService + Inrou"))
+        );
     }
 
     #[test]
@@ -25559,11 +25690,13 @@ printf 'ok' > "$SCRIPT_DIR/http-service-local-dev-ran.txt"
         assert_eq!(output.execution_plane, "HttpService");
         assert_eq!(output.runtime, "Inrou");
         assert_eq!(output.route_path_prefix.as_deref(), Some("/api/v1"));
-        assert!(output
-            .workspace_scripts
-            .build_and_sync
-            .as_deref()
-            .is_some_and(|path| path.ends_with("build-and-sync.sh")));
+        assert!(
+            output
+                .workspace_scripts
+                .build_and_sync
+                .as_deref()
+                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
+        );
         assert_eq!(output.command, vec!["./local-dev.sh".to_owned()]);
         assert!(
             dir.join("http-service-local-dev-ran.txt").exists(),
@@ -25611,15 +25744,19 @@ exit 130
         assert_eq!(output.mode, "interrupted");
         assert_eq!(output.exit_status, Some(130));
         assert_eq!(output.route_path_prefix.as_deref(), Some("/api/v1"));
-        assert!(output
-            .workspace_scripts
-            .upgrade
-            .as_deref()
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
-        assert!(output
-            .notes
-            .iter()
-            .any(|note| note.contains("interactive interrupt")));
+        assert!(
+            output
+                .workspace_scripts
+                .upgrade
+                .as_deref()
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("interactive interrupt"))
+        );
     }
 
     #[test]
@@ -25666,20 +25803,24 @@ printf 'ok' > "$SCRIPT_DIR/http-service-build-and-sync-ran.txt"
         assert_eq!(output.runtime, "Inrou");
         assert_eq!(output.route_path_prefix.as_deref(), Some("/api/v1"));
         assert_eq!(output.lease_volume_count, 2);
-        assert!(output
-            .workspace_scripts
-            .deploy
-            .as_deref()
-            .is_some_and(|path| path.ends_with("deploy.sh")));
+        assert!(
+            output
+                .workspace_scripts
+                .deploy
+                .as_deref()
+                .is_some_and(|path| path.ends_with("deploy.sh"))
+        );
         assert_eq!(output.command, vec!["./build-and-sync.sh".to_owned()]);
         assert!(
             dir.join("http-service-build-and-sync-ran.txt").exists(),
             "build-and-sync command should run the manifest-adjacent script"
         );
-        assert!(output
-            .notes
-            .iter()
-            .any(|note| note.contains("build-and-sync completed")));
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("build-and-sync completed"))
+        );
     }
 
     #[test]
@@ -25717,11 +25858,13 @@ printf 'ok' > "$SCRIPT_DIR/http-service-build-and-sync-ran.txt"
         assert_eq!(output.route_path_prefix.as_deref(), Some("/api/v1"));
         assert_eq!(output.state_binding_count, 0);
         assert_eq!(output.lease_volume_count, 2);
-        assert!(output
-            .workspace_scripts
-            .deploy
-            .as_deref()
-            .is_some_and(|path| path.ends_with("deploy.sh")));
+        assert!(
+            output
+                .workspace_scripts
+                .deploy
+                .as_deref()
+                .is_some_and(|path| path.ends_with("deploy.sh"))
+        );
         assert_eq!(
             output.command,
             vec![
@@ -25731,10 +25874,12 @@ printf 'ok' > "$SCRIPT_DIR/http-service-build-and-sync-ran.txt"
             ]
         );
         assert!(output.script_path.ends_with("deploy.sh"));
-        assert!(output
-            .notes
-            .iter()
-            .any(|note| note.contains("exporting TORII_URL")));
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("exporting TORII_URL"))
+        );
     }
 
     #[test]
@@ -25799,11 +25944,13 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/deploy-workspace-args.txt"
         assert_eq!(output.torii_url, "http://127.0.0.1:8080");
         assert!(output.uses_api_token);
         assert_eq!(output.route_path_prefix.as_deref(), Some("/api/v1"));
-        assert!(output
-            .workspace_scripts
-            .local_dev
-            .as_deref()
-            .is_some_and(|path| path.ends_with("local-dev.sh")));
+        assert!(
+            output
+                .workspace_scripts
+                .local_dev
+                .as_deref()
+                .is_some_and(|path| path.ends_with("local-dev.sh"))
+        );
         assert_eq!(
             fs::read_to_string(dir.join("deploy-workspace-torii.txt"))
                 .expect("read deploy-workspace torii"),
@@ -25822,10 +25969,12 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/deploy-workspace-args.txt"
         assert!(args.contains(resolved_secrets.to_string_lossy().as_ref()));
         assert!(args.contains("--timeout-secs"));
         assert!(args.contains("27"));
-        assert!(output
-            .notes
-            .iter()
-            .any(|note| note.contains("deploy completed")));
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("deploy completed"))
+        );
     }
 
     #[test]
@@ -25876,11 +26025,13 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/upgrade-workspace-args.txt"
         assert_eq!(output.exit_status, Some(0));
         assert_eq!(output.script_name, "upgrade.sh");
         assert_eq!(output.route_path_prefix.as_deref(), Some("/api/v1"));
-        assert!(output
-            .workspace_scripts
-            .upgrade
-            .as_deref()
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert!(
+            output
+                .workspace_scripts
+                .upgrade
+                .as_deref()
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
         assert_eq!(
             fs::read_to_string(dir.join("upgrade-workspace-torii.txt"))
                 .expect("read upgrade-workspace torii"),
@@ -25890,10 +26041,12 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/upgrade-workspace-args.txt"
             .expect("read upgrade-workspace args");
         assert!(args.contains("--timeout-secs"));
         assert!(args.contains("19"));
-        assert!(output
-            .notes
-            .iter()
-            .any(|note| note.contains("upgrade completed")));
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("upgrade completed"))
+        );
     }
 
     #[test]
@@ -26312,6 +26465,7 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/upgrade-workspace-args.txt"
         assert!(readme.contains("app local-plan --manifest ./app_manifest.json"));
         assert!(readme.contains("workspace_dir"));
         assert!(readme.contains("workspace_scripts"));
+        assert!(readme.contains("root `hostname`"));
         assert!(readme.contains("child service scripts"));
         assert!(readme.contains(
             "iroha app soracloud app status --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080"
@@ -26768,6 +26922,7 @@ main().catch((error) => {
         assert!(app_readme.contains("app local-plan"));
         assert!(app_readme.contains("workspace_dir"));
         assert!(app_readme.contains("workspace_scripts"));
+        assert!(app_readme.contains("root `hostname`"));
         assert!(app_readme.contains("child service scripts"));
         assert!(app_readme.contains(
             "iroha app soracloud app status --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080"
@@ -26834,26 +26989,34 @@ main().catch((error) => {
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
         assert!(output.workspace_dir.contains("split_app_local_plan"));
-        assert!(output
-            .workspace_scripts
-            .local_dev
-            .as_deref()
-            .is_some_and(|path| path.ends_with("local-dev.sh")));
-        assert!(output
-            .workspace_scripts
-            .build_and_sync
-            .as_deref()
-            .is_some_and(|path| path.ends_with("build-and-sync.sh")));
-        assert!(output
-            .workspace_scripts
-            .deploy
-            .as_deref()
-            .is_some_and(|path| path.ends_with("deploy.sh")));
-        assert!(output
-            .workspace_scripts
-            .upgrade
-            .as_deref()
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert!(
+            output
+                .workspace_scripts
+                .local_dev
+                .as_deref()
+                .is_some_and(|path| path.ends_with("local-dev.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .build_and_sync
+                .as_deref()
+                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .deploy
+                .as_deref()
+                .is_some_and(|path| path.ends_with("deploy.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .upgrade
+                .as_deref()
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
         assert_eq!(
             output
                 .frontend
@@ -26861,64 +27024,58 @@ main().catch((error) => {
                 .and_then(|frontend| frontend.cid_gateway_url_template.as_deref()),
             Some("https://travel-ops.sora/sorafs/cid/<cid>/")
         );
-        assert!(
-            output
-                .services
-                .iter()
-                .any(|service| service.service_name == "travel-ops_live"
-                    && service
-                        .container_manifest_path
-                        .ends_with("services/live/container_manifest.json")
-                    && service
-                        .service_manifest_path
-                        .ends_with("services/live/service_manifest.json")
-                    && service.workspace_dir.ends_with("services/live")
-                    && service
-                        .workspace_scripts
-                        .dev
-                        .as_deref()
-                        .is_some_and(|path| path.ends_with("services/live/dev.sh"))
-                    && service
-                        .workspace_scripts
-                        .build
-                        .as_deref()
-                        .is_some_and(|path| path.ends_with("services/live/build.sh"))
-                    && service.workspace_scripts.verify_build.is_none()
-                    && service.execution_plane == "HttpService"
-                    && service.runtime == "Inrou"
-                    && service.route_path_prefix.as_deref() == Some("/api/v1"))
-        );
-        assert!(
-            output
-                .services
-                .iter()
-                .any(|service| service.service_name == "travel-ops_vault"
-                    && service
-                        .container_manifest_path
-                        .ends_with("services/vault/container_manifest.json")
-                    && service
-                        .service_manifest_path
-                        .ends_with("services/vault/service_manifest.json")
-                    && service.workspace_dir.ends_with("services/vault")
-                    && service
-                        .workspace_scripts
-                        .dev
-                        .as_deref()
-                        .is_some_and(|path| path.ends_with("services/vault/dev.sh"))
-                    && service
-                        .workspace_scripts
-                        .build
-                        .as_deref()
-                        .is_some_and(|path| path.ends_with("services/vault/build.sh"))
-                    && service
-                        .workspace_scripts
-                        .verify_build
-                        .as_deref()
-                        .is_some_and(|path| path.ends_with("services/vault/verify-build.sh"))
-                    && service.execution_plane == "DeterministicService"
-                    && service.runtime == "Ivm"
-                    && service.route_path_prefix.as_deref() == Some("/api"))
-        );
+        assert!(output.services.iter().any(|service| {
+            service.service_name == "travel-ops_live"
+                && service
+                    .container_manifest_path
+                    .ends_with("services/live/container_manifest.json")
+                && service
+                    .service_manifest_path
+                    .ends_with("services/live/service_manifest.json")
+                && service.workspace_dir.ends_with("services/live")
+                && service
+                    .workspace_scripts
+                    .dev
+                    .as_deref()
+                    .is_some_and(|path| path.ends_with("services/live/dev.sh"))
+                && service
+                    .workspace_scripts
+                    .build
+                    .as_deref()
+                    .is_some_and(|path| path.ends_with("services/live/build.sh"))
+                && service.workspace_scripts.verify_build.is_none()
+                && service.execution_plane == "HttpService"
+                && service.runtime == "Inrou"
+                && service.route_path_prefix.as_deref() == Some("/api/v1")
+        }));
+        assert!(output.services.iter().any(|service| {
+            service.service_name == "travel-ops_vault"
+                && service
+                    .container_manifest_path
+                    .ends_with("services/vault/container_manifest.json")
+                && service
+                    .service_manifest_path
+                    .ends_with("services/vault/service_manifest.json")
+                && service.workspace_dir.ends_with("services/vault")
+                && service
+                    .workspace_scripts
+                    .dev
+                    .as_deref()
+                    .is_some_and(|path| path.ends_with("services/vault/dev.sh"))
+                && service
+                    .workspace_scripts
+                    .build
+                    .as_deref()
+                    .is_some_and(|path| path.ends_with("services/vault/build.sh"))
+                && service
+                    .workspace_scripts
+                    .verify_build
+                    .as_deref()
+                    .is_some_and(|path| path.ends_with("services/vault/verify-build.sh"))
+                && service.execution_plane == "DeterministicService"
+                && service.runtime == "Ivm"
+                && service.route_path_prefix.as_deref() == Some("/api")
+        }));
         assert!(
             output
                 .routes
@@ -26969,34 +27126,45 @@ main().catch((error) => {
         .expect("app local-plan should succeed");
 
         assert!(output.manifest_path.ends_with("app_manifest.json"));
+        assert_eq!(output.hostname, "travel-ops.sora");
         assert!(!output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 0);
         assert_eq!(output.deterministic_service_count, 1);
         assert_eq!(output.services.len(), 1);
         let service = &output.services[0];
         assert_eq!(service.service_name, "travel-ops_api");
-        assert!(service
-            .container_manifest_path
-            .ends_with("services/api/container_manifest.json"));
-        assert!(service
-            .service_manifest_path
-            .ends_with("services/api/service_manifest.json"));
+        assert!(
+            service
+                .container_manifest_path
+                .ends_with("services/api/container_manifest.json")
+        );
+        assert!(
+            service
+                .service_manifest_path
+                .ends_with("services/api/service_manifest.json")
+        );
         assert!(service.workspace_dir.ends_with("services/api"));
-        assert!(service
-            .workspace_scripts
-            .dev
-            .as_deref()
-            .is_some_and(|path| path.ends_with("services/api/dev.sh")));
-        assert!(service
-            .workspace_scripts
-            .build
-            .as_deref()
-            .is_some_and(|path| path.ends_with("services/api/build.sh")));
-        assert!(service
-            .workspace_scripts
-            .verify_build
-            .as_deref()
-            .is_some_and(|path| path.ends_with("services/api/verify-build.sh")));
+        assert!(
+            service
+                .workspace_scripts
+                .dev
+                .as_deref()
+                .is_some_and(|path| path.ends_with("services/api/dev.sh"))
+        );
+        assert!(
+            service
+                .workspace_scripts
+                .build
+                .as_deref()
+                .is_some_and(|path| path.ends_with("services/api/build.sh"))
+        );
+        assert!(
+            service
+                .workspace_scripts
+                .verify_build
+                .as_deref()
+                .is_some_and(|path| path.ends_with("services/api/verify-build.sh"))
+        );
         assert_eq!(service.execution_plane, "DeterministicService");
         assert_eq!(service.runtime, "Ivm");
         assert_eq!(service.route_path_prefix.as_deref(), Some("/api"));
@@ -27023,6 +27191,29 @@ main().catch((error) => {
         .expect("local-dev dry-run should succeed");
 
         assert_eq!(output.mode, "dry_run");
+        assert_eq!(output.hostname, "travel-ops.sora");
+        assert!(output.manifest_path.ends_with("app_manifest.json"));
+        assert!(output.workspace_dir.contains("split_app_local_dev_dry_run"));
+        assert!(output
+            .workspace_scripts
+            .local_dev
+            .as_deref()
+            .is_some_and(|path| path.ends_with("local-dev.sh")));
+        assert!(output
+            .workspace_scripts
+            .build_and_sync
+            .as_deref()
+            .is_some_and(|path| path.ends_with("build-and-sync.sh")));
+        assert!(output
+            .workspace_scripts
+            .deploy
+            .as_deref()
+            .is_some_and(|path| path.ends_with("deploy.sh")));
+        assert!(output
+            .workspace_scripts
+            .upgrade
+            .as_deref()
+            .is_some_and(|path| path.ends_with("upgrade.sh")));
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
@@ -27030,18 +27221,23 @@ main().catch((error) => {
         assert!(output.script_path.ends_with("local-dev.sh"));
         assert!(output.working_dir.contains("split_app_local_dev_dry_run"));
         assert_eq!(output.services.len(), 2);
-        assert!(output
-            .services
-            .iter()
-            .any(|service| service.service_name == "travel-ops_live"));
-        assert!(output
-            .routes
-            .iter()
-            .any(|route| route.service_name == "travel-ops_live" && route.path == "/api/v1"));
-        assert!(output
-            .notes
-            .iter()
-            .any(|note| note.contains("mixed app plan includes both hosted HttpService + Inrou")));
+        assert!(
+            output
+                .services
+                .iter()
+                .any(|service| service.service_name == "travel-ops_live")
+        );
+        assert!(
+            output
+                .routes
+                .iter()
+                .any(|route| route.service_name == "travel-ops_live" && route.path == "/api/v1")
+        );
+        assert!(
+            output.notes.iter().any(
+                |note| note.contains("mixed app plan includes both hosted HttpService + Inrou")
+            )
+        );
     }
 
     #[test]
@@ -27082,6 +27278,13 @@ printf 'ok' > "$SCRIPT_DIR/local-dev-ran.txt"
         .expect("local-dev execution should succeed");
 
         assert_eq!(output.mode, "completed");
+        assert_eq!(output.hostname, "travel-ops.sora");
+        assert!(output.workspace_dir.contains("single_api_local_dev_run"));
+        assert!(output
+            .workspace_scripts
+            .local_dev
+            .as_deref()
+            .is_some_and(|path| path.ends_with("local-dev.sh")));
         assert_eq!(output.exit_status, Some(0));
         assert_eq!(output.command, vec!["./local-dev.sh".to_owned()]);
         assert_eq!(output.services.len(), 1);
@@ -27132,12 +27335,16 @@ exit 130
         .expect("interrupt status 130 should be treated as a successful local-dev stop");
 
         assert_eq!(output.mode, "interrupted");
+        assert_eq!(output.hostname, "travel-ops.sora");
+        assert!(output.workspace_dir.contains("single_api_local_dev_interrupt"));
         assert_eq!(output.exit_status, Some(130));
         assert_eq!(output.services.len(), 1);
-        assert!(output
-            .notes
-            .iter()
-            .any(|note| note.contains("interactive interrupt")));
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("interactive interrupt"))
+        );
     }
 
     #[test]
@@ -27161,18 +27368,47 @@ exit 130
         .expect("build-and-sync dry-run should succeed");
 
         assert_eq!(output.mode, "dry_run");
+        assert_eq!(output.hostname, "travel-ops.sora");
+        assert!(output.manifest_path.ends_with("app_manifest.json"));
+        assert!(output.workspace_dir.contains("split_app_build_and_sync_dry_run"));
+        assert!(output
+            .workspace_scripts
+            .local_dev
+            .as_deref()
+            .is_some_and(|path| path.ends_with("local-dev.sh")));
+        assert!(output
+            .workspace_scripts
+            .build_and_sync
+            .as_deref()
+            .is_some_and(|path| path.ends_with("build-and-sync.sh")));
+        assert!(output
+            .workspace_scripts
+            .deploy
+            .as_deref()
+            .is_some_and(|path| path.ends_with("deploy.sh")));
+        assert!(output
+            .workspace_scripts
+            .upgrade
+            .as_deref()
+            .is_some_and(|path| path.ends_with("upgrade.sh")));
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
         assert_eq!(output.command, vec!["./build-and-sync.sh".to_owned()]);
         assert!(output.script_path.ends_with("build-and-sync.sh"));
-        assert!(output.working_dir.contains("split_app_build_and_sync_dry_run"));
+        assert!(
+            output
+                .working_dir
+                .contains("split_app_build_and_sync_dry_run")
+        );
         assert_eq!(output.services.len(), 2);
-        assert!(output
-            .routes
-            .iter()
-            .any(|route| route.service_name == "travel-ops_vault"
-                && route.path == "/api/auth/challenge"));
+        assert!(
+            output
+                .routes
+                .iter()
+                .any(|route| route.service_name == "travel-ops_vault"
+                    && route.path == "/api/auth/challenge")
+        );
     }
 
     #[test]
@@ -27214,6 +27450,13 @@ printf 'ok' > "$SCRIPT_DIR/build-and-sync-ran.txt"
         .expect("build-and-sync execution should succeed");
 
         assert_eq!(output.mode, "completed");
+        assert_eq!(output.hostname, "travel-ops.sora");
+        assert!(output.workspace_dir.contains("single_api_build_and_sync_run"));
+        assert!(output
+            .workspace_scripts
+            .build_and_sync
+            .as_deref()
+            .is_some_and(|path| path.ends_with("build-and-sync.sh")));
         assert_eq!(output.exit_status, Some(0));
         assert_eq!(output.command, vec!["./build-and-sync.sh".to_owned()]);
         assert_eq!(output.services.len(), 1);
@@ -27221,10 +27464,12 @@ printf 'ok' > "$SCRIPT_DIR/build-and-sync-ran.txt"
             dir.join("build-and-sync-ran.txt").exists(),
             "build-and-sync command should run the manifest-adjacent script"
         );
-        assert!(output
-            .notes
-            .iter()
-            .any(|note| note.contains("build-and-sync completed")));
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("build-and-sync completed"))
+        );
     }
 
     #[test]
@@ -27251,6 +27496,19 @@ printf 'ok' > "$SCRIPT_DIR/build-and-sync-ran.txt"
         .expect("app deploy-workspace dry-run should succeed");
 
         assert_eq!(output.mode, "dry_run");
+        assert_eq!(output.hostname, "travel-ops.sora");
+        assert!(output.manifest_path.ends_with("app_manifest.json"));
+        assert!(output.workspace_dir.contains("split_app_deploy_workspace_dry_run"));
+        assert!(output
+            .workspace_scripts
+            .deploy
+            .as_deref()
+            .is_some_and(|path| path.ends_with("deploy.sh")));
+        assert!(output
+            .workspace_scripts
+            .upgrade
+            .as_deref()
+            .is_some_and(|path| path.ends_with("upgrade.sh")));
         assert_eq!(output.script_name, "deploy.sh");
         assert_eq!(output.torii_url, "http://127.0.0.1:8080");
         assert!(output.uses_api_token);
@@ -27267,15 +27525,19 @@ printf 'ok' > "$SCRIPT_DIR/build-and-sync-ran.txt"
         );
         assert!(output.script_path.ends_with("deploy.sh"));
         assert_eq!(output.services.len(), 2);
-        assert!(output
-            .services
-            .iter()
-            .any(|service| service.service_name == "travel-ops_vault"
-                && service.workspace_dir.ends_with("services/vault")));
-        assert!(output
-            .notes
-            .iter()
-            .any(|note| note.contains("exporting TORII_URL")));
+        assert!(
+            output
+                .services
+                .iter()
+                .any(|service| service.service_name == "travel-ops_vault"
+                    && service.workspace_dir.ends_with("services/vault"))
+        );
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("exporting TORII_URL"))
+        );
     }
 
     #[test]
@@ -27308,7 +27570,8 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-upgrade-workspace-args.txt"
 "#,
         )
         .expect("write app upgrade-workspace script");
-        mark_template_file_executable(&upgrade_script).expect("mark app upgrade-workspace executable");
+        mark_template_file_executable(&upgrade_script)
+            .expect("mark app upgrade-workspace executable");
 
         let output = AppWorkspaceMutationArgs {
             manifest: dir.join("app_manifest.json"),
@@ -27321,6 +27584,18 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-upgrade-workspace-args.txt"
         .expect("app upgrade-workspace execution should succeed");
 
         assert_eq!(output.mode, "completed");
+        assert_eq!(output.hostname, "travel-ops.sora");
+        assert!(output.workspace_dir.contains("single_api_upgrade_workspace_run"));
+        assert!(output
+            .workspace_scripts
+            .deploy
+            .as_deref()
+            .is_some_and(|path| path.ends_with("deploy.sh")));
+        assert!(output
+            .workspace_scripts
+            .upgrade
+            .as_deref()
+            .is_some_and(|path| path.ends_with("upgrade.sh")));
         assert_eq!(output.exit_status, Some(0));
         assert_eq!(output.script_name, "upgrade.sh");
         assert_eq!(output.torii_url, "http://127.0.0.1:8080");
@@ -27344,10 +27619,12 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-upgrade-workspace-args.txt"
             .expect("read app upgrade-workspace args");
         assert!(args.contains("--timeout-secs"));
         assert!(args.contains("23"));
-        assert!(output
-            .notes
-            .iter()
-            .any(|note| note.contains("upgrade completed")));
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("upgrade completed"))
+        );
     }
 
     #[test]
@@ -28558,29 +28835,38 @@ main().catch((error) => {
         .expect("app status should succeed");
 
         assert_eq!(output.app_name, "travel_ops");
+        assert_eq!(output.hostname, "travel-ops.sora");
         assert_eq!(output.public_url, "https://travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(output.workspace_dir.contains("split_app_status"));
-        assert!(output
-            .workspace_scripts
-            .local_dev
-            .as_deref()
-            .is_some_and(|path| path.ends_with("local-dev.sh")));
-        assert!(output
-            .workspace_scripts
-            .build_and_sync
-            .as_deref()
-            .is_some_and(|path| path.ends_with("build-and-sync.sh")));
-        assert!(output
-            .workspace_scripts
-            .deploy
-            .as_deref()
-            .is_some_and(|path| path.ends_with("deploy.sh")));
-        assert!(output
-            .workspace_scripts
-            .upgrade
-            .as_deref()
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert!(
+            output
+                .workspace_scripts
+                .local_dev
+                .as_deref()
+                .is_some_and(|path| path.ends_with("local-dev.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .build_and_sync
+                .as_deref()
+                .is_some_and(|path| path.ends_with("build-and-sync.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .deploy
+                .as_deref()
+                .is_some_and(|path| path.ends_with("deploy.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .upgrade
+                .as_deref()
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
         assert_eq!(
             output
                 .static_site
@@ -28633,23 +28919,27 @@ main().catch((error) => {
         assert_eq!(live.execution_plane, "HttpService");
         assert_eq!(live.runtime, "Inrou");
         assert_eq!(live.route_path_prefix.as_deref(), Some("/api/v1"));
-        assert!(live
-            .container_manifest_path
-            .ends_with("services/live/container_manifest.json"));
-        assert!(live
-            .service_manifest_path
-            .ends_with("services/live/service_manifest.json"));
+        assert!(
+            live.container_manifest_path
+                .ends_with("services/live/container_manifest.json")
+        );
+        assert!(
+            live.service_manifest_path
+                .ends_with("services/live/service_manifest.json")
+        );
         assert!(live.workspace_dir.ends_with("services/live"));
-        assert!(live
-            .workspace_scripts
-            .dev
-            .as_deref()
-            .is_some_and(|path| path.ends_with("services/live/dev.sh")));
-        assert!(live
-            .workspace_scripts
-            .build
-            .as_deref()
-            .is_some_and(|path| path.ends_with("services/live/build.sh")));
+        assert!(
+            live.workspace_scripts
+                .dev
+                .as_deref()
+                .is_some_and(|path| path.ends_with("services/live/dev.sh"))
+        );
+        assert!(
+            live.workspace_scripts
+                .build
+                .as_deref()
+                .is_some_and(|path| path.ends_with("services/live/build.sh"))
+        );
         assert!(live.workspace_scripts.verify_build.is_none());
         assert_eq!(
             live.status
@@ -28668,28 +28958,38 @@ main().catch((error) => {
         assert_eq!(vault.execution_plane, "DeterministicService");
         assert_eq!(vault.runtime, "Ivm");
         assert_eq!(vault.route_path_prefix.as_deref(), Some("/api"));
-        assert!(vault
-            .container_manifest_path
-            .ends_with("services/vault/container_manifest.json"));
-        assert!(vault
-            .service_manifest_path
-            .ends_with("services/vault/service_manifest.json"));
+        assert!(
+            vault
+                .container_manifest_path
+                .ends_with("services/vault/container_manifest.json")
+        );
+        assert!(
+            vault
+                .service_manifest_path
+                .ends_with("services/vault/service_manifest.json")
+        );
         assert!(vault.workspace_dir.ends_with("services/vault"));
-        assert!(vault
-            .workspace_scripts
-            .dev
-            .as_deref()
-            .is_some_and(|path| path.ends_with("services/vault/dev.sh")));
-        assert!(vault
-            .workspace_scripts
-            .build
-            .as_deref()
-            .is_some_and(|path| path.ends_with("services/vault/build.sh")));
-        assert!(vault
-            .workspace_scripts
-            .verify_build
-            .as_deref()
-            .is_some_and(|path| path.ends_with("services/vault/verify-build.sh")));
+        assert!(
+            vault
+                .workspace_scripts
+                .dev
+                .as_deref()
+                .is_some_and(|path| path.ends_with("services/vault/dev.sh"))
+        );
+        assert!(
+            vault
+                .workspace_scripts
+                .build
+                .as_deref()
+                .is_some_and(|path| path.ends_with("services/vault/build.sh"))
+        );
+        assert!(
+            vault
+                .workspace_scripts
+                .verify_build
+                .as_deref()
+                .is_some_and(|path| path.ends_with("services/vault/verify-build.sh"))
+        );
         assert_eq!(
             vault
                 .status
@@ -28744,17 +29044,26 @@ main().catch((error) => {
         .expect("app status should succeed");
 
         assert!(output.manifest_path.ends_with("app_manifest.json"));
-        assert!(output.workspace_dir.contains("split_app_status_missing_service"));
-        assert!(output
-            .workspace_scripts
-            .deploy
-            .as_deref()
-            .is_some_and(|path| path.ends_with("deploy.sh")));
-        assert!(output
-            .workspace_scripts
-            .upgrade
-            .as_deref()
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert_eq!(output.hostname, "travel-ops.sora");
+        assert!(
+            output
+                .workspace_dir
+                .contains("split_app_status_missing_service")
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .deploy
+                .as_deref()
+                .is_some_and(|path| path.ends_with("deploy.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .upgrade
+                .as_deref()
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
         assert_eq!(output.services.len(), 2);
         let live = output
             .services
@@ -28782,9 +29091,11 @@ main().catch((error) => {
                 && route.handler_name.as_deref() == Some("auth_me")
                 && route.path == "/api/auth/me"
         }));
-        assert!(vault.notes.iter().any(|note| {
-            note.contains("no matching Torii control-plane entry was returned")
-        }));
+        assert!(
+            vault.notes.iter().any(|note| {
+                note.contains("no matching Torii control-plane entry was returned")
+            })
+        );
     }
 
     #[test]
@@ -28831,17 +29142,26 @@ main().catch((error) => {
         .expect("app status should succeed");
 
         assert!(output.manifest_path.ends_with("app_manifest.json"));
-        assert!(output.workspace_dir.contains("single_api_status_root_binding"));
-        assert!(output
-            .workspace_scripts
-            .deploy
-            .as_deref()
-            .is_some_and(|path| path.ends_with("deploy.sh")));
-        assert!(output
-            .workspace_scripts
-            .upgrade
-            .as_deref()
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert_eq!(output.hostname, "travel-ops.sora");
+        assert!(
+            output
+                .workspace_dir
+                .contains("single_api_status_root_binding")
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .deploy
+                .as_deref()
+                .is_some_and(|path| path.ends_with("deploy.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .upgrade
+                .as_deref()
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
         assert!(!output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 0);
         assert_eq!(output.deterministic_service_count, 1);
@@ -28945,18 +29265,27 @@ main().catch((error) => {
         .run(MutationMode::Deploy, &authority, &key_pair)
         .expect("app deploy should succeed");
 
+        assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
-        assert!(output.workspace_dir.contains("single_api_root_binding_deploy"));
-        assert!(output
-            .workspace_scripts
-            .deploy
-            .as_deref()
-            .is_some_and(|path| path.ends_with("deploy.sh")));
-        assert!(output
-            .workspace_scripts
-            .upgrade
-            .as_deref()
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert!(
+            output
+                .workspace_dir
+                .contains("single_api_root_binding_deploy")
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .deploy
+                .as_deref()
+                .is_some_and(|path| path.ends_with("deploy.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .upgrade
+                .as_deref()
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
         assert!(!output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 0);
         assert_eq!(output.deterministic_service_count, 1);
@@ -28988,22 +29317,33 @@ main().catch((error) => {
         assert_eq!(api_service.runtime, "Ivm");
         assert_eq!(api_service.route_path_prefix.as_deref(), Some("/api"));
         assert!(api_service.workspace_dir.ends_with("services/api"));
-        assert!(api_service
-            .workspace_scripts
-            .dev
-            .as_deref()
-            .is_some_and(|path| path.ends_with("services/api/dev.sh")));
-        assert!(api_service
-            .workspace_scripts
-            .build
-            .as_deref()
-            .is_some_and(|path| path.ends_with("services/api/build.sh")));
-        assert!(api_service
-            .workspace_scripts
-            .verify_build
-            .as_deref()
-            .is_some_and(|path| path.ends_with("services/api/verify-build.sh")));
-        assert!(api_service.notes.iter().any(|note| note.contains("deterministic IVM")));
+        assert!(
+            api_service
+                .workspace_scripts
+                .dev
+                .as_deref()
+                .is_some_and(|path| path.ends_with("services/api/dev.sh"))
+        );
+        assert!(
+            api_service
+                .workspace_scripts
+                .build
+                .as_deref()
+                .is_some_and(|path| path.ends_with("services/api/build.sh"))
+        );
+        assert!(
+            api_service
+                .workspace_scripts
+                .verify_build
+                .as_deref()
+                .is_some_and(|path| path.ends_with("services/api/verify-build.sh"))
+        );
+        assert!(
+            api_service
+                .notes
+                .iter()
+                .any(|note| note.contains("deterministic IVM"))
+        );
         let publication = output
             .published_static_site
             .as_ref()
@@ -29090,11 +29430,7 @@ main().catch((error) => {
         .run(MutationMode::Deploy, &authority, &key_pair)
         .expect_err("app deploy should fail on mismatched service name");
 
-        assert!(
-            error
-                .to_string()
-                .contains("wrong_live_name")
-        );
+        assert!(error.to_string().contains("wrong_live_name"));
         assert!(
             server.requests().is_empty(),
             "preflight mismatch should fail before any Soracloud or Sorafs network mutation"
@@ -29181,35 +29517,44 @@ main().catch((error) => {
         .run(MutationMode::Deploy, &authority, &key_pair)
         .expect("split-app deploy should succeed");
 
+        assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(output.workspace_dir.contains("split_app_cid_only_deploy"));
-        assert!(output
-            .workspace_scripts
-            .deploy
-            .as_deref()
-            .is_some_and(|path| path.ends_with("deploy.sh")));
-        assert!(output
-            .workspace_scripts
-            .upgrade
-            .as_deref()
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert!(
+            output
+                .workspace_scripts
+                .deploy
+                .as_deref()
+                .is_some_and(|path| path.ends_with("deploy.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .upgrade
+                .as_deref()
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);
         assert_eq!(output.deterministic_service_count, 1);
         assert_eq!(output.services.len(), 2);
-        assert!(output
-            .routes
-            .iter()
-            .any(|route| route.service_name == "travel-ops_live"
-                && route.route_kind == "hosted_http_prefix"
-                && route.path == "/api/v1"));
-        assert!(output
-            .routes
-            .iter()
-            .any(|route| route.service_name == "travel-ops_vault"
-                && route.route_kind == "handler"
-                && route.handler_name.as_deref() == Some("auth_me")
-                && route.path == "/api/auth/me"));
+        assert!(
+            output
+                .routes
+                .iter()
+                .any(|route| route.service_name == "travel-ops_live"
+                    && route.route_kind == "hosted_http_prefix"
+                    && route.path == "/api/v1")
+        );
+        assert!(
+            output
+                .routes
+                .iter()
+                .any(|route| route.service_name == "travel-ops_vault"
+                    && route.route_kind == "handler"
+                    && route.handler_name.as_deref() == Some("auth_me")
+                    && route.path == "/api/auth/me")
+        );
         assert_eq!(
             output
                 .static_site
@@ -29240,18 +29585,24 @@ main().catch((error) => {
         assert_eq!(live.runtime, "Inrou");
         assert_eq!(live.route_path_prefix.as_deref(), Some("/api/v1"));
         assert!(live.workspace_dir.ends_with("services/live"));
-        assert!(live
-            .workspace_scripts
-            .dev
-            .as_deref()
-            .is_some_and(|path| path.ends_with("services/live/dev.sh")));
-        assert!(live
-            .workspace_scripts
-            .build
-            .as_deref()
-            .is_some_and(|path| path.ends_with("services/live/build.sh")));
+        assert!(
+            live.workspace_scripts
+                .dev
+                .as_deref()
+                .is_some_and(|path| path.ends_with("services/live/dev.sh"))
+        );
+        assert!(
+            live.workspace_scripts
+                .build
+                .as_deref()
+                .is_some_and(|path| path.ends_with("services/live/build.sh"))
+        );
         assert!(live.workspace_scripts.verify_build.is_none());
-        assert!(live.notes.iter().any(|note| note.contains("hosted HttpService + Inrou")));
+        assert!(
+            live.notes
+                .iter()
+                .any(|note| note.contains("hosted HttpService + Inrou"))
+        );
         let vault = output
             .services
             .iter()
@@ -29261,11 +29612,13 @@ main().catch((error) => {
         assert_eq!(vault.runtime, "Ivm");
         assert_eq!(vault.route_path_prefix.as_deref(), Some("/api"));
         assert!(vault.workspace_dir.ends_with("services/vault"));
-        assert!(vault
-            .workspace_scripts
-            .verify_build
-            .as_deref()
-            .is_some_and(|path| path.ends_with("services/vault/verify-build.sh")));
+        assert!(
+            vault
+                .workspace_scripts
+                .verify_build
+                .as_deref()
+                .is_some_and(|path| path.ends_with("services/vault/verify-build.sh"))
+        );
         let publication = output
             .published_static_site
             .as_ref()
@@ -29385,18 +29738,23 @@ main().catch((error) => {
         .run(MutationMode::Upgrade, &authority, &key_pair)
         .expect("split-app upgrade should succeed");
 
+        assert_eq!(output.hostname, "travel-ops.sora");
         assert!(output.manifest_path.ends_with("app_manifest.json"));
         assert!(output.workspace_dir.contains("split_app_cid_only_upgrade"));
-        assert!(output
-            .workspace_scripts
-            .deploy
-            .as_deref()
-            .is_some_and(|path| path.ends_with("deploy.sh")));
-        assert!(output
-            .workspace_scripts
-            .upgrade
-            .as_deref()
-            .is_some_and(|path| path.ends_with("upgrade.sh")));
+        assert!(
+            output
+                .workspace_scripts
+                .deploy
+                .as_deref()
+                .is_some_and(|path| path.ends_with("deploy.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .upgrade
+                .as_deref()
+                .is_some_and(|path| path.ends_with("upgrade.sh"))
+        );
         assert_eq!(output.mode, "upgrade");
         assert!(output.has_mixed_planes);
         assert_eq!(output.hosted_http_service_count, 1);

@@ -396,7 +396,7 @@ mod tests {
     use std::{
         collections::BTreeMap,
         io::Write,
-        net::{TcpListener, TcpStream},
+        net::{Shutdown, TcpListener, TcpStream},
         sync::{
             Arc,
             atomic::{AtomicBool, Ordering},
@@ -560,6 +560,8 @@ mod tests {
                             stream
                                 .write_all(&response.body)
                                 .expect("write mock response body");
+                            stream.flush().expect("flush mock response");
+                            let _ = stream.shutdown(Shutdown::Write);
                         }
                         Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                             thread::sleep(Duration::from_millis(10));

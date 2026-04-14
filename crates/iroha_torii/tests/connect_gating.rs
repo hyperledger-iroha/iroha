@@ -280,6 +280,9 @@ fn minimal_actual_config(connect_enabled: bool) -> iroha_config::parameters::act
             ws_message_timeout: std::time::Duration::from_millis(
                 iroha_config::parameters::defaults::torii::WS_MESSAGE_TIMEOUT_MS,
             ),
+            webhooks_enabled: iroha_config::parameters::defaults::torii::WEBHOOKS_ENABLED,
+            zk_attachments_enabled:
+                iroha_config::parameters::defaults::torii::ZK_ATTACHMENTS_ENABLED,
             app_api: iroha_config::parameters::actual::AppApi {
                 default_list_limit: std::num::NonZeroU32::new(
                     iroha_config::parameters::defaults::torii::APP_API_DEFAULT_LIST_LIMIT.max(1),

@@ -1,6 +1,12 @@
 //! Contracts helpers.
 
-use std::{collections::BTreeMap, path::PathBuf, str::FromStr, sync::Arc};
+use std::{
+    collections::BTreeMap,
+    fs,
+    path::{Path, PathBuf},
+    str::FromStr,
+    sync::Arc,
+};
 
 use base64::Engine as _;
 use eyre::{Result, WrapErr as _, eyre};
@@ -19,13 +25,17 @@ use iroha_core::{
     smartcontracts::ivm::{cache::ProgramSummary, host::CoreHost},
 };
 use iroha_crypto::{Hash, KeyPair, PrivateKey};
-use ivm::{PointerType, host::IVMHost};
+use ivm::{PointerType, host::IVMHost, kotodama::compiler::CompilerOptions};
 use reqwest::StatusCode;
+use serde::Deserialize;
 
 use crate::{Run, RunContext, TransactionWaitArgs, wait_for_transaction_status};
 
 #[derive(clap::Subcommand, Debug)]
 pub enum Command {
+    /// Contract app bundle helpers
+    #[command(subcommand)]
+    App(AppCommand),
     /// Contract code helpers
     #[command(subcommand)]
     Code(CodeCommand),
@@ -54,6 +64,7 @@ pub enum Command {
 impl Run for Command {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         match self {
+            Command::App(cmd) => cmd.run(context),
             Command::Code(cmd) => cmd.run(context),
             Command::Alias(cmd) => cmd.run(context),
             Command::Deploy(args) => args.run(context),
@@ -64,6 +75,29 @@ impl Run for Command {
             Command::DebugCall(args) => args.run(context),
             Command::Manifest(cmd) => cmd.run(context),
             Command::Simulate(args) => args.run(context),
+        }
+    }
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum AppCommand {
+    /// Build an `iroha.app.toml` manifest into a compiled deployable bundle
+    Build(AppBuildArgs),
+    /// Compile a manifest and ask Torii for a dry-run deployment plan
+    Plan(AppPlanArgs),
+    /// Compile a manifest and deploy the bundle through Torii
+    Deploy(AppDeployArgs),
+    /// Resume an interrupted bundle deployment using the same manifest payload
+    Resume(AppResumeArgs),
+}
+
+impl Run for AppCommand {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        match self {
+            AppCommand::Build(args) => args.run(context),
+            AppCommand::Plan(args) => args.run(context),
+            AppCommand::Deploy(args) => args.run(context),
+            AppCommand::Resume(args) => args.run(context),
         }
     }
 }
@@ -116,6 +150,367 @@ impl Run for ManifestCommand {
             ManifestCommand::Get(args) => args.run(context),
             ManifestCommand::Build(args) => args.run(context),
         }
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct ContractAppManifest {
+    bundle_name: String,
+    #[serde(default)]
+    default_dataspace: Option<String>,
+    contracts: Vec<ContractAppManifestContract>,
+    #[serde(default)]
+    init: Vec<ContractAppManifestInitCall>,
+    #[serde(default)]
+    assertions: Vec<ContractAppManifestAssertion>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ContractAppManifestContract {
+    name: String,
+    alias: String,
+    #[serde(default)]
+    source: Option<PathBuf>,
+    #[serde(default)]
+    artifact: Option<PathBuf>,
+    #[serde(default)]
+    depends_on: Vec<String>,
+    #[serde(default)]
+    lease_expiry_ms: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ContractAppManifestInitCall {
+    id: String,
+    contract: String,
+    #[serde(default)]
+    entrypoint: Option<String>,
+    #[serde(default)]
+    payload: Option<toml::Value>,
+    gas_limit: u64,
+    #[serde(default)]
+    gas_asset_id: Option<String>,
+    #[serde(default)]
+    fee_sponsor: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct ContractAppManifestAssertion {
+    id: String,
+    contract: String,
+    #[serde(default)]
+    entrypoint: Option<String>,
+    #[serde(default)]
+    payload: Option<toml::Value>,
+    gas_limit: u64,
+    #[serde(default)]
+    expected_result: Option<toml::Value>,
+}
+
+#[derive(clap::Args, Debug, Clone)]
+pub struct ContractAppManifestArgs {
+    /// Path to the contract app manifest (`iroha.app.toml`)
+    #[arg(long, default_value = "iroha.app.toml")]
+    pub manifest: PathBuf,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppBuildArgs {
+    #[command(flatten)]
+    pub manifest: ContractAppManifestArgs,
+    /// Optional output path for the compiled bundle JSON
+    #[arg(long)]
+    pub out: Option<PathBuf>,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppPlanArgs {
+    #[command(flatten)]
+    pub manifest: ContractAppManifestArgs,
+    /// Authority account identifier (canonical I105 account literal)
+    #[arg(long)]
+    pub authority: String,
+    /// Hex-encoded private key for signing
+    #[arg(long, value_name = "HEX")]
+    pub private_key: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppDeployArgs {
+    #[command(flatten)]
+    pub manifest: ContractAppManifestArgs,
+    /// Authority account identifier (canonical I105 account literal)
+    #[arg(long)]
+    pub authority: String,
+    /// Hex-encoded private key for signing
+    #[arg(long, value_name = "HEX")]
+    pub private_key: String,
+}
+
+#[derive(clap::Args, Debug)]
+pub struct AppResumeArgs {
+    #[command(flatten)]
+    pub manifest: ContractAppManifestArgs,
+    /// Authority account identifier (canonical I105 account literal)
+    #[arg(long)]
+    pub authority: String,
+    /// Hex-encoded private key for signing
+    #[arg(long, value_name = "HEX")]
+    pub private_key: String,
+}
+
+fn default_contract_artifact_path(manifest_path: &Path, contract_name: &str) -> Result<PathBuf> {
+    let base = manifest_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."))
+        .join("artifacts");
+    fs::create_dir_all(&base)?;
+    Ok(base.join(format!("{contract_name}.to")))
+}
+
+fn resolve_manifest_path(base: &Path, path: &Path) -> PathBuf {
+    if path.is_absolute() {
+        path.to_path_buf()
+    } else {
+        base.join(path)
+    }
+}
+
+fn resolve_contract_manifest_alias(
+    alias_literal: &str,
+    default_dataspace: Option<&str>,
+) -> Result<iroha::data_model::smart_contract::ContractAlias> {
+    let alias_literal = alias_literal.trim();
+    if alias_literal.contains("::") {
+        return alias_literal
+            .parse()
+            .wrap_err_with(|| format!("invalid contract alias `{alias_literal}`"));
+    }
+    let dataspace = default_dataspace.ok_or_else(|| {
+        eyre!(
+            "contract alias `{alias_literal}` is missing a dataspace and manifest has no default_dataspace"
+        )
+    })?;
+    format!("{alias_literal}::{dataspace}")
+        .parse()
+        .wrap_err_with(|| format!("invalid contract alias `{alias_literal}`"))
+}
+
+fn toml_to_json_value(value: toml::Value) -> Result<norito::json::Value> {
+    match value {
+        toml::Value::String(value) => Ok(norito::json::Value::from(value)),
+        toml::Value::Integer(value) => Ok(norito::json::Value::from(value)),
+        toml::Value::Float(value) => Ok(norito::json::Value::from(value)),
+        toml::Value::Boolean(value) => Ok(norito::json::Value::from(value)),
+        toml::Value::Datetime(value) => Ok(norito::json::Value::from(value.to_string())),
+        toml::Value::Array(values) => Ok(norito::json::Value::Array(
+            values
+                .into_iter()
+                .map(toml_to_json_value)
+                .collect::<Result<Vec<_>>>()?,
+        )),
+        toml::Value::Table(values) => Ok(norito::json::Value::Object(
+            values
+                .into_iter()
+                .map(|(key, value)| Ok((key, toml_to_json_value(value)?)))
+                .collect::<Result<norito::json::Map>>()?,
+        )),
+    }
+}
+
+fn compile_or_load_contract_code(
+    manifest_path: &Path,
+    contract: &ContractAppManifestContract,
+) -> Result<Vec<u8>> {
+    let manifest_dir = manifest_path.parent().unwrap_or_else(|| Path::new("."));
+    match (&contract.source, &contract.artifact) {
+        (Some(source), artifact) => {
+            let source_path = resolve_manifest_path(manifest_dir, source);
+            let source_text = fs::read_to_string(&source_path)
+                .wrap_err_with(|| format!("failed to read `{}`", source_path.display()))?;
+            let compiler = ivm::KotodamaCompiler::new_with_options(CompilerOptions {
+                debug_source_name: Some(source_path.display().to_string()),
+                ..CompilerOptions::default()
+            });
+            let (program, _manifest) = compiler
+                .compile_source_with_manifest(&source_text)
+                .map_err(|err| eyre!("failed to compile `{}`: {err}", source_path.display()))?;
+            let artifact_path = artifact
+                .as_ref()
+                .map(|path| resolve_manifest_path(manifest_dir, path))
+                .unwrap_or(default_contract_artifact_path(manifest_path, &contract.name)?);
+            if let Some(parent) = artifact_path.parent() {
+                fs::create_dir_all(parent)?;
+            }
+            fs::write(&artifact_path, &program).wrap_err_with(|| {
+                format!("failed to write compiled artifact `{}`", artifact_path.display())
+            })?;
+            Ok(program)
+        }
+        (None, Some(artifact)) => {
+            let artifact_path = resolve_manifest_path(manifest_dir, artifact);
+            fs::read(&artifact_path)
+                .wrap_err_with(|| format!("failed to read `{}`", artifact_path.display()))
+        }
+        (None, None) => Err(eyre!(
+            "contract `{}` must declare either `source` or `artifact`",
+            contract.name
+        )),
+    }
+}
+
+fn load_contract_app_manifest(path: &Path) -> Result<ContractAppManifest> {
+    let body =
+        fs::read_to_string(path).wrap_err_with(|| format!("failed to read `{}`", path.display()))?;
+    toml::from_str(&body).wrap_err_with(|| format!("failed to parse `{}`", path.display()))
+}
+
+fn build_contract_app_bundle(manifest_path: &Path) -> Result<norito::json::Value> {
+    let manifest = load_contract_app_manifest(manifest_path)?;
+    let default_dataspace = manifest.default_dataspace.as_deref();
+    let mut contracts = Vec::with_capacity(manifest.contracts.len());
+    let mut alias_by_name = BTreeMap::new();
+
+    for contract in &manifest.contracts {
+        let contract_alias = resolve_contract_manifest_alias(&contract.alias, default_dataspace)?;
+        alias_by_name.insert(contract.name.clone(), contract_alias.clone());
+        let code = compile_or_load_contract_code(manifest_path, contract)?;
+        contracts.push(norito::json!({
+            "name": (contract.name.clone()),
+            "contract_alias": (contract_alias),
+            "code_b64": (base64::engine::general_purpose::STANDARD.encode(code)),
+            "lease_expiry_ms": (contract.lease_expiry_ms),
+            "depends_on": (contract.depends_on.clone()),
+        }));
+    }
+
+    let resolve_alias_ref = |value: &str| -> Result<iroha::data_model::smart_contract::ContractAlias> {
+        if let Some(alias) = alias_by_name.get(value) {
+            return Ok(alias.clone());
+        }
+        resolve_contract_manifest_alias(value, default_dataspace)
+    };
+
+    let init_calls = manifest
+        .init
+        .into_iter()
+        .map(|call| {
+            Ok(norito::json!({
+                "id": (call.id),
+                "contract_alias": (resolve_alias_ref(&call.contract)?),
+                "entrypoint": (call.entrypoint),
+                "payload": (call.payload.map(toml_to_json_value).transpose()?),
+                "gas_limit": (call.gas_limit),
+                "gas_asset_id": (call.gas_asset_id),
+                "fee_sponsor": (call.fee_sponsor),
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let assertions = manifest
+        .assertions
+        .into_iter()
+        .map(|assertion| {
+            Ok(norito::json!({
+                "id": (assertion.id),
+                "contract_alias": (resolve_alias_ref(&assertion.contract)?),
+                "entrypoint": (assertion.entrypoint),
+                "payload": (assertion.payload.map(toml_to_json_value).transpose()?),
+                "gas_limit": (assertion.gas_limit),
+                "expected_result": (assertion.expected_result.map(toml_to_json_value).transpose()?),
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    Ok(norito::json!({
+        "bundle_name": (manifest.bundle_name),
+        "default_dataspace": (manifest.default_dataspace),
+        "contracts": (contracts),
+        "init_calls": (init_calls),
+        "assertions": (assertions),
+    }))
+}
+
+fn wrap_contract_bundle_request(
+    bundle: norito::json::Value,
+    authority: &AccountId,
+    private_key: &PrivateKey,
+) -> Result<norito::json::Value> {
+    let mut object = bundle
+        .as_object()
+        .cloned()
+        .ok_or_else(|| eyre!("compiled bundle must be a JSON object"))?;
+    object.insert("authority".to_owned(), authority.to_string().into());
+    object.insert(
+        "private_key".to_owned(),
+        norito::json::to_value(&iroha_data_model::prelude::ExposedPrivateKey(
+            private_key.clone(),
+        ))?,
+    );
+    Ok(norito::json::Value::Object(object))
+}
+
+fn resolve_contract_app_authority<C: RunContext>(
+    context: &C,
+    authority: &str,
+    private_key: &str,
+) -> Result<(AccountId, PrivateKey)> {
+    let authority =
+        crate::resolve_account_id(context, authority).wrap_err("failed to resolve --authority")?;
+    let private_key = private_key.parse().wrap_err("invalid --private-key")?;
+    Ok((authority, private_key))
+}
+
+impl Run for AppBuildArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let bundle = build_contract_app_bundle(&self.manifest.manifest)?;
+        if let Some(out) = self.out {
+            let body = norito::json::to_json_pretty(&bundle)?;
+            fs::write(&out, body).wrap_err_with(|| format!("failed to write `{}`", out.display()))?;
+            context.println(format_args!("Wrote bundle to {}", out.display()))?;
+        } else {
+            context.print_data(&bundle)?;
+        }
+        Ok(())
+    }
+}
+
+impl Run for AppPlanArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let bundle = build_contract_app_bundle(&self.manifest.manifest)?;
+        let (authority, private_key) =
+            resolve_contract_app_authority(context, &self.authority, &self.private_key)?;
+        let request = wrap_contract_bundle_request(bundle, &authority, &private_key)?;
+        let client: Client = context.client_from_config();
+        let response = client.post_contract_deploy_bundle_json(&request, true)?;
+        context.print_data(&response)?;
+        Ok(())
+    }
+}
+
+impl Run for AppDeployArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let bundle = build_contract_app_bundle(&self.manifest.manifest)?;
+        let (authority, private_key) =
+            resolve_contract_app_authority(context, &self.authority, &self.private_key)?;
+        let request = wrap_contract_bundle_request(bundle, &authority, &private_key)?;
+        let client: Client = context.client_from_config();
+        let response = client.post_contract_deploy_bundle_json(&request, false)?;
+        context.print_data(&response)?;
+        Ok(())
+    }
+}
+
+impl Run for AppResumeArgs {
+    fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
+        let bundle = build_contract_app_bundle(&self.manifest.manifest)?;
+        let (authority, private_key) =
+            resolve_contract_app_authority(context, &self.authority, &self.private_key)?;
+        let request = wrap_contract_bundle_request(bundle, &authority, &private_key)?;
+        let client: Client = context.client_from_config();
+        let response = client.post_contract_deploy_bundle_json(&request, false)?;
+        context.print_data(&response)?;
+        Ok(())
     }
 }
 
@@ -1964,9 +2359,12 @@ fn decode_contract_view_signed_i64(raw: u64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::fs;
+
     use iroha_crypto::{Algorithm, ExposedPrivateKey};
     use iroha_i18n::{Bundle, Language, Localizer};
     use ivm::kotodama::compiler::CompilerOptions;
+    use tempfile::tempdir;
     use url::Url;
 
     fn minimal_program() -> Vec<u8> {
@@ -2018,6 +2416,114 @@ mod tests {
         assert_eq!(decode_contract_view_signed_i64(u64::MAX), -1);
         assert_eq!(decode_contract_view_signed_i64(i64::MAX as u64), i64::MAX);
         assert_eq!(decode_contract_view_signed_i64(i64::MIN as u64), i64::MIN);
+    }
+
+    #[test]
+    fn resolve_contract_manifest_alias_uses_default_dataspace() {
+        let alias = resolve_contract_manifest_alias("router", Some("universal"))
+            .expect("resolve contract alias");
+        assert_eq!(alias.to_string(), "router::universal");
+    }
+
+    #[test]
+    fn toml_to_json_value_preserves_nested_tables() {
+        let value = toml::from_str::<toml::Value>(
+            r#"
+            retries = 2
+            enabled = true
+            [nested]
+            label = "alpha"
+            values = [1, 2]
+            "#,
+        )
+        .expect("parse toml");
+        let json = toml_to_json_value(value).expect("convert to json");
+        assert_eq!(json.get("retries").and_then(norito::json::Value::as_i64), Some(2));
+        assert_eq!(json.get("enabled").and_then(norito::json::Value::as_bool), Some(true));
+        assert_eq!(
+            json.get("nested")
+                .and_then(|nested| nested.get("label"))
+                .and_then(norito::json::Value::as_str),
+            Some("alpha")
+        );
+        assert_eq!(
+            json.get("nested")
+                .and_then(|nested| nested.get("values"))
+                .and_then(norito::json::Value::as_array)
+                .map(Vec::len),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn build_contract_app_bundle_compiles_manifest_sources() {
+        let dir = tempdir().expect("tempdir");
+        let contracts_dir = dir.path().join("contracts");
+        let artifacts_dir = dir.path().join("artifacts");
+        fs::create_dir_all(&contracts_dir).expect("create contracts dir");
+        fs::create_dir_all(&artifacts_dir).expect("create artifacts dir");
+
+        let contract_path = contracts_dir.join("greeter.ko");
+        fs::write(
+            &contract_path,
+            r#"
+                seiyaku Greeter {
+                    pub fn init(value: int) {}
+                    view fn status() -> int { return 7; }
+                }
+            "#,
+        )
+        .expect("write contract");
+
+        let manifest_path = dir.path().join("iroha.app.toml");
+        fs::write(
+            &manifest_path,
+            r#"
+                bundle_name = "demo"
+                default_dataspace = "universal"
+
+                [[contracts]]
+                name = "demo.greeter"
+                alias = "greeter"
+                source = "contracts/greeter.ko"
+                artifact = "artifacts/greeter.to"
+
+                [[init]]
+                id = "seed"
+                contract = "demo.greeter"
+                entrypoint = "init"
+                gas_limit = 1000
+                payload = { value = 7 }
+            "#,
+        )
+        .expect("write manifest");
+
+        let bundle = build_contract_app_bundle(&manifest_path).expect("build bundle");
+        assert_eq!(
+            bundle
+                .get("bundle_name")
+                .and_then(norito::json::Value::as_str),
+            Some("demo")
+        );
+        assert_eq!(
+            bundle
+                .get("contracts")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|contracts| contracts.first())
+                .and_then(|contract| contract.get("contract_alias"))
+                .and_then(norito::json::Value::as_str),
+            Some("greeter::universal")
+        );
+        assert_eq!(
+            bundle
+                .get("init_calls")
+                .and_then(norito::json::Value::as_array)
+                .and_then(|calls| calls.first())
+                .and_then(|call| call.get("contract_alias"))
+                .and_then(norito::json::Value::as_str),
+            Some("greeter::universal")
+        );
+        assert!(dir.path().join("artifacts/greeter.to").exists());
     }
 
     #[test]

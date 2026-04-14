@@ -23,15 +23,16 @@ use iroha_data_model::{
         SoraContainerManifestV1, SoraContainerRuntimeV1, SoraDeploymentBundleV1,
         SoraHfPlacementHostAssignmentV1, SoraHfPlacementHostRoleV1, SoraHfPlacementHostStatusV1,
         SoraHfPlacementRecordV1, SoraHfSharedLeaseMemberStatusV1, SoraHfSharedLeaseStatusV1,
-        SoraHfSourceStatusV1, SoraHttpServiceEconomicsV1, SoraInrouGuestOsV1,
-        SoraLeaseVolumeKindV1, SoraLifecycleHooksV1, SoraNetworkAllowlistEntryV1,
-        SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionStatusV1,
-        SoraResourceLimitsV1, SoraRolloutPolicyV1, SoraRouteTargetV1, SoraRouteVisibilityV1,
-        SoraRuntimeReceiptV1, SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1,
-        SoraServiceHandlerClassV1, SoraServiceHandlerV1, SoraServiceHealthStatusV1,
-        SoraServiceLeaseStatusV1, SoraServiceMailboxMessageV1, SoraServiceManifestV1,
-        SoraServiceRuntimeStateV1, SoraStateEncryptionV1, SoraStateMutationOperationV1,
-        SoraTlsModeV1, SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
+        SoraHfSourceStatusV1, SoraHttpServiceEconomicsV1, SoraInrouGuestIsaV1, SoraInrouGuestOsV1,
+        SoraInrouRuntimeBackendV1, SoraLeaseVolumeKindV1, SoraLifecycleHooksV1,
+        SoraNetworkAllowlistEntryV1, SoraNetworkPolicyV1, SoraPrivateInferenceCheckpointV1,
+        SoraPrivateInferenceSessionStatusV1, SoraResourceLimitsV1, SoraRolloutPolicyV1,
+        SoraRouteTargetV1, SoraRouteVisibilityV1, SoraRuntimeReceiptV1,
+        SoraServiceDeploymentStateV1, SoraServiceExecutionPlaneV1, SoraServiceHandlerClassV1,
+        SoraServiceHandlerV1, SoraServiceHealthStatusV1, SoraServiceLeaseStatusV1,
+        SoraServiceMailboxMessageV1, SoraServiceManifestV1, SoraServiceRuntimeStateV1,
+        SoraStateEncryptionV1, SoraStateMutationOperationV1, SoraTlsModeV1,
+        SoraUploadedModelKeyEncapsulationV1, SoraUploadedModelKeyWrapAeadV1,
     },
     sorafs::pin_registry::StorageClass,
 };
@@ -567,11 +568,15 @@ pub struct SoracloudRuntimeServicePlan {
 pub struct SoracloudRuntimeInrouPlan {
     /// Guest userspace profile expected by the VM image.
     pub guest_os: SoraInrouGuestOsV1,
-    /// Kernel image path inside the hydrated Soracloud bundle.
+    /// Runtime backend selected locally for the assigned host.
+    pub selected_backend: SoraInrouRuntimeBackendV1,
+    /// Guest ISA profile selected locally for this replica.
+    pub selected_guest_isa: SoraInrouGuestIsaV1,
+    /// Kernel image path for the selected guest ISA inside the hydrated Soracloud bundle.
     pub kernel_image_path: String,
-    /// Immutable base root filesystem image path inside the hydrated Soracloud bundle.
+    /// Immutable base root filesystem image path for the selected guest ISA.
     pub rootfs_image_path: String,
-    /// Optional initrd image path inside the hydrated Soracloud bundle.
+    /// Optional initrd image path for the selected guest ISA.
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
     pub initrd_image_path: Option<String>,

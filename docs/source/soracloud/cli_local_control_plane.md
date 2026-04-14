@@ -66,9 +66,9 @@ manager; the CLI does not keep a shadow control-plane mirror.
     - hosted `/api/v1/*` ownership for `HttpService + Inrou`
     - deterministic handler ownership for `/api/auth*` and `/api/v1/user*`
   - prints the frontend CID gateway URL template when `publish_mode = CidOnly`
-  - prints the root `manifest_path`, then each service's resolved
-    `container_manifest_path` and `service_manifest_path` for service-scoped
-    Soracloud commands
+  - prints the root `manifest_path`, root `hostname`, then each service's
+    resolved `container_manifest_path` and `service_manifest_path` for
+    service-scoped Soracloud commands
   - prints each child service `workspace_dir` plus discovered child scripts such
     as `dev.sh`, `build.sh`, and `verify-build.sh` when present
   - reports the manifest-adjacent root script paths for `local-dev.sh`,
@@ -76,27 +76,27 @@ manager; the CLI does not keep a shadow control-plane mirror.
 - `iroha app soracloud app local-dev`
   - resolves `local-dev.sh` adjacent to the app manifest
   - `--dry-run` prints the resolved working directory, script path, mixed-plane
-    summary, and the same child service plus route plan that `app local-plan`
-    reports
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
   - without `--dry-run`, executes the local app entrypoint in place
 - `iroha app soracloud app build-and-sync`
   - resolves `build-and-sync.sh` adjacent to the app manifest
   - `--dry-run` prints the resolved working directory, script path, mixed-plane
-    summary, and the same child service plus route plan that `app local-plan`
-    reports
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
   - without `--dry-run`, executes the root rebuild + manifest-sync entrypoint in place
 - `iroha app soracloud app deploy-workspace`
   - resolves `deploy.sh` adjacent to the app manifest
   - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
   - `--dry-run` prints the resolved working directory, script path, mixed-plane
-    summary, and the same child service plus route plan that `app local-plan`
-    reports
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
 - `iroha app soracloud app upgrade-workspace`
   - resolves `upgrade.sh` adjacent to the app manifest
   - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
   - `--dry-run` prints the resolved working directory, script path, mixed-plane
-    summary, and the same child service plus route plan that `app local-plan`
-    reports
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
 - `iroha app soracloud sync-manifests`
   - recomputes `container.bundle_hash`, the service-side referenced container
     hash, and matching schema versions after local edits
@@ -155,13 +155,13 @@ Torii-backed and require `--torii-url`.
   - publishes the declared static site from `static_site.dist_dir`
   - deploys every referenced service in one pass
   - returns the root app `manifest_path`, root `workspace_dir`, root
-    `workspace_scripts`, the frontend publish projection, the top-level app
-    `routes` split, and one manifest-derived service entry per app service
-    alongside the mutation responses
+    `workspace_scripts`, root `hostname`, the frontend publish projection, the
+    top-level app `routes` split, and one manifest-derived service entry per
+    app service alongside the mutation responses
 - `iroha app soracloud app upgrade`
   - follows the same app-wide flow, but uses upgrade semantics
-  - returns the same app-scoped root manifest/workspace metadata, frontend,
-    top-level `routes`, and service projection
+  - returns the same app-scoped root manifest/hostname/workspace metadata,
+    frontend, top-level `routes`, and service projection
 - `iroha app soracloud status`
   - accepts `--service-name` directly or resolves the filter from
     `--container` plus `--service`
@@ -209,9 +209,9 @@ Torii-backed and require `--torii-url`.
 - `iroha app soracloud app status`
   - keeps one status entry per service declared in one app manifest
   - projects the root app `manifest_path`, root `workspace_dir`, root
-    `workspace_scripts`, the top-level app `routes` split, the frontend
-    publish mode, and the expected CID-gateway or root-binding URL when a
-    static site is configured
+    `workspace_scripts`, root `hostname`, the top-level app `routes` split, the
+    frontend publish mode, and the expected CID-gateway or root-binding URL
+    when a static site is configured
   - projects child manifest paths, `workspace_dir`, plane/runtime, route
     ownership, and the matched Torii control-plane status when present
   - keeps missing manifest services visible instead of dropping them from the

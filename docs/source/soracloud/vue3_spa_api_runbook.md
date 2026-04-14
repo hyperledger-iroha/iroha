@@ -249,9 +249,9 @@ service reference can declare its own `bundle_file`, letting one command
 refresh every `bundle_hash` and referenced container manifest hash before
 deployment. The same path also works for single-api apps, where the manifest
 tracks `services/api/build/api-service.to`. The local-plan output also reports
-the root `manifest_path` and the manifest-adjacent root scripts that the
-generated workspace and CLI wrappers use for `local-dev`, `build-and-sync`,
-`deploy`, and `upgrade`.
+the root `manifest_path`, root `hostname`, and the manifest-adjacent root
+scripts that the generated workspace and CLI wrappers use for `local-dev`,
+`build-and-sync`, `deploy`, and `upgrade`.
 
 ## 4. Publish Frontend Assets
 
@@ -270,8 +270,8 @@ For a single-api app you also normally do not need a separate manual packaging
 step because `app deploy` publishes `web/dist` directly from the app manifest.
 `iroha app soracloud app deploy` publishes the declared `static_site.dist_dir`
 from the app manifest as part of the app-wide deploy flow, and now returns the
-same frontend publish projection plus per-service manifest metadata that
-`app status` reports.
+same root manifest/hostname/workspace metadata, frontend publish projection,
+and per-service manifest metadata that `app status` reports.
 
 For split apps in production on Taira, keep `https://taira.sora.org/` bound to
 Torii and use the SoraFS gateway path for frontend access:
@@ -313,8 +313,8 @@ The app deploy flow:
 - split-app: deploys the hosted `services/live` API
 - split-app: deploys the deterministic `services/vault` API
 - both modes: return the root app `manifest_path`, root `workspace_dir`, root
-  `workspace_scripts`, the top-level app `routes` split, and one
-  manifest-derived service entry per app service
+  `workspace_scripts`, root `hostname`, the top-level app `routes` split, and
+  one manifest-derived service entry per app service
 
 ## 6. Validate Routing and Runtime State
 
@@ -342,9 +342,10 @@ iroha app soracloud app status \
 
 `app status` keeps one entry per service declared in the app manifest and
 reports each child `container_manifest_path`, `service_manifest_path`, the root
-`manifest_path`, root `workspace_dir`, root `workspace_scripts`, plane/runtime,
-route prefix, the top-level app `routes` split, the frontend publish
-projection, and the matched Torii status when present.
+`manifest_path`, root `hostname`, root `workspace_dir`, root
+`workspace_scripts`, plane/runtime, route prefix, the top-level app `routes`
+split, the frontend publish projection, and the matched Torii status when
+present.
 
 Expected checks for a single-api app:
 

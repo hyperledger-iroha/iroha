@@ -35,7 +35,7 @@ async fn contracts_deploy_and_fetch_code_bytes() {
     // Minimal in-memory state and queue
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -52,12 +52,14 @@ async fn contracts_deploy_and_fetch_code_bytes() {
             "/v1/contracts/deploy",
             post({
                 let chain_id = Arc::new(chain_id.clone());
+                let kura = kura.clone();
                 let queue = queue.clone();
                 let state = state.clone();
                 let telemetry = telemetry.clone();
                 move |req: iroha_torii::NoritoJson<iroha_torii::DeployContractDto>| async move {
                     iroha_torii::handle_post_contract_deploy(
                         chain_id.clone(),
+                        kura.clone(),
                         queue.clone(),
                         state.clone(),
                         telemetry.clone(),
@@ -133,7 +135,7 @@ async fn contracts_redeploy_same_alias_rotates_address_and_deactivates_previous(
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -148,12 +150,14 @@ async fn contracts_redeploy_same_alias_rotates_address_and_deactivates_previous(
         "/v1/contracts/deploy",
         post({
             let chain_id = Arc::new(chain_id.clone());
+            let kura = kura.clone();
             let queue = queue.clone();
             let state = state.clone();
             let telemetry = telemetry.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::DeployContractDto>| async move {
                 iroha_torii::handle_post_contract_deploy(
                     chain_id.clone(),
+                    kura.clone(),
                     queue.clone(),
                     state.clone(),
                     telemetry.clone(),
@@ -338,7 +342,7 @@ async fn contracts_redeploy_same_alias_reclaims_stale_inactive_binding() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let state = Arc::new(State::new_for_testing(world, kura, query));
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
     iroha_torii::test_utils::grant_contract_operator_permissions(&state, &creds.account);
     let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
     let queue_cfg = iroha_config::parameters::actual::Queue::default();
@@ -353,12 +357,14 @@ async fn contracts_redeploy_same_alias_reclaims_stale_inactive_binding() {
         "/v1/contracts/deploy",
         post({
             let chain_id = Arc::new(chain_id.clone());
+            let kura = kura.clone();
             let queue = queue.clone();
             let state = state.clone();
             let telemetry = telemetry.clone();
             move |req: iroha_torii::NoritoJson<iroha_torii::DeployContractDto>| async move {
                 iroha_torii::handle_post_contract_deploy(
                     chain_id.clone(),
+                    kura.clone(),
                     queue.clone(),
                     state.clone(),
                     telemetry.clone(),

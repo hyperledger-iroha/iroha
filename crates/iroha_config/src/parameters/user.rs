@@ -14189,6 +14189,9 @@ pub struct SoracloudRuntimeInrou {
     /// Maximum number of Inrou microVMs hosted concurrently.
     #[config(default = "defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS")]
     pub max_concurrent_vms: NonZeroUsize,
+    /// Whether this validator should proxy hosted HTTP without materializing replicas.
+    #[config(default = "defaults::soracloud_runtime::INROU_PROXY_ONLY")]
+    pub proxy_only: bool,
     /// Startup grace window in milliseconds.
     #[config(
         default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS))"
@@ -14205,6 +14208,7 @@ impl Default for SoracloudRuntimeInrou {
     fn default() -> Self {
         Self {
             max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
+            proxy_only: defaults::soracloud_runtime::INROU_PROXY_ONLY,
             start_grace_ms: DurationMs(std::time::Duration::from_millis(
                 defaults::soracloud_runtime::INROU_START_GRACE_MS,
             )),
@@ -14219,6 +14223,7 @@ impl SoracloudRuntimeInrou {
     fn parse(self) -> actual::SoracloudRuntimeInrou {
         actual::SoracloudRuntimeInrou {
             max_concurrent_vms: self.max_concurrent_vms,
+            proxy_only: self.proxy_only,
             start_grace: self.start_grace_ms.get().max(MIN_TIMER_INTERVAL),
             stop_grace: self.stop_grace_ms.get().max(MIN_TIMER_INTERVAL),
         }
@@ -14565,6 +14570,18 @@ pub struct Torii {
     pub api_high_load_stream_threshold: Option<usize>,
     /// Optional high-load threshold for subscription WS endpoint.
     pub api_high_load_subscription_threshold: Option<usize>,
+    /// Enable app-facing webhook routes and workers.
+    #[config(
+        env = "TORII_WEBHOOKS_ENABLED",
+        default = "defaults::torii::WEBHOOKS_ENABLED"
+    )]
+    pub webhooks_enabled: bool,
+    /// Enable app-facing ZK attachment routes and workers.
+    #[config(
+        env = "TORII_ZK_ATTACHMENTS_ENABLED",
+        default = "defaults::torii::ZK_ATTACHMENTS_ENABLED"
+    )]
+    pub zk_attachments_enabled: bool,
     /// Attachments TTL (seconds) for ZK attachments (app API).
     #[config(
         env = "TORII_ATTACHMENTS_TTL_SECS",
@@ -15131,6 +15148,8 @@ impl Torii {
             api_high_load_tx_threshold: self.api_high_load_tx_threshold,
             api_high_load_stream_threshold: self.api_high_load_stream_threshold,
             api_high_load_subscription_threshold: self.api_high_load_subscription_threshold,
+            webhooks_enabled: self.webhooks_enabled,
+            zk_attachments_enabled: self.zk_attachments_enabled,
             attachments_ttl_secs: self.attachments_ttl_secs,
             attachments_max_bytes: self.attachments_max_bytes,
             attachments_per_tenant_max_count: self.attachments_per_tenant_max_count,
@@ -18835,6 +18854,10 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS
         );
         assert_eq!(
+            actual.soracloud_runtime.inrou.proxy_only,
+            defaults::soracloud_runtime::INROU_PROXY_ONLY
+        );
+        assert_eq!(
             actual.soracloud_runtime.inrou.start_grace,
             StdDuration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS)
         );
@@ -18891,6 +18914,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
 
         let mut inrou = Table::new();
         inrou.insert("max_concurrent_vms".into(), Value::Integer(5));
+        inrou.insert("proxy_only".into(), Value::Boolean(true));
         inrou.insert("start_grace_ms".into(), Value::Integer(7_500));
         inrou.insert("stop_grace_ms".into(), Value::Integer(9_500));
         runtime.insert("inrou".into(), Value::Table(inrou));
@@ -18979,6 +19003,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             6_144
         );
         assert_eq!(actual.soracloud_runtime.inrou.max_concurrent_vms.get(), 5);
+        assert!(actual.soracloud_runtime.inrou.proxy_only);
         assert_eq!(
             actual.soracloud_runtime.inrou.start_grace,
             StdDuration::from_millis(7_500)
@@ -19072,6 +19097,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             },
             "inrou":{
                 "max_concurrent_vms":5,
+                "proxy_only":true,
                 "start_grace_ms":7500,
                 "stop_grace_ms":9500
             },
@@ -19110,6 +19136,7 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .ends_with("runtime/json")
         );
         assert_eq!(parsed.inrou.max_concurrent_vms.get(), 5);
+        assert!(parsed.inrou.proxy_only);
         assert!(parsed.egress.default_allow);
         assert_eq!(parsed.hf.inference_token.as_deref(), Some("secret-token"));
     }

@@ -28,7 +28,8 @@ fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
 async fn app_api_router_smoke() {
     // Start Kiso and minimal components for Torii
     let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
-    let cfg = mk_minimal_root_cfg();
+    let mut cfg = mk_minimal_root_cfg();
+    cfg.torii.webhooks_enabled = true;
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -307,5 +308,131 @@ async fn app_api_router_smoke() {
     assert!(matches!(
         status,
         StatusCode::CREATED | StatusCode::TOO_MANY_REQUESTS
+    ));
+}
+
+#[tokio::test]
+async fn contract_routes_ignore_api_token_requirement() {
+    let _data_dir = iroha_torii::test_utils::TestDataDirGuard::new();
+    let mut cfg = mk_minimal_root_cfg();
+    cfg.torii.require_api_token = true;
+    cfg.torii.api_tokens = vec!["test-token".to_owned()];
+    let (kiso, _child) = KisoHandle::start(cfg.clone());
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
+    let mut world = World::default();
+    fixtures::seed_peer(&mut world, local_peer_id.clone());
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    let queue_cfg = iroha_config::parameters::actual::Queue::default();
+    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+    let queue = Arc::new(iroha_core::queue::Queue::from_config(
+        queue_cfg,
+        events_sender,
+    ));
+    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+    let _ = peers_tx;
+    let da_receipt_signer = cfg.common.key_pair.clone();
+
+    let torii = {
+        #[cfg(feature = "telemetry")]
+        {
+            use iroha_core::telemetry as core_telemetry;
+            use iroha_primitives::time::TimeSource;
+            let metrics = fixtures::shared_metrics();
+            let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
+            let telemetry = core_telemetry::start(
+                metrics,
+                state.clone(),
+                kura.clone(),
+                queue.clone(),
+                peers_rx.clone(),
+                local_peer_id,
+                ts,
+                false,
+            )
+            .0;
+            iroha_torii::Torii::new(
+                ChainId::from("test-chain"),
+                kiso,
+                cfg.torii.clone(),
+                queue,
+                tokio::sync::broadcast::channel(1).0,
+                LiveQueryStore::start_test(),
+                kura,
+                state,
+                da_receipt_signer.clone(),
+                iroha_torii::OnlinePeersProvider::new(peers_rx),
+                telemetry,
+                true,
+            )
+        }
+        #[cfg(not(feature = "telemetry"))]
+        {
+            iroha_torii::Torii::new(
+                ChainId::from("test-chain"),
+                kiso,
+                cfg.torii.clone(),
+                queue,
+                tokio::sync::broadcast::channel(1).0,
+                LiveQueryStore::start_test(),
+                kura,
+                state,
+                da_receipt_signer,
+                iroha_torii::OnlinePeersProvider::new(peers_rx),
+            )
+        }
+    };
+
+    let app = torii.api_router_for_tests();
+
+    let deploy_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(Uri::from_static("/v1/contracts/deploy"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(!matches!(
+        deploy_resp.status(),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+    ));
+
+    let bundle_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(Uri::from_static("/v1/contracts/deploy-bundle"))
+                .header(axum::http::header::CONTENT_TYPE, "application/json")
+                .body(axum::body::Body::from("{}"))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(!matches!(
+        bundle_resp.status(),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+    ));
+
+    let status_resp = app
+        .oneshot(
+            Request::builder()
+                .uri(Uri::from_static(
+                    "/v1/contracts/deploy-bundles/not-a-real-bundle-digest",
+                ))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(!matches!(
+        status_resp.status(),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
     ));
 }

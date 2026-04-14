@@ -50087,6 +50087,262 @@ async fn frontier_stall_routes_same_height_stall_through_unified_recovery() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn frontier_stall_reanchors_body_present_known_block_commit_qc_repair() {
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let committed_height = actor.committed_height_snapshot();
+    let frontier_height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let now = Instant::now();
+    let stale_delta = actor
+        .recovery_missing_block_height_ttl()
+        .max(Duration::from_millis(1))
+        .saturating_add(Duration::from_millis(1));
+    let old = now.checked_sub(stale_delta).unwrap_or(now);
+
+    let block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        frontier_height,
+        view,
+        Some(parent_hash),
+    );
+    let block_hash = insert_validated_pending(actor, block);
+    assert!(
+        actor.update_frontier_slot(
+            block_hash,
+            frontier_height,
+            view,
+            None,
+            BTreeSet::new(),
+            /*block_created_seen*/ true,
+            /*exact_fetch_armed*/ true,
+            /*body_present*/ true,
+            None,
+            None,
+            now,
+        ),
+        "test setup must seed an exact-height frontier slot for the local payload"
+    );
+    actor.pending.missing_commit_qc_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height: frontier_height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(5),
+            view_change_window: Some(Duration::from_millis(20)),
+            first_seen: old,
+            last_requested: old,
+            last_dependency_progress: old,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 4,
+        },
+    );
+
+    let expected_reanchor = actor.state.latest_block_hash_fast().is_some()
+        && !actor
+            .range_pull_targets_for_height(frontier_height)
+            .is_empty();
+    assert!(
+        actor.maybe_reset_stalled_frontier_state(committed_height, now),
+        "body-present known-block commit-QC stalls should reanchor to canonical catch-up"
+    );
+    assert!(
+        actor
+            .pending
+            .missing_commit_qc_requests
+            .contains_key(&block_hash),
+        "same-height commit-QC repair should stay tracked until canonical catch-up resolves it"
+    );
+    assert!(
+        !expected_reanchor
+            || actor
+                .range_pull_escalation_cooldowns
+                .keys()
+                .any(|(_, _, height, reason)| {
+                    *height == frontier_height
+                        && (*reason == "frontier_stall_reset"
+                            || *reason == "frontier_stall_reset_fallback")
+                }),
+        "body-present known-block commit-QC stalls should spend the bounded range-pull budget"
+    );
+    let slot = actor
+        .frontier_slot
+        .as_ref()
+        .expect("frontier slot should remain present after passive handoff");
+    assert!(
+        matches!(slot.mode, super::FrontierSlotMode::PassiveCatchup),
+        "body-present known-block commit-QC stalls should relinquish active same-height ownership"
+    );
+    assert!(
+        !actor.frontier_slot_has_active_owner_state_for_view(frontier_height, view),
+        "passive catch-up should suppress further same-height exact-slot churn"
+    );
+
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn frontier_stall_reanchors_stale_vote_backed_owner_and_clears_non_actionable_same_height_dependencies()
+{
+    let _guard = super::status::missing_block_fetch_test_guard();
+    super::status::reset_missing_block_fetch_counters_for_tests();
+
+    let mut harness = test_actor_harness(4).await;
+    let actor = &mut harness.actor;
+
+    let parent_hash = seed_genesis_block_for_state(&actor.state);
+    let committed_height = actor.committed_height_snapshot();
+    let frontier_height = committed_height.saturating_add(1);
+    let view = 0_u64;
+    let now = Instant::now();
+    let stale_delta = actor
+        .recovery_missing_block_height_ttl()
+        .max(Duration::from_millis(1))
+        .saturating_add(Duration::from_millis(1));
+    let old = now.checked_sub(stale_delta).unwrap_or(now);
+
+    let block = nonempty_block_for_actor(
+        actor,
+        &harness.key_pairs,
+        frontier_height,
+        view,
+        Some(parent_hash),
+    );
+    let block_hash = insert_validated_pending(actor, block);
+    assert!(
+        actor.update_frontier_slot(
+            block_hash,
+            frontier_height,
+            view,
+            None,
+            BTreeSet::new(),
+            /*block_created_seen*/ true,
+            /*exact_fetch_armed*/ true,
+            /*body_present*/ true,
+            None,
+            None,
+            old,
+        ),
+        "test setup must seed a body-present contiguous frontier owner"
+    );
+
+    let epoch = actor.epoch_for_height(frontier_height);
+    let topology = super::network_topology::Topology::new(actor.effective_commit_topology());
+    let local_idx = actor
+        .local_validator_index_for_topology(&topology)
+        .expect("local validator index for vote-backed frontier owner");
+    actor.vote_log.insert(
+        (Phase::Commit, frontier_height, view, epoch, local_idx),
+        crate::sumeragi::consensus::Vote {
+            phase: Phase::Commit,
+            block_hash,
+            parent_state_root: zero_state_root(),
+            post_state_root: zero_state_root(),
+            height: frontier_height,
+            view,
+            epoch,
+            highest_qc: None,
+            signer: local_idx,
+            bls_sig: Vec::new(),
+        },
+    );
+    assert!(
+        actor.slot_has_vote_backed_consensus_evidence(frontier_height, view),
+        "test setup requires local vote-backed same-slot evidence"
+    );
+
+    actor.pending.missing_block_requests.insert(
+        block_hash,
+        super::MissingBlockRequest {
+            height: frontier_height,
+            view,
+            phase: Phase::Commit,
+            priority: super::MissingBlockPriority::Consensus,
+            retry_window: Duration::from_millis(5),
+            view_change_window: Some(Duration::from_millis(20)),
+            first_seen: old,
+            last_requested: old,
+            last_dependency_progress: old,
+            last_rbc_observed: None,
+            last_view_change_triggered: None,
+            view_change_triggered_view: None,
+            attempts: 3,
+        },
+    );
+
+    let qc = Qc {
+        phase: Phase::Commit,
+        subject_block_hash: block_hash,
+        parent_state_root: zero_state_root(),
+        post_state_root: zero_state_root(),
+        height: frontier_height,
+        view,
+        epoch,
+        mode_tag: "permissioned".to_string(),
+        highest_qc: None,
+        validator_set_hash: HashOf::new(&Vec::<PeerId>::new()),
+        validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+        validator_set: Vec::new(),
+        aggregate: QcAggregate {
+            signers_bitmap: Vec::new(),
+            bls_aggregate_signature: Vec::new(),
+        },
+    };
+    let qc_key = super::Actor::qc_tally_key(&qc);
+    actor.deferred_missing_payload_qcs.insert(
+        qc_key,
+        super::DeferredQcEntry {
+            qc,
+            first_seen: old,
+            last_attempt: old,
+            attempts: 1,
+            escalated_fetch: false,
+            reason: "test_frontier_stall_vote_backed_owner",
+        },
+    );
+
+    assert!(
+        actor.maybe_reset_stalled_frontier_state(committed_height, now),
+        "stale body-present vote-backed frontier ownership should hand off to passive catch-up"
+    );
+    assert!(
+        !actor.pending.missing_block_requests.contains_key(&block_hash),
+        "non-actionable same-height missing-block markers should be cleared before passive handoff"
+    );
+    assert!(
+        !actor.deferred_missing_payload_qcs.contains_key(&qc_key),
+        "non-actionable deferred same-height payload-QC markers should be cleared before passive handoff"
+    );
+
+    let slot = actor
+        .frontier_slot
+        .as_ref()
+        .expect("frontier slot should remain retained after passive handoff");
+    assert!(
+        matches!(slot.mode, super::FrontierSlotMode::PassiveCatchup),
+        "stale body-present vote-backed owners should relinquish active same-height ownership"
+    );
+    assert!(
+        !actor.frontier_slot_has_active_owner_state_for_view(frontier_height, view),
+        "passive catch-up should suppress repeated same-height quorum-timeout churn"
+    );
+
+    super::status::reset_missing_block_fetch_counters_for_tests();
+    harness.shutdown.send();
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn frontier_stall_does_not_emit_second_recovery_action_in_same_window() {
     let _guard = super::status::missing_block_fetch_test_guard();
     super::status::reset_missing_block_fetch_counters_for_tests();

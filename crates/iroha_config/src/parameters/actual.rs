@@ -233,6 +233,8 @@ impl Default for SoracloudRuntimeCacheBudgets {
 pub struct SoracloudRuntimeInrou {
     /// Maximum number of Inrou VMs hosted concurrently.
     pub max_concurrent_vms: NonZeroUsize,
+    /// Whether the validator should act as a proxy/control-plane node only.
+    pub proxy_only: bool,
     /// Startup grace window before the manager treats the VM as failed.
     pub start_grace: Duration,
     /// Shutdown grace window before the manager force-stops the VMM process.
@@ -243,6 +245,7 @@ impl Default for SoracloudRuntimeInrou {
     fn default() -> Self {
         Self {
             max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
+            proxy_only: defaults::soracloud_runtime::INROU_PROXY_ONLY,
             start_grace: Duration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS),
             stop_grace: Duration::from_millis(defaults::soracloud_runtime::INROU_STOP_GRACE_MS),
         }
@@ -5355,6 +5358,10 @@ pub struct Torii {
     pub events_buffer_capacity: NonZeroUsize,
     /// WebSocket message timeout for Torii event/block streams.
     pub ws_message_timeout: Duration,
+    /// Enable app-facing webhook routes and workers.
+    pub webhooks_enabled: bool,
+    /// Enable app-facing ZK attachment routes and workers.
+    pub zk_attachments_enabled: bool,
     /// ZK attachments TTL (seconds) for app-facing attachments store.
     pub attachments_ttl_secs: u64,
     /// ZK attachments maximum allowed size per item (bytes).

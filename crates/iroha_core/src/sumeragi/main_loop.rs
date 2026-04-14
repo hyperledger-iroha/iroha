@@ -14038,6 +14038,13 @@ impl Actor {
             && self.frontier_catchup_has_unresolved_dependency(height)
     }
 
+    fn frontier_slot_has_vote_backed_owner_state_in_slot(&self, slot: &FrontierSlot) -> bool {
+        slot.quorum_progress.votes_observed
+            || slot.quorum_progress.commit_qc_observed
+            || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc)
+            || self.slot_has_vote_backed_consensus_evidence(slot.height, slot.view)
+    }
+
     fn frontier_slot_allows_deep_catchup(&self, height: u64, _reason: &'static str) -> bool {
         height == self.committed_height_snapshot().saturating_add(1)
             && (self.frontier_slot_deep_catchup_active_at_height(height)
@@ -14050,12 +14057,35 @@ impl Actor {
         now: Instant,
         reason: &'static str,
     ) -> bool {
+        let Some((slot_block_hash, slot_height, slot_view, slot_body_missing)) = self
+            .frontier_slot
+            .as_ref()
+            .map(|slot| (slot.block_hash, slot.height, slot.view, slot.body_missing()))
+        else {
+            return false;
+        };
+        let vote_backed_frontier_owner = self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == slot_height
+                && slot.view == slot_view
+                && slot.body_present
+                && Self::frontier_slot_has_active_owner_state_in_slot(slot)
+                && self.frontier_slot_has_vote_backed_owner_state_in_slot(slot)
+        });
+        let missing_commit_qc_repair = self.missing_commit_qc_repair_active_for_round(
+            slot_block_hash,
+            slot_height,
+            slot_view,
+            self.committed_height_snapshot(),
+            now,
+        );
+        if slot_height != frontier_height
+            || (!slot_body_missing && !missing_commit_qc_repair && !vote_backed_frontier_owner)
+        {
+            return false;
+        }
         let Some(slot) = self.frontier_slot.as_mut() else {
             return false;
         };
-        if slot.height != frontier_height || !slot.body_missing() {
-            return false;
-        }
         slot.mark_passive_catchup(now, reason);
         slot.sync_compat_fields();
         if self
@@ -26234,7 +26264,13 @@ impl Actor {
         let ttl = self
             .recovery_missing_block_height_ttl()
             .max(Duration::from_millis(1));
-        let stalled_frontier_requests = self
+        let cleared_non_actionable_frontier_dependencies =
+            self.clear_non_actionable_missing_dependencies_for_height(
+                frontier_height,
+                committed_height,
+                now,
+            );
+        let stalled_missing_block_requests = self
             .pending
             .missing_block_requests
             .iter()
@@ -26245,9 +26281,37 @@ impl Actor {
                     && now.saturating_duration_since(request.last_dependency_progress) >= ttl
             })
             .count();
+        let stalled_known_block_commit_qc_requests = self
+            .pending
+            .missing_commit_qc_requests
+            .iter()
+            .filter(|(hash, request)| {
+                request.height == frontier_height
+                    && self.missing_commit_qc_request_has_actionable_dependency(
+                        **hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+                    && now.saturating_duration_since(request.first_seen) >= ttl
+                    && now.saturating_duration_since(request.last_dependency_progress) >= ttl
+            })
+            .count();
+        let stalled_vote_backed_frontier_owner = self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == frontier_height
+                && slot.body_present
+                && Self::frontier_slot_has_active_owner_state_in_slot(slot)
+                && self.frontier_slot_has_vote_backed_owner_state_in_slot(slot)
+                && now.saturating_duration_since(slot.observed_at) >= ttl
+                && now.saturating_duration_since(slot.timers.last_progress_at) >= ttl
+        });
+        let stalled_frontier_requests =
+            stalled_missing_block_requests
+                .saturating_add(stalled_known_block_commit_qc_requests)
+                .saturating_add(usize::from(stalled_vote_backed_frontier_owner));
         if stalled_frontier_requests == 0 {
             self.clear_frontier_stall_reset_window_gate_for_height(frontier_height);
-            return false;
+            return cleared_non_actionable_frontier_dependencies;
         }
         if !self.allow_frontier_stall_reset_action(frontier_height, now) {
             return false;
@@ -26286,6 +26350,26 @@ impl Actor {
                 .keys()
                 .any(|(height, _)| *height > prune_threshold);
         if !has_far_future_state {
+            if stalled_known_block_commit_qc_requests > 0 || stalled_vote_backed_frontier_owner {
+                // Once the exact-height payload is already local, repeated same-slot repair or
+                // vote-backed ownership no longer adds information. Reanchor to the canonical
+                // committed edge instead of letting the stale branch keep ownership indefinitely.
+                let mut requested_pull = self.request_range_pull_from_anchor(
+                    frontier_height,
+                    "frontier_stall_reset",
+                    now,
+                );
+                if !requested_pull {
+                    requested_pull = self.request_range_pull_from_anchor(
+                        frontier_height,
+                        "frontier_stall_reset_fallback",
+                        now,
+                    );
+                }
+                if requested_pull {
+                    return true;
+                }
+            }
             let view = self
                 .phase_tracker
                 .current_view(frontier_height)

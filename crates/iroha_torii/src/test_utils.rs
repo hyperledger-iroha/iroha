@@ -547,6 +547,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             ram_lfe: None,
             faucet: None,
             tx_history: None,
+            webhooks_enabled: defaults::torii::WEBHOOKS_ENABLED,
+            zk_attachments_enabled: defaults::torii::ZK_ATTACHMENTS_ENABLED,
             events_buffer_capacity: defaults::torii::events_buffer_capacity(),
             ws_message_timeout: Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),
             query_rate_per_authority_per_sec: None,

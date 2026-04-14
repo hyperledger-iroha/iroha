@@ -4608,8 +4608,8 @@ where
     Ok(resp)
 }
 
-fn sccp_json_value_response(value: &norito::json::Value) -> Result<Response> {
-    let body = norito::json::to_vec(value).map_err(|err| {
+fn sccp_json_value_response(value: &serde_json::Value) -> Result<Response> {
+    let body = serde_json::to_vec_pretty(value).map_err(|err| {
         sccp_internal_error(format!("failed to serialize SCCP bundle JSON: {err}"))
     })?;
     let mut resp = Response::new(Body::from(body));
@@ -4622,7 +4622,7 @@ fn sccp_json_value_response(value: &norito::json::Value) -> Result<Response> {
 
 fn sccp_bundle_response_with_json_value<T>(
     bundle: &T,
-    json_value: norito::json::Value,
+    json_value: serde_json::Value,
     accept: Option<&axum::http::HeaderValue>,
 ) -> Result<Response>
 where
@@ -4688,8 +4688,28 @@ fn sccp_open_verify_summary_to_json(
     ]))
 }
 
-fn sccp_artifact_json_value(artifact: &NexusSccpMessageTransparentProofV1) -> Result<Value> {
-    let mut value = norito::json::value::to_value(artifact).map_err(|err| {
+fn sccp_open_verify_summary_to_serde_json(
+    summary: &SccpOpenVerifyEnvelopeSummaryV1,
+) -> serde_json::Value {
+    serde_json::json!({
+        "version": summary.version,
+        "backend": summary.backend,
+        "circuit_id": summary.circuit_id,
+        "vk_hash": hex::encode(summary.vk_hash),
+        "public_inputs_schema_hash": hex::encode(summary.public_inputs_schema_hash),
+        "public_inputs_schema_len_bytes": summary.public_inputs_schema_len_bytes,
+        "public_input_column_count": summary.public_input_column_count,
+        "public_input_word_count": summary.public_input_word_count,
+        "open_proof_len_bytes": summary.open_proof_len_bytes,
+        "backend_proof_len_bytes": summary.backend_proof_len_bytes,
+        "aux_len_bytes": summary.aux_len_bytes,
+    })
+}
+
+fn sccp_artifact_json_value(
+    artifact: &NexusSccpMessageTransparentProofV1,
+) -> Result<serde_json::Value> {
+    let mut value = serde_json::to_value(artifact).map_err(|err| {
         sccp_internal_error(format!(
             "failed to serialize SCCP proof artifact JSON value: {err}"
         ))
@@ -4704,14 +4724,14 @@ fn sccp_artifact_json_value(artifact: &NexusSccpMessageTransparentProofV1) -> Re
     {
         map.insert(
             "proof_envelope_summary".into(),
-            sccp_open_verify_summary_to_json(&summary),
+            sccp_open_verify_summary_to_serde_json(&summary),
         );
     }
     Ok(value)
 }
 
-fn sccp_job_json_value(job: &SccpCounterpartyProofJobV1) -> Result<Value> {
-    let mut value = norito::json::value::to_value(job).map_err(|err| {
+fn sccp_job_json_value(job: &SccpCounterpartyProofJobV1) -> Result<serde_json::Value> {
+    let mut value = serde_json::to_value(job).map_err(|err| {
         sccp_internal_error(format!(
             "failed to serialize SCCP proof job JSON value: {err}"
         ))
@@ -4726,7 +4746,7 @@ fn sccp_job_json_value(job: &SccpCounterpartyProofJobV1) -> Result<Value> {
     {
         map.insert(
             "proof_envelope_summary".into(),
-            sccp_open_verify_summary_to_json(&summary),
+            sccp_open_verify_summary_to_serde_json(&summary),
         );
     }
     Ok(value)
@@ -4778,6 +4798,10 @@ pub struct SccpCounterpartyCapabilityDto {
     pub counterparty_account_codec: u8,
     /// Stable logical key for `counterparty_account_codec`.
     pub counterparty_account_codec_key: String,
+    /// Per-family destination verifier rollout state for this lane family.
+    #[serde(default)]
+    #[norito(default)]
+    pub destination_rollout: iroha_sccp::SccpDestinationRolloutV1,
     /// Whether the current lane is safe to use for production proof generation and consumption.
     pub production_ready: bool,
     /// Explanation for why the lane is disabled when `production_ready` is false.
@@ -4972,6 +4996,7 @@ fn sccp_counterparty_capabilities() -> Result<Vec<SccpCounterpartyCapabilityDto>
                 registry_backend: manifest.registry_backend,
                 counterparty_account_codec: manifest.counterparty_account_codec,
                 counterparty_account_codec_key: manifest.counterparty_account_codec_key,
+                destination_rollout: manifest.destination_rollout,
                 production_ready: manifest.production_ready,
                 disabled_reason: manifest.disabled_reason,
             })
@@ -5488,6 +5513,8 @@ mod sccp_message_backend_tests {
             .expect("ton manifest");
         let public_inputs = iroha_sccp::sccp_message_transparent_public_inputs(&bundle)
             .expect("message public inputs");
+        let public_inputs_cell =
+            iroha_sccp::canonical_sccp_message_transparent_public_inputs_bytes(&public_inputs);
         NexusSccpMessageTransparentProofV1 {
             version: 1,
             local_domain: manifest.local_domain,
@@ -5514,10 +5541,7 @@ mod sccp_message_backend_tests {
                 platform_payload: iroha_sccp::SccpPlatformSubmissionPayloadV1::TonInternalMessage(
                     iroha_sccp::SccpTonInternalMessageSubmissionPayloadV1 {
                         proof_cell: proof_bytes,
-                        public_inputs_cell:
-                            iroha_sccp::canonical_sccp_message_transparent_public_inputs_bytes(
-                                &public_inputs,
-                            ),
+                        public_inputs_cell,
                         bundle_cell: iroha_sccp::canonical_nexus_sccp_message_bundle_bytes(&bundle),
                     },
                 ),
@@ -5668,28 +5692,28 @@ mod sccp_message_backend_tests {
         let object = json.as_object().expect("artifact json object");
         let summary = object
             .get("proof_envelope_summary")
-            .and_then(norito::json::Value::as_object)
+            .and_then(serde_json::Value::as_object)
             .expect("proof envelope summary");
         let expected_vk_hash = "66".repeat(32);
 
         assert_eq!(
-            summary.get("backend").and_then(norito::json::Value::as_str),
+            summary.get("backend").and_then(serde_json::Value::as_str),
             Some("stark")
         );
         assert_eq!(
             summary
                 .get("circuit_id")
-                .and_then(norito::json::Value::as_str),
+                .and_then(serde_json::Value::as_str),
             Some("sccp-message-transparent-v1")
         );
         assert_eq!(
-            summary.get("vk_hash").and_then(norito::json::Value::as_str),
+            summary.get("vk_hash").and_then(serde_json::Value::as_str),
             Some(expected_vk_hash.as_str())
         );
         assert_eq!(
             summary
                 .get("public_input_column_count")
-                .and_then(norito::json::Value::as_u64),
+                .and_then(serde_json::Value::as_u64),
             Some(1)
         );
     }
@@ -5701,17 +5725,17 @@ mod sccp_message_backend_tests {
         let object = json.as_object().expect("job json object");
         let summary = object
             .get("proof_envelope_summary")
-            .and_then(norito::json::Value::as_object)
+            .and_then(serde_json::Value::as_object)
             .expect("proof envelope summary");
 
         assert_eq!(
-            summary.get("backend").and_then(norito::json::Value::as_str),
+            summary.get("backend").and_then(serde_json::Value::as_str),
             Some("stark")
         );
         assert_eq!(
             summary
                 .get("circuit_id")
-                .and_then(norito::json::Value::as_str),
+                .and_then(serde_json::Value::as_str),
             Some("sccp-message-transparent-v1")
         );
     }
@@ -10148,13 +10172,14 @@ pub async fn handle_get_contract_code_bytes(
 /// POST /v1/contracts/call — invoke a deployed contract entrypoint with optional payload.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_contract_call(
+async fn submit_contract_call_request(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
-    NoritoJson(req): NoritoJson<ContractCallDto>,
-) -> Result<impl IntoResponse> {
+    req: ContractCallDto,
+    endpoint: &'static str,
+) -> Result<ContractCallResponseDto> {
     use base64::Engine as _;
     use iroha_data_model::prelude as dm;
 
@@ -10217,127 +10242,214 @@ pub async fn handle_post_contract_call(
     let response_entrypoint = Some(resolved_entrypoint.to_owned());
     let code_hash_hex = hex::encode(code_hash.as_ref());
     let abi_hash_hex = hex::encode(abi_hash.as_ref());
-    let response =
-        if let Some(private_key) = private_key {
-            let tx = builder.sign(&private_key.0);
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id,
-                queue,
-                state,
-                tx,
-                telemetry,
-                "/v1/contracts/call",
-            )
-            .await?;
-            ContractCallResponseDto {
-                ok: true,
-                submitted: true,
-                dataspace: dataspace.clone(),
-                contract_address: Some(contract_address.clone()),
-                code_hash_hex,
-                abi_hash_hex,
-                creation_time_ms,
-                tx_hash_hex: Some(tx_hash_hex),
-                transaction_scaffold_b64: None,
-                signed_transaction_b64: None,
-                signing_message_b64: None,
-                entrypoint: response_entrypoint.clone(),
-            }
-        } else if public_key_hex.is_some() || signature_b64.is_some() {
-            let public_key_hex = public_key_hex
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
-            let signature_b64 = signature_b64
-                .as_deref()
-                .map(str::trim)
-                .filter(|value| !value.is_empty())
-                .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
-            let public_key_bytes = hex::decode(public_key_hex)
-                .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let public_key = iroha_crypto::PublicKey::from_bytes(
-                iroha_crypto::Algorithm::Ed25519,
-                &public_key_bytes,
-            )
+    if let Some(private_key) = private_key {
+        let tx = builder.sign(&private_key.0);
+        let tx_hash_hex = hex::encode(tx.hash().as_ref());
+        handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
+        return Ok(ContractCallResponseDto {
+            ok: true,
+            submitted: true,
+            dataspace: dataspace.clone(),
+            contract_address: Some(contract_address.clone()),
+            code_hash_hex,
+            abi_hash_hex,
+            creation_time_ms,
+            tx_hash_hex: Some(tx_hash_hex),
+            transaction_scaffold_b64: None,
+            signed_transaction_b64: None,
+            signing_message_b64: None,
+            entrypoint: response_entrypoint.clone(),
+        });
+    }
+
+    if public_key_hex.is_some() || signature_b64.is_some() {
+        let public_key_hex = public_key_hex
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("public_key_hex is required".to_owned()))?;
+        let signature_b64 = signature_b64
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .ok_or_else(|| conversion_error("signature_b64 is required".to_owned()))?;
+        let public_key_bytes = hex::decode(public_key_hex)
             .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
-            let expected_authority = dm::AccountId::new(public_key.clone());
-            if authority != expected_authority {
-                return Err(conversion_error(
-                    "public_key_hex does not match authority".to_owned(),
-                ));
-            }
-            let signature_bytes = base64::engine::general_purpose::STANDARD
-                .decode(signature_b64.as_bytes())
-                .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
-            let mut tx = builder
-                .sign(
-                    iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
-                        .private_key(),
-                )
-                .with_authority(authority.clone().into());
-            let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
-            tx.set_signature(iroha_data_model::transaction::signed::TransactionSignature(
+        let public_key = iroha_crypto::PublicKey::from_bytes(
+            iroha_crypto::Algorithm::Ed25519,
+            &public_key_bytes,
+        )
+        .map_err(|err| conversion_error(format!("invalid public_key_hex: {err}")))?;
+        let expected_authority = dm::AccountId::new(public_key.clone());
+        if authority != expected_authority {
+            return Err(conversion_error(
+                "public_key_hex does not match authority".to_owned(),
+            ));
+        }
+        let signature_bytes = base64::engine::general_purpose::STANDARD
+            .decode(signature_b64.as_bytes())
+            .map_err(|err| conversion_error(format!("invalid signature_b64: {err}")))?;
+        let mut tx = builder
+            .sign(
+                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519)
+                    .private_key(),
+            )
+            .with_authority(authority.clone().into());
+        let signature = iroha_crypto::Signature::from_bytes(&signature_bytes);
+        tx.set_signature(
+            iroha_data_model::transaction::signed::TransactionSignature(
                 iroha_crypto::SignatureOf::<
                     iroha_data_model::transaction::signed::TransactionPayload,
                 >::from_signature(signature),
+            ),
+        );
+        tx.verify_signature().map_err(|err| {
+            conversion_error(format!(
+                "contract call detached signature verification failed: {err}"
+            ))
+        })?;
+        let tx_hash_hex = hex::encode(tx.hash().as_ref());
+        handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
+        return Ok(ContractCallResponseDto {
+            ok: true,
+            submitted: true,
+            dataspace: dataspace.clone(),
+            contract_address: Some(contract_address.clone()),
+            code_hash_hex,
+            abi_hash_hex,
+            creation_time_ms,
+            tx_hash_hex: Some(tx_hash_hex),
+            transaction_scaffold_b64: None,
+            signed_transaction_b64: None,
+            signing_message_b64: None,
+            entrypoint: response_entrypoint.clone(),
+        });
+    }
+
+    let scaffold_key =
+        iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
+    let tx = builder
+        .sign(scaffold_key.private_key())
+        .with_authority(authority.into());
+    let signed_transaction_b64 =
+        base64::engine::general_purpose::STANDARD.encode(norito::codec::Encode::encode(&tx));
+    let signing_message_b64 = base64::engine::general_purpose::STANDARD
+        .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
+    Ok(ContractCallResponseDto {
+        ok: true,
+        submitted: false,
+        dataspace,
+        contract_address: Some(contract_address),
+        code_hash_hex,
+        abi_hash_hex,
+        creation_time_ms,
+        tx_hash_hex: None,
+        transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
+        signed_transaction_b64: Some(signed_transaction_b64),
+        signing_message_b64: Some(signing_message_b64),
+        entrypoint: response_entrypoint,
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn evaluate_contract_view_request(
+    state: Arc<CoreState>,
+    req: ContractViewDto,
+) -> Result<core::result::Result<ContractViewResponseDto, ContractViewErrorResponseDto>> {
+    let ContractViewDto {
+        authority,
+        contract_address,
+        contract_alias,
+        entrypoint,
+        payload,
+        gas_limit,
+    } = req;
+
+    if gas_limit == 0 {
+        return Err(conversion_error("gas_limit must be positive".to_owned()));
+    }
+
+    let prepared = match (contract_address.as_ref(), contract_alias.as_ref()) {
+        (Some(_), Some(_)) => {
+            return Err(conversion_error(
+                "exactly one of contract_address or contract_alias must be provided".to_owned(),
             ));
-            tx.verify_signature().map_err(|err| {
-                conversion_error(format!(
-                    "contract call detached signature verification failed: {err}"
-                ))
-            })?;
-            let tx_hash_hex = hex::encode(tx.hash().as_ref());
-            handle_transaction_with_metrics(
-                chain_id,
-                queue,
-                state,
-                tx,
-                telemetry,
-                "/v1/contracts/call",
-            )
-            .await?;
-            ContractCallResponseDto {
-                ok: true,
-                submitted: true,
-                dataspace: dataspace.clone(),
-                contract_address: Some(contract_address.clone()),
-                code_hash_hex,
-                abi_hash_hex,
-                creation_time_ms,
-                tx_hash_hex: Some(tx_hash_hex),
-                transaction_scaffold_b64: None,
-                signed_transaction_b64: None,
-                signing_message_b64: None,
-                entrypoint: response_entrypoint.clone(),
-            }
-        } else {
-            let scaffold_key =
-                iroha_crypto::KeyPair::random_with_algorithm(iroha_crypto::Algorithm::Ed25519);
-            let tx = builder
-                .sign(scaffold_key.private_key())
-                .with_authority(authority.clone().into());
-            let signed_transaction_b64 = base64::engine::general_purpose::STANDARD
-                .encode(norito::codec::Encode::encode(&tx));
-            let signing_message_b64 = base64::engine::general_purpose::STANDARD
-                .encode(iroha_crypto::HashOf::new(tx.payload()).as_ref());
-            ContractCallResponseDto {
-                ok: true,
-                submitted: false,
+        }
+        (Some(contract_address), None) => {
+            prepare_contract_call_by_address(&state, contract_address)?
+        }
+        (None, Some(contract_alias)) => {
+            prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
+        }
+        _ => {
+            return Err(conversion_error(
+                "provide exactly one contract target via contract_address or contract_alias"
+                    .to_owned(),
+            ));
+        }
+    };
+    let PreparedContractCall {
+        code_bytes,
+        code_hash,
+        abi_hash,
+        manifest,
+        dataspace,
+        contract_address,
+        contract_alias,
+    } = prepared;
+    let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
+    let entrypoint_descriptor = ensure_view_contract_entrypoint(&manifest, resolved_entrypoint)?;
+    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
+    let result = match execute_contract_view(
+        &state,
+        &authority,
+        &contract_address,
+        contract_alias.as_ref(),
+        &code_bytes,
+        resolved_entrypoint,
+        entrypoint_descriptor,
+        normalized_payload.clone(),
+        gas_limit,
+    ) {
+        Ok(result) => result,
+        Err(err) => {
+            return Ok(Err(ContractViewErrorResponseDto {
+                ok: false,
                 dataspace,
                 contract_address: Some(contract_address),
-                code_hash_hex,
-                abi_hash_hex,
-                creation_time_ms,
-                tx_hash_hex: None,
-                transaction_scaffold_b64: Some(signed_transaction_b64.clone()),
-                signed_transaction_b64: Some(signed_transaction_b64),
-                signing_message_b64: Some(signing_message_b64),
-                entrypoint: response_entrypoint,
-            }
-        };
+                code_hash_hex: hex::encode(code_hash.as_ref()),
+                abi_hash_hex: hex::encode(abi_hash.as_ref()),
+                entrypoint: resolved_entrypoint.to_owned(),
+                error: err.message,
+                vm_diagnostic: err.vm_diagnostic,
+            }));
+        }
+    };
 
+    Ok(Ok(ContractViewResponseDto {
+        ok: true,
+        dataspace,
+        contract_address: Some(contract_address),
+        code_hash_hex: hex::encode(code_hash.as_ref()),
+        abi_hash_hex: hex::encode(abi_hash.as_ref()),
+        entrypoint: resolved_entrypoint.to_owned(),
+        result,
+    }))
+}
+
+#[cfg(feature = "app_api")]
+/// POST /v1/contracts/call — submit a public contract call transaction and
+/// return the queued execution receipt metadata.
+pub async fn handle_post_contract_call(
+    chain_id: Arc<ChainId>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(req): NoritoJson<ContractCallDto>,
+) -> Result<impl IntoResponse> {
+    let response =
+        submit_contract_call_request(chain_id, queue, state, telemetry, req, "/v1/contracts/call")
+            .await?;
     let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
@@ -10941,95 +11053,19 @@ pub async fn handle_post_contract_view(
     state: Arc<CoreState>,
     NoritoJson(req): NoritoJson<ContractViewDto>,
 ) -> Result<impl IntoResponse> {
-    let ContractViewDto {
-        authority,
-        contract_address,
-        contract_alias,
-        entrypoint,
-        payload,
-        gas_limit,
-    } = req;
-
-    if gas_limit == 0 {
-        return Err(conversion_error("gas_limit must be positive".to_owned()));
-    }
-
-    let prepared = match (contract_address.as_ref(), contract_alias.as_ref()) {
-        (Some(_), Some(_)) => {
-            return Err(conversion_error(
-                "exactly one of contract_address or contract_alias must be provided".to_owned(),
-            ));
-        }
-        (Some(contract_address), None) => {
-            prepare_contract_call_by_address(&state, contract_address)?
-        }
-        (None, Some(contract_alias)) => {
-            prepare_contract_call_by_alias(&state, contract_alias, current_time_millis())?
-        }
-        _ => {
-            return Err(conversion_error(
-                "provide exactly one contract target via contract_address or contract_alias"
-                    .to_owned(),
-            ));
-        }
+    let view = evaluate_contract_view_request(state, req)?;
+    let (status, body) = match view {
+        Ok(response) => (
+            StatusCode::OK,
+            norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
+        ),
+        Err(response) => (
+            StatusCode::UNPROCESSABLE_ENTITY,
+            norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into()),
+        ),
     };
-    let PreparedContractCall {
-        code_bytes,
-        code_hash,
-        abi_hash,
-        manifest,
-        dataspace,
-        contract_address,
-        contract_alias,
-    } = prepared;
-    let resolved_entrypoint = entrypoint.as_deref().unwrap_or("main");
-    let entrypoint_descriptor = ensure_view_contract_entrypoint(&manifest, resolved_entrypoint)?;
-    let normalized_payload = normalize_contract_payload(entrypoint_descriptor, payload.as_ref())?;
-    let result = match execute_contract_view(
-        &state,
-        &authority,
-        &contract_address,
-        contract_alias.as_ref(),
-        &code_bytes,
-        resolved_entrypoint,
-        entrypoint_descriptor,
-        normalized_payload.clone(),
-        gas_limit,
-    ) {
-        Ok(result) => result,
-        Err(err) => {
-            let body = norito::json::to_json_pretty(&ContractViewErrorResponseDto {
-                ok: false,
-                dataspace,
-                contract_address: Some(contract_address),
-                code_hash_hex: hex::encode(code_hash.as_ref()),
-                abi_hash_hex: hex::encode(abi_hash.as_ref()),
-                entrypoint: resolved_entrypoint.to_owned(),
-                error: err.message,
-                vm_diagnostic: err.vm_diagnostic,
-            })
-            .unwrap_or_else(|_| "{}".into());
-            let mut resp = axum::response::Response::new(axum::body::Body::from(body));
-            *resp.status_mut() = StatusCode::UNPROCESSABLE_ENTITY;
-            resp.headers_mut().insert(
-                axum::http::header::CONTENT_TYPE,
-                axum::http::HeaderValue::from_static("application/json"),
-            );
-            return Ok(resp);
-        }
-    };
-
-    let body = norito::json::to_json_pretty(&ContractViewResponseDto {
-        ok: true,
-        dataspace,
-        contract_address: Some(contract_address),
-        code_hash_hex: hex::encode(code_hash.as_ref()),
-        abi_hash_hex: hex::encode(abi_hash.as_ref()),
-        entrypoint: resolved_entrypoint.to_owned(),
-        result,
-    })
-    .unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    *resp.status_mut() = status;
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
         axum::http::HeaderValue::from_static("application/json"),
@@ -18405,6 +18441,189 @@ pub struct DeployContractResponseDto {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Default, serde::Deserialize)]
+pub struct DeployBundleQuery {
+    pub dry_run: Option<bool>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+pub struct DeployContractBundleDto {
+    pub bundle_name: String,
+    pub authority: iroha_data_model::account::AccountId,
+    pub private_key: iroha_data_model::prelude::ExposedPrivateKey,
+    #[norito(default)]
+    pub default_dataspace: Option<String>,
+    pub contracts: Vec<DeployContractBundleContractDto>,
+    #[norito(default)]
+    pub init_calls: Vec<DeployContractBundleInitCallDto>,
+    #[norito(default)]
+    pub assertions: Vec<DeployContractBundleAssertionDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+pub struct DeployContractBundleContractDto {
+    pub name: String,
+    pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    pub code_b64: String,
+    #[norito(default)]
+    pub lease_expiry_ms: Option<u64>,
+    #[norito(default)]
+    pub depends_on: Vec<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+pub struct DeployContractBundleInitCallDto {
+    pub id: String,
+    pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    #[norito(default)]
+    pub entrypoint: Option<String>,
+    #[norito(default)]
+    pub payload: Option<IrohaJson>,
+    pub gas_limit: u64,
+    #[norito(default)]
+    pub gas_asset_id: Option<String>,
+    #[norito(default)]
+    pub fee_sponsor: Option<iroha_data_model::account::AccountId>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+pub struct DeployContractBundleAssertionDto {
+    pub id: String,
+    pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    #[norito(default)]
+    pub entrypoint: Option<String>,
+    #[norito(default)]
+    pub payload: Option<IrohaJson>,
+    pub gas_limit: u64,
+    #[norito(default)]
+    pub expected_result: Option<IrohaJson>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+pub struct DeployContractBundleReceiptDto {
+    pub ok: bool,
+    pub bundle_name: String,
+    pub bundle_digest: String,
+    pub chain_fingerprint: String,
+    pub dry_run: bool,
+    pub completed_stages: Vec<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub failure_point: Option<String>,
+    pub contracts: Vec<DeployContractBundleContractReceiptDto>,
+    #[norito(default)]
+    pub init_calls: Vec<DeployContractBundleCallReceiptDto>,
+    #[norito(default)]
+    pub assertions: Vec<DeployContractBundleAssertionReceiptDto>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+pub struct DeployContractBundleContractReceiptDto {
+    pub name: String,
+    pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    pub contract_address: iroha_data_model::smart_contract::ContractAddress,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub previous_contract_address: Option<iroha_data_model::smart_contract::ContractAddress>,
+    pub upgraded: bool,
+    pub dataspace: String,
+    pub deploy_nonce: u64,
+    pub code_hash_hex: String,
+    pub abi_hash_hex: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub tx_hash_hex: Option<String>,
+    pub status: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+pub struct DeployContractBundleCallReceiptDto {
+    pub id: String,
+    pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub tx_hash_hex: Option<String>,
+    pub status: String,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    Clone,
+    Debug,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    crate::json_macros::JsonSerialize,
+    norito::derive::NoritoSerialize,
+)]
+pub struct DeployContractBundleAssertionReceiptDto {
+    pub id: String,
+    pub contract_alias: iroha_data_model::smart_contract::ContractAlias,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub entrypoint: Option<String>,
+    pub status: String,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub actual_result: Option<IrohaJson>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub expected_result: Option<IrohaJson>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
 #[derive(crate::json_macros::JsonDeserialize, crate::json_macros::JsonSerialize)]
 /// Request for dry-run simulation of contract deployment without enqueueing a transaction.
 pub struct ContractSimulateDto {
@@ -18673,6 +18892,327 @@ fn metadata_with_default_gas_asset(state: &CoreState) -> Metadata {
         metadata.insert(gas_asset_key, IrohaJson::new(asset_id));
     }
     metadata
+}
+
+#[cfg(feature = "app_api")]
+const CONTRACT_BUNDLE_RECEIPTS_DIR: &str = "contract_deploy_bundles";
+#[cfg(feature = "app_api")]
+const CONTRACT_BUNDLE_WAIT_TIMEOUT: Duration = Duration::from_secs(30);
+#[cfg(feature = "app_api")]
+const CONTRACT_BUNDLE_POLL_INTERVAL: Duration = Duration::from_millis(250);
+
+#[cfg(feature = "app_api")]
+fn contract_bundle_receipt_root() -> std::path::PathBuf {
+    crate::data_dir::base_dir().join(CONTRACT_BUNDLE_RECEIPTS_DIR)
+}
+
+#[cfg(feature = "app_api")]
+fn contract_bundle_receipt_path(
+    bundle_digest: &str,
+    chain_fingerprint: &str,
+) -> std::path::PathBuf {
+    let chain_key = hex::encode(<[u8; 32]>::from(Hash::new(chain_fingerprint.as_bytes())));
+    contract_bundle_receipt_root()
+        .join(chain_key)
+        .join(format!("{bundle_digest}.json"))
+}
+
+#[cfg(feature = "app_api")]
+fn persist_contract_bundle_receipt(receipt: &DeployContractBundleReceiptDto) -> Result<()> {
+    let path = contract_bundle_receipt_path(&receipt.bundle_digest, &receipt.chain_fingerprint);
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|err| conversion_error(err.to_string()))?;
+    }
+    let body = norito::json::to_json_pretty(receipt)
+        .map_err(|err| conversion_error(format!("failed to encode bundle receipt: {err}")))?;
+    std::fs::write(path, body).map_err(|err| conversion_error(err.to_string()))?;
+    Ok(())
+}
+
+#[cfg(feature = "app_api")]
+fn load_contract_bundle_receipt(
+    bundle_digest: &str,
+    chain_fingerprint: &str,
+) -> Result<Option<DeployContractBundleReceiptDto>> {
+    let path = contract_bundle_receipt_path(bundle_digest, chain_fingerprint);
+    let body = match std::fs::read_to_string(path) {
+        Ok(body) => body,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(conversion_error(err.to_string())),
+    };
+    let receipt = norito::json::from_str(&body)
+        .map_err(|err| conversion_error(format!("failed to parse bundle receipt: {err}")))?;
+    Ok(Some(receipt))
+}
+
+#[cfg(feature = "app_api")]
+fn current_chain_fingerprint(chain_id: &ChainId, kura: &Kura) -> String {
+    let block_hash_hex = NonZeroUsize::new(1)
+        .and_then(|height| kura.get_block_hash(height))
+        .map(|hash| hex::encode(hash.as_ref()))
+        .unwrap_or_else(|| "missing-block-1".to_owned());
+    format!("{chain_id}@{block_hash_hex}")
+}
+
+#[cfg(feature = "app_api")]
+fn contract_bundle_digest(req: &DeployContractBundleDto) -> Result<String> {
+    let signer = KeyPair::from(req.private_key.0.clone());
+    let contracts = req
+        .contracts
+        .iter()
+        .map(|contract| -> Result<Value> {
+            let prepared = prepare_contract_deployment(&contract.code_b64, &signer)?;
+            let value = norito::json!({
+                "name": (contract.name.clone()),
+                "contract_alias": (contract.contract_alias.clone()),
+                "lease_expiry_ms": (contract.lease_expiry_ms),
+                "depends_on": (contract.depends_on.clone()),
+                "code_hash_hex": (hex::encode(<[u8; 32]>::from(prepared.code_hash))),
+                "abi_hash_hex": (hex::encode(<[u8; 32]>::from(prepared.abi_hash))),
+            });
+            Ok(value)
+        })
+        .collect::<Result<Vec<Value>>>()?;
+    let init_calls = req
+        .init_calls
+        .iter()
+        .map(|call| {
+            norito::json!({
+                "id": (call.id.clone()),
+                "contract_alias": (call.contract_alias.clone()),
+                "entrypoint": (call.entrypoint.clone()),
+                "payload": (call.payload.clone()),
+                "gas_limit": (call.gas_limit),
+                "gas_asset_id": (call.gas_asset_id.clone()),
+                "fee_sponsor": (call.fee_sponsor.clone()),
+            })
+        })
+        .collect::<Vec<_>>();
+    let assertions = req
+        .assertions
+        .iter()
+        .map(|assertion| {
+            norito::json!({
+                "id": (assertion.id.clone()),
+                "contract_alias": (assertion.contract_alias.clone()),
+                "entrypoint": (assertion.entrypoint.clone()),
+                "payload": (assertion.payload.clone()),
+                "gas_limit": (assertion.gas_limit),
+                "expected_result": (assertion.expected_result.clone()),
+            })
+        })
+        .collect::<Vec<_>>();
+    let payload = norito::json!({
+        "bundle_name": (req.bundle_name.clone()),
+        "authority": (req.authority.clone()),
+        "default_dataspace": (req.default_dataspace.clone()),
+        "contracts": (contracts),
+        "init_calls": (init_calls),
+        "assertions": (assertions),
+    });
+    let bytes = norito::json::to_vec(&payload)
+        .map_err(|err| conversion_error(format!("failed to encode bundle payload: {err}")))?;
+    Ok(hex::encode(<[u8; 32]>::from(Hash::new(bytes))))
+}
+
+#[cfg(feature = "app_api")]
+fn topologically_sort_contract_bundle(
+    contracts: &[DeployContractBundleContractDto],
+) -> Result<Vec<usize>> {
+    if contracts.is_empty() {
+        return Err(conversion_error(
+            "contract bundle must declare at least one contract".to_owned(),
+        ));
+    }
+
+    let mut by_name = BTreeMap::new();
+    for (index, contract) in contracts.iter().enumerate() {
+        if contract.name.trim().is_empty() {
+            return Err(conversion_error(
+                "contract bundle entries must have a non-empty `name`".to_owned(),
+            ));
+        }
+        if by_name.insert(contract.name.clone(), index).is_some() {
+            return Err(conversion_error(format!(
+                "duplicate contract bundle entry `{}`",
+                contract.name
+            )));
+        }
+    }
+
+    let mut in_degree = vec![0_usize; contracts.len()];
+    let mut dependents = vec![Vec::<usize>::new(); contracts.len()];
+    for (index, contract) in contracts.iter().enumerate() {
+        let mut seen = BTreeSet::new();
+        for dependency in &contract.depends_on {
+            let dependency = dependency.trim();
+            let Some(&dependency_index) = by_name.get(dependency) else {
+                return Err(conversion_error(format!(
+                    "contract `{}` depends on unknown contract `{dependency}`",
+                    contract.name
+                )));
+            };
+            if dependency_index == index {
+                return Err(conversion_error(format!(
+                    "contract `{}` cannot depend on itself",
+                    contract.name
+                )));
+            }
+            if seen.insert(dependency_index) {
+                in_degree[index] += 1;
+                dependents[dependency_index].push(index);
+            }
+        }
+    }
+
+    let mut queue = VecDeque::new();
+    for (index, degree) in in_degree.iter().enumerate() {
+        if *degree == 0 {
+            queue.push_back(index);
+        }
+    }
+
+    let mut ordered = Vec::with_capacity(contracts.len());
+    while let Some(index) = queue.pop_front() {
+        ordered.push(index);
+        for dependent in &dependents[index] {
+            in_degree[*dependent] -= 1;
+            if in_degree[*dependent] == 0 {
+                queue.push_back(*dependent);
+            }
+        }
+    }
+
+    if ordered.len() != contracts.len() {
+        return Err(conversion_error(
+            "contract bundle dependency graph contains a cycle".to_owned(),
+        ));
+    }
+
+    Ok(ordered)
+}
+
+#[cfg(feature = "app_api")]
+fn plan_contract_bundle(
+    chain_id: &ChainId,
+    kura: &Kura,
+    state: &CoreState,
+    req: &DeployContractBundleDto,
+    dry_run: bool,
+) -> Result<DeployContractBundleReceiptDto> {
+    let signer = KeyPair::from(req.private_key.0.clone());
+    let ordered_indexes = topologically_sort_contract_bundle(&req.contracts)?;
+    let authority: iroha_data_model::account::AccountId = req.authority.clone().into();
+    let starting_nonce = contract_deploy_nonce_for_authority(state, &authority)?;
+    let bundle_digest = contract_bundle_digest(req)?;
+    let chain_fingerprint = current_chain_fingerprint(chain_id, kura);
+    let now_ms = current_time_millis();
+    let world = state.world_view();
+    let mut planned_contracts = Vec::with_capacity(req.contracts.len());
+
+    for (offset, contract_index) in ordered_indexes.iter().enumerate() {
+        let contract = &req.contracts[*contract_index];
+        let prepared = prepare_contract_deployment(&contract.code_b64, &signer)?;
+        let (dataspace_alias, dataspace_id) =
+            resolve_public_contract_deploy_alias(state, &contract.contract_alias)?;
+        let previous_contract_address =
+            world.contract_address_by_alias_at(&contract.contract_alias, now_ms);
+        let deploy_nonce = starting_nonce
+            .checked_add(u64::try_from(offset).expect("bundle order fits in u64"))
+            .ok_or_else(|| conversion_error("contract deploy nonce overflow".to_owned()))?;
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            deploy_nonce,
+            dataspace_id,
+        )
+        .map_err(|err| conversion_error(err.to_string()))?;
+        planned_contracts.push(DeployContractBundleContractReceiptDto {
+            name: contract.name.clone(),
+            contract_alias: contract.contract_alias.clone(),
+            contract_address,
+            previous_contract_address: previous_contract_address.clone(),
+            upgraded: previous_contract_address.is_some(),
+            dataspace: dataspace_alias,
+            deploy_nonce,
+            code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
+            abi_hash_hex: hex::encode(<[u8; 32]>::from(prepared.abi_hash)),
+            tx_hash_hex: None,
+            status: "planned".to_owned(),
+        });
+    }
+
+    Ok(DeployContractBundleReceiptDto {
+        ok: true,
+        bundle_name: req.bundle_name.clone(),
+        bundle_digest,
+        chain_fingerprint,
+        dry_run,
+        completed_stages: vec!["plan".to_owned()],
+        failure_point: None,
+        contracts: planned_contracts,
+        init_calls: req
+            .init_calls
+            .iter()
+            .map(|call| DeployContractBundleCallReceiptDto {
+                id: call.id.clone(),
+                contract_alias: call.contract_alias.clone(),
+                entrypoint: call.entrypoint.clone(),
+                tx_hash_hex: None,
+                status: "pending".to_owned(),
+            })
+            .collect(),
+        assertions: req
+            .assertions
+            .iter()
+            .map(|assertion| DeployContractBundleAssertionReceiptDto {
+                id: assertion.id.clone(),
+                contract_alias: assertion.contract_alias.clone(),
+                entrypoint: assertion.entrypoint.clone(),
+                status: "pending".to_owned(),
+                actual_result: None,
+                expected_result: assertion.expected_result.clone(),
+                error: None,
+            })
+            .collect(),
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn contract_alias_activation_state(
+    state: &CoreState,
+    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+    expected_address: &iroha_data_model::smart_contract::ContractAddress,
+) -> (bool, bool) {
+    let world = state.world_view();
+    let bound = world
+        .contract_address_by_alias_at(contract_alias, current_time_millis())
+        .is_some_and(|candidate| candidate == *expected_address);
+    let active = world.contract_instances().get(expected_address).is_some();
+    (bound, active)
+}
+
+#[cfg(feature = "app_api")]
+async fn wait_for_contract_alias_target(
+    state: Arc<CoreState>,
+    contract_alias: &iroha_data_model::smart_contract::ContractAlias,
+    expected_address: &iroha_data_model::smart_contract::ContractAddress,
+) -> Result<()> {
+    let deadline = tokio::time::Instant::now() + CONTRACT_BUNDLE_WAIT_TIMEOUT;
+    loop {
+        let (bound, active) =
+            contract_alias_activation_state(state.as_ref(), contract_alias, expected_address);
+        if bound && active {
+            return Ok(());
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return Err(conversion_error(format!(
+                "timed out waiting for alias `{}` to activate at `{}`",
+                contract_alias, expected_address
+            )));
+        }
+        tokio::time::sleep(CONTRACT_BUNDLE_POLL_INTERVAL).await;
+    }
 }
 
 #[cfg(feature = "app_api")]
@@ -20716,13 +21256,14 @@ pub struct RecordReplicationFailureResponseDto {
 /// register the code, and activate a public universal contract instance.
 #[iroha_futures::telemetry_future]
 #[cfg(feature = "app_api")]
-pub async fn handle_post_contract_deploy(
+async fn submit_contract_deploy_request(
     chain_id: Arc<ChainId>,
     queue: Arc<Queue>,
     state: Arc<CoreState>,
     telemetry: MaybeTelemetry,
-    NoritoJson(req): NoritoJson<DeployContractDto>,
-) -> Result<impl IntoResponse> {
+    req: DeployContractDto,
+    endpoint: &'static str,
+) -> Result<DeployContractResponseDto> {
     use iroha_data_model::{
         isi::{
             contract_alias::SetContractAlias,
@@ -20731,6 +21272,7 @@ pub async fn handle_post_contract_deploy(
         },
         prelude as dm,
     };
+
     let DeployContractDto {
         authority,
         private_key,
@@ -20767,8 +21309,6 @@ pub async fn handle_post_contract_deploy(
         Name::from_str(iroha_data_model::smart_contract::CONTRACT_DEPLOY_NONCE_METADATA_KEY)
             .expect("static deploy nonce metadata key");
 
-    // Construct transaction: register the authority only if absent, store manifest/code,
-    // activate canonical binding, update the stable alias, and advance the successful deploy nonce.
     let isi_code = smart_contract_code::RegisterSmartContractCode {
         manifest: prepared.manifest.clone(),
     };
@@ -20812,20 +21352,9 @@ pub async fn handle_post_contract_deploy(
         .sign(&private_key.0);
     let tx_hash_hex = hex::encode(tx.hash().as_ref());
 
-    // Submit via queue
-    handle_transaction_with_metrics(
-        chain_id,
-        queue.clone(),
-        state.clone(),
-        tx,
-        telemetry,
-        "/v1/contracts/deploy",
-    )
-    .await?;
+    handle_transaction_with_metrics(chain_id, queue, state, tx, telemetry, endpoint).await?;
 
-    // Note: storage happens on-chain when the transaction is applied by the worker.
-
-    let body = norito::json::to_json_pretty(&DeployContractResponseDto {
+    Ok(DeployContractResponseDto {
         ok: true,
         contract_alias,
         contract_address,
@@ -20837,13 +21366,584 @@ pub async fn handle_post_contract_deploy(
         code_hash_hex: hex::encode(<[u8; 32]>::from(prepared.code_hash)),
         abi_hash_hex: hex::encode(<[u8; 32]>::from(prepared.abi_hash)),
     })
-    .unwrap_or_else(|_| "{}".into());
+}
+
+#[cfg(feature = "app_api")]
+fn bundle_stage_completed(receipt: &DeployContractBundleReceiptDto, stage: &str) -> bool {
+    receipt
+        .completed_stages
+        .iter()
+        .any(|completed| completed == stage)
+}
+
+#[cfg(feature = "app_api")]
+fn record_bundle_stage(receipt: &mut DeployContractBundleReceiptDto, stage: &str) {
+    if !bundle_stage_completed(receipt, stage) {
+        receipt.completed_stages.push(stage.to_owned());
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn mark_bundle_failure(receipt: &mut DeployContractBundleReceiptDto, failure_point: String) {
+    receipt.ok = false;
+    receipt.failure_point = Some(failure_point);
+}
+
+#[cfg(feature = "app_api")]
+async fn wait_for_contract_bundle_assertion(
+    state: Arc<CoreState>,
+    authority: iroha_data_model::account::AccountId,
+    assertion: &DeployContractBundleAssertionDto,
+) -> DeployContractBundleAssertionReceiptDto {
+    let deadline = tokio::time::Instant::now() + CONTRACT_BUNDLE_WAIT_TIMEOUT;
+    loop {
+        let receipt = match evaluate_contract_view_request(
+            state.clone(),
+            ContractViewDto {
+                authority: authority.clone(),
+                contract_address: None,
+                contract_alias: Some(assertion.contract_alias.clone()),
+                entrypoint: assertion.entrypoint.clone(),
+                payload: assertion.payload.clone(),
+                gas_limit: assertion.gas_limit,
+            },
+        ) {
+            Ok(Ok(response)) => {
+                let expected_matches = assertion
+                    .expected_result
+                    .as_ref()
+                    .map_or(true, |expected| expected == &response.result);
+                if expected_matches {
+                    return DeployContractBundleAssertionReceiptDto {
+                        id: assertion.id.clone(),
+                        contract_alias: assertion.contract_alias.clone(),
+                        entrypoint: assertion.entrypoint.clone(),
+                        status: "passed".to_owned(),
+                        actual_result: Some(response.result),
+                        expected_result: assertion.expected_result.clone(),
+                        error: None,
+                    };
+                }
+                DeployContractBundleAssertionReceiptDto {
+                    id: assertion.id.clone(),
+                    contract_alias: assertion.contract_alias.clone(),
+                    entrypoint: assertion.entrypoint.clone(),
+                    status: "failed".to_owned(),
+                    actual_result: Some(response.result),
+                    expected_result: assertion.expected_result.clone(),
+                    error: Some("unexpected view result".to_owned()),
+                }
+            }
+            Ok(Err(response)) => DeployContractBundleAssertionReceiptDto {
+                id: assertion.id.clone(),
+                contract_alias: assertion.contract_alias.clone(),
+                entrypoint: assertion.entrypoint.clone(),
+                status: "failed".to_owned(),
+                actual_result: None,
+                expected_result: assertion.expected_result.clone(),
+                error: Some(response.error),
+            },
+            Err(err) => DeployContractBundleAssertionReceiptDto {
+                id: assertion.id.clone(),
+                contract_alias: assertion.contract_alias.clone(),
+                entrypoint: assertion.entrypoint.clone(),
+                status: "failed".to_owned(),
+                actual_result: None,
+                expected_result: assertion.expected_result.clone(),
+                error: Some(err.to_string()),
+            },
+        };
+        if tokio::time::Instant::now() >= deadline {
+            return DeployContractBundleAssertionReceiptDto {
+                error: receipt
+                    .error
+                    .clone()
+                    .or_else(|| Some("assertion did not pass before timeout".to_owned())),
+                ..receipt
+            };
+        }
+        tokio::time::sleep(CONTRACT_BUNDLE_POLL_INTERVAL).await;
+    }
+}
+
+#[cfg(feature = "app_api")]
+async fn execute_contract_bundle_request(
+    chain_id: Arc<ChainId>,
+    kura: Arc<Kura>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    req: DeployContractBundleDto,
+    dry_run: bool,
+) -> Result<DeployContractBundleReceiptDto> {
+    let planned = plan_contract_bundle(&chain_id, &kura, &state, &req, dry_run)?;
+    if dry_run {
+        return Ok(planned);
+    }
+
+    let mut receipt =
+        load_contract_bundle_receipt(&planned.bundle_digest, &planned.chain_fingerprint)?
+            .unwrap_or(planned);
+    receipt.ok = true;
+    receipt.failure_point = None;
+    persist_contract_bundle_receipt(&receipt)?;
+
+    let contracts_by_name = req
+        .contracts
+        .iter()
+        .cloned()
+        .map(|contract| (contract.name.clone(), contract))
+        .collect::<BTreeMap<_, _>>();
+
+    if !bundle_stage_completed(&receipt, "deploy") {
+        for index in 0..receipt.contracts.len() {
+            let contract_name = receipt.contracts[index].name.clone();
+            let contract_alias = receipt.contracts[index].contract_alias.clone();
+            let contract_address = receipt.contracts[index].contract_address.clone();
+
+            let (already_bound, already_active) =
+                contract_alias_activation_state(state.as_ref(), &contract_alias, &contract_address);
+            if already_bound && already_active {
+                receipt.contracts[index].status = "deployed".to_owned();
+                persist_contract_bundle_receipt(&receipt)?;
+                continue;
+            }
+
+            let Some(contract) = contracts_by_name.get(&contract_name) else {
+                mark_bundle_failure(
+                    &mut receipt,
+                    format!("missing contract input `{contract_name}` during resume"),
+                );
+                persist_contract_bundle_receipt(&receipt)?;
+                return Err(conversion_error(
+                    "bundle receipt is inconsistent with request".to_owned(),
+                ));
+            };
+
+            let response = match submit_contract_deploy_request(
+                chain_id.clone(),
+                queue.clone(),
+                state.clone(),
+                telemetry.clone(),
+                DeployContractDto {
+                    authority: req.authority.clone(),
+                    private_key: req.private_key.clone(),
+                    code_b64: contract.code_b64.clone(),
+                    contract_alias: contract.contract_alias.clone(),
+                    lease_expiry_ms: contract.lease_expiry_ms,
+                },
+                "/v1/contracts/deploy-bundle",
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(err) => {
+                    mark_bundle_failure(
+                        &mut receipt,
+                        format!("deploy contract `{contract_name}`: {err}"),
+                    );
+                    persist_contract_bundle_receipt(&receipt)?;
+                    return Err(err);
+                }
+            };
+            receipt.contracts[index].tx_hash_hex = Some(response.tx_hash_hex);
+            receipt.contracts[index].status = "submitted".to_owned();
+            persist_contract_bundle_receipt(&receipt)?;
+
+            if let Err(err) =
+                wait_for_contract_alias_target(state.clone(), &contract_alias, &contract_address)
+                    .await
+            {
+                mark_bundle_failure(
+                    &mut receipt,
+                    format!("activate contract `{contract_name}`: {err}"),
+                );
+                persist_contract_bundle_receipt(&receipt)?;
+                return Err(err);
+            }
+
+            receipt.contracts[index].status = "deployed".to_owned();
+            persist_contract_bundle_receipt(&receipt)?;
+        }
+
+        record_bundle_stage(&mut receipt, "deploy");
+        persist_contract_bundle_receipt(&receipt)?;
+    }
+
+    if !req.init_calls.is_empty() && !bundle_stage_completed(&receipt, "init_calls") {
+        for index in 0..receipt.init_calls.len() {
+            let call_receipt_id = receipt.init_calls[index].id.clone();
+            if receipt.init_calls[index].status == "submitted"
+                || receipt.init_calls[index].status == "completed"
+            {
+                continue;
+            }
+            let call = &req.init_calls[index];
+            let response = match submit_contract_call_request(
+                chain_id.clone(),
+                queue.clone(),
+                state.clone(),
+                telemetry.clone(),
+                ContractCallDto {
+                    authority: req.authority.clone(),
+                    private_key: Some(req.private_key.clone()),
+                    public_key_hex: None,
+                    signature_b64: None,
+                    contract_address: None,
+                    contract_alias: Some(call.contract_alias.clone()),
+                    entrypoint: call.entrypoint.clone(),
+                    payload: call.payload.clone(),
+                    creation_time_ms: None,
+                    gas_asset_id: call.gas_asset_id.clone(),
+                    fee_sponsor: call.fee_sponsor.clone(),
+                    gas_limit: call.gas_limit,
+                },
+                "/v1/contracts/deploy-bundle",
+            )
+            .await
+            {
+                Ok(response) => response,
+                Err(err) => {
+                    mark_bundle_failure(
+                        &mut receipt,
+                        format!("init call `{call_receipt_id}`: {err}"),
+                    );
+                    persist_contract_bundle_receipt(&receipt)?;
+                    return Err(err);
+                }
+            };
+            receipt.init_calls[index].tx_hash_hex = response.tx_hash_hex;
+            receipt.init_calls[index].status = if response.submitted {
+                "submitted".to_owned()
+            } else {
+                "pending_signature".to_owned()
+            };
+            persist_contract_bundle_receipt(&receipt)?;
+        }
+
+        record_bundle_stage(&mut receipt, "init_calls");
+        persist_contract_bundle_receipt(&receipt)?;
+    }
+
+    if !req.assertions.is_empty() && !bundle_stage_completed(&receipt, "assertions") {
+        for index in 0..receipt.assertions.len() {
+            if receipt.assertions[index].status == "passed" {
+                continue;
+            }
+            let assertion = &req.assertions[index];
+            receipt.assertions[index] =
+                wait_for_contract_bundle_assertion(state.clone(), req.authority.clone(), assertion)
+                    .await;
+            persist_contract_bundle_receipt(&receipt)?;
+            if receipt.assertions[index].status != "passed" {
+                let assertion_receipt = receipt.assertions[index].clone();
+                let message = assertion_receipt
+                    .error
+                    .clone()
+                    .unwrap_or_else(|| "assertion failed".to_owned());
+                let failure_point = format!("assertion `{}`: {message}", assertion_receipt.id);
+                mark_bundle_failure(&mut receipt, failure_point);
+                persist_contract_bundle_receipt(&receipt)?;
+                return Err(conversion_error(message));
+            }
+        }
+
+        record_bundle_stage(&mut receipt, "assertions");
+        persist_contract_bundle_receipt(&receipt)?;
+    }
+
+    receipt.ok = true;
+    receipt.failure_point = None;
+    persist_contract_bundle_receipt(&receipt)?;
+    Ok(receipt)
+}
+
+#[cfg(feature = "app_api")]
+fn wrap_single_contract_deploy_request(req: DeployContractDto) -> DeployContractBundleDto {
+    let DeployContractDto {
+        authority,
+        private_key,
+        code_b64,
+        contract_alias,
+        lease_expiry_ms,
+    } = req;
+    DeployContractBundleDto {
+        bundle_name: "single-contract-deploy".to_owned(),
+        authority,
+        private_key,
+        default_dataspace: None,
+        contracts: vec![DeployContractBundleContractDto {
+            name: contract_alias.to_string(),
+            contract_alias,
+            code_b64,
+            lease_expiry_ms,
+            depends_on: Vec::new(),
+        }],
+        init_calls: Vec::new(),
+        assertions: Vec::new(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn deploy_bundle_receipt_to_legacy_response(
+    receipt: DeployContractBundleReceiptDto,
+) -> Result<DeployContractResponseDto> {
+    let contract = receipt.contracts.into_iter().next().ok_or_else(|| {
+        conversion_error("bundle receipt did not include any contracts".to_owned())
+    })?;
+    let tx_hash_hex = contract.tx_hash_hex.ok_or_else(|| {
+        conversion_error("bundle receipt did not include a deployment transaction hash".to_owned())
+    })?;
+    Ok(DeployContractResponseDto {
+        ok: receipt.ok,
+        contract_alias: contract.contract_alias,
+        contract_address: contract.contract_address,
+        previous_contract_address: contract.previous_contract_address,
+        upgraded: contract.upgraded,
+        dataspace: contract.dataspace,
+        deploy_nonce: contract.deploy_nonce,
+        tx_hash_hex,
+        code_hash_hex: contract.code_hash_hex,
+        abi_hash_hex: contract.abi_hash_hex,
+    })
+}
+
+#[cfg(feature = "app_api")]
+/// POST /v1/contracts/deploy-bundle — deploy a dependency-ordered bundle of
+/// public contracts, init calls, and post-deploy assertions.
+pub async fn handle_post_contract_deploy_bundle(
+    chain_id: Arc<ChainId>,
+    kura: Arc<Kura>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    dry_run: bool,
+    NoritoJson(req): NoritoJson<DeployContractBundleDto>,
+) -> Result<impl IntoResponse> {
+    let response =
+        execute_contract_bundle_request(chain_id, kura, queue, state, telemetry, req, dry_run)
+            .await?;
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
     let mut resp = axum::response::Response::new(axum::body::Body::from(body));
     resp.headers_mut().insert(
         axum::http::header::CONTENT_TYPE,
         axum::http::HeaderValue::from_static("application/json"),
     );
     Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+/// GET /v1/contracts/deploy-bundles/{bundle_digest} — return the persisted
+/// execution status for a previously submitted contract deploy bundle.
+pub async fn handle_get_contract_deploy_bundle_status(
+    chain_id: Arc<ChainId>,
+    kura: Arc<Kura>,
+    axum::extract::Path(bundle_digest): axum::extract::Path<String>,
+) -> Result<impl IntoResponse> {
+    let chain_fingerprint = current_chain_fingerprint(&chain_id, &kura);
+    let Some(receipt) = load_contract_bundle_receipt(&bundle_digest, &chain_fingerprint)? else {
+        return Ok(StatusCode::NOT_FOUND.into_response());
+    };
+    let body = norito::json::to_json_pretty(&receipt).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(feature = "app_api")]
+/// POST /v1/contracts/deploy — submit a single public contract deployment and
+/// return the queued deploy receipt metadata.
+pub async fn handle_post_contract_deploy(
+    chain_id: Arc<ChainId>,
+    kura: Arc<Kura>,
+    queue: Arc<Queue>,
+    state: Arc<CoreState>,
+    telemetry: MaybeTelemetry,
+    NoritoJson(req): NoritoJson<DeployContractDto>,
+) -> Result<impl IntoResponse> {
+    let receipt = execute_contract_bundle_request(
+        chain_id,
+        kura,
+        queue,
+        state,
+        telemetry,
+        wrap_single_contract_deploy_request(req),
+        false,
+    )
+    .await?;
+    let response = deploy_bundle_receipt_to_legacy_response(receipt)?;
+    let body = norito::json::to_json_pretty(&response).unwrap_or_else(|_| "{}".into());
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+#[cfg(all(test, feature = "app_api"))]
+mod contract_bundle_tests {
+    use super::*;
+    use crate::data_dir::OverrideGuard;
+    use iroha_crypto::Algorithm;
+    use iroha_data_model::{
+        account::AccountId,
+        nexus::DataSpaceId,
+        smart_contract::{CHAIN_DISCRIMINANT_MAINNET, ContractAddress, ContractAlias},
+    };
+    use tempfile::tempdir;
+
+    fn sample_authority() -> AccountId {
+        AccountId::new(
+            KeyPair::from_seed(vec![7u8; 32], Algorithm::Ed25519)
+                .public_key()
+                .clone(),
+        )
+    }
+
+    fn sample_alias(literal: &str) -> ContractAlias {
+        literal.parse().expect("valid contract alias")
+    }
+
+    fn sample_address(nonce: u64) -> ContractAddress {
+        ContractAddress::derive(
+            CHAIN_DISCRIMINANT_MAINNET,
+            &sample_authority(),
+            nonce,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("derive contract address")
+    }
+
+    #[test]
+    fn bundle_dependency_cycles_are_rejected() {
+        let contracts = vec![
+            DeployContractBundleContractDto {
+                name: "alpha".to_owned(),
+                contract_alias: sample_alias("alpha::universal"),
+                code_b64: String::new(),
+                lease_expiry_ms: None,
+                depends_on: vec!["beta".to_owned()],
+            },
+            DeployContractBundleContractDto {
+                name: "beta".to_owned(),
+                contract_alias: sample_alias("beta::universal"),
+                code_b64: String::new(),
+                lease_expiry_ms: None,
+                depends_on: vec!["alpha".to_owned()],
+            },
+        ];
+
+        let err =
+            topologically_sort_contract_bundle(&contracts).expect_err("cycle must be rejected");
+        match err {
+            Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::Conversion(message),
+            )) => assert!(message.contains("contains a cycle")),
+            other => panic!("unexpected cycle rejection error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bundle_receipt_round_trips_from_persisted_storage() {
+        let dir = tempdir().expect("tempdir");
+        let _guard = OverrideGuard::new(dir.path());
+        let receipt = DeployContractBundleReceiptDto {
+            ok: true,
+            bundle_name: "demo".to_owned(),
+            bundle_digest: "digest-1".to_owned(),
+            chain_fingerprint: "chain@block1".to_owned(),
+            dry_run: false,
+            completed_stages: vec!["deploy".to_owned()],
+            failure_point: None,
+            contracts: vec![DeployContractBundleContractReceiptDto {
+                name: "demo.greeter".to_owned(),
+                contract_alias: sample_alias("greeter::universal"),
+                contract_address: sample_address(0),
+                previous_contract_address: None,
+                upgraded: false,
+                dataspace: "universal".to_owned(),
+                deploy_nonce: 0,
+                code_hash_hex: "code".to_owned(),
+                abi_hash_hex: "abi".to_owned(),
+                tx_hash_hex: Some("tx".to_owned()),
+                status: "deployed".to_owned(),
+            }],
+            init_calls: vec![DeployContractBundleCallReceiptDto {
+                id: "seed".to_owned(),
+                contract_alias: sample_alias("greeter::universal"),
+                entrypoint: Some("init".to_owned()),
+                tx_hash_hex: Some("tx-init".to_owned()),
+                status: "submitted".to_owned(),
+            }],
+            assertions: vec![DeployContractBundleAssertionReceiptDto {
+                id: "ready".to_owned(),
+                contract_alias: sample_alias("greeter::universal"),
+                entrypoint: Some("status".to_owned()),
+                status: "passed".to_owned(),
+                actual_result: Some(IrohaJson::new(7)),
+                expected_result: Some(IrohaJson::new(7)),
+                error: None,
+            }],
+        };
+
+        persist_contract_bundle_receipt(&receipt).expect("persist receipt");
+        let loaded = load_contract_bundle_receipt("digest-1", "chain@block1")
+            .expect("load receipt")
+            .expect("receipt should exist");
+
+        assert_eq!(loaded.bundle_name, "demo");
+        assert_eq!(loaded.bundle_digest, "digest-1");
+        assert_eq!(loaded.contracts.len(), 1);
+        assert_eq!(
+            loaded.contracts[0].contract_alias,
+            sample_alias("greeter::universal")
+        );
+        assert_eq!(loaded.assertions[0].status, "passed");
+    }
+
+    #[test]
+    fn bundle_receipt_flattens_to_legacy_single_contract_response() {
+        let response = deploy_bundle_receipt_to_legacy_response(DeployContractBundleReceiptDto {
+            ok: true,
+            bundle_name: "single-contract-deploy".to_owned(),
+            bundle_digest: "digest-1".to_owned(),
+            chain_fingerprint: "chain@block1".to_owned(),
+            dry_run: false,
+            completed_stages: vec!["deploy".to_owned()],
+            failure_point: None,
+            contracts: vec![DeployContractBundleContractReceiptDto {
+                name: "demo.greeter".to_owned(),
+                contract_alias: sample_alias("greeter::universal"),
+                contract_address: sample_address(0),
+                previous_contract_address: Some(sample_address(1)),
+                upgraded: true,
+                dataspace: "universal".to_owned(),
+                deploy_nonce: 7,
+                code_hash_hex: "code".to_owned(),
+                abi_hash_hex: "abi".to_owned(),
+                tx_hash_hex: Some("tx".to_owned()),
+                status: "deployed".to_owned(),
+            }],
+            init_calls: Vec::new(),
+            assertions: Vec::new(),
+        })
+        .expect("legacy response");
+
+        assert!(response.ok);
+        assert_eq!(response.contract_alias, sample_alias("greeter::universal"));
+        assert_eq!(response.contract_address, sample_address(0));
+        assert_eq!(response.previous_contract_address, Some(sample_address(1)));
+        assert!(response.upgraded);
+        assert_eq!(response.dataspace, "universal");
+        assert_eq!(response.deploy_nonce, 7);
+        assert_eq!(response.tx_hash_hex, "tx");
+        assert_eq!(response.code_hash_hex, "code");
+        assert_eq!(response.abi_hash_hex, "abi");
+    }
 }
 
 /// POST /v1/sorafs/pin/register — submit a manifest registration transaction after validation.
@@ -23191,7 +24291,7 @@ mod deploy_tests {
         let query = iroha_core::query::store::LiveQueryStore::start_test();
         let state = std::sync::Arc::new(iroha_core::state::State::new_for_testing(
             iroha_core::state::World::default(),
-            kura,
+            kura.clone(),
             query,
         ));
         let events: iroha_core::EventsSender = tokio::sync::broadcast::channel(8).0;
@@ -23218,6 +24318,7 @@ mod deploy_tests {
 
         let resp = handle_post_contract_deploy(
             Arc::clone(&chain_id),
+            kura,
             queue,
             state,
             telemetry,
