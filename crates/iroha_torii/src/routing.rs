@@ -9301,6 +9301,10 @@ pub async fn handle_get_contract_code(
     Debug, crate::json_macros::JsonDeserialize, norito::derive::NoritoDeserialize, Default,
 )]
 pub struct ContractStateQuery {
+    /// Optional canonical contract address used to scope logical state paths.
+    pub contract_address: Option<String>,
+    /// Optional on-chain contract alias used to scope logical state paths.
+    pub contract_alias: Option<String>,
     /// Exact state key path (Name).
     pub path: Option<String>,
     /// Comma-separated list of state key paths (Names).
@@ -9335,6 +9339,10 @@ pub struct ContractStateEntry {
 #[cfg(feature = "app_api")]
 #[derive(Debug, crate::json_macros::JsonSerialize)]
 pub struct ContractStateResponse {
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_address: Option<String>,
+    #[norito(skip_serializing_if = "Option::is_none")]
+    pub contract_alias: Option<String>,
     #[norito(skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -9788,11 +9796,83 @@ pub async fn handle_get_contract_state(
         parse_contract_state_decode_mode(q.decode.as_deref()).map_err(conversion_error)?;
 
     let world = state.world_view();
+    let (resolved_contract_address, resolved_contract_alias) =
+        match (q.contract_address.as_deref(), q.contract_alias.as_deref()) {
+            (Some(_), Some(_)) => {
+                return Err(conversion_error(
+                    "provide at most one of contract_address or contract_alias".to_owned(),
+                ));
+            }
+            (Some(raw), None) => {
+                let contract_address = raw.parse().map_err(|err| {
+                    conversion_error(format!("invalid contract address `{raw}`: {err}"))
+                })?;
+                (Some(contract_address), None)
+            }
+            (None, Some(raw)) => {
+                let contract_alias = raw.parse().map_err(|err| {
+                    conversion_error(format!("invalid contract alias `{raw}`: {err}"))
+                })?;
+                let contract_address = world
+                    .contract_address_by_alias_at(&contract_alias, current_time_millis())
+                    .ok_or_else(|| {
+                        Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                            iroha_data_model::query::error::QueryExecutionFail::NotFound,
+                        ))
+                    })?;
+                (Some(contract_address), Some(contract_alias))
+            }
+            (None, None) => (None, None),
+        };
+    let scoped_prefix = resolved_contract_address.as_ref().map(|contract_address| {
+        let scope_id = contract_address.to_string();
+        let digest = hex::encode(Hash::new(scope_id.as_bytes()).as_ref());
+        format!("sc/{digest}/")
+    });
+    let scoped_name_for = |logical_path: &str| -> Result<Name> {
+        let scoped = if let Some(prefix) = scoped_prefix.as_ref() {
+            format!("{prefix}{logical_path}")
+        } else {
+            logical_path.to_owned()
+        };
+        Name::from_str(&scoped).map_err(|err| {
+            conversion_error(format!(
+                "invalid scoped smart-contract state path `{scoped}`: {err}"
+            ))
+        })
+    };
+    let strip_scope_prefix = |stored_path: &str| -> Option<String> {
+        if let Some(prefix) = scoped_prefix.as_deref() {
+            stored_path.strip_prefix(prefix).map(str::to_owned)
+        } else {
+            Some(stored_path.to_owned())
+        }
+    };
     let storage = world.smart_contract_state();
     let schema_registry = matches!(decode_mode, Some(ContractStateDecodeMode::Json))
         .then(|| collect_contract_state_schemas(&world));
-    let get_value = |path: &str| storage.get(path).cloned();
-    let has_value = |path: &str| storage.get(path).is_some();
+    let get_value = |path: &str| {
+        let scoped = if let Some(prefix) = scoped_prefix.as_ref() {
+            format!("{prefix}{path}")
+        } else {
+            path.to_owned()
+        };
+        storage.get(scoped.as_str()).cloned()
+    };
+    let has_value = |path: &str| {
+        let scoped = if let Some(prefix) = scoped_prefix.as_ref() {
+            format!("{prefix}{path}")
+        } else {
+            path.to_owned()
+        };
+        storage.get(scoped.as_str()).is_some()
+    };
+    let contract_address_response = resolved_contract_address
+        .as_ref()
+        .map(std::string::ToString::to_string);
+    let contract_alias_response = resolved_contract_alias
+        .as_ref()
+        .map(std::string::ToString::to_string);
 
     let encode_entry = |path: &str,
                         value: Option<&Vec<u8>>,
@@ -9830,7 +9910,7 @@ pub async fn handle_get_contract_state(
     if let Some(path_raw) = q.path {
         let name = parse_name(&path_raw, "path")?;
         let path = name.as_ref();
-        let stored = storage.get(path);
+        let stored = get_value(path);
         let logical_found = schema_registry
             .as_ref()
             .is_some_and(|registry| contract_state_logical_path_exists(registry, path, &has_value));
@@ -9852,8 +9932,10 @@ pub async fn handle_get_contract_state(
             )));
         }
 
-        let entry = encode_entry(path, stored, true, value_json, decode_error);
+        let entry = encode_entry(path, stored.as_ref(), true, value_json, decode_error);
         return Ok(JsonBody(ContractStateResponse {
+            contract_address: contract_address_response.clone(),
+            contract_alias: contract_alias_response.clone(),
             path: Some(path.to_string()),
             paths: None,
             prefix: None,
@@ -9881,7 +9963,7 @@ pub async fn handle_get_contract_state(
         let mut paths = Vec::with_capacity(parsed.len());
         for name in parsed {
             let path = name.as_ref();
-            let stored = storage.get(path);
+            let stored = get_value(path);
             let logical_found = schema_registry.as_ref().is_some_and(|registry| {
                 contract_state_logical_path_exists(registry, path, &has_value)
             });
@@ -9896,11 +9978,13 @@ pub async fn handle_get_contract_state(
                 }
                 _ => (None, None),
             };
-            entries.push(encode_entry(path, stored, found, value_json, decode_error));
+            entries.push(encode_entry(path, stored.as_ref(), found, value_json, decode_error));
             paths.push(path.to_string());
         }
         let limit = entries.len() as u64;
         return Ok(JsonBody(ContractStateResponse {
+            contract_address: contract_address_response.clone(),
+            contract_alias: contract_alias_response.clone(),
             path: None,
             paths: Some(paths),
             prefix: None,
@@ -9919,19 +10003,24 @@ pub async fn handle_get_contract_state(
     let mut entries = Vec::new();
     let mut skipped = 0u64;
     let mut has_more = false;
+    let storage_prefix_name = scoped_name_for(prefix_str)?;
+    let storage_prefix_str = storage_prefix_name.as_ref().to_owned();
 
     if let (Some(ContractStateDecodeMode::Json), Some(registry)) =
         (decode_mode, schema_registry.as_ref())
     {
         if let Some(Some(ivm::EmbeddedStateType::Map { value, .. })) = registry.get(prefix_str) {
             let mut key_suffixes = BTreeSet::new();
-            for (key, _) in storage.range(prefix.clone()..) {
+            for (key, _) in storage.range(storage_prefix_name.clone()..) {
                 let key_str = key.as_ref();
-                if !key_str.starts_with(prefix_str) {
+                if !key_str.starts_with(&storage_prefix_str) {
                     break;
                 }
+                let Some(logical_key) = strip_scope_prefix(key_str) else {
+                    continue;
+                };
                 if let Some(key_suffix) =
-                    match_contract_state_map_key_suffix(prefix_str, value, key_str)
+                    match_contract_state_map_key_suffix(prefix_str, value, logical_key.as_str())
                 {
                     key_suffixes.insert(key_suffix);
                 }
@@ -9971,6 +10060,8 @@ pub async fn handle_get_contract_state(
                 None
             };
             return Ok(JsonBody(ContractStateResponse {
+                contract_address: contract_address_response.clone(),
+                contract_alias: contract_alias_response.clone(),
                 path: None,
                 paths: None,
                 prefix: Some(prefix_str.to_string()),
@@ -9982,11 +10073,14 @@ pub async fn handle_get_contract_state(
         }
     }
 
-    for (key, value) in storage.range(prefix.clone()..) {
+    for (key, value) in storage.range(storage_prefix_name.clone()..) {
         let key_str = key.as_ref();
-        if !key_str.starts_with(prefix_str) {
+        if !key_str.starts_with(&storage_prefix_str) {
             break;
         }
+        let Some(logical_key) = strip_scope_prefix(key_str) else {
+            continue;
+        };
         if skipped < offset {
             skipped += 1;
             continue;
@@ -9997,9 +10091,9 @@ pub async fn handle_get_contract_state(
         }
         let (value_json, decode_error) = match (decode_mode, schema_registry.as_ref()) {
             (Some(ContractStateDecodeMode::Json), Some(registry))
-                if registry.contains_key(key_str) =>
+                if registry.contains_key(logical_key.as_str()) =>
             {
-                match decode_contract_state_path_json(registry, key_str, &get_value) {
+                match decode_contract_state_path_json(registry, logical_key.as_str(), &get_value) {
                     Ok(value_json) => (Some(value_json), None),
                     Err(err) => (None, Some(err)),
                 }
@@ -10007,7 +10101,7 @@ pub async fn handle_get_contract_state(
             _ => (None, None),
         };
         entries.push(encode_entry(
-            key_str,
+            logical_key.as_str(),
             Some(value),
             true,
             value_json,
@@ -10020,6 +10114,8 @@ pub async fn handle_get_contract_state(
         None
     };
     Ok(JsonBody(ContractStateResponse {
+        contract_address: contract_address_response,
+        contract_alias: contract_alias_response,
         path: None,
         paths: None,
         prefix: Some(prefix_str.to_string()),
@@ -10052,6 +10148,15 @@ mod contract_state_tests {
         bytes
     }
 
+    fn scoped_state_key(
+        contract_address: &iroha_data_model::smart_contract::ContractAddress,
+        logical_path: &str,
+    ) -> Name {
+        let digest = hex::encode(Hash::new(contract_address.to_string().as_bytes()).as_ref());
+        let scoped = format!("sc/{digest}/{logical_path}");
+        Name::from_str(&scoped).expect("scoped contract state path")
+    }
+
     #[tokio::test]
     async fn contract_state_prefix_empty_on_blank_state() {
         let state = Arc::new(CoreState::new_for_testing(
@@ -10072,6 +10177,91 @@ mod contract_state_tests {
         assert!(response.entries.is_empty());
         assert_eq!(response.offset, 0);
         assert_eq!(response.next_offset, None);
+    }
+
+    #[tokio::test]
+    async fn contract_state_exact_path_can_scope_by_contract_address() {
+        let contract_address: iroha_data_model::smart_contract::ContractAddress =
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address");
+        let mut world = World::default();
+        world.smart_contract_state_mut_for_testing().insert(
+            scoped_state_key(&contract_address, "market/by-id/mkt-1/state"),
+            make_tlv(
+                PointerType::NoritoBytes,
+                &norito::to_bytes(&"open".to_owned()).expect("encode state"),
+            ),
+        );
+        let state = Arc::new(CoreState::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let query = ContractStateQuery {
+            contract_address: Some(contract_address.to_string()),
+            path: Some("market/by-id/mkt-1/state".to_owned()),
+            ..Default::default()
+        };
+
+        let JsonBody(response) = handle_get_contract_state(state, NoritoQuery(query))
+            .await
+            .expect("handler should succeed");
+
+        assert_eq!(
+            response.contract_address.as_deref(),
+            Some(contract_address.to_string().as_str())
+        );
+        assert_eq!(response.entries.len(), 1);
+        assert_eq!(response.entries[0].path, "market/by-id/mkt-1/state");
+        assert!(response.entries[0].found);
+    }
+
+    #[tokio::test]
+    async fn contract_state_prefix_can_scope_by_contract_address() {
+        let contract_address: iroha_data_model::smart_contract::ContractAddress =
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address");
+        let mut world = World::default();
+        world.smart_contract_state_mut_for_testing().insert(
+            scoped_state_key(&contract_address, "market/by-id/mkt-1/meta"),
+            make_tlv(
+                PointerType::NoritoBytes,
+                &norito::to_bytes(&"meta".to_owned()).expect("encode meta"),
+            ),
+        );
+        world.smart_contract_state_mut_for_testing().insert(
+            scoped_state_key(&contract_address, "market/by-id/mkt-1/state"),
+            make_tlv(
+                PointerType::NoritoBytes,
+                &norito::to_bytes(&"open".to_owned()).expect("encode state"),
+            ),
+        );
+        let state = Arc::new(CoreState::new_for_testing(
+            world,
+            Kura::blank_kura_for_testing(),
+            LiveQueryStore::start_test(),
+        ));
+        let query = ContractStateQuery {
+            contract_address: Some(contract_address.to_string()),
+            prefix: Some("market/by-id/mkt-1".to_owned()),
+            ..Default::default()
+        };
+
+        let JsonBody(response) = handle_get_contract_state(state, NoritoQuery(query))
+            .await
+            .expect("handler should succeed");
+
+        let paths = response
+            .entries
+            .iter()
+            .map(|entry| entry.path.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            paths,
+            vec!["market/by-id/mkt-1/meta", "market/by-id/mkt-1/state"]
+        );
     }
 
     #[test]
@@ -30441,7 +30631,7 @@ mod tx_query_filter_tests {
 
     #[test]
     fn explorer_transaction_filters_match_asset_id() {
-        let (authority, keypair) = account_with_key();
+        let (authority, keypair): (dm::AccountId, KeyPair) = account_with_key();
         let (other_account, _) = account_with_key();
         let def = test_asset_definition_id();
         let asset_id = dm::AssetId::new(def.clone(), authority.clone());
@@ -31630,6 +31820,12 @@ mod tx_query_integration_smoke {
     const TEST_ACCOUNT: &str =
         "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
 
+    fn account_with_key() -> (dm::AccountId, KeyPair) {
+        let kp = KeyPair::random();
+        let account = dm::AccountId::new(kp.public_key().clone());
+        (account, kp)
+    }
+
     #[must_use]
     struct DebugEnvGuard {
         prev_torii_debug_match: bool,
@@ -32164,7 +32360,9 @@ mod tx_query_integration_smoke {
         tx_builder.set_creation_time(core::time::Duration::from_millis(1_710_000_000_000));
         let signed = tx_builder
             .with_metadata(metadata)
-            .with_executable(dm::Executable::Instructions(ConstVec::from(Vec::new())))
+            .with_executable(dm::Executable::Instructions(ConstVec::from(
+                Vec::<dm::InstructionBox>::new(),
+            )))
             .sign(keypair.private_key());
         let entry_hash = format!("{}", signed.hash_as_entrypoint());
         let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
