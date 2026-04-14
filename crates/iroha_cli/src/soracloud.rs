@@ -1203,6 +1203,15 @@ pub struct AppInitArgs {
     /// App template to scaffold.
     #[arg(long, value_enum, default_value_t = AppInitTemplate::SingleApi)]
     template: AppInitTemplate,
+    /// Optional public hostname used for the app URL and service routes.
+    #[arg(long, value_name = "HOST")]
+    public_host: Option<String>,
+    /// Optional static frontend dist directory recorded in the app manifest.
+    #[arg(long, value_name = "PATH")]
+    static_site_dist_dir: Option<String>,
+    /// Emit only control-plane manifests plus minimal root scripts for wiring the app into an existing repo.
+    #[arg(long)]
+    existing_repo: bool,
     /// Overwrite existing files in the output directory.
     #[arg(long)]
     overwrite: bool,
@@ -1229,6 +1238,11 @@ impl AppInitTemplate {
 
 impl AppInitArgs {
     fn run(self) -> Result<AppInitOutput> {
+        if self.existing_repo && self.template != AppInitTemplate::SplitApp {
+            return Err(eyre!(
+                "--existing-repo is only supported with --template split-app"
+            ));
+        }
         match self.template {
             AppInitTemplate::SingleApi => self.run_single_api(),
             AppInitTemplate::SplitApp => self.run_split_app(),
@@ -1244,7 +1258,9 @@ impl AppInitArgs {
         })?;
 
         let app_name = normalized_service_label(&self.app_name);
-        let public_url = format!("https://{app_name}.sora");
+        let host = self.resolve_public_host(&app_name)?;
+        let public_url = format!("https://{host}");
+        let static_site_dist_dir = self.resolve_static_site_dist_dir("web/dist")?;
         let manifest_path = self.output_dir.join("app_manifest.json");
         ensure_can_write(&manifest_path, self.overwrite)?;
 
@@ -1276,7 +1292,7 @@ impl AppInitArgs {
         service.service_name = api_service_name.clone();
         service.service_version = self.app_version;
         service.route = Some(SoraRouteTargetV1 {
-            host: format!("{app_name}.sora"),
+            host: host.clone(),
             path_prefix: "/api".to_owned(),
             service_port: NonZeroU16::new(8787).expect("nonzero literal"),
             visibility: SoraRouteVisibilityV1::Public,
@@ -1313,7 +1329,7 @@ impl AppInitArgs {
             app_name: self.app_name,
             public_url: public_url.clone(),
             static_site: Some(SoracloudAppStaticSiteV1 {
-                dist_dir: "web/dist".to_owned(),
+                dist_dir: static_site_dist_dir,
                 mount_path: "/".to_owned(),
                 publish_mode: APP_STATIC_SITE_PUBLISH_MODE_ROOT_BINDING.to_owned(),
                 api_base_path: Some("/api".to_owned()),
@@ -1352,8 +1368,10 @@ impl AppInitArgs {
         })?;
 
         let app_name = normalized_service_label(&self.app_name);
-        let host = format!("{app_name}.sora");
+        let host = self.resolve_public_host(&app_name)?;
         let public_url = format!("https://{host}");
+        let static_site_dist_dir = self.resolve_static_site_dist_dir("frontend/dist")?;
+        let existing_repo = self.existing_repo;
         let manifest_path = self.output_dir.join("app_manifest.json");
         ensure_can_write(&manifest_path, self.overwrite)?;
 
@@ -1385,7 +1403,7 @@ impl AppInitArgs {
             app_name: self.app_name.clone(),
             public_url: public_url.clone(),
             static_site: Some(SoracloudAppStaticSiteV1 {
-                dist_dir: "frontend/dist".to_owned(),
+                dist_dir: static_site_dist_dir,
                 mount_path: "/".to_owned(),
                 publish_mode: APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY.to_owned(),
                 api_base_path: Some("/api".to_owned()),
@@ -1418,8 +1436,12 @@ impl AppInitArgs {
         };
         manifest.validate()?;
         write_json(&manifest_path, &manifest)?;
-        let template_artifacts =
-            scaffold_split_app_template(&self.output_dir, &self.app_name, self.overwrite)?;
+        let template_artifacts = scaffold_split_app_template(
+            &self.output_dir,
+            &self.app_name,
+            self.overwrite,
+            existing_repo,
+        )?;
 
         Ok(AppInitOutput {
             template: self.template.as_str().to_owned(),
@@ -1433,6 +1455,33 @@ impl AppInitArgs {
             ],
             template_artifacts,
         })
+    }
+
+    fn resolve_public_host(&self, default_host: &str) -> Result<String> {
+        let Some(host) = self.public_host.as_deref() else {
+            return Ok(format!("{default_host}.sora"));
+        };
+        let host = host.trim();
+        if host.is_empty() {
+            return Err(eyre!("--public-host must not be empty"));
+        }
+        if host.contains("://") || host.contains('/') {
+            return Err(eyre!(
+                "--public-host must be a hostname only, got `{host}`"
+            ));
+        }
+        Ok(host.to_owned())
+    }
+
+    fn resolve_static_site_dist_dir(&self, default_dist_dir: &str) -> Result<String> {
+        let Some(dist_dir) = self.static_site_dist_dir.as_deref() else {
+            return Ok(default_dist_dir.to_owned());
+        };
+        let dist_dir = dist_dir.trim();
+        if dist_dir.is_empty() {
+            return Err(eyre!("--static-site-dist-dir must not be empty"));
+        }
+        Ok(dist_dir.to_owned())
     }
 }
 
@@ -15776,7 +15825,12 @@ fn scaffold_split_app_template(
     output_dir: &Path,
     app_name: &str,
     overwrite: bool,
+    existing_repo: bool,
 ) -> Result<Vec<String>> {
+    if existing_repo {
+        return scaffold_split_app_existing_repo_template(output_dir, app_name, overwrite);
+    }
+
     let frontend_dir = output_dir.join("frontend");
     let live_dir = output_dir.join("services").join("live");
     let vault_dir = output_dir.join("services").join("vault");
@@ -15861,6 +15915,33 @@ fn scaffold_split_app_template(
         (
             output_dir.join("README.md"),
             split_app_readme(app_name, &package_name),
+        ),
+    ];
+    write_template_files(files, overwrite)
+}
+
+fn scaffold_split_app_existing_repo_template(
+    output_dir: &Path,
+    app_name: &str,
+    overwrite: bool,
+) -> Result<Vec<String>> {
+    let files = vec![
+        (
+            output_dir.join("build-and-sync.sh"),
+            split_app_existing_repo_build_and_sync_sh(),
+        ),
+        (output_dir.join("doctor.sh"), split_app_doctor_sh()),
+        (output_dir.join("release.sh"), split_app_release_sh()),
+        (output_dir.join("deploy.sh"), split_app_deploy_sh()),
+        (output_dir.join("upgrade.sh"), split_app_upgrade_sh()),
+        (
+            output_dir.join(".gitignore"),
+            "services/live/build/\nservices/live/tmp/\nservices/vault/build/\nservices/vault/tmp/\n"
+                .to_owned(),
+        ),
+        (
+            output_dir.join("README.md"),
+            split_app_existing_repo_readme(app_name),
         ),
     ];
     write_template_files(files, overwrite)
@@ -19848,6 +19929,26 @@ NPM_BIN="${NPM_BIN:-npm}"
     .replace("{prelude}", prelude)
 }
 
+fn split_app_existing_repo_build_and_sync_sh() -> String {
+    let prelude = iroha_shell_command_prelude();
+    r#"#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+{prelude}
+
+cat >&2 <<'EOF'
+split-app existing-repo scaffold: replace build-and-sync.sh with your real
+frontend/live/vault build pipeline. The default implementation only refreshes
+manifest hashes for artifacts that already exist at the paths referenced by
+app_manifest.json.
+EOF
+
+exec "${IROHA_CMD[@]}" app soracloud sync-manifests --app-manifest "$SCRIPT_DIR/app_manifest.json"
+"#
+    .replace("{prelude}", prelude)
+}
+
 fn split_app_doctor_sh() -> String {
     let prelude = iroha_shell_command_prelude();
     r#"#!/usr/bin/env bash
@@ -20097,6 +20198,48 @@ The generated API origin is `https://{package_name}.sora`, and the frontend is
 served from the published `cid_gateway_url` under
 `https://{package_name}.sora/sorafs/cid/...` while both services continue to
 share `/api` on the host origin.
+"#
+    )
+}
+
+fn split_app_existing_repo_readme(app_name: &str) -> String {
+    format!(
+        r#"# {app_name} Split App Existing-Repo Template
+
+This template is for app repos that already own their frontend and service
+source trees.
+
+It provides:
+
+- `app_manifest.json` wiring the static site, live service, and vault service
+- `services/live/*.json` and `services/vault/*.json` control-plane manifests
+- `build-and-sync.sh`, `doctor.sh`, `release.sh`, `deploy.sh`, and `upgrade.sh`
+- `.gitignore` entries for the expected service build outputs
+
+It intentionally does not generate starter source under `frontend/`,
+`services/live/app/`, or `services/vault/contract/`.
+
+## What you need to replace
+
+- point `app_manifest.json` at your real static-site dist directory if it is not
+  already correct
+- replace `build-and-sync.sh` with the commands that build your frontend, live
+  bundle, and vault bytecode before calling `iroha app soracloud sync-manifests`
+- add your own local-dev scripts if you want a one-command development entrypoint
+
+## Release flow
+
+```bash
+./doctor.sh
+TORII_URL=http://127.0.0.1:8080 ./release.sh
+TORII_URL=http://127.0.0.1:8080 ./deploy.sh
+TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
+```
+
+The root scripts resolve `IROHA_CLI_BIN`, `IROHA_BIN`,
+`IROHA_CARGO_TARGET_DIR/.../iroha`, `CARGO_TARGET_DIR/.../iroha`,
+`IROHA_MANIFEST_PATH`, and finally `PATH` `iroha`, so the workspace can target
+a local `iroha_cli` checkout without requiring a globally installed wrapper.
 "#
     )
 }
@@ -26491,6 +26634,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SingleApi,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -27241,6 +27387,9 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/upgrade-workspace-args.txt"
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SingleApi,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -27467,6 +27616,9 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/upgrade-workspace-args.txt"
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SingleApi,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -27614,6 +27766,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -27986,6 +28141,159 @@ main().catch((error) => {
     }
 
     #[test]
+    fn app_init_split_app_existing_repo_template_omits_starter_sources() {
+        let dir = temp_dir("split_app_existing_repo_template");
+        let output = AppInitArgs {
+            output_dir: dir.clone(),
+            app_name: "travel_ops".to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template: AppInitTemplate::SplitApp,
+            existing_repo: true,
+            public_host: None,
+            static_site_dist_dir: None,
+            overwrite: false,
+        }
+        .run()
+        .expect("split-app existing-repo init should succeed");
+
+        assert_eq!(output.template, "split-app");
+        assert!(dir.join("app_manifest.json").exists());
+        assert!(dir.join("services/live/container_manifest.json").exists());
+        assert!(dir.join("services/live/service_manifest.json").exists());
+        assert!(dir.join("services/vault/container_manifest.json").exists());
+        assert!(dir.join("services/vault/service_manifest.json").exists());
+        assert!(dir.join("build-and-sync.sh").exists());
+        assert!(dir.join("doctor.sh").exists());
+        assert!(dir.join("release.sh").exists());
+        assert!(dir.join("deploy.sh").exists());
+        assert!(dir.join("upgrade.sh").exists());
+        assert!(dir.join("README.md").exists());
+        assert!(!dir.join("frontend").exists());
+        assert!(!dir.join("local-dev.sh").exists());
+        assert!(!dir.join("services/live/app/server.mjs").exists());
+        assert!(!dir.join("services/live/dev.sh").exists());
+        assert!(!dir.join("services/live/build.sh").exists());
+        assert!(!dir.join("services/vault/contract/vault_api.ko").exists());
+        assert!(!dir.join("services/vault/dev-server.mjs").exists());
+        assert!(!dir.join("services/vault/dev.sh").exists());
+        assert!(!dir.join("services/vault/build.sh").exists());
+        assert!(!dir.join("services/vault/verify-build.sh").exists());
+
+        let manifest: SoracloudAppManifestV1 =
+            load_json(&dir.join("app_manifest.json")).expect("app manifest");
+        assert_eq!(
+            manifest
+                .static_site
+                .as_ref()
+                .map(|site| site.dist_dir.as_str()),
+            Some("frontend/dist")
+        );
+        assert_eq!(
+            manifest.services.len(),
+            2,
+            "existing-repo mode must still wire both services into the app manifest"
+        );
+
+        let build_and_sync_sh =
+            fs::read_to_string(dir.join("build-and-sync.sh")).expect("read build-and-sync.sh");
+        assert!(build_and_sync_sh.contains("replace build-and-sync.sh with your real"));
+        assert!(build_and_sync_sh.contains("app soracloud sync-manifests"));
+        assert!(!build_and_sync_sh.contains("npm install"));
+        assert!(!build_and_sync_sh.contains("services/live"));
+        assert!(!build_and_sync_sh.contains("services/vault"));
+
+        let app_readme = fs::read_to_string(dir.join("README.md")).expect("read app readme");
+        assert!(app_readme.contains("Existing-Repo Template"));
+        assert!(app_readme.contains("does not generate starter source"));
+        assert!(app_readme.contains("replace `build-and-sync.sh`"));
+        assert!(!app_readme.contains("./local-dev.sh"));
+
+        if bash_available() {
+            run_bash_syntax_check(&dir.join("build-and-sync.sh"));
+            run_bash_syntax_check(&dir.join("doctor.sh"));
+            run_bash_syntax_check(&dir.join("release.sh"));
+            run_bash_syntax_check(&dir.join("deploy.sh"));
+            run_bash_syntax_check(&dir.join("upgrade.sh"));
+        }
+    }
+
+    #[test]
+    fn app_init_existing_repo_rejects_non_split_templates() {
+        let dir = temp_dir("single_api_existing_repo_template");
+        let err = AppInitArgs {
+            output_dir: dir,
+            app_name: "travel_ops".to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template: AppInitTemplate::SingleApi,
+            existing_repo: true,
+            public_host: None,
+            static_site_dist_dir: None,
+            overwrite: false,
+        }
+        .run()
+        .expect_err("existing-repo should be rejected for single-api");
+        assert!(
+            err.to_string()
+                .contains("--existing-repo is only supported with --template split-app")
+        );
+    }
+
+    #[test]
+    fn app_init_split_app_template_accepts_public_host_and_dist_dir_overrides() {
+        let dir = temp_dir("split_app_template_overrides");
+        let output = AppInitArgs {
+            output_dir: dir.clone(),
+            app_name: "hayahi".to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: Some("taira.sora.org".to_owned()),
+            static_site_dist_dir: Some("../../apps/web/dist".to_owned()),
+            overwrite: false,
+        }
+        .run()
+        .expect("split-app init with overrides should succeed");
+
+        assert_eq!(output.public_url, "https://taira.sora.org");
+
+        let manifest: SoracloudAppManifestV1 =
+            load_json(&dir.join("app_manifest.json")).expect("app manifest");
+        assert_eq!(manifest.public_url, "https://taira.sora.org");
+        assert_eq!(
+            manifest
+                .static_site
+                .as_ref()
+                .map(|site| site.dist_dir.as_str()),
+            Some("../../apps/web/dist")
+        );
+
+        let live_service: SoraServiceManifestV1 =
+            load_json(&dir.join("services/live/service_manifest.json")).expect("live service");
+        assert_eq!(
+            live_service.route.as_ref().map(|route| route.host.as_str()),
+            Some("taira.sora.org")
+        );
+
+        let vault_container: SoraContainerManifestV1 =
+            load_json(&dir.join("services/vault/container_manifest.json"))
+                .expect("vault container");
+        assert_eq!(
+            vault_container
+                .env
+                .get("PUBLIC_BASE_URL")
+                .map(String::as_str),
+            Some("https://taira.sora.org")
+        );
+
+        let vault_service: SoraServiceManifestV1 =
+            load_json(&dir.join("services/vault/service_manifest.json")).expect("vault service");
+        assert_eq!(
+            vault_service.route.as_ref().map(|route| route.host.as_str()),
+            Some("taira.sora.org")
+        );
+    }
+
+    #[test]
     fn app_local_plan_split_app_reports_mixed_routes_and_cid_gateway() {
         let dir = temp_dir("split_app_local_plan");
         AppInitArgs {
@@ -27993,6 +28301,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -28136,6 +28447,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SingleApi,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -28200,6 +28514,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -28274,6 +28591,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SingleApi,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -28332,6 +28652,9 @@ printf 'ok' > "$SCRIPT_DIR/local-dev-ran.txt"
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SingleApi,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -28377,6 +28700,9 @@ exit 130
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -28445,6 +28771,9 @@ exit 130
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SingleApi,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -28502,6 +28831,9 @@ printf 'ok' > "$SCRIPT_DIR/build-and-sync-ran.txt"
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -28555,6 +28887,9 @@ printf 'ok' > "$SCRIPT_DIR/build-and-sync-ran.txt"
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SingleApi,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -28634,6 +28969,9 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-release-workspace-args.txt"
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -28706,6 +29044,9 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-release-workspace-args.txt"
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SingleApi,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -28789,6 +29130,9 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-upgrade-workspace-args.txt"
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -28859,6 +29203,9 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-upgrade-workspace-args.txt"
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -28912,6 +29259,9 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-upgrade-workspace-args.txt"
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -29020,6 +29370,9 @@ printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -29051,6 +29404,9 @@ printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -29256,6 +29612,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -29442,6 +29801,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -30041,6 +30403,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -30123,6 +30488,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SingleApi,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -30174,6 +30542,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -30393,6 +30764,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -30491,6 +30865,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SingleApi,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -30585,6 +30962,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SingleApi,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -30792,6 +31172,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -30830,6 +31213,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
@@ -31051,6 +31437,9 @@ main().catch((error) => {
             app_name: "travel_ops".to_owned(),
             app_version: "1.0.0".to_owned(),
             template: AppInitTemplate::SplitApp,
+            existing_repo: false,
+            public_host: None,
+            static_site_dist_dir: None,
             overwrite: false,
         }
         .run()
