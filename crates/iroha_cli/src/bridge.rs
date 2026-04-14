@@ -973,8 +973,12 @@ mod tests {
         let rendered = ctx.printed_lines.join("\n");
         assert!(rendered.contains("sccp capabilities:"));
         assert!(rendered.contains("proof_family=stark-fri-v1"));
-        assert!(rendered.contains("ton(4:ton_raw:ton-contract-v1:disabled)"));
-        assert!(rendered.contains("eth(1:evm_hex:evm-secp256k1-keccak-v1:disabled)"));
+        assert!(rendered.contains(
+            "ton(4:ton_raw:ton-contract-v1:TonContractNativeRecursive/verifier_live=false/anchors_live=false:disabled)"
+        ));
+        assert!(rendered.contains(
+            "eth(1:evm_hex:evm-secp256k1-keccak-v1:EvmGroth16Bn254Adapter/verifier_live=false/anchors_live=false:disabled)"
+        ));
     }
 
     #[test]
