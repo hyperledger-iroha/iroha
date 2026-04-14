@@ -24,7 +24,7 @@ public final class AccountIdLiteralTests {
   public void rejectsDomainSuffixedLiterals() throws Exception {
     final String address = sampleI105(0x33);
     try {
-      AccountIdLiteral.requireCanonicalI105Address(address + "@hbl.dataspace", "accountId");
+      AccountIdLiteral.requireCanonicalI105Address(address + "@banka.dataspace", "accountId");
       throw new AssertionError("expected IllegalArgumentException");
     } catch (final IllegalArgumentException expected) {
       assert expected.getMessage().contains("without @domain")

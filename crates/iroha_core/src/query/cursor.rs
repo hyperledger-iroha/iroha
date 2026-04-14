@@ -207,8 +207,8 @@ mod tests {
 
     #[test]
     fn empty_selector_projects_full_items() {
-        let d1: DomainId = "wonderland".parse().unwrap();
-        let d2: DomainId = "underland".parse().unwrap();
+        let d1: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let d2: DomainId = DomainId::try_new("underland", "universal").unwrap();
         let items = vec![d1.clone(), d2.clone()];
 
         let mut it = ErasedQueryIterator::new(
@@ -236,9 +236,9 @@ mod tests {
 
     #[test]
     fn cursor_mismatch_and_done_paths() {
-        let d1: DomainId = "alpha".parse().unwrap();
-        let d2: DomainId = "beta".parse().unwrap();
-        let d3: DomainId = "gamma".parse().unwrap();
+        let d1: DomainId = DomainId::try_new("alpha", "universal").unwrap();
+        let d2: DomainId = DomainId::try_new("beta", "universal").unwrap();
+        let d3: DomainId = DomainId::try_new("gamma", "universal").unwrap();
         let items = vec![d1, d2, d3];
 
         let mut it = ErasedQueryIterator::new(

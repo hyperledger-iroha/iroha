@@ -88,7 +88,7 @@ use sorafs_manifest::{
 pub const IZANAMI_BASE_SEED: &str = "izanami-chaos";
 use tokio::sync::Mutex;
 
-use crate::config::{NexusProfile, WorkloadProfile};
+use crate::config::WorkloadProfile;
 use crate::smart_contracts;
 
 /// Record describing an account and its signing material.
@@ -221,16 +221,6 @@ fn nexus_fee_seed_amount() -> Numeric {
     1_000_000_u64.into()
 }
 
-fn nexus_fee_asset_is_preseeded(fee_asset: &AssetDefinitionId) -> bool {
-    static SEEDED_FEE_ASSET: std::sync::OnceLock<AssetDefinitionId> = std::sync::OnceLock::new();
-    let seeded_fee_asset = SEEDED_FEE_ASSET.get_or_init(|| {
-        NexusProfile::sora_defaults()
-            .expect("embedded nexus profile should load")
-            .fee_asset_id
-    });
-    fee_asset == seeded_fee_asset
-}
-
 fn account_from_record(record: &AccountRecord, _domain: &DomainId) -> NewAccount {
     let builder = Account::new(record.id.clone());
     if let Some(uaid) = record.uaid {
@@ -303,9 +293,8 @@ pub fn prepare_state(
     allow_contract_deploy_in_stable: bool,
 ) -> Result<PreparedChaos> {
     let effective_accounts = account_count.max(3);
-    let base_domain: DomainId = "chaosnet"
-        .parse()
-        .map_err(|_| eyre!("invalid base domain"))?;
+    let base_domain =
+        DomainId::try_new("chaosnet", "universal").map_err(|_| eyre!("invalid base domain"))?;
     let treasury_key = KeyPair::random();
     let treasury_id = AccountId::new(treasury_key.public_key().clone());
     let treasury = AccountRecord {
@@ -397,14 +386,11 @@ pub fn prepare_state(
     let mut nexus_staking = None;
     let mut npos_bootstrap_stake = None;
     if nexus.is_some() {
-        let nexus_domain: DomainId = "nexus"
-            .parse()
+        let nexus_domain = DomainId::try_new("nexus", "universal")
             .map_err(|_| eyre!("failed to parse nexus domain id"))?;
-        let ivm_domain: DomainId = "ivm"
-            .parse()
+        let ivm_domain = DomainId::try_new("ivm", "universal")
             .map_err(|_| eyre!("failed to parse ivm domain id"))?;
-        let universal_domain: DomainId = "universal"
-            .parse()
+        let universal_domain = DomainId::try_new("universal", "universal")
             .map_err(|_| eyre!("failed to parse universal domain id"))?;
         let gas_account_id = nexus_gas_account_id();
         let gas_label: Name = "gas"
@@ -430,7 +416,6 @@ pub fn prepare_state(
                     .parse()
                     .expect("default nexus fee asset id should parse")
             });
-        let fee_asset_preseeded = nexus_fee_asset_is_preseeded(&fee_asset);
         let stake_amount_value = SumeragiNposParameters::default().min_self_bond();
         let bootstrap_lane_count = u64::try_from(bootstrap_public_lanes.len()).unwrap_or(u64::MAX);
         let total_bootstrap_stake_value = stake_amount_value.saturating_mul(bootstrap_lane_count);
@@ -443,7 +428,13 @@ pub fn prepare_state(
         nexus_genesis.push(InstructionBox::from(Register::domain(Domain::new(
             ivm_domain.clone(),
         ))));
-        if fee_asset.domain() != stake_asset.domain() {
+        let needs_universal_domain = fee_asset
+            .try_domain()
+            .zip(stake_asset.try_domain())
+            .map_or(true, |(fee_domain, stake_domain)| {
+                fee_domain != stake_domain
+            });
+        if needs_universal_domain {
             nexus_genesis.push(InstructionBox::from(Register::domain(Domain::new(
                 universal_domain,
             ))));
@@ -452,7 +443,7 @@ pub fn prepare_state(
         nexus_genesis.push(InstructionBox::from(Register::asset_definition(
             AssetDefinition::numeric(stake_asset.clone()).with_name("Nexus Stake".to_owned()),
         )));
-        if fee_asset != stake_asset && !fee_asset_preseeded {
+        if fee_asset != stake_asset {
             nexus_genesis.push(InstructionBox::from(Register::asset_definition(
                 AssetDefinition::numeric(fee_asset.clone()).with_name("Nexus Fee".to_owned()),
             )));
@@ -637,11 +628,18 @@ pub fn prepare_state(
         )));
     }
     let initial_float: Numeric = 1_000_000_000_u64.into();
+    let initial_user_balance: Numeric = 1_000_u64.into();
     let treasury_asset_id = AssetId::new(asset_numeric_id.clone(), treasury.id.clone());
     genesis_tx.push(InstructionBox::from(Mint::asset_numeric(
         initial_float,
         treasury_asset_id.clone(),
     )));
+    for account in &users {
+        genesis_tx.push(InstructionBox::from(Mint::asset_numeric(
+            initial_user_balance.clone(),
+            AssetId::new(asset_numeric_id.clone(), account.id.clone()),
+        )));
+    }
 
     let mut state = ChaosState::new(
         base_domain.clone(),
@@ -679,17 +677,18 @@ pub fn prepare_state(
         }
     }
     let mut recipes = match workload_profile {
-        WorkloadProfile::Stable => BASE_RECIPES_STABLE.to_vec(),
+        WorkloadProfile::Stable => {
+            let mut recipes = BASE_RECIPES_STABLE.to_vec();
+            if allow_contract_deploy_in_stable {
+                recipes.extend([
+                    RecipeKind::DeployIvmContract,
+                    RecipeKind::DeployKotodamaContract,
+                ]);
+            }
+            recipes
+        }
         WorkloadProfile::Chaos => BASE_RECIPES_CHAOS.to_vec(),
     };
-    if matches!(workload_profile, WorkloadProfile::Stable) && !allow_contract_deploy_in_stable {
-        recipes.retain(|kind| {
-            !matches!(
-                kind,
-                RecipeKind::DeployIvmContract | RecipeKind::DeployKotodamaContract
-            )
-        });
-    }
     if nexus.is_some() {
         let extra = match workload_profile {
             WorkloadProfile::Stable => NEXUS_RECIPES_STABLE,
@@ -778,7 +777,6 @@ impl WorkloadEngine {
 
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum RecipeKind {
-    RegisterDomain,
     DuplicateDomain,
     RegisterAccount,
     DuplicateAccount,
@@ -826,32 +824,11 @@ pub(crate) enum RecipeKind {
     CompleteReplicationOrder,
 }
 
-// Stable runs favor deterministic recipes; contract deployment can be enabled via
-// `allow_contract_deploy_in_stable`.
-const BASE_RECIPES_STABLE: &[RecipeKind] = &[
-    RecipeKind::RegisterDomain,
-    RecipeKind::RegisterNft,
-    RecipeKind::MintAsset,
-    RecipeKind::TransferAsset,
-    RecipeKind::TransferNft,
-    RecipeKind::BurnAsset,
-    RecipeKind::SetAccountKeyValue,
-    RecipeKind::RemoveAccountKeyValue,
-    RecipeKind::SetDomainKeyValue,
-    RecipeKind::RemoveDomainKeyValue,
-    RecipeKind::SetAssetDefinitionKeyValue,
-    RecipeKind::RemoveAssetDefinitionKeyValue,
-    RecipeKind::SetAssetInstanceKeyValue,
-    RecipeKind::RemoveAssetInstanceKeyValue,
-    RecipeKind::RegisterRole,
-    RecipeKind::MintTriggerRepetitions,
-    RecipeKind::BurnTriggerRepetitions,
-    RecipeKind::DeployIvmContract,
-    RecipeKind::DeployKotodamaContract,
-];
+// Stable runs default to the preallocated hot path only. Contract deployment remains an
+// explicit opt-in escape hatch for targeted smoke coverage.
+const BASE_RECIPES_STABLE: &[RecipeKind] = &[RecipeKind::TransferAsset];
 
 const BASE_RECIPES_CHAOS: &[RecipeKind] = &[
-    RecipeKind::RegisterDomain,
     RecipeKind::RegisterAssetDefinition,
     RecipeKind::RegisterAccount,
     RecipeKind::RegisterUaidAccount,
@@ -975,7 +952,6 @@ pub(crate) enum RepeatableTriggerState {
 
 #[derive(Debug, Default, Clone)]
 struct ChaosCounters {
-    domain: u64,
     account: u64,
     uaid: u64,
     trigger: u64,
@@ -1161,7 +1137,6 @@ impl ChaosState {
 
     fn produce_plan(&mut self, kind: RecipeKind, rng: &mut StdRng) -> Result<TransactionPlan> {
         match kind {
-            RecipeKind::RegisterDomain => self.plan_register_domain(rng),
             RecipeKind::DuplicateDomain => Ok(self.plan_duplicate_domain()),
             RecipeKind::RegisterAccount => Ok(self.plan_register_account()),
             RecipeKind::DuplicateAccount => self.plan_duplicate_account(rng),
@@ -1210,21 +1185,21 @@ impl ChaosState {
         }
     }
 
+    /// Expose plan generation to sibling test modules without widening production visibility.
+    #[cfg(test)]
+    pub(crate) fn produce_plan_for_test(
+        &mut self,
+        kind: RecipeKind,
+        rng: &mut StdRng,
+    ) -> Result<TransactionPlan> {
+        self.produce_plan(kind, rng)
+    }
+
+    #[cfg(test)]
     fn plan_register_domain(&mut self, _rng: &mut StdRng) -> Result<TransactionPlan> {
-        let suffix = self.bump_domain();
-        let domain_id: DomainId = format!("chaos_child_{suffix}")
-            .parse()
-            .map_err(|_| eyre!("failed to build new domain id"))?;
-        self.created_domains.insert(domain_id.clone());
-        Ok(TransactionPlan {
-            state_updates: Vec::new(),
-            label: "register_domain",
-            instructions: vec![InstructionBox::from(Register::domain(Domain::new(
-                domain_id,
-            )))],
-            signer: self.treasury.clone(),
-            expect_success: true,
-        })
+        Err(eyre!(
+            "runtime domain registration requires an active SNS domain-name lease; Izanami does not synthesize leases"
+        ))
     }
 
     fn plan_duplicate_domain(&mut self) -> TransactionPlan {
@@ -1309,20 +1284,13 @@ impl ChaosState {
         let receiver = self.random_user(rng)?.clone();
         let amount: Numeric = rng.random_range(1_u32..=50_u32).into();
         let treasury_asset = AssetId::new(self.asset_numeric.clone(), self.treasury.id.clone());
-        let receiver_asset = AssetId::new(self.asset_numeric.clone(), receiver.id.clone());
-        let instructions = vec![
-            InstructionBox::from(Mint::asset_numeric(amount.clone(), treasury_asset.clone())),
-            InstructionBox::from(Transfer::asset_numeric(
-                treasury_asset.clone(),
-                amount,
-                receiver.id.clone(),
-            )),
-        ];
+        let instructions = vec![InstructionBox::from(Transfer::asset_numeric(
+            treasury_asset,
+            amount,
+            receiver.id.clone(),
+        ))];
         Ok(TransactionPlan {
-            state_updates: vec![
-                PlanUpdate::TrackAssetInstance(treasury_asset.clone()),
-                PlanUpdate::TrackAssetInstance(receiver_asset.clone()),
-            ],
+            state_updates: Vec::new(),
             label: "transfer_asset",
             instructions,
             signer: self.treasury.clone(),
@@ -1619,8 +1587,8 @@ impl ChaosState {
 
     fn plan_register_nft(&mut self, _rng: &mut StdRng) -> Result<TransactionPlan> {
         let suffix = self.bump_nft();
-        let domain_name = self.base_domain.name().to_string();
-        let nft_id: NftId = format!("chaos_nft_{suffix}${domain_name}")
+        let domain_id = self.base_domain.to_string();
+        let nft_id: NftId = format!("chaos_nft_{suffix}${domain_id}")
             .parse()
             .map_err(|_| eyre!("failed to parse nft id"))?;
         let nft = Nft::new(nft_id.clone(), Metadata::default());
@@ -1637,8 +1605,8 @@ impl ChaosState {
 
     fn plan_transfer_nft(&mut self, rng: &mut StdRng) -> Result<TransactionPlan> {
         let suffix = self.bump_nft();
-        let domain_name = self.base_domain.name().to_string();
-        let nft_id: NftId = format!("chaos_nft_{suffix}${domain_name}")
+        let domain_id = self.base_domain.to_string();
+        let nft_id: NftId = format!("chaos_nft_{suffix}${domain_id}")
             .parse()
             .map_err(|_| eyre!("failed to parse nft id"))?;
         let receiver = self.random_user_except(rng, &self.treasury.id)?;
@@ -2947,12 +2915,6 @@ impl ChaosState {
         }
     }
 
-    fn bump_domain(&mut self) -> u64 {
-        let value = self.counters.domain;
-        self.counters.domain += 1;
-        value
-    }
-
     fn bump_account(&mut self) -> u64 {
         let value = self.counters.account;
         self.counters.account += 1;
@@ -3076,7 +3038,7 @@ mod tests {
         assert!(!prepared.genesis.is_empty());
         assert!(!prepared.genesis[0].is_empty());
         assert!(prepared.state.users.len() >= 3);
-        let expected: DomainId = "chaosnet".parse().unwrap();
+        let expected: DomainId = DomainId::parse_fully_qualified("chaosnet.universal").unwrap();
         assert_eq!(prepared.state.base_domain(), &expected);
     }
 
@@ -3417,17 +3379,13 @@ mod tests {
     }
 
     #[test]
-    fn base_recipes_include_asset_instance_metadata() {
-        assert!(
-            BASE_RECIPES_STABLE
-                .iter()
-                .any(|kind| matches!(kind, RecipeKind::SetAssetInstanceKeyValue))
-        );
-        assert!(
-            BASE_RECIPES_STABLE
-                .iter()
-                .any(|kind| matches!(kind, RecipeKind::RemoveAssetInstanceKeyValue))
-        );
+    fn stable_recipes_are_preseeded_transfer_only() {
+        assert_eq!(BASE_RECIPES_STABLE.len(), 1);
+        assert!(matches!(BASE_RECIPES_STABLE[0], RecipeKind::TransferAsset));
+    }
+
+    #[test]
+    fn chaos_recipes_include_stateful_paths() {
         assert!(
             BASE_RECIPES_CHAOS
                 .iter()
@@ -3439,29 +3397,37 @@ mod tests {
                 .any(|kind| matches!(kind, RecipeKind::RemoveAssetInstanceKeyValue))
         );
         assert!(
-            BASE_RECIPES_STABLE
+            BASE_RECIPES_CHAOS
                 .iter()
                 .any(|kind| matches!(kind, RecipeKind::MintTriggerRepetitions))
         );
         assert!(
-            BASE_RECIPES_STABLE
+            BASE_RECIPES_CHAOS
                 .iter()
                 .any(|kind| matches!(kind, RecipeKind::BurnTriggerRepetitions))
         );
         assert!(
-            BASE_RECIPES_STABLE
+            BASE_RECIPES_CHAOS
                 .iter()
                 .any(|kind| matches!(kind, RecipeKind::DeployIvmContract))
-        );
-        assert!(
-            BASE_RECIPES_STABLE
-                .iter()
-                .any(|kind| matches!(kind, RecipeKind::DeployKotodamaContract))
         );
         assert!(
             BASE_RECIPES_CHAOS
                 .iter()
                 .any(|kind| matches!(kind, RecipeKind::DeployKotodamaContract))
+        );
+    }
+
+    #[test]
+    fn register_domain_plan_is_disabled_under_sns_domain_model() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let err = state
+            .plan_register_domain(&mut StdRng::seed_from_u64(7))
+            .expect_err("runtime domain registration should require an external SNS lease");
+        assert!(
+            err.to_string().contains("SNS domain-name lease"),
+            "unexpected error: {err}"
         );
     }
 
@@ -4090,6 +4056,31 @@ mod tests {
         );
     }
 
+    #[test]
+    fn transfer_asset_plan_uses_preseeded_balances() {
+        let PreparedChaos { mut state, .. } =
+            prepare_state(3, None, None, WorkloadProfile::Stable, false).expect("state prepared");
+        let mut rng = StdRng::seed_from_u64(224);
+
+        let plan = state.plan_transfer_asset(&mut rng).expect("transfer asset");
+
+        assert!(plan.state_updates.is_empty());
+        assert_eq!(plan.instructions.len(), 1);
+        assert!(
+            plan.instructions[0]
+                .as_any()
+                .downcast_ref::<TransferBox>()
+                .is_some(),
+            "stable transfer path should submit only the transfer instruction"
+        );
+        assert!(
+            plan.instructions
+                .iter()
+                .all(|instruction| instruction.as_any().downcast_ref::<MintBox>().is_none()),
+            "stable transfer path should not mint during the measured hot path"
+        );
+    }
+
     #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn workload_record_result_applies_updates_on_success() {
         let PreparedChaos {
@@ -4695,16 +4686,7 @@ mod tests {
     }
 
     #[test]
-    fn default_nexus_fee_asset_is_marked_preseeded() {
-        let profile = NexusProfile::sora_defaults().expect("profile");
-        assert!(
-            nexus_fee_asset_is_preseeded(&profile.fee_asset_id),
-            "embedded Nexus fee asset should reuse the test-network preseeded fee asset"
-        );
-    }
-
-    #[test]
-    fn nexus_prepare_state_reuses_preseeded_fee_asset_definition() {
+    fn nexus_prepare_state_registers_fee_asset_definition() {
         let profile = NexusProfile::sora_defaults().expect("profile");
         let PreparedChaos { genesis, .. } =
             prepare_state(3, None, Some(&profile), WorkloadProfile::Stable, false)
@@ -4725,8 +4707,8 @@ mod tests {
             })
             .count();
         assert_eq!(
-            fee_registration_count, 0,
-            "prepare_state should not re-register the canonical test-network fee asset"
+            fee_registration_count, 1,
+            "prepare_state should register the fee asset definition before minting it"
         );
     }
 

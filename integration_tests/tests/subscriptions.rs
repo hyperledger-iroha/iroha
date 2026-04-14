@@ -179,13 +179,17 @@ async fn subscription_usage_arrears_billing_charges_usage_scenario(
         || async {
             let provider = ALICE_ID.clone();
             let subscriber = BOB_ID.clone();
-            let charge_def_id: AssetDefinitionId =
-                AssetDefinitionId::new("wonderland".parse()?, "usd".parse()?);
-            let plan_id: AssetDefinitionId =
-                AssetDefinitionId::new("wonderland".parse()?, "usage_plan".parse()?);
+            let charge_def_id: AssetDefinitionId = AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal")?,
+                "usd".parse()?,
+            );
+            let plan_id: AssetDefinitionId = AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal")?,
+                "usage_plan".parse()?,
+            );
             let billing_trigger_id: TriggerId = "usage_billing".parse()?;
             let usage_trigger_id: TriggerId = "usage_record".parse()?;
-            let nft_id: NftId = "subscription_usage$wonderland".parse()?;
+            let nft_id: NftId = "subscription_usage$wonderland.universal".parse()?;
             let unit_key: Name = "requests".parse()?;
             let period_ms = 2_000_u64;
             let retry_backoff_ms = 500_u64;
@@ -452,12 +456,16 @@ async fn subscription_fixed_advance_billing_charges_future_period_scenario(
         || async {
             let provider = ALICE_ID.clone();
             let subscriber = BOB_ID.clone();
-            let charge_def_id: AssetDefinitionId =
-                AssetDefinitionId::new("wonderland".parse()?, "usd_fixed".parse()?);
-            let plan_id: AssetDefinitionId =
-                AssetDefinitionId::new("wonderland".parse()?, "fixed_plan".parse()?);
+            let charge_def_id: AssetDefinitionId = AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal")?,
+                "usd_fixed".parse()?,
+            );
+            let plan_id: AssetDefinitionId = AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal")?,
+                "fixed_plan".parse()?,
+            );
             let billing_trigger_id: TriggerId = "fixed_billing".parse()?;
-            let nft_id: NftId = "subscription_fixed$wonderland".parse()?;
+            let nft_id: NftId = "subscription_fixed$wonderland.universal".parse()?;
             let period_ms = 3_000_u64;
             let (start_time, start_ms) = schedule_start(&network);
 
@@ -667,12 +675,16 @@ async fn subscription_retry_grace_failure_marks_past_due_scenario(
         || async {
             let provider = ALICE_ID.clone();
             let subscriber = BOB_ID.clone();
-            let charge_def_id: AssetDefinitionId =
-                AssetDefinitionId::new("wonderland".parse()?, "usd_retry".parse()?);
-            let plan_id: AssetDefinitionId =
-                AssetDefinitionId::new("wonderland".parse()?, "retry_plan".parse()?);
+            let charge_def_id: AssetDefinitionId = AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal")?,
+                "usd_retry".parse()?,
+            );
+            let plan_id: AssetDefinitionId = AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal")?,
+                "retry_plan".parse()?,
+            );
             let billing_trigger_id: TriggerId = "retry_billing".parse()?;
-            let nft_id: NftId = "subscription_retry$wonderland".parse()?;
+            let nft_id: NftId = "subscription_retry$wonderland.universal".parse()?;
             let period_ms = 1_500_u64;
             let retry_backoff_ms = 750_u64;
             let (start_time, start_ms) = schedule_start(&network);

@@ -13959,7 +13959,7 @@ pub struct Snapshot {
 }
 
 /// User-level configuration container for the embedded Soracloud runtime manager.
-#[derive(Debug, Clone, ReadConfig, norito::JsonDeserialize)]
+#[derive(Debug, Clone, ReadConfig)]
 pub struct SoracloudRuntime {
     /// Root directory for node-local Soracloud runtime state.
     #[config(default = "PathBuf::from(defaults::soracloud_runtime::STATE_DIR)")]
@@ -13973,16 +13973,16 @@ pub struct SoracloudRuntime {
     #[config(default = "defaults::soracloud_runtime::HYDRATION_CONCURRENCY")]
     pub hydration_concurrency: NonZeroUsize,
     /// Cache budgets for hydrated Soracloud artifacts.
-    #[config(nested)]
+    #[config(default)]
     pub cache_budgets: SoracloudRuntimeCacheBudgets,
-    /// Deterministic `NativeProcess` hosting limits.
-    #[config(nested)]
-    pub native_process: SoracloudRuntimeNativeProcess,
+    /// Mutable Inrou microVM hosting limits.
+    #[config(default)]
+    pub inrou: SoracloudRuntimeInrou,
     /// Outbound egress policy for embedded runtimes.
-    #[config(nested)]
+    #[config(default)]
     pub egress: SoracloudRuntimeEgress,
     /// Hugging Face importer and inference-bridge settings.
-    #[config(nested)]
+    #[config(default)]
     pub hf: SoracloudRuntimeHuggingFace,
 }
 
@@ -13993,10 +13993,143 @@ impl SoracloudRuntime {
             reconcile_interval: self.reconcile_interval_ms.get().max(MIN_TIMER_INTERVAL),
             hydration_concurrency: self.hydration_concurrency,
             cache_budgets: self.cache_budgets.parse(),
-            native_process: self.native_process.parse(),
+            inrou: self.inrou.parse(),
             egress: self.egress.parse(),
             hf: self.hf.parse(),
         }
+    }
+}
+
+#[derive(Default)]
+struct SoracloudRuntimeFields {
+    state_dir: Option<WithOrigin<PathBuf>>,
+    reconcile_interval_ms: Option<DurationMs>,
+    hydration_concurrency: Option<NonZeroUsize>,
+    cache_budgets: Option<SoracloudRuntimeCacheBudgets>,
+    inrou: Option<SoracloudRuntimeInrou>,
+    egress: Option<SoracloudRuntimeEgress>,
+    hf: Option<SoracloudRuntimeHuggingFace>,
+}
+
+impl SoracloudRuntimeFields {
+    fn set_unique<T, F>(
+        slot: &mut Option<T>,
+        field: &'static str,
+        parser: &mut json::Parser<'_>,
+        parse: F,
+    ) -> ::core::result::Result<(), json::Error>
+    where
+        F: FnOnce(&mut json::Parser<'_>) -> ::core::result::Result<T, json::Error>,
+    {
+        if slot.is_some() {
+            return Err(json::Error::duplicate_field(field));
+        }
+        *slot = Some(parse(parser)?);
+        Ok(())
+    }
+
+    fn parse_field(
+        &mut self,
+        parser: &mut json::Parser<'_>,
+        key: &str,
+    ) -> ::core::result::Result<(), json::Error> {
+        match key {
+            "state_dir" => Self::set_unique(
+                &mut self.state_dir,
+                "state_dir",
+                parser,
+                <WithOrigin<PathBuf> as json::JsonDeserialize>::json_deserialize,
+            ),
+            "reconcile_interval_ms" => Self::set_unique(
+                &mut self.reconcile_interval_ms,
+                "reconcile_interval_ms",
+                parser,
+                <DurationMs as json::JsonDeserialize>::json_deserialize,
+            ),
+            "hydration_concurrency" => Self::set_unique(
+                &mut self.hydration_concurrency,
+                "hydration_concurrency",
+                parser,
+                <NonZeroUsize as json::JsonDeserialize>::json_deserialize,
+            ),
+            "cache_budgets" => Self::set_unique(
+                &mut self.cache_budgets,
+                "cache_budgets",
+                parser,
+                SoracloudRuntimeCacheBudgets::json_deserialize,
+            ),
+            "inrou" => Self::set_unique(
+                &mut self.inrou,
+                "inrou",
+                parser,
+                SoracloudRuntimeInrou::json_deserialize,
+            ),
+            "egress" => Self::set_unique(
+                &mut self.egress,
+                "egress",
+                parser,
+                SoracloudRuntimeEgress::json_deserialize,
+            ),
+            "hf" => Self::set_unique(
+                &mut self.hf,
+                "hf",
+                parser,
+                SoracloudRuntimeHuggingFace::json_deserialize,
+            ),
+            other => Err(json::Error::Message(format!("unknown field {other}"))),
+        }
+    }
+
+    fn finish(self) -> SoracloudRuntime {
+        SoracloudRuntime {
+            state_dir: self.state_dir.unwrap_or_else(|| {
+                WithOrigin::inline(PathBuf::from(defaults::soracloud_runtime::STATE_DIR))
+            }),
+            reconcile_interval_ms: self.reconcile_interval_ms.unwrap_or_else(|| {
+                DurationMs(std::time::Duration::from_millis(
+                    defaults::soracloud_runtime::RECONCILE_INTERVAL_MS,
+                ))
+            }),
+            hydration_concurrency: self
+                .hydration_concurrency
+                .unwrap_or(defaults::soracloud_runtime::HYDRATION_CONCURRENCY),
+            cache_budgets: self.cache_budgets.unwrap_or_default(),
+            inrou: self.inrou.unwrap_or_default(),
+            egress: self.egress.unwrap_or_default(),
+            hf: self.hf.unwrap_or_default(),
+        }
+    }
+}
+
+impl JsonDeserialize for SoracloudRuntime {
+    fn json_deserialize(
+        parser: &mut json::Parser<'_>,
+    ) -> ::core::result::Result<Self, json::Error> {
+        parser.skip_ws();
+        parser.expect(b'{')?;
+
+        let mut fields = SoracloudRuntimeFields::default();
+
+        loop {
+            parser.skip_ws();
+            if parser.try_consume_char(b'}')? {
+                break;
+            }
+
+            let key = parser.parse_key()?;
+            fields.parse_field(parser, key.as_str())?;
+
+            parser.skip_ws();
+            if parser.try_consume_char(b',')? {
+                continue;
+            }
+            if parser.try_consume_char(b'}')? {
+                break;
+            }
+            return Err(json::Error::Message("expected , or }".into()));
+        }
+
+        Ok(fields.finish())
     }
 }
 
@@ -14024,6 +14157,19 @@ pub struct SoracloudRuntimeCacheBudgets {
     pub model_weight_bytes: NonZeroU64,
 }
 
+impl Default for SoracloudRuntimeCacheBudgets {
+    fn default() -> Self {
+        Self {
+            bundle_bytes: defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES,
+            static_asset_bytes: defaults::soracloud_runtime::STATIC_ASSET_CACHE_BUDGET_BYTES,
+            journal_bytes: defaults::soracloud_runtime::JOURNAL_CACHE_BUDGET_BYTES,
+            checkpoint_bytes: defaults::soracloud_runtime::CHECKPOINT_CACHE_BUDGET_BYTES,
+            model_artifact_bytes: defaults::soracloud_runtime::MODEL_ARTIFACT_CACHE_BUDGET_BYTES,
+            model_weight_bytes: defaults::soracloud_runtime::MODEL_WEIGHT_CACHE_BUDGET_BYTES,
+        }
+    }
+}
+
 impl SoracloudRuntimeCacheBudgets {
     fn parse(self) -> actual::SoracloudRuntimeCacheBudgets {
         actual::SoracloudRuntimeCacheBudgets {
@@ -14037,48 +14183,47 @@ impl SoracloudRuntimeCacheBudgets {
     }
 }
 
-/// User-level deterministic `NativeProcess` resource ceilings.
+/// User-level mutable `Inrou` microVM ceilings.
 #[derive(Debug, Clone, Copy, ReadConfig, norito::JsonDeserialize)]
-pub struct SoracloudRuntimeNativeProcess {
-    /// Maximum number of deterministic native processes hosted concurrently.
-    #[config(default = "defaults::soracloud_runtime::NATIVE_PROCESS_MAX_CONCURRENT_PROCESSES")]
-    pub max_concurrent_processes: NonZeroUsize,
-    /// CPU budget in millicores per hosted process.
-    #[config(default = "defaults::soracloud_runtime::NATIVE_PROCESS_CPU_MILLIS")]
-    pub cpu_millis: NonZeroU32,
-    /// Memory budget in bytes per hosted process.
-    #[config(default = "defaults::soracloud_runtime::NATIVE_PROCESS_MEMORY_BYTES")]
-    pub memory_bytes: NonZeroU64,
-    /// Ephemeral filesystem budget in bytes per hosted process.
-    #[config(default = "defaults::soracloud_runtime::NATIVE_PROCESS_EPHEMERAL_STORAGE_BYTES")]
-    pub ephemeral_storage_bytes: NonZeroU64,
-    /// Open-file ceiling per hosted process.
-    #[config(default = "defaults::soracloud_runtime::NATIVE_PROCESS_MAX_OPEN_FILES")]
-    pub max_open_files: NonZeroU32,
-    /// Task/thread ceiling per hosted process.
-    #[config(default = "defaults::soracloud_runtime::NATIVE_PROCESS_MAX_TASKS")]
-    pub max_tasks: NonZeroU16,
+pub struct SoracloudRuntimeInrou {
+    /// Maximum number of Inrou microVMs hosted concurrently.
+    #[config(default = "defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS")]
+    pub max_concurrent_vms: NonZeroUsize,
+    /// Whether this validator should proxy hosted HTTP without materializing replicas.
+    #[config(default = "defaults::soracloud_runtime::INROU_PROXY_ONLY")]
+    pub proxy_only: bool,
     /// Startup grace window in milliseconds.
     #[config(
-        default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::NATIVE_PROCESS_START_GRACE_MS))"
+        default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS))"
     )]
     pub start_grace_ms: DurationMs,
     /// Shutdown grace window in milliseconds.
     #[config(
-        default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::NATIVE_PROCESS_STOP_GRACE_MS))"
+        default = "DurationMs(std::time::Duration::from_millis(defaults::soracloud_runtime::INROU_STOP_GRACE_MS))"
     )]
     pub stop_grace_ms: DurationMs,
 }
 
-impl SoracloudRuntimeNativeProcess {
-    fn parse(self) -> actual::SoracloudRuntimeNativeProcess {
-        actual::SoracloudRuntimeNativeProcess {
-            max_concurrent_processes: self.max_concurrent_processes,
-            cpu_millis: self.cpu_millis,
-            memory_bytes: self.memory_bytes,
-            ephemeral_storage_bytes: self.ephemeral_storage_bytes,
-            max_open_files: self.max_open_files,
-            max_tasks: self.max_tasks,
+impl Default for SoracloudRuntimeInrou {
+    fn default() -> Self {
+        Self {
+            max_concurrent_vms: defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS,
+            proxy_only: defaults::soracloud_runtime::INROU_PROXY_ONLY,
+            start_grace_ms: DurationMs(std::time::Duration::from_millis(
+                defaults::soracloud_runtime::INROU_START_GRACE_MS,
+            )),
+            stop_grace_ms: DurationMs(std::time::Duration::from_millis(
+                defaults::soracloud_runtime::INROU_STOP_GRACE_MS,
+            )),
+        }
+    }
+}
+
+impl SoracloudRuntimeInrou {
+    fn parse(self) -> actual::SoracloudRuntimeInrou {
+        actual::SoracloudRuntimeInrou {
+            max_concurrent_vms: self.max_concurrent_vms,
+            proxy_only: self.proxy_only,
             start_grace: self.start_grace_ms.get().max(MIN_TIMER_INTERVAL),
             stop_grace: self.stop_grace_ms.get().max(MIN_TIMER_INTERVAL),
         }
@@ -14098,6 +14243,17 @@ pub struct SoracloudRuntimeEgress {
     pub rate_per_minute: Option<u32>,
     /// Optional outbound byte budget per service/minute.
     pub max_bytes_per_minute: Option<u64>,
+}
+
+impl Default for SoracloudRuntimeEgress {
+    fn default() -> Self {
+        Self {
+            default_allow: defaults::soracloud_runtime::EGRESS_DEFAULT_ALLOW,
+            allowed_hosts: defaults::soracloud_runtime::egress_allowed_hosts(),
+            rate_per_minute: None,
+            max_bytes_per_minute: None,
+        }
+    }
 }
 
 impl SoracloudRuntimeEgress {
@@ -14414,6 +14570,18 @@ pub struct Torii {
     pub api_high_load_stream_threshold: Option<usize>,
     /// Optional high-load threshold for subscription WS endpoint.
     pub api_high_load_subscription_threshold: Option<usize>,
+    /// Enable app-facing webhook routes and workers.
+    #[config(
+        env = "TORII_WEBHOOKS_ENABLED",
+        default = "defaults::torii::WEBHOOKS_ENABLED"
+    )]
+    pub webhooks_enabled: bool,
+    /// Enable app-facing ZK attachment routes and workers.
+    #[config(
+        env = "TORII_ZK_ATTACHMENTS_ENABLED",
+        default = "defaults::torii::ZK_ATTACHMENTS_ENABLED"
+    )]
+    pub zk_attachments_enabled: bool,
     /// Attachments TTL (seconds) for ZK attachments (app API).
     #[config(
         env = "TORII_ATTACHMENTS_TTL_SECS",
@@ -14980,6 +15148,8 @@ impl Torii {
             api_high_load_tx_threshold: self.api_high_load_tx_threshold,
             api_high_load_stream_threshold: self.api_high_load_stream_threshold,
             api_high_load_subscription_threshold: self.api_high_load_subscription_threshold,
+            webhooks_enabled: self.webhooks_enabled,
+            zk_attachments_enabled: self.zk_attachments_enabled,
             attachments_ttl_secs: self.attachments_ttl_secs,
             attachments_max_bytes: self.attachments_max_bytes,
             attachments_per_tenant_max_count: self.attachments_per_tenant_max_count,
@@ -15674,6 +15844,7 @@ impl ToriiFaucet {
 mod torii_faucet_tests {
     use super::*;
     use iroha_crypto::PublicKey;
+    use iroha_data_model::DomainId;
 
     fn sample_faucet() -> ToriiFaucet {
         let public_key: PublicKey =
@@ -15681,7 +15852,7 @@ mod torii_faucet_tests {
                 .parse()
                 .expect("public key");
         let asset_definition_id = AssetDefinitionId::new(
-            "sora".parse().expect("domain"),
+            DomainId::try_new("sora", "universal").expect("domain"),
             "xor".parse().expect("name"),
         )
         .to_string();
@@ -17268,6 +17439,9 @@ pub struct SorafsGateway {
     pub rollout_phase: String,
     /// Optional staged anonymity policy override for SoraNet transports.
     pub anonymity_policy: Option<String>,
+    /// Untrusted per-CID host routing configuration.
+    #[config(nested)]
+    pub untrusted_hosting: SorafsGatewayUntrustedHosting,
     /// Optional direct-mode override configuration.
     pub direct_mode: Option<SorafsGatewayDirectMode>,
 }
@@ -17284,6 +17458,7 @@ impl Default for SorafsGateway {
             acme: SorafsGatewayAcme::default(),
             rollout_phase: defaults::sorafs::gateway::rollout_phase(),
             anonymity_policy: defaults::sorafs::gateway::anonymity_policy(),
+            untrusted_hosting: SorafsGatewayUntrustedHosting::default(),
             direct_mode: None,
         }
     }
@@ -17301,6 +17476,7 @@ impl SorafsGateway {
             acme,
             rollout_phase,
             anonymity_policy,
+            untrusted_hosting,
             direct_mode,
         } = self;
 
@@ -17326,12 +17502,81 @@ impl SorafsGateway {
             cdn_policy_path: None,
             rate_limit: rate_limit.parse(),
             denylist: denylist.parse(),
+            untrusted_hosting: untrusted_hosting.parse(),
             acme: acme.parse(),
             rollout_phase,
             anonymity_policy: Some(
                 explicit_stage.unwrap_or_else(|| rollout_phase.default_anonymity_policy()),
             ),
             direct_mode: direct_mode.map(SorafsGatewayDirectMode::parse),
+        }
+    }
+}
+
+/// Canonical CID-host suffixes for untrusted browser app delivery.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsGatewayCidHostSuffixes {
+    /// Live-network CID-host suffix.
+    #[config(default = "defaults::sorafs::gateway::untrusted_hosting::live_cid_host_suffix()")]
+    pub live: String,
+    /// Taira-network CID-host suffix.
+    #[config(default = "defaults::sorafs::gateway::untrusted_hosting::taira_cid_host_suffix()")]
+    pub taira: String,
+}
+
+impl Default for SorafsGatewayCidHostSuffixes {
+    fn default() -> Self {
+        Self {
+            live: defaults::sorafs::gateway::untrusted_hosting::live_cid_host_suffix(),
+            taira: defaults::sorafs::gateway::untrusted_hosting::taira_cid_host_suffix(),
+        }
+    }
+}
+
+impl SorafsGatewayCidHostSuffixes {
+    fn parse(self) -> actual::SorafsGatewayCidHostSuffixes {
+        actual::SorafsGatewayCidHostSuffixes {
+            live: self.live.trim().trim_end_matches('.').to_ascii_lowercase(),
+            taira: self.taira.trim().trim_end_matches('.').to_ascii_lowercase(),
+        }
+    }
+}
+
+/// User-level configuration for serving untrusted apps on CID-derived origins.
+#[derive(Debug, ReadConfig, Clone, norito::JsonDeserialize)]
+pub struct SorafsGatewayUntrustedHosting {
+    /// Enable per-CID host routing.
+    #[config(default = "defaults::sorafs::gateway::UNTRUSTED_HOSTING_ENABLED")]
+    pub enabled: bool,
+    /// Canonical live/test CID-host suffixes.
+    #[config(nested)]
+    pub cid_host_suffixes: SorafsGatewayCidHostSuffixes,
+    /// Redirect path-gateway requests to the canonical CID host.
+    #[config(default = "defaults::sorafs::gateway::PATH_GATEWAY_REDIRECT")]
+    pub path_gateway_redirect: bool,
+    /// Restrict canonical redirects to browser HTML navigations.
+    #[config(default = "defaults::sorafs::gateway::REDIRECT_HTML_ONLY")]
+    pub redirect_html_only: bool,
+}
+
+impl Default for SorafsGatewayUntrustedHosting {
+    fn default() -> Self {
+        Self {
+            enabled: defaults::sorafs::gateway::UNTRUSTED_HOSTING_ENABLED,
+            cid_host_suffixes: SorafsGatewayCidHostSuffixes::default(),
+            path_gateway_redirect: defaults::sorafs::gateway::PATH_GATEWAY_REDIRECT,
+            redirect_html_only: defaults::sorafs::gateway::REDIRECT_HTML_ONLY,
+        }
+    }
+}
+
+impl SorafsGatewayUntrustedHosting {
+    fn parse(self) -> actual::SorafsGatewayUntrustedHosting {
+        actual::SorafsGatewayUntrustedHosting {
+            enabled: self.enabled,
+            cid_host_suffixes: self.cid_host_suffixes.parse(),
+            path_gateway_redirect: self.path_gateway_redirect,
+            redirect_html_only: self.redirect_html_only,
         }
     }
 }
@@ -17869,6 +18114,7 @@ mod offline_cfg_tests {
     use core::str::FromStr;
 
     use super::*;
+    use iroha_data_model::DomainId;
 
     fn bundled_tables_path() -> PathBuf {
         PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -17900,7 +18146,7 @@ mod offline_cfg_tests {
             default_haircut_bps: 12_500,
             margin_frequency_secs: 0,
             eligible_collateral: vec![iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             )],
             collateral_substitution_matrix: BTreeMap::new(),
@@ -18054,9 +18300,11 @@ mod offline_cfg_tests {
 
     #[test]
     fn iso_bridge_json_deserializes() {
-        let asset_definition =
-            AssetDefinitionId::new("fin".parse().expect("domain"), "usd".parse().expect("name"))
-                .to_string();
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("fin", "universal").expect("domain"),
+            "usd".parse().expect("name"),
+        )
+        .to_string();
         let json = r#"{
             "enabled": true,
             "dedupe_ttl_secs": 120,
@@ -18171,14 +18419,14 @@ mod offline_cfg_tests {
         assert_eq!(
             parsed.voting_asset_id,
             iroha_data_model::asset::prelude::AssetDefinitionId::new(
-                "sora".parse().unwrap(),
+                DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap()
             )
         );
         assert_eq!(
             parsed.citizenship_asset_id,
             iroha_data_model::asset::prelude::AssetDefinitionId::new(
-                "sora".parse().unwrap(),
+                DomainId::try_new("sora", "universal").unwrap(),
                 "xor".parse().unwrap()
             )
         );
@@ -18209,7 +18457,7 @@ mod offline_cfg_tests {
         assert_eq!(
             parsed.parliament_eligibility_asset_id,
             iroha_data_model::asset::prelude::AssetDefinitionId::new(
-                "stake".parse().unwrap(),
+                DomainId::try_new("stake", "universal").unwrap(),
                 "SORA".parse().unwrap()
             )
         );
@@ -18307,7 +18555,7 @@ mod duration_clamp_tests {
     use iroha_config_base::toml::TomlSource;
     use toml::{Table, Value};
 
-    use crate::parameters::{actual, defaults};
+    use crate::parameters::{actual, defaults, user::SoracloudRuntime};
 
     const MINIMAL_CONFIG: &str = r#"
 chain = "00000000-0000-0000-0000-000000000000"
@@ -18602,11 +18850,16 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             defaults::soracloud_runtime::BUNDLE_CACHE_BUDGET_BYTES
         );
         assert_eq!(
-            actual
-                .soracloud_runtime
-                .native_process
-                .max_concurrent_processes,
-            defaults::soracloud_runtime::NATIVE_PROCESS_MAX_CONCURRENT_PROCESSES
+            actual.soracloud_runtime.inrou.max_concurrent_vms,
+            defaults::soracloud_runtime::INROU_MAX_CONCURRENT_VMS
+        );
+        assert_eq!(
+            actual.soracloud_runtime.inrou.proxy_only,
+            defaults::soracloud_runtime::INROU_PROXY_ONLY
+        );
+        assert_eq!(
+            actual.soracloud_runtime.inrou.start_grace,
+            StdDuration::from_millis(defaults::soracloud_runtime::INROU_START_GRACE_MS)
         );
         assert_eq!(
             actual.soracloud_runtime.egress.default_allow,
@@ -18659,16 +18912,12 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
         cache_budgets.insert("model_weight_bytes".into(), Value::Integer(6_144));
         runtime.insert("cache_budgets".into(), Value::Table(cache_budgets));
 
-        let mut native_process = Table::new();
-        native_process.insert("max_concurrent_processes".into(), Value::Integer(3));
-        native_process.insert("cpu_millis".into(), Value::Integer(1_500));
-        native_process.insert("memory_bytes".into(), Value::Integer(65_536));
-        native_process.insert("ephemeral_storage_bytes".into(), Value::Integer(131_072));
-        native_process.insert("max_open_files".into(), Value::Integer(64));
-        native_process.insert("max_tasks".into(), Value::Integer(32));
-        native_process.insert("start_grace_ms".into(), Value::Integer(1_500));
-        native_process.insert("stop_grace_ms".into(), Value::Integer(2_500));
-        runtime.insert("native_process".into(), Value::Table(native_process));
+        let mut inrou = Table::new();
+        inrou.insert("max_concurrent_vms".into(), Value::Integer(5));
+        inrou.insert("proxy_only".into(), Value::Boolean(true));
+        inrou.insert("start_grace_ms".into(), Value::Integer(7_500));
+        inrou.insert("stop_grace_ms".into(), Value::Integer(9_500));
+        runtime.insert("inrou".into(), Value::Table(inrou));
 
         let mut egress = Table::new();
         egress.insert("default_allow".into(), Value::Boolean(true));
@@ -18753,17 +19002,15 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
                 .get(),
             6_144
         );
+        assert_eq!(actual.soracloud_runtime.inrou.max_concurrent_vms.get(), 5);
+        assert!(actual.soracloud_runtime.inrou.proxy_only);
         assert_eq!(
-            actual
-                .soracloud_runtime
-                .native_process
-                .max_concurrent_processes
-                .get(),
-            3
+            actual.soracloud_runtime.inrou.start_grace,
+            StdDuration::from_millis(7_500)
         );
         assert_eq!(
-            actual.soracloud_runtime.native_process.start_grace,
-            StdDuration::from_millis(1_500)
+            actual.soracloud_runtime.inrou.stop_grace,
+            StdDuration::from_millis(9_500)
         );
         assert!(actual.soracloud_runtime.egress.default_allow);
         assert_eq!(
@@ -18832,6 +19079,137 @@ identity_private_key = "8026208F4C15E5D664DA3F13778801D23D4E89B76E94C1B94B389544
             actual.soracloud_runtime.hf.inference_token.as_deref(),
             Some("secret-token")
         );
+    }
+
+    #[test]
+    fn soracloud_runtime_json_deserialize_applies_explicit_overrides() {
+        let json = r#"{
+            "state_dir":"./runtime/json",
+            "reconcile_interval_ms":2500,
+            "hydration_concurrency":7,
+            "cache_budgets":{
+                "bundle_bytes":1024,
+                "static_asset_bytes":2048,
+                "journal_bytes":3072,
+                "checkpoint_bytes":4096,
+                "model_artifact_bytes":5120,
+                "model_weight_bytes":6144
+            },
+            "inrou":{
+                "max_concurrent_vms":5,
+                "proxy_only":true,
+                "start_grace_ms":7500,
+                "stop_grace_ms":9500
+            },
+            "egress":{
+                "default_allow":true,
+                "allowed_hosts":["cdn.sora.test"],
+                "rate_per_minute":120,
+                "max_bytes_per_minute":262144
+            },
+            "hf":{
+                "hub_base_url":"https://mirror.hf.test",
+                "api_base_url":"https://mirror.hf.test/api",
+                "inference_base_url":"https://router.hf.test/hf-inference/models",
+                "request_timeout_ms":21000,
+                "local_execution_enabled":false,
+                "local_runner_program":"python3.12",
+                "local_runner_timeout_ms":45000,
+                "model_host_heartbeat_ttl_ms":18000,
+                "allow_inference_bridge_fallback":false,
+                "import_max_files":48,
+                "import_max_file_bytes":777777,
+                "import_max_total_bytes":9999999,
+                "import_file_allowlist":["config.json","*.safetensors"],
+                "inference_token":"secret-token"
+            }
+        }"#;
+
+        let parsed: SoracloudRuntime =
+            norito::json::from_json(json).expect("runtime JSON should deserialize");
+
+        assert!(
+            parsed
+                .state_dir
+                .value()
+                .to_string_lossy()
+                .ends_with("runtime/json")
+        );
+        assert_eq!(parsed.inrou.max_concurrent_vms.get(), 5);
+        assert!(parsed.inrou.proxy_only);
+        assert!(parsed.egress.default_allow);
+        assert_eq!(parsed.hf.inference_token.as_deref(), Some("secret-token"));
+    }
+
+    #[test]
+    fn soracloud_runtime_parse_rejects_removed_legacy_runtime_section() {
+        let mut table = base_table();
+        let runtime = table
+            .entry("soracloud_runtime")
+            .or_insert_with(|| Value::Table(Table::new()))
+            .as_table_mut()
+            .expect("soracloud_runtime table");
+        let removed_field = ["native", "process"].join("_");
+        runtime.insert(removed_field.into(), Value::Table(Table::new()));
+
+        let error = actual::Root::from_toml_source(TomlSource::inline(table))
+            .expect_err("removed legacy runtime section must not parse");
+        assert!(
+            !error.to_string().is_empty(),
+            "removed legacy runtime section should produce a parse error"
+        );
+    }
+
+    #[test]
+    fn soracloud_runtime_json_deserialize_rejects_removed_legacy_runtime_field() {
+        let removed_field = ["native", "process"].join("_");
+        let json = r#"{
+            "state_dir":"./runtime/json",
+            "reconcile_interval_ms":2500,
+            "hydration_concurrency":7,
+            "cache_budgets":{
+                "bundle_bytes":1024,
+                "static_asset_bytes":2048,
+                "journal_bytes":3072,
+                "checkpoint_bytes":4096,
+                "model_artifact_bytes":5120,
+                "model_weight_bytes":6144
+            },
+            "__REMOVED_FIELD__":{},
+            "inrou":{
+                "max_concurrent_vms":5,
+                "start_grace_ms":7500,
+                "stop_grace_ms":9500
+            },
+            "egress":{
+                "default_allow":true,
+                "allowed_hosts":["cdn.sora.test"]
+            },
+            "hf":{
+                "hub_base_url":"https://mirror.hf.test",
+                "api_base_url":"https://mirror.hf.test/api",
+                "inference_base_url":"https://router.hf.test/hf-inference/models",
+                "request_timeout_ms":21000,
+                "local_execution_enabled":false,
+                "local_runner_program":"python3.12",
+                "local_runner_timeout_ms":45000,
+                "model_host_heartbeat_ttl_ms":18000,
+                "allow_inference_bridge_fallback":false,
+                "import_max_files":48,
+                "import_max_file_bytes":777777,
+                "import_max_total_bytes":9999999,
+                "import_file_allowlist":["config.json","*.safetensors"],
+                "inference_token":"secret-token"
+            }
+        }"#
+        .replace(
+            "\"__REMOVED_FIELD__\":{}",
+            &format!("\"{removed_field}\":{{}}"),
+        );
+
+        let error = norito::json::from_json::<SoracloudRuntime>(&json)
+            .expect_err("removed legacy runtime JSON field must be rejected");
+        assert!(error.to_string().contains(&removed_field));
     }
 
     #[test]

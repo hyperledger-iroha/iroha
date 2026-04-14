@@ -14,6 +14,7 @@ use iroha_data_model::{
     isi::{smart_contract_code as scode, transfer::TransferAssetBatch},
     nexus::{AxtPolicyBinding, AxtPolicyEntry, AxtPolicySnapshot, DataSpaceId, LaneId},
     proof::{ProofAttachment, VerifyingKeyId},
+    smart_contract::ContractAddress,
 };
 use iroha_primitives::json::Json;
 use iroha_primitives::numeric::{Numeric, NumericSpec};
@@ -337,8 +338,8 @@ pub struct MockWorldStateView {
     contract_manifests: HashSet<CryptoHash>,
     /// Stored contract bytecode keyed by code hash.
     contract_code: HashMap<CryptoHash, Vec<u8>>,
-    /// Active contract instances keyed by (namespace, contract_id).
-    contract_instances: HashMap<(String, String), CryptoHash>,
+    /// Active contract instances keyed by canonical contract address.
+    contract_instances: HashMap<ContractAddress, CryptoHash>,
     /// Logical wall-clock timestamp used for time-gated operations (ms since epoch).
     current_time_ms: u64,
     /// Slot length (ms) used to derive current slot for expiry checks.
@@ -545,12 +546,10 @@ impl MockWorldStateView {
     /// Bind a contract instance in the mock registry.
     pub fn bind_contract_instance(
         &mut self,
-        namespace: impl Into<String>,
-        contract_id: impl Into<String>,
+        contract_address: ContractAddress,
         code_hash: CryptoHash,
     ) {
-        self.contract_instances
-            .insert((namespace.into(), contract_id.into()), code_hash);
+        self.contract_instances.insert(contract_address, code_hash);
     }
 
     // -----------------------------
@@ -1880,7 +1879,7 @@ mod tests {
 
 #[cfg(test)]
 fn test_account_id(signatory: &str, domain: &str) -> AccountId {
-    let _domain: DomainId = domain.parse().expect("test domain id must parse");
+    let _domain = DomainId::try_new(domain, "universal").expect("test domain id must parse");
     AccountId::new(
         signatory
             .parse()
@@ -3052,6 +3051,10 @@ fn parse_account_id_literal(raw: &str) -> Result<AccountId, VMError> {
 fn parse_account_subject_literal(raw: &str) -> Result<AccountId, VMError> {
     AccountId::parse_encoded(raw)
         .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+        .or_else(|_| {
+            raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
+                .map(|address| address.subject_id())
+        })
         .map_err(|_| VMError::NoritoInvalid)
 }
 
@@ -3361,7 +3364,8 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_TO_INT => {
+            crate::syscalls::SYSCALL_NUMERIC_TO_INT
+            | crate::syscalls::SYSCALL_NUMERIC_TO_INT_DIRECT => {
                 let ptr = vm.register(10);
                 if ptr == 0 {
                     return Err(VMError::NoritoInvalid);
@@ -3376,7 +3380,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, (value as i64) as u64);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_ADD => {
+            crate::syscalls::SYSCALL_NUMERIC_ADD | crate::syscalls::SYSCALL_NUMERIC_ADD_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs.checked_add(rhs).ok_or(VMError::AssertionFailed)?;
@@ -3385,7 +3389,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_SUB => {
+            crate::syscalls::SYSCALL_NUMERIC_SUB | crate::syscalls::SYSCALL_NUMERIC_SUB_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs.checked_sub(rhs).ok_or(VMError::AssertionFailed)?;
@@ -3397,7 +3401,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_MUL => {
+            crate::syscalls::SYSCALL_NUMERIC_MUL | crate::syscalls::SYSCALL_NUMERIC_MUL_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs
@@ -3408,7 +3412,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_DIV => {
+            crate::syscalls::SYSCALL_NUMERIC_DIV | crate::syscalls::SYSCALL_NUMERIC_DIV_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs
@@ -3419,7 +3423,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_REM => {
+            crate::syscalls::SYSCALL_NUMERIC_REM | crate::syscalls::SYSCALL_NUMERIC_REM_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let out = lhs
@@ -3430,7 +3434,7 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_NUMERIC_NEG => {
+            crate::syscalls::SYSCALL_NUMERIC_NEG | crate::syscalls::SYSCALL_NUMERIC_NEG_DIRECT => {
                 let val = self.decode_numeric_ptr(vm, vm.register(10))?;
                 if !val.is_zero() {
                     return Err(VMError::AssertionFailed);
@@ -3445,11 +3449,17 @@ impl IVMHost for WsvHost {
             | crate::syscalls::SYSCALL_NUMERIC_LT
             | crate::syscalls::SYSCALL_NUMERIC_LE
             | crate::syscalls::SYSCALL_NUMERIC_GT
-            | crate::syscalls::SYSCALL_NUMERIC_GE => {
+            | crate::syscalls::SYSCALL_NUMERIC_GE
+            | crate::syscalls::SYSCALL_NUMERIC_EQ_DIRECT
+            | crate::syscalls::SYSCALL_NUMERIC_NE_DIRECT
+            | crate::syscalls::SYSCALL_NUMERIC_LT_DIRECT
+            | crate::syscalls::SYSCALL_NUMERIC_LE_DIRECT
+            | crate::syscalls::SYSCALL_NUMERIC_GT_DIRECT
+            | crate::syscalls::SYSCALL_NUMERIC_GE_DIRECT => {
                 let lhs = self.decode_numeric_ptr(vm, vm.register(10))?;
                 let rhs = self.decode_numeric_ptr(vm, vm.register(11))?;
                 let cmp = lhs.cmp(&rhs);
-                let result = match number {
+                let result = match crate::syscalls::canonical_helper_syscall(number) {
                     crate::syscalls::SYSCALL_NUMERIC_EQ => cmp == core::cmp::Ordering::Equal,
                     crate::syscalls::SYSCALL_NUMERIC_NE => cmp != core::cmp::Ordering::Equal,
                     crate::syscalls::SYSCALL_NUMERIC_LT => cmp == core::cmp::Ordering::Less,
@@ -3530,6 +3540,91 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
+            crate::syscalls::SYSCALL_JSON_OBJECT => {
+                let out_json = Json::from(njson::Value::Object(njson::Map::new()));
+                let body = norito::to_bytes(&out_json).map_err(|_| VMError::NoritoInvalid)?;
+                let mut out = Vec::with_capacity(7 + body.len() + 32);
+                out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                out.extend_from_slice(&body);
+                let h: [u8; 32] = CryptoHash::new(&body).into();
+                out.extend_from_slice(&h);
+                let p = vm.alloc_input_tlv(&out)?;
+                vm.set_register(10, p);
+                Ok(0)
+            }
+            crate::syscalls::SYSCALL_JSON_SET_I64
+            | crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
+            | crate::syscalls::SYSCALL_JSON_SET_I64_DIRECT
+            | crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID_DIRECT => {
+                let json_tlv = vm.memory.validate_tlv(vm.register(10))?;
+                let key_tlv = vm.memory.validate_tlv(vm.register(11))?;
+                if json_tlv.type_id != PointerType::Json || key_tlv.type_id != PointerType::Name {
+                    return Err(VMError::NoritoInvalid);
+                }
+                let policy = vm.syscall_policy();
+                if !pointer_abi::is_type_allowed_for_policy(policy, json_tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: json_tlv.type_id as u16,
+                    });
+                }
+                if !pointer_abi::is_type_allowed_for_policy(policy, key_tlv.type_id) {
+                    return Err(VMError::AbiTypeNotAllowed {
+                        abi: vm.abi_version(),
+                        type_id: key_tlv.type_id as u16,
+                    });
+                }
+
+                let json: Json =
+                    decode_from_bytes(json_tlv.payload).map_err(|_| VMError::DecodeError)?;
+                let value: njson::Value = json
+                    .try_into_any_norito()
+                    .map_err(|_| VMError::DecodeError)?;
+                let mut obj = match value {
+                    njson::Value::Object(map) => map,
+                    _ => return Err(VMError::DecodeError),
+                };
+                let key_name: Name =
+                    decode_from_bytes(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
+
+                let field = match crate::syscalls::canonical_helper_syscall(number) {
+                    crate::syscalls::SYSCALL_JSON_SET_I64 => {
+                        njson::Value::from(vm.register(12) as i64)
+                    }
+                    crate::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID => {
+                        let value_tlv = vm.memory.validate_tlv(vm.register(12))?;
+                        if value_tlv.type_id != PointerType::AccountId {
+                            return Err(VMError::NoritoInvalid);
+                        }
+                        if !pointer_abi::is_type_allowed_for_policy(policy, value_tlv.type_id) {
+                            return Err(VMError::AbiTypeNotAllowed {
+                                abi: vm.abi_version(),
+                                type_id: value_tlv.type_id as u16,
+                            });
+                        }
+                        let account: AccountId = decode_from_bytes(value_tlv.payload)
+                            .map_err(|_| VMError::DecodeError)?;
+                        njson::Value::from(account.to_string())
+                    }
+                    _ => return Err(VMError::UnknownSyscall(number)),
+                };
+
+                obj.insert(key_name.to_string(), field);
+                let out_json = Json::from(njson::Value::Object(obj));
+                let body = norito::to_bytes(&out_json).map_err(|_| VMError::NoritoInvalid)?;
+                let mut out = Vec::with_capacity(7 + body.len() + 32);
+                out.extend_from_slice(&(PointerType::Json as u16).to_be_bytes());
+                out.push(1);
+                out.extend_from_slice(&(body.len() as u32).to_be_bytes());
+                out.extend_from_slice(&body);
+                let h: [u8; 32] = CryptoHash::new(&body).into();
+                out.extend_from_slice(&h);
+                let p = vm.alloc_input_tlv(&out)?;
+                vm.set_register(10, p);
+                Ok(0)
+            }
             crate::syscalls::SYSCALL_TLV_LEN => {
                 let addr = vm.register(10);
                 if addr == 0 {
@@ -3554,7 +3649,15 @@ impl IVMHost for WsvHost {
             | crate::syscalls::SYSCALL_JSON_GET_NFT_ID
             | crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX
             | crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID
-            | crate::syscalls::SYSCALL_JSON_GET_NUMERIC => {
+            | crate::syscalls::SYSCALL_JSON_GET_NUMERIC
+            | crate::syscalls::SYSCALL_JSON_GET_I64_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_JSON_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_NAME_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_NFT_ID_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_BLOB_HEX_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT
+            | crate::syscalls::SYSCALL_JSON_GET_NUMERIC_DIRECT => {
                 let json_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 let key_tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if json_tlv.type_id != PointerType::Json || key_tlv.type_id != PointerType::Name {
@@ -3584,7 +3687,7 @@ impl IVMHost for WsvHost {
                     decode_from_bytes(key_tlv.payload).map_err(|_| VMError::DecodeError)?;
                 let field = obj.get(key_name.as_ref()).ok_or(VMError::DecodeError)?;
 
-                match number {
+                match crate::syscalls::canonical_helper_syscall(number) {
                     crate::syscalls::SYSCALL_JSON_GET_I64 => {
                         let n = match field {
                             njson::Value::Number(njson::native::Number::I64(v)) => *v,
@@ -3630,8 +3733,12 @@ impl IVMHost for WsvHost {
                     crate::syscalls::SYSCALL_JSON_GET_ACCOUNT_ID => {
                         let raw = field.as_str().ok_or(VMError::DecodeError)?;
                         let acct = iroha_data_model::account::AccountId::parse_encoded(raw)
-                            .map_err(|_| VMError::DecodeError)?
-                            .into_account_id();
+                            .map(iroha_data_model::account::ParsedAccountId::into_account_id)
+                            .or_else(|_| {
+                                raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
+                                    .map(|address| address.subject_id())
+                            })
+                            .map_err(|_| VMError::DecodeError)?;
                         let body = norito::to_bytes(&acct).map_err(|_| VMError::NoritoInvalid)?;
                         let mut out = Vec::with_capacity(7 + body.len() + 32);
                         out.extend_from_slice(&(PointerType::AccountId as u16).to_be_bytes());
@@ -3853,7 +3960,8 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, if eq { 1 } else { 0 });
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_SCHEMA_ENCODE => {
+            crate::syscalls::SYSCALL_SCHEMA_ENCODE
+            | crate::syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT => {
                 let s_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 let v_tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if s_tlv.type_id != PointerType::Name || v_tlv.type_id != PointerType::Json {
@@ -3958,7 +4066,8 @@ impl IVMHost for WsvHost {
                     }
                 }
             }
-            crate::syscalls::SYSCALL_SCHEMA_DECODE => {
+            crate::syscalls::SYSCALL_SCHEMA_DECODE
+            | crate::syscalls::SYSCALL_SCHEMA_DECODE_DIRECT => {
                 let s_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 let b_tlv = vm.memory.validate_tlv(vm.register(11))?;
                 if s_tlv.type_id != PointerType::Name || b_tlv.type_id != PointerType::NoritoBytes {
@@ -4071,7 +4180,7 @@ impl IVMHost for WsvHost {
                     }
                 }
             }
-            crate::syscalls::SYSCALL_SCHEMA_INFO => {
+            crate::syscalls::SYSCALL_SCHEMA_INFO | crate::syscalls::SYSCALL_SCHEMA_INFO_DIRECT => {
                 let tlv = vm.memory.validate_tlv(vm.register(10))?;
                 if tlv.type_id != PointerType::Name {
                     return Err(VMError::NoritoInvalid);
@@ -4111,7 +4220,8 @@ impl IVMHost for WsvHost {
                 vm.set_register(10, p);
                 Ok(0)
             }
-            crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO => {
+            crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO
+            | crate::syscalls::SYSCALL_BUILD_PATH_KEY_NORITO_DIRECT => {
                 let base_tlv = vm.memory.validate_tlv(vm.register(10))?;
                 if base_tlv.type_id != PointerType::Name {
                     return Err(VMError::NoritoInvalid);
@@ -4357,11 +4467,11 @@ impl IVMHost for WsvHost {
                     // List account literals for all subjects linked to a domain:
                     // {domain_id} -> {domain_id, account_ids:[...]}
                     "wsv.list_accounts_for_domain" => {
-                        let domain: DomainId = payload
+                        let domain_literal = payload
                             .get("domain_id")
                             .and_then(|v| v.as_str())
-                            .ok_or(VMError::NoritoInvalid)?
-                            .parse()
+                            .ok_or(VMError::NoritoInvalid)?;
+                        let domain = DomainId::parse_fully_qualified(domain_literal)
                             .map_err(|_| VMError::NoritoInvalid)?;
                         let account_ids = self
                             .wsv
@@ -4731,8 +4841,8 @@ impl IVMHost for WsvHost {
                                             .get("domain_id")
                                             .and_then(|v| v.as_str())
                                             .ok_or(VMError::NoritoInvalid)?;
-                                        let domain: DomainId =
-                                            domain_s.parse().map_err(|_| VMError::NoritoInvalid)?;
+                                        let domain = DomainId::parse_fully_qualified(domain_s)
+                                            .map_err(|_| VMError::NoritoInvalid)?;
                                         let ok = self.wsv.register_domain(&self.caller, domain);
                                         if ok {
                                             return Ok(0);
@@ -5307,13 +5417,12 @@ impl IVMHost for WsvHost {
                 }
                 let req: scode::DeactivateContractInstance =
                     norito::decode_from_bytes(tlv.payload).map_err(|_| VMError::NoritoInvalid)?;
-                let namespace = req.namespace().trim();
-                let contract_id = req.contract_id().trim();
-                if namespace.is_empty() || contract_id.is_empty() {
-                    return Err(VMError::NoritoInvalid);
-                }
-                let key = (namespace.to_owned(), contract_id.to_owned());
-                if self.wsv.contract_instances.remove(&key).is_some() {
+                if self
+                    .wsv
+                    .contract_instances
+                    .remove(req.contract_address())
+                    .is_some()
+                {
                     Ok(0)
                 } else {
                     Err(VMError::PermissionDenied)
@@ -5842,7 +5951,7 @@ mod tests_permission_json {
     use iroha_data_model::domain::DomainId;
 
     fn account(domain: &str, controller: &str) -> AccountId {
-        let _domain_id: DomainId = domain.parse().expect("test domain id");
+        let _domain_id = DomainId::try_new(domain, "universal").expect("test domain id");
         let public_key: PublicKey = controller.parse().expect("test public key");
         AccountId::new(public_key)
     }
@@ -5874,7 +5983,7 @@ mod tests_permission_json {
     #[test]
     fn parse_register_zk_asset_ok() {
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "land".parse().unwrap(),
+            DomainId::try_new("land", "universal").unwrap(),
             "gold".parse().unwrap(),
         );
         let s = format!("{{\"type\":\"register_zk_asset\",\"target\":\"{ad}\"}}");
@@ -5885,7 +5994,7 @@ mod tests_permission_json {
     #[test]
     fn parse_shield_ok() {
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "land".parse().unwrap(),
+            DomainId::try_new("land", "universal").unwrap(),
             "silver".parse().unwrap(),
         );
         let s = format!("{{\"type\":\"shield\",\"target\":\"{ad}\"}}");
@@ -5896,7 +6005,7 @@ mod tests_permission_json {
     #[test]
     fn parse_unshield_ok() {
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "land".parse().unwrap(),
+            DomainId::try_new("land", "universal").unwrap(),
             "bronze".parse().unwrap(),
         );
         let s = format!("{{\"type\":\"unshield\",\"target\":\"{ad}\"}}");
@@ -6575,9 +6684,9 @@ mod tests_zk_asset_bindings {
             "ed012059C8A4DA1EBB5380F74ABA51F502714652FDCCE9611FAFB9904E4A3C4D382774",
             "domain",
         );
-        let domain: DomainId = "domain".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("domain", "universal").unwrap();
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "domain".parse().unwrap(),
+            DomainId::try_new("domain", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let mut wsv = MockWorldStateView::new();
@@ -6616,7 +6725,7 @@ mod tests_zk_asset_bindings {
             "domain",
         );
         let asset: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonder".parse().unwrap(),
+            DomainId::try_new("wonder", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let opaque = norito::decode_from_bytes::<AssetDefinitionId>(
@@ -6773,7 +6882,7 @@ mod tests_null_decode {
             "wonderland",
         );
         let asset = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain id"),
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
             "rose".parse().expect("asset name"),
         );
         let wsv = MockWorldStateView::with_balances(&[(

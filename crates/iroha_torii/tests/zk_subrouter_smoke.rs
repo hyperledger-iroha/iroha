@@ -25,7 +25,8 @@ mod fixtures;
 #[allow(clippy::too_many_lines)]
 async fn zk_verify_and_attachments_endpoints_exposed() {
     // Minimal Torii setup (no telemetry requirement for these endpoints)
-    let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let mut cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    cfg.torii.zk_attachments_enabled = true;
     let (kiso, _child) = KisoHandle::start(cfg.clone());
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
@@ -151,4 +152,91 @@ async fn zk_verify_and_attachments_endpoints_exposed() {
             | StatusCode::BAD_REQUEST
             | StatusCode::TOO_MANY_REQUESTS
     ));
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines)]
+async fn zk_attachments_endpoints_disabled_by_default() {
+    let cfg = iroha_torii::test_utils::mk_minimal_root_cfg();
+    let (kiso, _child) = KisoHandle::start(cfg.clone());
+    let kura = Kura::blank_kura_for_testing();
+    let query = LiveQueryStore::start_test();
+    let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
+    let mut world = World::default();
+    fixtures::seed_peer(&mut world, local_peer_id.clone());
+    let state = Arc::new(State::new_for_testing(world, kura.clone(), query));
+    let queue_cfg = iroha_config::parameters::actual::Queue::default();
+    let events_sender: iroha_core::EventsSender = tokio::sync::broadcast::channel(1).0;
+    let queue = Arc::new(iroha_core::queue::Queue::from_config(
+        queue_cfg,
+        events_sender,
+    ));
+    let (peers_tx, peers_rx) = tokio::sync::watch::channel(<_>::default());
+    let _ = peers_tx;
+
+    #[cfg(feature = "telemetry")]
+    let telemetry = {
+        use iroha_core::telemetry as core_telemetry;
+        let metrics = fixtures::shared_metrics();
+        let (_mh, ts) = TimeSource::new_mock(core::time::Duration::default());
+        core_telemetry::start(
+            metrics,
+            state.clone(),
+            kura.clone(),
+            queue.clone(),
+            peers_rx.clone(),
+            local_peer_id.clone(),
+            ts,
+            false,
+        )
+        .0
+    };
+
+    let da_receipt_signer = cfg.common.key_pair.clone();
+    let torii = {
+        #[cfg(feature = "telemetry")]
+        {
+            Torii::new(
+                iroha_data_model::ChainId::from("test-chain"),
+                kiso,
+                cfg.torii.clone(),
+                queue,
+                tokio::sync::broadcast::channel(1).0,
+                LiveQueryStore::start_test(),
+                kura,
+                state,
+                da_receipt_signer.clone(),
+                iroha_torii::OnlinePeersProvider::new(peers_rx),
+                telemetry,
+                true,
+            )
+        }
+        #[cfg(not(feature = "telemetry"))]
+        {
+            Torii::new(
+                iroha_data_model::ChainId::from("test-chain"),
+                kiso,
+                cfg.torii.clone(),
+                queue,
+                tokio::sync::broadcast::channel(1).0,
+                LiveQueryStore::start_test(),
+                kura,
+                state,
+                da_receipt_signer,
+                iroha_torii::OnlinePeersProvider::new(peers_rx),
+            )
+        }
+    };
+
+    let app = torii.api_router_for_tests();
+    let resp = app
+        .oneshot(
+            Request::builder()
+                .uri("/v1/zk/attachments")
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), StatusCode::NOT_FOUND);
 }

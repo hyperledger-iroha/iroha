@@ -50,7 +50,7 @@ translator: machine-google-reviewed
 - Модель псевдонима:
   – Идентификация канонической учетной записи никогда не включает сегмент домена или пространства данных.
   — Значения `AccountAlias` — это отдельные привязки SNS, расположенные поверх `AccountId`.
-  - Псевдонимы с указанием домена, такие как `merchant@hbl.sbp`, содержат в привязке псевдонима как домен, так и пространство данных.
+  - Псевдонимы с указанием домена, такие как `merchant@banka.sbp`, содержат в привязке псевдонима как домен, так и пространство данных.
   - Псевдонимы корня пространства данных, такие как `merchant@sbp`, несут только пространство данных и, следовательно, естественным образом сочетаются с `Account::new(...)`.
   - Тесты и исправления должны сначала инициализировать универсальный `AccountId`, а затем отдельно добавлять аренду псевдонимов, разрешения псевдонимов и любое состояние, принадлежащее домену, вместо кодирования предположений о домене в саму идентификацию учетной записи.
   - Поиск общедоступных учетных записей теперь фокусируется на псевдонимах (`FindAliasesByAccountId`); Идентификация учетной записи сама по себе остается бездоменной.### Определения и активы активов
@@ -185,7 +185,7 @@ use iroha_crypto::KeyPair;
 use iroha_primitives::numeric::Numeric;
 
 // Domain
-let domain_id: DomainId = "wonderland".parse().unwrap();
+let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
 let new_domain = Domain::new(domain_id.clone()).with_metadata(Metadata::default());
 
 // Account
@@ -196,7 +196,7 @@ let new_account = Account::new(account_id.clone())
 
 // Asset definition and an asset for the account
 let asset_def_id = AssetDefinitionId::new(
-    "wonderland".parse().unwrap(),
+    domain_id.clone(),
     "usd".parse().unwrap(),
 );
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
@@ -249,7 +249,7 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl.sbp
+  --alias pkr#bankb.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
@@ -259,14 +259,14 @@ iroha ledger asset definition register \
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl.sbp \
+  --definition-alias pkr#bankb.sbp \
   --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl.sbp"}'
+  -d '{"alias":"pkr#bankb.sbp"}'
 ```Примечание по миграции:
 — Старые идентификаторы определения актива `name#domain` не принимаются в версии 1.
 - Селекторы общедоступных активов используют только один формат определения активов: канонические идентификаторы Base58. Псевдонимы остаются необязательными селекторами, но разрешаются к тому же каноническому идентификатору.

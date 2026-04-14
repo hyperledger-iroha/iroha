@@ -603,13 +603,14 @@ impl Actor {
         true
     }
 
-    fn preserve_block_created_for_highest_qc_repair(
+    fn preserve_block_created_for_deferred_replay(
         &mut self,
         block: &SignedBlock,
         frontier: Option<super::message::BlockCreatedFrontierInfo>,
         inline_hint: Option<super::message::ProposalHint>,
         inline_proposal: Option<crate::sumeragi::consensus::Proposal>,
         sender: Option<PeerId>,
+        reason: &'static str,
     ) {
         let block_hash = block.hash();
         let header = block.header();
@@ -633,12 +634,30 @@ impl Actor {
             block_hash,
             height,
             view,
-            "missing_highest_qc_block_created",
+            reason,
         );
         self.flush_frontier_body_requesters(block);
         self.flush_pending_fetch_requests(block);
         self.clear_missing_block_request(&block_hash, MissingBlockClearReason::PayloadAvailable);
         self.clear_missing_block_view_change(&block_hash);
+    }
+
+    fn preserve_block_created_for_highest_qc_repair(
+        &mut self,
+        block: &SignedBlock,
+        frontier: Option<super::message::BlockCreatedFrontierInfo>,
+        inline_hint: Option<super::message::ProposalHint>,
+        inline_proposal: Option<crate::sumeragi::consensus::Proposal>,
+        sender: Option<PeerId>,
+    ) {
+        self.preserve_block_created_for_deferred_replay(
+            block,
+            frontier,
+            inline_hint,
+            inline_proposal,
+            sender,
+            "missing_highest_qc_block_created",
+        );
     }
 
     pub(super) fn ensure_highest_qc_extends_locked(
@@ -1681,7 +1700,9 @@ impl Actor {
         msg: super::message::BlockCreated,
         sender: Option<PeerId>,
     ) -> Result<()> {
-        self.handle_block_created_with_preserve_policy(msg, sender, true, false, false)
+        self.handle_block_created_with_preserve_policy(
+            msg, sender, false, true, false, false, false, None,
+        )
     }
 
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
@@ -1692,13 +1713,18 @@ impl Actor {
         allow_frontier_owner_preserve_on_payload_mismatch: bool,
         allow_authoritative_frontier_owner_supersede: bool,
         allow_stale_recovery_without_request: bool,
+        allow_aborted_revival_without_local_commit_qc: bool,
+        observed_commit_qc_epoch: Option<u64>,
     ) -> Result<()> {
         self.handle_block_created_with_preserve_policy(
             msg,
             sender,
+            true,
             allow_frontier_owner_preserve_on_payload_mismatch,
             allow_authoritative_frontier_owner_supersede,
             allow_stale_recovery_without_request,
+            allow_aborted_revival_without_local_commit_qc,
+            observed_commit_qc_epoch,
         )
     }
 
@@ -1730,11 +1756,14 @@ impl Actor {
         &mut self,
         msg: super::message::BlockCreated,
         sender: Option<PeerId>,
+        allow_when_local_removed: bool,
         allow_frontier_owner_preserve_on_payload_mismatch: bool,
         allow_authoritative_frontier_owner_supersede: bool,
         allow_stale_recovery_without_request: bool,
+        allow_aborted_revival_without_local_commit_qc: bool,
+        observed_commit_qc_epoch: Option<u64>,
     ) -> Result<()> {
-        if crate::sumeragi::status::local_peer_removed() {
+        if crate::sumeragi::status::local_peer_removed() && !allow_when_local_removed {
             debug!(
                 ?sender,
                 "dropping BlockCreated because local peer removed from world"
@@ -2059,16 +2088,76 @@ impl Actor {
         let stale_payload_only = stale_view.is_some() || passive_conflicting_same_height;
         let revive_aborted = !stale_payload_only
             && pending_status.is_some_and(|(aborted, _, status, commit_qc_seen)| {
-                aborted && commit_qc_seen && !matches!(status, ValidationStatus::Invalid)
+                aborted
+                    && !matches!(status, ValidationStatus::Invalid)
+                    && (commit_qc_seen
+                        // Block sync may deliver the payload before an explicit commit sidecar or
+                        // checkpoint is applied locally. Keep that authoritative recovery traffic
+                        // from getting stuck on an aborted placeholder that would otherwise be
+                        // treated as a duplicate.
+                        || allow_aborted_revival_without_local_commit_qc)
             });
         if pending_status.is_some() && !revive_aborted && !stale_payload_only {
             if da_enabled {
                 let session_key = Self::session_key(&block_hash, height, view);
                 if self.frontier_slot_is_exact_height(height) {
-                    // The exact-frontier path already has a local pending block, so the live RBC
-                    // runtime can retire. Keep the persisted snapshot and operator summary until
-                    // commit or TTL cleanup so restart recovery still has durable payload state.
-                    self.clear_rbc_runtime_state(session_key, false);
+                    let payload_hash = self
+                        .pending
+                        .pending_blocks
+                        .get(&block_hash)
+                        .map(|pending| pending.payload_hash)
+                        .unwrap_or_else(|| {
+                            Hash::new(&super::proposals::block_payload_bytes(&block))
+                        });
+                    let needs_retry = self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .sessions
+                        .get(&session_key)
+                        .is_some_and(|session| {
+                            !session.is_invalid()
+                                && !session.delivered
+                                && (!session.sent_ready
+                                    || super::rbc_session_needs_payload(session, payload_hash))
+                        });
+                    if needs_retry
+                        && self
+                            .subsystems
+                            .da_rbc
+                            .rbc
+                            .sessions
+                            .get(&session_key)
+                            .is_some_and(|session| {
+                                super::rbc_session_needs_payload(session, payload_hash)
+                            })
+                    {
+                        let payload_bytes = super::proposals::block_payload_bytes(&block);
+                        self.hydrate_rbc_session_from_block(
+                            session_key,
+                            &payload_bytes,
+                            payload_hash,
+                            sender.as_ref(),
+                        )?;
+                    }
+                    if needs_retry {
+                        self.populate_rbc_session_metadata_from_block(session_key, &block);
+                        self.retry_rbc_progress_after_block_created_hydration(session_key);
+                    }
+                    if !self
+                        .subsystems
+                        .da_rbc
+                        .rbc
+                        .sessions
+                        .get(&session_key)
+                        .is_some_and(|session| !session.is_invalid() && !session.delivered)
+                    {
+                        // The exact-frontier path already has a local pending block, so the live
+                        // RBC runtime can retire once no further READY/DELIVER progress is needed.
+                        // Keep the persisted snapshot and operator summary until commit or TTL
+                        // cleanup so restart recovery still has durable payload state.
+                        self.clear_rbc_runtime_state(session_key, false);
+                    }
                     self.publish_rbc_backlog_snapshot();
                 } else {
                     let payload_hash = self
@@ -3332,6 +3421,14 @@ impl Actor {
             .get()
             .is_some_and(|pending| pending == block_hash)
         {
+            self.preserve_block_created_for_deferred_replay(
+                &block,
+                frontier,
+                inline_hint,
+                inline_proposal,
+                sender,
+                "pending_processing_block_created",
+            );
             debug!(
                 height,
                 view,
@@ -3351,6 +3448,14 @@ impl Actor {
             .as_ref()
             .is_some_and(|inflight| inflight.block_hash == block_hash)
         {
+            self.preserve_block_created_for_deferred_replay(
+                &block,
+                frontier,
+                inline_hint,
+                inline_proposal,
+                sender,
+                "commit_inflight_block_created",
+            );
             debug!(
                 height,
                 view,
@@ -3369,7 +3474,7 @@ impl Actor {
         match self.pending.pending_blocks.entry(block_hash) {
             Entry::Occupied(mut occ) => {
                 if revive_aborted {
-                    let commit_qc_epoch = occ.get().commit_qc_epoch;
+                    let commit_qc_epoch = occ.get().commit_qc_epoch.or(observed_commit_qc_epoch);
                     let pending = occ.get_mut();
                     pending.revive_after_abort(block, payload_hash, height, view);
                     if let Some(epoch) = commit_qc_epoch {
@@ -3392,6 +3497,8 @@ impl Actor {
                 let mut pending = PendingBlock::new(block, payload_hash, height, view);
                 if stale_payload_only {
                     pending.retire_same_height();
+                } else if let Some(epoch) = observed_commit_qc_epoch {
+                    pending.note_commit_qc_observed(epoch);
                 }
                 vac.insert(pending);
             }

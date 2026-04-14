@@ -36,14 +36,14 @@ async fn set_up_trigger(
     network: &sandbox::SerializedNetwork,
 ) -> eyre::Result<(DomainId, AccountId, TriggerId)> {
     let iroha = network.client();
-    let failand: DomainId = "failand".parse()?;
+    let failand: DomainId = DomainId::try_new("failand", "universal")?;
     let create_failand = Register::domain(Domain::new(failand.clone()));
 
     let (the_one_who_fails, account_keypair) = gen_account_in(failand.name());
     let create_the_one_who_fails = Register::account(Account::new(the_one_who_fails.clone()));
 
     let fail_on_account_events = "fail".parse::<TriggerId>()?;
-    let fail_isi = Unregister::domain("dummy".parse().unwrap());
+    let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
     let register_fail_on_account_events = Register::trigger(Trigger::new(
         fail_on_account_events.clone(),
         Action::new(

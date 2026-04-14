@@ -117,9 +117,9 @@ async fn zk_roots_endpoint_returns_bounded_recent_roots() {
     });
 
     // Seed shielded roots via ISIs
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let asset_def_id = AssetDefinitionId::new(
-        "zkd".parse().expect("domain id"),
+        DomainId::try_new("zkd", "universal").expect("domain id"),
         "rose".parse().expect("asset definition name"),
     );
     let asset_alias = "rose#centralbank";

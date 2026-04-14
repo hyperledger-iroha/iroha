@@ -535,6 +535,7 @@ mod tests {
     use iroha_data_model::{
         account::AccountId,
         asset::{AssetDefinitionId, AssetId},
+        domain::DomainId,
         offline::OfflineAllowanceCommitment,
     };
     use iroha_primitives::numeric::Numeric;
@@ -556,7 +557,7 @@ mod tests {
 
     fn sample_asset() -> AssetId {
         let definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let owner = sample_account();

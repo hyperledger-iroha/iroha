@@ -67,11 +67,19 @@ enum Field {
     Seed,
     Tps,
     MaxInflight,
+    Submitters,
     WorkloadProfile,
     AllowContractDeployInStable,
     LogFilter,
     FaultMin,
     FaultMax,
+    FaultCrashRestart,
+    FaultWipeStorage,
+    FaultSpamInvalidTransactions,
+    FaultNetworkLatency,
+    FaultNetworkPartition,
+    FaultCpuStress,
+    FaultDiskSaturation,
     Run,
     Quit,
 }
@@ -90,11 +98,19 @@ impl Field {
             Field::Seed => "Seed",
             Field::Tps => "Tx/s Target",
             Field::MaxInflight => "Max Inflight",
+            Field::Submitters => "Submitters",
             Field::WorkloadProfile => "Workload Profile",
             Field::AllowContractDeployInStable => "Stable Contract Deploys",
             Field::LogFilter => "Log Filter",
             Field::FaultMin => "Fault Interval Min",
             Field::FaultMax => "Fault Interval Max",
+            Field::FaultCrashRestart => "Fault: Crash Restart",
+            Field::FaultWipeStorage => "Fault: Wipe Storage",
+            Field::FaultSpamInvalidTransactions => "Fault: Spam Invalid Tx",
+            Field::FaultNetworkLatency => "Fault: Network Latency",
+            Field::FaultNetworkPartition => "Fault: Network Partition",
+            Field::FaultCpuStress => "Fault: CPU Stress",
+            Field::FaultDiskSaturation => "Fault: Disk Saturation",
             Field::Run => "Run",
             Field::Quit => "Quit",
         }
@@ -113,11 +129,19 @@ impl Field {
             Field::Seed,
             Field::Tps,
             Field::MaxInflight,
+            Field::Submitters,
             Field::WorkloadProfile,
             Field::AllowContractDeployInStable,
             Field::LogFilter,
             Field::FaultMin,
             Field::FaultMax,
+            Field::FaultCrashRestart,
+            Field::FaultWipeStorage,
+            Field::FaultSpamInvalidTransactions,
+            Field::FaultNetworkLatency,
+            Field::FaultNetworkPartition,
+            Field::FaultCpuStress,
+            Field::FaultDiskSaturation,
             Field::Run,
             Field::Quit,
         ];
@@ -144,6 +168,15 @@ struct App {
     list_state: ListState,
     input: Option<InputState>,
     message: Option<Message>,
+}
+
+fn parse_bool_input(buffer: &str, label: &str) -> Result<bool, String> {
+    let normalized = buffer.trim().to_ascii_lowercase();
+    match normalized.as_str() {
+        "1" | "true" | "yes" | "on" | "y" => Ok(true),
+        "0" | "false" | "no" | "off" | "n" => Ok(false),
+        other => Err(format!("{label} must be true/false (received `{other}`)")),
+    }
 }
 
 impl App {
@@ -496,6 +529,16 @@ impl App {
                 }
                 self.args.max_inflight = v;
             }
+            Field::Submitters => {
+                let v: usize = buffer
+                    .trim()
+                    .parse()
+                    .map_err(|_| "Submitters must be a positive integer".to_string())?;
+                if v == 0 {
+                    return Err("Submitters must be greater than zero".into());
+                }
+                self.args.submitters = v;
+            }
             Field::WorkloadProfile => {
                 let normalized = buffer.trim().to_ascii_lowercase();
                 self.args.workload_profile = match normalized.as_str() {
@@ -532,6 +575,31 @@ impl App {
                 let dur = parse_duration(buffer.trim())
                     .map_err(|e| format!("Invalid max interval: {e}"))?;
                 self.args.fault_interval_max = dur;
+            }
+            Field::FaultCrashRestart => {
+                self.args.faults.crash_restart = parse_bool_input(buffer, "Crash restart fault")?;
+            }
+            Field::FaultWipeStorage => {
+                self.args.faults.wipe_storage = parse_bool_input(buffer, "Wipe storage fault")?;
+            }
+            Field::FaultSpamInvalidTransactions => {
+                self.args.faults.spam_invalid_transactions =
+                    parse_bool_input(buffer, "Spam invalid transactions fault")?;
+            }
+            Field::FaultNetworkLatency => {
+                self.args.faults.network_latency =
+                    parse_bool_input(buffer, "Network latency fault")?;
+            }
+            Field::FaultNetworkPartition => {
+                self.args.faults.network_partition =
+                    parse_bool_input(buffer, "Network partition fault")?;
+            }
+            Field::FaultCpuStress => {
+                self.args.faults.cpu_stress = parse_bool_input(buffer, "CPU stress fault")?;
+            }
+            Field::FaultDiskSaturation => {
+                self.args.faults.disk_saturation =
+                    parse_bool_input(buffer, "Disk saturation fault")?;
             }
             Field::Run | Field::Quit => {}
         }
@@ -616,6 +684,7 @@ impl App {
                 .map_or_else(|| "(unset)".to_string(), |s| s.to_string()),
             Field::Tps => format!("{:.2}", self.args.tps),
             Field::MaxInflight => self.args.max_inflight.to_string(),
+            Field::Submitters => self.args.submitters.to_string(),
             Field::WorkloadProfile => match self.args.workload_profile {
                 WorkloadProfile::Stable => "stable".to_string(),
                 WorkloadProfile::Chaos => "chaos".to_string(),
@@ -630,6 +699,15 @@ impl App {
             Field::LogFilter => self.args.log_filter.clone(),
             Field::FaultMin => format_duration(self.args.fault_interval_min).to_string(),
             Field::FaultMax => format_duration(self.args.fault_interval_max).to_string(),
+            Field::FaultCrashRestart => self.args.faults.crash_restart.to_string(),
+            Field::FaultWipeStorage => self.args.faults.wipe_storage.to_string(),
+            Field::FaultSpamInvalidTransactions => {
+                self.args.faults.spam_invalid_transactions.to_string()
+            }
+            Field::FaultNetworkLatency => self.args.faults.network_latency.to_string(),
+            Field::FaultNetworkPartition => self.args.faults.network_partition.to_string(),
+            Field::FaultCpuStress => self.args.faults.cpu_stress.to_string(),
+            Field::FaultDiskSaturation => self.args.faults.disk_saturation.to_string(),
             Field::Run => "(start)".into(),
             Field::Quit => "(exit)".into(),
         }
@@ -656,6 +734,7 @@ impl App {
             Field::AllowNet => self.args.allow_net.to_string(),
             Field::Tps => self.args.tps.to_string(),
             Field::MaxInflight => self.args.max_inflight.to_string(),
+            Field::Submitters => self.args.submitters.to_string(),
             Field::WorkloadProfile => match self.args.workload_profile {
                 WorkloadProfile::Stable => "stable".to_string(),
                 WorkloadProfile::Chaos => "chaos".to_string(),
@@ -666,6 +745,15 @@ impl App {
             Field::LogFilter => self.args.log_filter.clone(),
             Field::FaultMin => format_duration(self.args.fault_interval_min).to_string(),
             Field::FaultMax => format_duration(self.args.fault_interval_max).to_string(),
+            Field::FaultCrashRestart => self.args.faults.crash_restart.to_string(),
+            Field::FaultWipeStorage => self.args.faults.wipe_storage.to_string(),
+            Field::FaultSpamInvalidTransactions => {
+                self.args.faults.spam_invalid_transactions.to_string()
+            }
+            Field::FaultNetworkLatency => self.args.faults.network_latency.to_string(),
+            Field::FaultNetworkPartition => self.args.faults.network_partition.to_string(),
+            Field::FaultCpuStress => self.args.faults.cpu_stress.to_string(),
+            Field::FaultDiskSaturation => self.args.faults.disk_saturation.to_string(),
             Field::Run | Field::Quit => return None,
         })
     }

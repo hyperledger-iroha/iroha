@@ -63,7 +63,7 @@ public final class MultisigRegisterInstructionTests {
     boolean threw = false;
     try {
       MultisigRegisterInstruction.builder()
-          .setAccountId(canonical + "@hbl.dataspace")
+          .setAccountId(canonical + "@banka.dataspace")
           .setSpec(spec)
           .build();
     } catch (final IllegalArgumentException expected) {

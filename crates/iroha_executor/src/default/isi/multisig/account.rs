@@ -409,8 +409,8 @@ mod tests {
 
     #[test]
     fn signatories_from_multiple_domains_are_allowed() {
-        let domain_a: DomainId = "wonderland".parse().unwrap();
-        let domain_b: DomainId = "looking_glass".parse().unwrap();
+        let domain_a: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
+        let domain_b: DomainId = DomainId::try_new("looking_glass", "universal").unwrap();
         let account_a = account(0, &domain_a);
         let account_b = account(1, &domain_b);
 
@@ -430,7 +430,7 @@ mod tests {
 
     #[test]
     fn quorum_must_be_reachable() {
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let single = account(0, &domain);
         let mut signatories = BTreeMap::new();
         signatories.insert(single, 1);
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn acyclic_graph_passes_validation() {
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let root = account(0, &domain);
         let child_a = account(1, &domain);
         let child_b = account(2, &domain);
@@ -471,7 +471,7 @@ mod tests {
 
     #[test]
     fn cyclic_graph_is_rejected() {
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let root = account(0, &domain);
         let child = account(1, &domain);
 
@@ -491,7 +491,7 @@ mod tests {
 
     #[test]
     fn signatory_materialization_skips_multisig_subject() {
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let multisig_account = account(0, &domain);
         let signer_one = account(1, &domain);
         let signer_two = account(2, &domain);

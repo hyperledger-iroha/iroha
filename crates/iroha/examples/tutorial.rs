@@ -2,6 +2,7 @@
 
 use eyre::{Error, WrapErr};
 use iroha::config::{Config, LoadPath};
+use iroha::data_model::DomainId;
 // #region rust_config_crates
 // #endregion rust_config_crates
 
@@ -40,7 +41,7 @@ fn domain_registration_test(config: Config) -> Result<(), Error> {
 
     // #region domain_register_example_create_domain
     // Create a domain Id
-    let looking_glass: DomainId = "looking_glass".parse()?;
+    let looking_glass: DomainId = DomainId::try_new("looking_glass", "universal")?;
     // #endregion domain_register_example_create_domain
 
     // #region domain_register_example_create_isi
@@ -117,7 +118,8 @@ fn account_registration_test(config: Config) -> Result<(), Error> {
 
     // #region register_account_generate
     // Generate a new account
-    let _account_domain: DomainId = "wonderland".parse().expect("valid domain id");
+    let _account_domain: DomainId =
+        DomainId::try_new("wonderland", "universal").expect("valid domain id");
     let create_account = Register::account(Account::new(account_id.clone()));
     // #endregion register_account_generate
 
@@ -155,7 +157,7 @@ fn asset_registration_test(config: Config) -> Result<(), Error> {
     // #region register_asset_create_asset
     // Create an asset
     let asset_def_id = AssetDefinitionId::new(
-        "looking_glass".parse().expect("valid domain identifier"),
+        DomainId::try_new("looking_glass", "universal").expect("valid domain identifier"),
         "time".parse().expect("valid asset identifier"),
     );
     // #endregion register_asset_create_asset
@@ -203,7 +205,7 @@ fn asset_minting_test(config: Config) -> Result<(), Error> {
     // Define the instances of an Asset and Account
     // #region mint_asset_define_asset_account
     let roses = AssetDefinitionId::new(
-        "wonderland".parse().expect("valid domain identifier"),
+        DomainId::try_new("wonderland", "universal").expect("valid domain identifier"),
         "rose".parse().expect("valid asset identifier"),
     );
     let alice = AccountId::new(
@@ -258,7 +260,7 @@ fn asset_burning_test(config: Config) -> Result<(), Error> {
     // #region burn_asset_define_asset_account
     // Define the instances of an Asset and Account
     let roses = AssetDefinitionId::new(
-        "wonderland".parse().expect("valid domain identifier"),
+        DomainId::try_new("wonderland", "universal").expect("valid domain identifier"),
         "rose".parse().expect("valid asset identifier"),
     );
     let alice = AccountId::new(

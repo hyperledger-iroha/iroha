@@ -1797,27 +1797,34 @@ impl<'a> Parser<'a> {
             if self.peek(TokenKind::Dot) {
                 self.bump();
                 // Accept `ident` or numeric tuple index after '.'
-                let field = if let Some(Token {
-                    kind: TokenKind::Ident(s),
-                    ..
-                }) = self.tokens.get(self.pos)
-                {
-                    let s = s.clone();
-                    self.bump();
-                    s
-                } else if let Some(token) = self.tokens.get(self.pos).cloned()
-                    && let TokenKind::Number(n) = token.kind.clone()
-                {
-                    self.bump();
-                    let index = self.number_to_usize(&token, n, "tuple index")?;
-                    index.to_string()
+                let (field, field_token) = if let Some(token) = self.tokens.get(self.pos).cloned() {
+                    match token.kind.clone() {
+                        TokenKind::Ident(s) => {
+                            self.bump();
+                            (s, Some(token))
+                        }
+                        TokenKind::Number(n) => {
+                            self.bump();
+                            let index = self.number_to_usize(&token, n, "tuple index")?;
+                            (index.to_string(), None)
+                        }
+                        _ => {
+                            // Avoid borrowing self immutably and mutably in a single expression
+                            let tok = self.bump();
+                            return Err(self.error(tok, "identifier or tuple index"));
+                        }
+                    }
                 } else {
-                    // Avoid borrowing self immutably and mutably in a single expression
                     let tok = self.bump();
                     return Err(self.error(tok, "identifier or tuple index"));
                 };
                 // Method-call sugar: `expr.method(args...)` -> `Call { name: method, args: [expr, args...] }`
                 if self.peek(TokenKind::LParen) {
+                    if let Some(token) = field_token.as_ref()
+                        && let Some(message) = removed_method_helper_message(&field)
+                    {
+                        return Err(self.error(token.clone(), message));
+                    }
                     self.bump();
                     let mut args = Vec::new();
                     if !self.peek(TokenKind::RParen) {
@@ -1894,6 +1901,9 @@ impl<'a> Parser<'a> {
                     return self.parse_macro_invocation(ident_token, name);
                 }
                 if self.peek(TokenKind::LParen) {
+                    if let Some(message) = removed_free_helper_message(&name) {
+                        return Err(self.error(ident_token, message));
+                    }
                     self.bump();
                     let mut args = Vec::new();
                     if !self.peek(TokenKind::RParen) {
@@ -2098,8 +2108,21 @@ impl<'a> Parser<'a> {
         Ok(Some(bound))
     }
 
+    fn parse_param_type_annotation(&mut self) -> ParseResult<(bool, TypeExpr)> {
+        let is_state = if self.peek(TokenKind::State) {
+            self.bump();
+            true
+        } else {
+            false
+        };
+        let ty = self.parse_type_expr()?;
+        Ok((is_state, ty))
+    }
+
     fn parse_param(&mut self) -> ParseResult<Param> {
         // Support both `Type name` and `name: Type` forms, or bare `name`.
+        // Typed parameters may be prefixed with `state` to request a durable
+        // state-map handle (for example `state Map<Name, int> balances`).
         let save = self.pos;
         // Try `Type name`
         if let Ok(ty) = self.try_parse_type_then_name() {
@@ -2108,19 +2131,24 @@ impl<'a> Parser<'a> {
         self.pos = save;
         // Fallback `name [: Type]?`
         let name = self.expect_ident()?;
-        let ty = if self.peek(TokenKind::Colon) {
+        let (is_state, ty) = if self.peek(TokenKind::Colon) {
             self.bump();
-            Some(self.parse_type_expr()?)
+            let (is_state, ty) = self.parse_param_type_annotation()?;
+            (is_state, Some(ty))
         } else {
-            None
+            (false, None)
         };
-        Ok(Param { ty, name })
+        Ok(Param { ty, name, is_state })
     }
 
     fn try_parse_type_then_name(&mut self) -> ParseResult<Param> {
-        let ty = self.parse_type_expr()?;
+        let (is_state, ty) = self.parse_param_type_annotation()?;
         let name = self.expect_ident()?;
-        Ok(Param { ty: Some(ty), name })
+        Ok(Param {
+            ty: Some(ty),
+            name,
+            is_state,
+        })
     }
 
     fn expect(&mut self, kind: TokenKind) -> ParseResult<()> {
@@ -2246,9 +2274,93 @@ impl<'a> Parser<'a> {
     }
 }
 
+fn removed_method_helper_message(name: &str) -> Option<&'static str> {
+    match name {
+        "has" => Some("`map.has(key)` was removed; use `map.contains(key)`"),
+        "get_or_insert_default" => Some(
+            "`map.get_or_insert_default(key, default)` was removed; use `map.ensure(key, default)`",
+        ),
+        "path_map_key" | "path_map_key_norito" => {
+            Some("`base.path_map_key(segment)` was removed; use `base.path(segment)`")
+        }
+        "json_get_int" => Some("`json.json_get_int(key)` was removed; use `json.get_int(key)`"),
+        "json_get_numeric" => {
+            Some("`json.json_get_numeric(key)` was removed; use `json.get_numeric(key)`")
+        }
+        "json_get_json" => Some("`json.json_get_json(key)` was removed; use `json.get_json(key)`"),
+        "json_get_name" => Some("`json.json_get_name(key)` was removed; use `json.get_name(key)`"),
+        "json_get_account_id" => {
+            Some("`json.json_get_account_id(key)` was removed; use `json.get_account_id(key)`")
+        }
+        "json_get_asset_definition_id" => Some(
+            "`json.json_get_asset_definition_id(key)` was removed; use `json.get_asset_definition_id(key)`",
+        ),
+        "json_get_nft_id" => {
+            Some("`json.json_get_nft_id(key)` was removed; use `json.get_nft_id(key)`")
+        }
+        "json_get_blob_hex" => {
+            Some("`json.json_get_blob_hex(key)` was removed; use `json.get_blob_hex(key)`")
+        }
+        _ => None,
+    }
+}
+
+fn removed_free_helper_message(name: &str) -> Option<&'static str> {
+    match name {
+        "contains" | "std::map::contains" | "has" | "std::map::has" => {
+            Some("`contains(...)` was removed; use `map.contains(key)`")
+        }
+        "get_or" | "std::map::get_or" => {
+            Some("`get_or(...)` was removed; use `map.get_or(key, default)`")
+        }
+        "get_or_insert_default"
+        | "std::map::get_or_insert_default"
+        | "ensure"
+        | "std::map::ensure" => {
+            Some("`ensure(...)` was removed as a free helper; use `map.ensure(key, default)`")
+        }
+        "path"
+        | "path_map_key"
+        | "path_map_key_norito"
+        | "host::path"
+        | "host::path_map_key"
+        | "host::path_map_key_norito" => {
+            Some("`path(...)` was removed as a free helper; use `base.path(segment)`")
+        }
+        "get_int" | "json_get_int" | "json::get_int" => {
+            Some("`get_int(...)` was removed as a free helper; use `json.get_int(key)`")
+        }
+        "get_numeric" | "json_get_numeric" | "json::get_numeric" => {
+            Some("`get_numeric(...)` was removed as a free helper; use `json.get_numeric(key)`")
+        }
+        "get_json" | "json_get_json" | "json::get_json" => {
+            Some("`get_json(...)` was removed as a free helper; use `json.get_json(key)`")
+        }
+        "get_name" | "json_get_name" | "json::get_name" => {
+            Some("`get_name(...)` was removed as a free helper; use `json.get_name(key)`")
+        }
+        "get_account_id" | "json_get_account_id" | "json::get_account_id" => Some(
+            "`get_account_id(...)` was removed as a free helper; use `json.get_account_id(key)`",
+        ),
+        "get_asset_definition_id"
+        | "json_get_asset_definition_id"
+        | "json::get_asset_definition_id" => Some(
+            "`get_asset_definition_id(...)` was removed as a free helper; use `json.get_asset_definition_id(key)`",
+        ),
+        "get_nft_id" | "json_get_nft_id" | "json::get_nft_id" => {
+            Some("`get_nft_id(...)` was removed as a free helper; use `json.get_nft_id(key)`")
+        }
+        "get_blob_hex" | "json_get_blob_hex" | "json::get_blob_hex" => {
+            Some("`get_blob_hex(...)` was removed as a free helper; use `json.get_blob_hex(key)`")
+        }
+        _ => None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_data_model::DomainId;
 
     fn sample_account_literal() -> String {
         iroha_data_model::account::AccountId::new(
@@ -2556,6 +2668,74 @@ mod tests {
     }
 
     #[test]
+    fn parse_state_map_parameter_annotations() {
+        let src = r#"
+        fn helper(state Map<Name, int> balances, key: Name, owners: state Map<int, AccountId>) {}
+        "#;
+        let prog = parse(src).expect("parse state params");
+        let func = prog
+            .items
+            .iter()
+            .find_map(|item| match item {
+                Item::Function(f) => Some(f),
+                _ => None,
+            })
+            .expect("function present");
+        assert_eq!(func.params.len(), 3);
+        assert!(func.params[0].is_state);
+        assert_eq!(func.params[0].name, "balances");
+        assert!(func.params[1].ty.is_some());
+        assert!(!func.params[1].is_state);
+        assert!(func.params[2].is_state);
+        assert_eq!(func.params[2].name, "owners");
+    }
+
+    #[test]
+    fn parse_rejects_removed_free_map_helpers() {
+        let err = parse("fn f(m: Map<int, int>) { let _x = get_or(m, 1, 7); }")
+            .expect_err("free get_or should be rejected");
+        assert!(
+            err.contains("map.get_or(key, default)"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_removed_free_json_helpers() {
+        let err = parse("fn f(ev: Json) { let _x = get_int(ev, name(\"n\")); }")
+            .expect_err("free get_int should be rejected");
+        assert!(err.contains("json.get_int(key)"), "unexpected error: {err}");
+    }
+
+    #[test]
+    fn parse_rejects_removed_method_map_aliases() {
+        let err = parse("fn f(m: Map<int, int>) { let _x = m.has(1); }")
+            .expect_err("method has should be rejected");
+        assert!(err.contains("map.contains(key)"), "unexpected error: {err}");
+
+        let err = parse("fn f(m: Map<int, int>) { let _x = m.get_or_insert_default(1, 7); }")
+            .expect_err("method get_or_insert_default should be rejected");
+        assert!(
+            err.contains("map.ensure(key, default)"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn parse_rejects_removed_method_path_and_json_aliases() {
+        let err = parse("fn f(base: Name) { let _x = base.path_map_key(7); }")
+            .expect_err("method path_map_key should be rejected");
+        assert!(
+            err.contains("base.path(segment)"),
+            "unexpected error: {err}"
+        );
+
+        let err = parse("fn f(ev: Json) { let _x = ev.json_get_int(name(\"n\")); }")
+            .expect_err("method json_get_int should be rejected");
+        assert!(err.contains("json.get_int(key)"), "unexpected error: {err}");
+    }
+
+    #[test]
     fn parse_kotoba_block_collects_entries() {
         let src = r#"
         kotoba {
@@ -2638,7 +2818,7 @@ mod tests {
 
     fn sample_asset_definition_literal() -> String {
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         )
         .to_string()

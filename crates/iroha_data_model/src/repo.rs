@@ -250,6 +250,7 @@ impl JsonKeyCodec for RepoAgreementId {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::domain::DomainId;
 
     const ALICE_ID_STR: &str =
         "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
@@ -264,14 +265,14 @@ mod tests {
         );
         let cash_leg = RepoCashLeg {
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: Numeric::from(1_000u32),
         };
         let collateral_leg = RepoCollateralLeg::new(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
             Numeric::from(1_100u32),

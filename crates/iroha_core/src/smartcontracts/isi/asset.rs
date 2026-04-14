@@ -470,8 +470,13 @@ pub mod isi {
 
         let alias_domains: BTreeSet<_> = state_transaction
             .world
-            .alias_domains_for_account(subject)
+            .bound_account_aliases(subject)
             .into_iter()
+            .filter_map(|alias| {
+                alias
+                    .domain_id(&state_transaction.nexus.dataspace_catalog)
+                    .expect("bound account alias dataspace must exist in catalog")
+            })
             .collect();
 
         for domain_id in &binding.allowed_domains {
@@ -1327,7 +1332,7 @@ pub mod query {
                     }
                 }
                 "domain" | "definition.domain" | "id.definition.domain" => {
-                    if let Ok(domain_id) = raw.parse() {
+                    if let Ok(domain_id) = DomainId::parse_fully_qualified(raw) {
                         self.domains.insert(domain_id);
                     }
                 }
@@ -1335,8 +1340,8 @@ pub mod query {
                     if let Ok(asset_id) = raw.parse::<AssetId>() {
                         self.subjects.insert(asset_id.account().subject_id());
                         self.definitions.insert(asset_id.definition().clone());
-                        if !asset_id.definition().is_opaque_canonical() {
-                            self.domains.insert(asset_id.definition().domain().clone());
+                        if let Some(domain_id) = asset_id.definition().try_domain() {
+                            self.domains.insert(domain_id.clone());
                         }
                     }
                 }
@@ -1401,8 +1406,11 @@ pub mod query {
                 return false;
             }
             if !self.domains.is_empty()
-                && (asset.id().definition().is_opaque_canonical()
-                    || !self.domains.contains(asset.id().definition().domain()))
+                && !asset
+                    .id()
+                    .definition()
+                    .try_domain()
+                    .is_some_and(|domain| self.domains.contains(domain))
             {
                 return false;
             }
@@ -1439,10 +1447,11 @@ pub mod query {
             | "asset_definition_id"
             | "definition_id"
             | "id.definition" => Some(asset.id().definition().to_string()),
-            "domain" | "definition.domain" | "id.definition.domain" => {
-                (!asset.id().definition().is_opaque_canonical())
-                    .then(|| asset.id().definition().domain().to_string())
-            }
+            "domain" | "definition.domain" | "id.definition.domain" => asset
+                .id()
+                .definition()
+                .try_domain()
+                .map(|domain| domain.to_string()),
             _ => None,
         }
     }
@@ -1491,7 +1500,7 @@ pub mod query {
                         let Value::String(raw) = value else {
                             return None;
                         };
-                        raw.parse::<DomainId>().ok()
+                        DomainId::parse_fully_qualified(raw).ok()
                     })
                     .collect::<BTreeSet<_>>()
                     .into_iter()
@@ -1723,9 +1732,11 @@ pub mod query {
                                 world
                                     .assets_iter()
                                     .filter(move |entry| {
-                                        let definition = entry.id().definition();
-                                        !definition.is_opaque_canonical()
-                                            && domains.contains(definition.domain())
+                                        entry
+                                            .id()
+                                            .definition()
+                                            .try_domain()
+                                            .is_some_and(|domain| domains.contains(domain))
                                     })
                                     .map(entry_to_asset),
                             )
@@ -1785,8 +1796,9 @@ pub mod query {
                                 definitions
                                     .iter()
                                     .filter(|definition| {
-                                        !definition.is_opaque_canonical()
-                                            && domains.contains(definition.domain())
+                                        definition
+                                            .try_domain()
+                                            .is_some_and(|domain| domains.contains(domain))
                                     })
                                     .cloned()
                                     .collect::<BTreeSet<_>>(),
@@ -1811,10 +1823,12 @@ pub mod query {
                             world
                                 .assets_in_account_iter(&subject)
                                 .filter(move |entry| {
-                                    let definition = entry.id().definition();
                                     domains.as_ref().is_none_or(|domains| {
-                                        !definition.is_opaque_canonical()
-                                            && domains.contains(definition.domain())
+                                        entry
+                                            .id()
+                                            .definition()
+                                            .try_domain()
+                                            .is_some_and(|domain| domains.contains(domain))
                                     })
                                 })
                                 .map(entry_to_asset)
@@ -1831,8 +1845,9 @@ pub mod query {
                         Some(definitions) => definitions
                             .into_iter()
                             .filter(|definition| {
-                                !definition.is_opaque_canonical()
-                                    && domains.contains(definition.domain())
+                                definition
+                                    .try_domain()
+                                    .is_some_and(|domain| domains.contains(domain))
                             })
                             .collect(),
                         None => {
@@ -1877,6 +1892,33 @@ pub mod query {
                 filter.applies(asset)
             }));
             Ok(iter)
+        }
+    }
+
+    impl ValidQuery for FindAssetsByAccountId {
+        #[metrics(+"find_assets_by_account_id")]
+        fn execute(
+            self,
+            filter: CompoundPredicate<Asset>,
+            state_ro: &impl StateReadOnly,
+        ) -> Result<impl Iterator<Item = Asset>, Error> {
+            fn entry_to_asset(entry: AssetEntry<'_>) -> Asset {
+                Asset {
+                    id: entry.id().clone(),
+                    value: entry.value().clone().into_inner(),
+                }
+            }
+
+            let account_id = self.account_id().clone();
+            state_ro.world().account(&account_id)?;
+
+            Ok(state_ro
+                .world()
+                .assets_in_account_iter(&account_id)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .map(entry_to_asset)
+                .filter(move |asset| filter.applies(asset)))
         }
     }
 
@@ -1966,13 +2008,14 @@ pub mod query {
         fn build_asset_transfer_control_test_state(
             source_balance: u32,
         ) -> (State, AssetDefinitionId, AssetId) {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
             let asset_definition_id: AssetDefinitionId =
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "rose".parse().unwrap(),
                 );
             let asset_definition = build_numeric_asset_definition(&asset_definition_id, &ALICE_ID);
@@ -2030,11 +2073,12 @@ pub mod query {
 
         #[test]
         fn find_assets_returns_registered_balances() {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = build_account_in_domain(&ALICE_ID, &domain_id);
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let asset_def = {
@@ -2063,14 +2107,60 @@ pub mod query {
         }
 
         #[test]
-        fn find_assets_filters_by_account_predicate() {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        fn find_assets_by_account_id_limits_results_to_requested_owner() {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
             let bob_account = build_account_in_domain(&bob_id, &domain_id);
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            );
+            let asset_def = {
+                let __asset_definition_id = asset_def_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            }
+            .build(&ALICE_ID);
+            let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
+            let bob_asset_id = AssetId::new(asset_def_id.clone(), bob_id.clone());
+            let alice_asset = Asset::new(alice_asset_id.clone(), Numeric::new(13, 0));
+            let bob_asset = Asset::new(bob_asset_id, Numeric::new(7, 0));
+
+            let world = World::with_assets(
+                [domain],
+                [alice_account, bob_account],
+                [asset_def],
+                [alice_asset, bob_asset],
+                [],
+            );
+            let kura = Kura::blank_kura_for_testing();
+            let query_store = LiveQueryStore::start_test();
+            let state = State::new(world, kura, query_store);
+            let view = state.view();
+
+            let assets: Vec<_> = FindAssetsByAccountId::new(ALICE_ID.clone())
+                .execute(CompoundPredicate::PASS, &view)
+                .expect("query execution succeeds")
+                .collect();
+
+            assert_eq!(assets.len(), 1);
+            assert_eq!(assets[0].id().account(), &*ALICE_ID);
+            assert_eq!(assets[0].id(), &alice_asset_id);
+        }
+
+        #[test]
+        fn find_assets_filters_by_account_predicate() {
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
+            let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
+            let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
+            let bob_account = build_account_in_domain(&bob_id, &domain_id);
+            let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let asset_def = {
@@ -2125,7 +2215,7 @@ pub mod query {
             );
 
             let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let definition_filter =
@@ -2156,13 +2246,14 @@ pub mod query {
 
         #[test]
         fn find_assets_filters_by_id_account_alias_predicate() {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
             let bob_account = build_account_in_domain(&bob_id, &domain_id);
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let asset_def = {
@@ -2201,8 +2292,10 @@ pub mod query {
 
         #[test]
         fn find_assets_filters_by_account_and_domain_predicate() {
-            let primary_domain_id: DomainId = "wonderland".parse().expect("domain id");
-            let secondary_domain_id: DomainId = "redland".parse().expect("domain id");
+            let primary_domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let secondary_domain_id: DomainId =
+                DomainId::try_new("redland", "universal").expect("domain id");
             let primary_domain = Domain::new(primary_domain_id.clone()).build(&ALICE_ID);
             let secondary_domain = Domain::new(secondary_domain_id.clone()).build(&ALICE_ID);
 
@@ -2283,12 +2376,13 @@ pub mod query {
 
         #[test]
         fn transfer_removes_metadata_when_balance_zero() {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let asset_def = {
@@ -2524,12 +2618,13 @@ pub mod query {
 
         #[test]
         fn transfer_rejects_configured_offline_escrow_source() {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let asset_def = {
@@ -2587,9 +2682,10 @@ pub mod query {
         #[test]
         fn transfer_rejects_metadata_derived_offline_escrow_source() {
             let chain_id: iroha_data_model::ChainId = "testnet".parse().expect("chain id");
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let escrow_account = crate::smartcontracts::isi::domain::isi::offline_escrow_account_id(
@@ -2653,7 +2749,8 @@ pub mod query {
 
         #[test]
         fn find_assets_filters_by_definition_predicate() {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
             let accounts = [
@@ -2661,11 +2758,11 @@ pub mod query {
                 build_account_in_domain(&bob_id, &domain_id),
             ];
             let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let tulip_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "tulip".parse().unwrap(),
             );
             let definitions = [
@@ -2735,7 +2832,8 @@ pub mod query {
 
         #[test]
         fn find_assets_filters_by_id_definition_alias_predicate() {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
             let accounts = [
@@ -2743,11 +2841,11 @@ pub mod query {
                 build_account_in_domain(&bob_id, &domain_id),
             ];
             let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let tulip_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "tulip".parse().unwrap(),
             );
             let definitions = [
@@ -2803,8 +2901,9 @@ pub mod query {
 
         #[test]
         fn find_assets_filters_by_domain_predicate() {
-            let wonderland_id: DomainId = "wonderland".parse().expect("domain id");
-            let oasis_id: DomainId = "oasis".parse().expect("domain id");
+            let wonderland_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let oasis_id: DomainId = DomainId::try_new("oasis", "universal").expect("domain id");
             let domains = [
                 Domain::new(wonderland_id.clone()).build(&ALICE_ID),
                 Domain::new(oasis_id.clone()).build(&ALICE_ID),
@@ -2817,11 +2916,11 @@ pub mod query {
                 build_account_in_domain(&dune_id, &oasis_id),
             ];
             let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let spice_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "oasis".parse().unwrap(),
+                DomainId::try_new("oasis", "universal").unwrap(),
                 "spice".parse().unwrap(),
             );
             let definitions = [
@@ -2889,8 +2988,9 @@ pub mod query {
 
         #[test]
         fn find_assets_filters_by_definition_domain_alias_predicate() {
-            let wonderland_id: DomainId = "wonderland".parse().expect("domain id");
-            let oasis_id: DomainId = "oasis".parse().expect("domain id");
+            let wonderland_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
+            let oasis_id: DomainId = DomainId::try_new("oasis", "universal").expect("domain id");
             let domains = [
                 Domain::new(wonderland_id.clone()).build(&ALICE_ID),
                 Domain::new(oasis_id.clone()).build(&ALICE_ID),
@@ -2903,11 +3003,11 @@ pub mod query {
                 build_account_in_domain(&dune_id, &oasis_id),
             ];
             let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let spice_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "oasis".parse().unwrap(),
+                DomainId::try_new("oasis", "universal").unwrap(),
                 "spice".parse().unwrap(),
             );
             let definitions = [
@@ -2972,11 +3072,12 @@ pub mod query {
 
         #[test]
         fn mint_restricted_asset_uses_current_dataspace_bucket() {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = build_account_in_domain(&ALICE_ID, &domain_id);
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let asset_def = {
@@ -3026,12 +3127,13 @@ pub mod query {
 
         #[test]
         fn transfer_restricted_asset_rejects_cross_dataspace_scope() {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let asset_def = {
@@ -3085,7 +3187,8 @@ pub mod query {
 
         #[test]
         fn transfer_restricted_asset_uses_destination_dataspace_binding_and_policy() {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let source_dataspace = DataSpaceId::new(7);
             let destination_dataspace = DataSpaceId::new(11);
             let uaid_alice = iroha_data_model::nexus::UniversalAccountId::from_hash(
@@ -3104,7 +3207,7 @@ pub mod query {
                 .build(&BOB_ID);
 
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let mut asset_def = {
@@ -3284,12 +3387,13 @@ pub mod query {
 
         #[test]
         fn transfer_rejects_when_issuer_policy_requires_binding_for_destination() {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let alice_account = build_account_in_domain(&ALICE_ID, &domain_id);
             let bob_account = build_account_in_domain(&BOB_ID, &domain_id);
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let mut asset_def = {
@@ -3341,9 +3445,10 @@ pub mod query {
 
         #[test]
         fn transfer_rejects_when_bound_domain_policy_denies_asset() {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let mut domain_metadata = Metadata::default();
@@ -3414,7 +3519,8 @@ pub mod query {
 
         #[test]
         fn transfer_rejects_when_dataspace_manifest_denies_bound_asset() {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let dsid = DataSpaceId::new(7);
             let uaid_alice = iroha_data_model::nexus::UniversalAccountId::from_hash(
                 iroha_crypto::Hash::new(b"uaid:alice"),
@@ -3431,7 +3537,7 @@ pub mod query {
                 .build(&BOB_ID);
 
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let mut asset_def = {

@@ -25,7 +25,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     // Domain sample
     let mut domain_metadata = Metadata::default();
     domain_metadata.insert("Is_Jabberwocky_alive".parse()?, norito::json!(true));
-    let domain = Domain::new("wonderland".parse()?)
+    let domain = Domain::new(DomainId::try_new("wonderland", "universal")?)
         .with_logo(
             "sorafs://bafybeigdyrztk/Qme7ss3ARVgxv6rXqVPiikMJ8u2NLgmgszg13pYrDKEoiu"
                 .parse()

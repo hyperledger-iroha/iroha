@@ -50,6 +50,7 @@ use iroha_data_model::{
         commitment::DaCommitmentLocation, pin_intent::DaPinIntentWithLocation,
         types::StorageTicketId,
     },
+    error::ParseError,
     events::{
         EventBox, SharedDataEvent,
         data::{
@@ -101,7 +102,9 @@ use iroha_data_model::{
         SoraAgentApartmentAuditEventV1, SoraAgentApartmentRecordV1, SoraDecryptionRequestRecordV1,
         SoraDeploymentBundleV1, SoraHfPlacementRecordV1, SoraHfSharedLeaseAuditEventV1,
         SoraHfSharedLeaseMemberV1, SoraHfSharedLeasePoolV1, SoraHfSourceRecordV1,
-        SoraModelArtifactAuditEventV1, SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
+        SoraInrouHostCapabilityRecordV1, SoraInrouReplicaRuntimeStateV1,
+        SoraInrouServicePlacementRecordV1, SoraModelArtifactAuditEventV1,
+        SoraModelArtifactRecordV1, SoraModelHostCapabilityRecordV1,
         SoraModelHostViolationEvidenceRecordV1, SoraModelRegistryV1, SoraModelWeightAuditEventV1,
         SoraModelWeightVersionRecordV1, SoraPrivateCompileProfileV1,
         SoraPrivateInferenceCheckpointV1, SoraPrivateInferenceSessionV1, SoraRuntimeReceiptV1,
@@ -192,14 +195,15 @@ use crate::{
     Peers,
     block::{CommittedBlock, ValidBlock},
     compliance::LaneComplianceEngine,
-    executor::Executor,
+    executor::{Executor, parse_contract_call_execution_context},
     governance::manifest::{
         LaneManifestRegistry, LaneManifestRegistryHandle, ManifestValidatorBinding,
     },
     interlane::{LanePrivacyRegistry, LanePrivacyRegistryHandle},
     kura::Kura,
     nexus::space_directory::{
-        SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
+        AccountScopeDirectoryEntry, SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet,
+        UaidDataspaceBindings,
     },
     query::store::LiveQueryStoreHandle,
     role::RoleIdWithOwner,
@@ -344,6 +348,7 @@ impl<T: MvValue> CellVecExt<T> for CellTransaction<'_, '_, Vec<T>> {
 macro_rules! build_world_block {
     ($state:expr, $method:ident) => {
         WorldBlock {
+            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
             parameters: $state.parameters.$method(),
             peers: $state.peers.$method(),
             consensus_keys: $state.consensus_keys.$method(),
@@ -358,6 +363,7 @@ macro_rules! build_world_block {
             uaid_accounts: $state.uaid_accounts.$method(),
             account_aliases: $state.account_aliases.$method(),
             account_aliases_by_account: $state.account_aliases_by_account.$method(),
+            account_scope_directory: $state.account_scope_directory.$method(),
             opaque_uaids: $state.opaque_uaids.$method(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.$method(),
             identifier_policies: $state.identifier_policies.$method(),
@@ -419,6 +425,7 @@ macro_rules! build_world_block {
             soracloud_service_revisions: $state.soracloud_service_revisions.$method(),
             soracloud_service_deployments: $state.soracloud_service_deployments.$method(),
             soracloud_service_runtime: $state.soracloud_service_runtime.$method(),
+            soracloud_inrou_replica_runtime: $state.soracloud_inrou_replica_runtime.$method(),
             soracloud_service_audit_events: $state.soracloud_service_audit_events.$method(),
             soracloud_service_state_entries: $state.soracloud_service_state_entries.$method(),
             soracloud_decryption_request_records: $state
@@ -451,6 +458,7 @@ macro_rules! build_world_block {
                 .soracloud_private_inference_checkpoints
                 .$method(),
             soracloud_model_host_capabilities: $state.soracloud_model_host_capabilities.$method(),
+            soracloud_inrou_host_capabilities: $state.soracloud_inrou_host_capabilities.$method(),
             soracloud_hf_sources: $state.soracloud_hf_sources.$method(),
             soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.$method(),
             soracloud_hf_shared_lease_members: $state.soracloud_hf_shared_lease_members.$method(),
@@ -461,6 +469,7 @@ macro_rules! build_world_block {
                 .soracloud_model_host_violation_evidence
                 .$method(),
             soracloud_hf_placements: $state.soracloud_hf_placements.$method(),
+            soracloud_inrou_service_placements: $state.soracloud_inrou_service_placements.$method(),
             soracloud_mailbox_messages: $state.soracloud_mailbox_messages.$method(),
             soracloud_runtime_receipts: $state.soracloud_runtime_receipts.$method(),
             capacity_declarations: $state.capacity_declarations.$method(),
@@ -507,6 +516,7 @@ macro_rules! build_world_block {
             zk_assets: $state.zk_assets.$method(),
             elections: $state.elections.$method(),
             citizens: $state.citizens.$method(),
+            ministry_agenda_proposals: $state.ministry_agenda_proposals.$method(),
             governance_proposals: $state.governance_proposals.$method(),
             governance_referenda: $state.governance_referenda.$method(),
             governance_stage_approvals: $state.governance_stage_approvals.$method(),
@@ -528,6 +538,7 @@ macro_rules! build_world_block {
 macro_rules! build_world_transaction {
     ($state:expr, $telemetry:expr, $axt_lane_config:expr, $axt_current_slot:expr) => {
         WorldTransaction {
+            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
             parameters: $state.parameters.transaction(),
             peers: $state.peers.transaction(),
             consensus_keys: $state.consensus_keys.transaction(),
@@ -542,6 +553,7 @@ macro_rules! build_world_transaction {
             uaid_accounts: $state.uaid_accounts.transaction(),
             account_aliases: $state.account_aliases.transaction(),
             account_aliases_by_account: $state.account_aliases_by_account.transaction(),
+            account_scope_directory: $state.account_scope_directory.transaction(),
             opaque_uaids: $state.opaque_uaids.transaction(),
             ram_lfe_program_policies: $state.ram_lfe_program_policies.transaction(),
             identifier_policies: $state.identifier_policies.transaction(),
@@ -603,6 +615,7 @@ macro_rules! build_world_transaction {
             soracloud_service_revisions: $state.soracloud_service_revisions.transaction(),
             soracloud_service_deployments: $state.soracloud_service_deployments.transaction(),
             soracloud_service_runtime: $state.soracloud_service_runtime.transaction(),
+            soracloud_inrou_replica_runtime: $state.soracloud_inrou_replica_runtime.transaction(),
             soracloud_service_audit_events: $state.soracloud_service_audit_events.transaction(),
             soracloud_service_state_entries: $state.soracloud_service_state_entries.transaction(),
             soracloud_decryption_request_records: $state
@@ -639,6 +652,9 @@ macro_rules! build_world_transaction {
             soracloud_model_host_capabilities: $state
                 .soracloud_model_host_capabilities
                 .transaction(),
+            soracloud_inrou_host_capabilities: $state
+                .soracloud_inrou_host_capabilities
+                .transaction(),
             soracloud_hf_sources: $state.soracloud_hf_sources.transaction(),
             soracloud_hf_shared_lease_pools: $state.soracloud_hf_shared_lease_pools.transaction(),
             soracloud_hf_shared_lease_members: $state
@@ -651,6 +667,9 @@ macro_rules! build_world_transaction {
                 .soracloud_model_host_violation_evidence
                 .transaction(),
             soracloud_hf_placements: $state.soracloud_hf_placements.transaction(),
+            soracloud_inrou_service_placements: $state
+                .soracloud_inrou_service_placements
+                .transaction(),
             soracloud_mailbox_messages: $state.soracloud_mailbox_messages.transaction(),
             soracloud_runtime_receipts: $state.soracloud_runtime_receipts.transaction(),
             capacity_declarations: $state.capacity_declarations.transaction(),
@@ -699,6 +718,7 @@ macro_rules! build_world_transaction {
             zk_assets: $state.zk_assets.transaction(),
             elections: $state.elections.transaction(),
             citizens: $state.citizens.transaction(),
+            ministry_agenda_proposals: $state.ministry_agenda_proposals.transaction(),
             governance_proposals: $state.governance_proposals.transaction(),
             governance_referenda: $state.governance_referenda.transaction(),
             governance_stage_approvals: $state.governance_stage_approvals.transaction(),
@@ -921,7 +941,7 @@ struct AccountPermissionSummary {
     fee_sponsors: std::collections::BTreeSet<iroha_data_model::account::AccountId>,
 }
 
-fn parse_permission_account_field(
+pub(crate) fn parse_permission_account_field(
     world: &impl WorldReadOnly,
     dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
     payload: &iroha_primitives::json::Json,
@@ -939,6 +959,33 @@ fn parse_permission_account_field(
     };
     crate::block::parse_account_literal_with_world(world, dataspace_catalog, literal)
         .map(Into::into)
+}
+
+pub(crate) fn fee_sponsor_from_permission(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    permission: &Permission,
+) -> Option<iroha_data_model::account::AccountId> {
+    (permission.name() == "CanUseFeeSponsor")
+        .then(|| {
+            parse_permission_account_field(
+                world,
+                dataspace_catalog,
+                permission.payload(),
+                "sponsor",
+            )
+        })
+        .flatten()
+}
+
+pub(crate) fn permission_allows_fee_sponsor(
+    world: &impl WorldReadOnly,
+    dataspace_catalog: &iroha_data_model::nexus::DataSpaceCatalog,
+    permission: &Permission,
+    sponsor: &iroha_data_model::account::AccountId,
+) -> bool {
+    fee_sponsor_from_permission(world, dataspace_catalog, permission)
+        .is_some_and(|allowed| allowed.subject_id() == sponsor.subject_id())
 }
 
 impl AccountPermissionSummary {
@@ -975,12 +1022,9 @@ impl AccountPermissionSummary {
                 }
             }
             "CanUseFeeSponsor" => {
-                if let Some(sponsor) = parse_permission_account_field(
-                    world,
-                    dataspace_catalog,
-                    permission.payload(),
-                    "sponsor",
-                ) {
+                if let Some(sponsor) =
+                    fee_sponsor_from_permission(world, dataspace_catalog, permission)
+                {
                     self.fee_sponsors.insert(sponsor);
                 }
             }
@@ -1422,6 +1466,9 @@ pub struct World {
     /// Reverse index from canonical I105 account id to bound aliases.
     #[norito(skip)]
     pub(crate) account_aliases_by_account: Storage<AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    #[norito(skip)]
+    pub(crate) account_scope_directory: Storage<AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     #[norito(skip)]
     pub(crate) opaque_uaids: Storage<OpaqueAccountId, UniversalAccountId>,
@@ -1590,8 +1637,9 @@ pub struct World {
         Storage<iroha_crypto::Hash, iroha_data_model::smart_contract::manifest::ContractManifest>,
     /// On-chain storage of compiled contract code bytes keyed by code hash.
     pub(crate) contract_code: Storage<iroha_crypto::Hash, Vec<u8>>,
-    /// Active contract instances bound to (namespace, `contract_id`)
-    pub(crate) contract_instances: Storage<(String, String), iroha_crypto::Hash>,
+    /// Active contract instances bound to canonical contract addresses.
+    pub(crate) contract_instances:
+        Storage<iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: Storage<Name, Vec<u8>>,
     /// Admitted Soracloud service revisions keyed by `(service_name, service_version)`.
@@ -1600,6 +1648,9 @@ pub struct World {
     pub(crate) soracloud_service_deployments: Storage<Name, SoraServiceDeploymentStateV1>,
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime: Storage<Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime:
+        Storage<(String, String, String), SoraInrouReplicaRuntimeStateV1>,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events: Storage<u64, SoraServiceAuditEventV1>,
     /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
@@ -1643,6 +1694,9 @@ pub struct World {
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         Storage<AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        Storage<AccountId, SoraInrouHostCapabilityRecordV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: Storage<Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -1657,6 +1711,9 @@ pub struct World {
         Storage<Hash, SoraModelHostViolationEvidenceRecordV1>,
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements: Storage<Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        Storage<(String, String), SoraInrouServicePlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by deterministic message id.
     pub(crate) soracloud_mailbox_messages: Storage<Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by deterministic receipt id.
@@ -1780,6 +1837,9 @@ pub struct World {
     pub(crate) elections: Storage<String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: Storage<AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals:
+        Storage<String, iroha_data_model::ministry::AgendaProposalRecordV1>,
     /// Governance proposals keyed by deterministic id.
     pub(crate) governance_proposals: Storage<[u8; 32], GovernanceProposalRecord>,
     /// Governance referenda keyed by referendum id.
@@ -1806,6 +1866,8 @@ pub struct World {
 
 /// Struct for block's aggregated changes
 pub struct WorldBlock<'world> {
+    /// Dataspace alias catalog used to qualify domain-backed aliases.
+    pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
     pub parameters: CellBlock<'world, Parameters>,
     /// Identifications of discovered peers.
@@ -1836,6 +1898,8 @@ pub struct WorldBlock<'world> {
     pub(crate) account_aliases: StorageBlock<'world, AccountAlias, AccountId>,
     /// Reverse index from canonical I105 account id to bound aliases.
     pub(crate) account_aliases_by_account: StorageBlock<'world, AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    pub(crate) account_scope_directory: StorageBlock<'world, AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageBlock<'world, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
@@ -1994,8 +2058,9 @@ pub struct WorldBlock<'world> {
     >,
     /// Contract code bytes keyed by hash
     pub(crate) contract_code: StorageBlock<'world, iroha_crypto::Hash, Vec<u8>>,
-    /// Active contract instances
-    pub(crate) contract_instances: StorageBlock<'world, (String, String), iroha_crypto::Hash>,
+    /// Active contract instances.
+    pub(crate) contract_instances:
+        StorageBlock<'world, iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageBlock<'world, Name, Vec<u8>>,
     /// Admitted Soracloud service revisions.
@@ -2006,6 +2071,9 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, Name, SoraServiceDeploymentStateV1>,
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime: StorageBlock<'world, Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime:
+        StorageBlock<'world, (String, String, String), SoraInrouReplicaRuntimeStateV1>,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events: StorageBlock<'world, u64, SoraServiceAuditEventV1>,
     /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
@@ -2058,6 +2126,9 @@ pub struct WorldBlock<'world> {
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         StorageBlock<'world, AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        StorageBlock<'world, AccountId, SoraInrouHostCapabilityRecordV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: StorageBlock<'world, Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -2073,6 +2144,9 @@ pub struct WorldBlock<'world> {
         StorageBlock<'world, Hash, SoraModelHostViolationEvidenceRecordV1>,
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements: StorageBlock<'world, Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        StorageBlock<'world, (String, String), SoraInrouServicePlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by message id.
     pub(crate) soracloud_mailbox_messages: StorageBlock<'world, Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by receipt id.
@@ -2175,6 +2249,9 @@ pub struct WorldBlock<'world> {
     pub(crate) elections: StorageBlock<'world, String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: StorageBlock<'world, AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals:
+        StorageBlock<'world, String, iroha_data_model::ministry::AgendaProposalRecordV1>,
     /// Governance proposals
     pub(crate) governance_proposals: StorageBlock<'world, [u8; 32], GovernanceProposalRecord>,
     /// Governance referenda
@@ -2270,6 +2347,7 @@ impl<'world> WorldBlock<'world> {
         collect_reverts!(self.smart_contract_state, SmartContractState);
         collect_reverts!(self.zk_assets, ZkAsset);
         collect_reverts!(self.elections, Election);
+        collect_reverts!(self.ministry_agenda_proposals, MinistryAgendaProposal);
         collect_reverts!(self.governance_proposals, GovernanceProposal);
         collect_reverts!(self.governance_referenda, GovernanceReferendum);
         collect_reverts!(self.governance_locks, GovernanceLock);
@@ -2330,6 +2408,7 @@ impl<'world> WorldBlock<'world> {
         collect_payload!(self.smart_contract_state, SmartContractState);
         collect_payload!(self.zk_assets, ZkAsset);
         collect_payload!(self.elections, Election);
+        collect_payload!(self.ministry_agenda_proposals, MinistryAgendaProposal);
         collect_payload!(self.governance_proposals, GovernanceProposal);
         collect_payload!(self.governance_referenda, GovernanceReferendum);
         collect_payload!(self.governance_locks, GovernanceLock);
@@ -2355,6 +2434,8 @@ impl<'world> WorldBlock<'world> {
 
 /// Struct for single transaction's aggregated changes
 pub struct WorldTransaction<'block, 'world> {
+    /// Dataspace alias catalog used to qualify domain-backed aliases.
+    pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
     pub(crate) parameters: CellTransaction<'block, 'world, Parameters>,
     /// Identifications of discovered peers.
@@ -2390,6 +2471,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Reverse index from canonical I105 account id to bound aliases.
     pub(crate) account_aliases_by_account:
         StorageTransaction<'block, 'world, AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    pub(crate) account_scope_directory:
+        StorageTransaction<'block, 'world, AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids:
         StorageTransaction<'block, 'world, OpaqueAccountId, UniversalAccountId>,
@@ -2579,8 +2663,12 @@ pub struct WorldTransaction<'block, 'world> {
         iroha_data_model::smart_contract::manifest::ContractManifest,
     >,
     pub(crate) contract_code: StorageTransaction<'block, 'world, iroha_crypto::Hash, Vec<u8>>,
-    pub(crate) contract_instances:
-        StorageTransaction<'block, 'world, (String, String), iroha_crypto::Hash>,
+    pub(crate) contract_instances: StorageTransaction<
+        'block,
+        'world,
+        iroha_data_model::smart_contract::ContractAddress,
+        iroha_crypto::Hash,
+    >,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageTransaction<'block, 'world, Name, Vec<u8>>,
     /// Admitted Soracloud service revisions.
@@ -2592,6 +2680,13 @@ pub struct WorldTransaction<'block, 'world> {
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime:
         StorageTransaction<'block, 'world, Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime: StorageTransaction<
+        'block,
+        'world,
+        (String, String, String),
+        SoraInrouReplicaRuntimeStateV1,
+    >,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events:
         StorageTransaction<'block, 'world, u64, SoraServiceAuditEventV1>,
@@ -2650,6 +2745,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         StorageTransaction<'block, 'world, AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        StorageTransaction<'block, 'world, AccountId, SoraInrouHostCapabilityRecordV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: StorageTransaction<'block, 'world, Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -2667,6 +2765,9 @@ pub struct WorldTransaction<'block, 'world> {
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements:
         StorageTransaction<'block, 'world, Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        StorageTransaction<'block, 'world, (String, String), SoraInrouServicePlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by message id.
     pub(crate) soracloud_mailbox_messages:
         StorageTransaction<'block, 'world, Hash, SoraServiceMailboxMessageV1>,
@@ -2783,6 +2884,13 @@ pub struct WorldTransaction<'block, 'world> {
     pub(crate) elections: StorageTransaction<'block, 'world, String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: StorageTransaction<'block, 'world, AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals: StorageTransaction<
+        'block,
+        'world,
+        String,
+        iroha_data_model::ministry::AgendaProposalRecordV1,
+    >,
     pub(crate) governance_proposals:
         StorageTransaction<'block, 'world, [u8; 32], GovernanceProposalRecord>,
     /// Governance referenda
@@ -2877,37 +2985,31 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
     /// Record that the given asset definition belongs to its domain.
     pub(crate) fn track_asset_definition_domain(&mut self, definition_id: &AssetDefinitionId) {
-        if definition_id.is_opaque_canonical() {
+        let Some(domain_id) = definition_id.try_domain() else {
             return;
-        }
-        if let Some(definitions) = self
-            .domain_asset_definitions
-            .get_mut(definition_id.domain())
-        {
+        };
+        if let Some(definitions) = self.domain_asset_definitions.get_mut(domain_id) {
             definitions.insert(definition_id.clone());
         } else {
-            self.domain_asset_definitions.insert(
-                definition_id.domain().clone(),
-                BTreeSet::from([definition_id.clone()]),
-            );
+            self.domain_asset_definitions
+                .insert(domain_id.clone(), BTreeSet::from([definition_id.clone()]));
         }
     }
 
     /// Drop the domain linkage when the asset definition no longer exists.
     pub(crate) fn untrack_asset_definition_domain(&mut self, definition_id: &AssetDefinitionId) {
-        if definition_id.is_opaque_canonical() {
+        let Some(domain_id) = definition_id.try_domain() else {
             return;
-        }
+        };
         let remove_domain_index_entry = self
             .domain_asset_definitions
-            .get_mut(definition_id.domain())
+            .get_mut(domain_id)
             .is_some_and(|definitions| {
                 definitions.remove(definition_id);
                 definitions.is_empty()
             });
         if remove_domain_index_entry {
-            self.domain_asset_definitions
-                .remove(definition_id.domain().clone());
+            self.domain_asset_definitions.remove(domain_id.clone());
         }
     }
 
@@ -3150,6 +3252,8 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
 
 /// Consistent point in time view of the [`World`]
 pub struct WorldView<'world> {
+    /// Dataspace alias catalog used to qualify domain-backed aliases.
+    pub(crate) dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog,
     /// Iroha on-chain parameters.
     pub(crate) parameters: CellView<'world, Parameters>,
     /// Identifications of discovered peers.
@@ -3166,6 +3270,8 @@ pub struct WorldView<'world> {
     pub(crate) account_aliases: StorageView<'world, AccountAlias, AccountId>,
     /// Reverse index from canonical I105 account id to bound aliases.
     pub(crate) account_aliases_by_account: StorageView<'world, AccountId, BTreeSet<AccountAlias>>,
+    /// Read-side account scope directory keyed by canonical I105 account id.
+    pub(crate) account_scope_directory: StorageView<'world, AccountId, AccountScopeDirectoryEntry>,
     /// Index from opaque identifiers to UAIDs.
     pub(crate) opaque_uaids: StorageView<'world, OpaqueAccountId, UniversalAccountId>,
     /// Global RAM-LFE program policy registry.
@@ -3338,7 +3444,8 @@ pub struct WorldView<'world> {
         iroha_data_model::smart_contract::manifest::ContractManifest,
     >,
     pub(crate) contract_code: StorageView<'world, iroha_crypto::Hash, Vec<u8>>,
-    pub(crate) contract_instances: StorageView<'world, (String, String), iroha_crypto::Hash>,
+    pub(crate) contract_instances:
+        StorageView<'world, iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>,
     /// Durable smart-contract state keyed by logical path.
     pub(crate) smart_contract_state: StorageView<'world, Name, Vec<u8>>,
     /// Admitted Soracloud service revisions.
@@ -3349,6 +3456,9 @@ pub struct WorldView<'world> {
         StorageView<'world, Name, SoraServiceDeploymentStateV1>,
     /// Active Soracloud runtime state keyed by service name.
     pub(crate) soracloud_service_runtime: StorageView<'world, Name, SoraServiceRuntimeStateV1>,
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)`.
+    pub(crate) soracloud_inrou_replica_runtime:
+        StorageView<'world, (String, String, String), SoraInrouReplicaRuntimeStateV1>,
     /// Soracloud lifecycle audit events keyed by deterministic sequence.
     pub(crate) soracloud_service_audit_events: StorageView<'world, u64, SoraServiceAuditEventV1>,
     /// Authoritative service state keyed by `(service_name, binding_name, state_key)`.
@@ -3401,6 +3511,9 @@ pub struct WorldView<'world> {
     /// Active validator-host capability adverts keyed by validator account id.
     pub(crate) soracloud_model_host_capabilities:
         StorageView<'world, AccountId, SoraModelHostCapabilityRecordV1>,
+    /// Active Inrou validator-host capability adverts keyed by validator account id.
+    pub(crate) soracloud_inrou_host_capabilities:
+        StorageView<'world, AccountId, SoraInrouHostCapabilityRecordV1>,
     /// Canonical Hugging Face sources keyed by source identifier.
     pub(crate) soracloud_hf_sources: StorageView<'world, Hash, SoraHfSourceRecordV1>,
     /// Shared lease pools keyed by canonical pool identifier.
@@ -3416,6 +3529,9 @@ pub struct WorldView<'world> {
         StorageView<'world, Hash, SoraModelHostViolationEvidenceRecordV1>,
     /// Active HF placement records keyed by shared-lease pool identifier.
     pub(crate) soracloud_hf_placements: StorageView<'world, Hash, SoraHfPlacementRecordV1>,
+    /// Active Inrou placement records keyed by `(service_name, service_version)`.
+    pub(crate) soracloud_inrou_service_placements:
+        StorageView<'world, (String, String), SoraInrouServicePlacementRecordV1>,
     /// Ordered Soracloud mailbox messages keyed by message id.
     pub(crate) soracloud_mailbox_messages: StorageView<'world, Hash, SoraServiceMailboxMessageV1>,
     /// Soracloud runtime receipts keyed by receipt id.
@@ -3523,6 +3639,9 @@ pub struct WorldView<'world> {
     pub(crate) elections: StorageView<'world, String, ElectionState>,
     /// Registered citizens keyed by account id.
     pub(crate) citizens: StorageView<'world, AccountId, CitizenshipRecord>,
+    /// Submitted Ministry agenda proposals keyed by `proposal_id`.
+    pub(crate) ministry_agenda_proposals:
+        StorageView<'world, String, iroha_data_model::ministry::AgendaProposalRecordV1>,
     pub(crate) governance_proposals: StorageView<'world, [u8; 32], GovernanceProposalRecord>,
     pub(crate) governance_referenda: StorageView<'world, String, GovernanceReferendumRecord>,
     pub(crate) governance_stage_approvals: StorageView<'world, String, GovernanceStageApprovals>,
@@ -6394,6 +6513,9 @@ pub struct StateTransaction<'block, 'state> {
     /// Hash of the current transaction entrypoint (`call_hash`), when executing a transaction.
     /// Not set for ad-hoc instruction execution in tests.
     pub tx_call_hash: Option<iroha_crypto::Hash>,
+    /// Canonical hash of the current signed transaction, when executing a transaction.
+    pub current_tx_hash:
+        Option<iroha_crypto::HashOf<iroha_data_model::transaction::SignedTransaction>>,
     /// Deterministic per-transaction ordinal used when generating canonical RWA lot ids.
     pub(crate) rwa_generated_id_ordinal: u64,
     /// Remaining executor fuel budget for runtime executor validation in this transaction.
@@ -8177,7 +8299,10 @@ mod state_lock_order_tests {
 
 #[cfg(test)]
 mod storage_migration_tests {
-    use std::sync::Arc;
+    use std::{
+        collections::{BTreeMap, BTreeSet},
+        sync::Arc,
+    };
 
     use iroha_crypto::{Hash, KeyPair};
     use iroha_data_model::{
@@ -8262,6 +8387,94 @@ mod storage_migration_tests {
             "only one dataspace expected"
         );
         assert!(iter.next().is_none(), "only one UAID entry expected");
+    }
+
+    #[test]
+    fn account_scope_directory_rebuilt_from_aliases_and_uaid_bindings_on_startup() {
+        let kura = crate::kura::Kura::blank_kura_for_testing();
+        let query = crate::query::store::LiveQueryStore::start_test();
+        let mut world = World::default();
+
+        let uaid = UniversalAccountId::from_hash(Hash::new("account-scope-migration"));
+        let dataspace = DataSpaceId::new(7);
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let details = AccountDetails::new(Metadata::default(), None, Some(uaid), Vec::new());
+        world
+            .accounts
+            .insert(account_id.clone(), AccountValue::new(details));
+        world.uaid_accounts.insert(uaid, account_id.clone());
+
+        let global_domain = DomainId::try_new("treasury", "universal").expect("global domain id");
+        let global_alias = alias_in_domain(&global_domain, "public".parse().expect("alias label"));
+        let private_alias = AccountAlias::new(
+            "private".parse().expect("private alias label"),
+            Some(AccountAliasDomain::new(
+                "treasury".parse::<Name>().expect("private domain name"),
+            )),
+            dataspace,
+        );
+        world
+            .account_aliases
+            .insert(global_alias.clone(), account_id.clone());
+        world
+            .account_aliases
+            .insert(private_alias.clone(), account_id.clone());
+        world.account_aliases_by_account.insert(
+            account_id.clone(),
+            BTreeSet::from([global_alias.clone(), private_alias.clone()]),
+        );
+
+        let manifest = AssetPermissionManifest {
+            version: ManifestVersion::default(),
+            uaid,
+            dataspace,
+            issued_ms: 0,
+            activation_epoch: 1,
+            expiry_epoch: None,
+            entries: Vec::new(),
+        };
+        let mut record = crate::nexus::space_directory::SpaceDirectoryManifestRecord::new(manifest);
+        record.lifecycle.mark_activated(1);
+        let mut set = crate::nexus::space_directory::SpaceDirectoryManifestSet::default();
+        set.upsert(record);
+        world.space_directory_manifests.insert(uaid, set);
+
+        assert!(
+            world.account_scope_directory.view().iter().next().is_none(),
+            "pre-migration world should not contain account scope entries",
+        );
+
+        let state = State::new_for_testing(world, Arc::clone(&kura), query);
+        let entry = state
+            .world
+            .account_scope_directory
+            .view()
+            .get(&account_id)
+            .cloned()
+            .expect("account scope entry should be rebuilt on startup");
+        let scopes = entry
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+
+        assert_eq!(
+            scopes,
+            BTreeMap::from([
+                (
+                    DataSpaceId::GLOBAL,
+                    BTreeSet::from([AccountAliasDomain::new(
+                        "treasury".parse::<Name>().expect("global domain name"),
+                    )]),
+                ),
+                (
+                    dataspace,
+                    BTreeSet::from([AccountAliasDomain::new(
+                        "treasury".parse::<Name>().expect("private domain name"),
+                    )]),
+                ),
+            ]),
+            "startup rebuild should merge alias domains with UAID-derived dataspace bindings",
+        );
     }
 
     #[test]
@@ -8368,10 +8581,13 @@ mod storage_migration_tests {
     fn domain_selector_index_tracks_default_and_local_domains() {
         let mut world = World::default();
         let owner = AccountId::new(KeyPair::random().public_key().clone());
-        let default_domain: DomainId = iroha_data_model::account::address::DEFAULT_DOMAIN_NAME
-            .parse()
-            .expect("default domain id");
-        let local_domain: DomainId = "wonderland".parse().expect("local domain id");
+        let default_domain = DomainId::try_new(
+            iroha_data_model::account::address::DEFAULT_DOMAIN_NAME,
+            "universal",
+        )
+        .expect("default domain id");
+        let local_domain: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("local domain id");
 
         world.domains.insert(
             default_domain.clone(),
@@ -8419,7 +8635,7 @@ mod storage_migration_tests {
     fn account_alias_index_rejects_duplicates() {
         let mut world = World::default();
 
-        let domain_id: DomainId = "alias.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
         let label = alias_in_domain(&domain_id, "primary".parse::<Name>().expect("label name"));
         let first = AccountId::new(KeyPair::random().public_key().clone());
         let second = AccountId::new(KeyPair::random().public_key().clone());
@@ -8448,7 +8664,7 @@ mod storage_migration_tests {
     fn account_alias_index_rejects_phone_like_labels() {
         let mut world = World::default();
 
-        let domain_id: DomainId = "alias.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
         let label = alias_in_domain(
             &domain_id,
             "+819398553445".parse::<Name>().expect("label name"),
@@ -8473,7 +8689,7 @@ mod storage_migration_tests {
     fn account_alias_index_preserves_bound_aliases_from_storage() {
         let mut world = World::default();
 
-        let domain_id: DomainId = "alias.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
         let primary_label = alias_in_domain(
             &domain_id,
             "banking".parse::<Name>().expect("primary label name"),
@@ -8528,7 +8744,7 @@ mod storage_migration_tests {
     fn account_rekey_rebuild_backfills_alias_bound_multisig_accounts() {
         let mut world = World::default();
 
-        let domain_id: DomainId = "alias.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
         let label = alias_in_domain(&domain_id, "cbdc".parse::<Name>().expect("label name"));
         let member_a = iroha_data_model::account::MultisigMember::new(
             KeyPair::random().public_key().clone(),
@@ -8570,7 +8786,7 @@ mod storage_migration_tests {
     fn account_rekey_rebuild_repoints_stale_records_to_current_alias_binding() {
         let mut world = World::default();
 
-        let domain_id: DomainId = "alias.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("alias", "world").expect("domain id");
         let label = alias_in_domain(&domain_id, "treasury".parse::<Name>().expect("label name"));
         let first_id = AccountId::new(KeyPair::random().public_key().clone());
         let second_key = KeyPair::random();
@@ -9556,7 +9772,13 @@ impl DetachedStateTransactionDelta {
             return Ok(true);
         }
 
-        for domain_id in world.alias_domains_for_account(account_id) {
+        for alias in world.bound_account_aliases(account_id) {
+            let Some(domain_id) = alias.domain_id(world.dataspace_catalog()).map_err(|err| {
+                ValidationFail::InstructionFailed(Error::InvariantViolation(err.to_string().into()))
+            })?
+            else {
+                continue;
+            };
             let domain_owner = match self.domain_owner_transfer.get(&domain_id) {
                 Some((_, to)) => to.clone(),
                 None => world
@@ -9643,7 +9865,13 @@ impl DetachedStateTransactionDelta {
             return Ok(true);
         }
 
-        for domain_id in world.alias_domains_for_account(transfer.source()) {
+        for alias in world.bound_account_aliases(transfer.source()) {
+            let Some(domain_id) = alias.domain_id(world.dataspace_catalog()).map_err(|err| {
+                ValidationFail::InstructionFailed(Error::InvariantViolation(err.to_string().into()))
+            })?
+            else {
+                continue;
+            };
             let source_domain_owner = match self.domain_owner_transfer.get(&domain_id) {
                 Some((_, to)) => to.clone(),
                 None => world
@@ -10633,6 +10861,13 @@ impl World {
         &mut self.soracloud_service_runtime
     }
 
+    /// Provides mutable access to placed Inrou replica runtime state for tests and API scaffolding.
+    pub fn soracloud_inrou_replica_runtime_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String, String), SoraInrouReplicaRuntimeStateV1> {
+        &mut self.soracloud_inrou_replica_runtime
+    }
+
     /// Provides mutable access to Soracloud audit events for tests and API scaffolding.
     pub fn soracloud_service_audit_events_mut_for_testing(
         &mut self,
@@ -10766,6 +11001,13 @@ impl World {
         &mut self.soracloud_model_host_capabilities
     }
 
+    /// Provides mutable access to authoritative Inrou host adverts for tests and API scaffolding.
+    pub fn soracloud_inrou_host_capabilities_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<AccountId, SoraInrouHostCapabilityRecordV1> {
+        &mut self.soracloud_inrou_host_capabilities
+    }
+
     /// Provides mutable access to HF shared-lease pools for tests and API scaffolding.
     pub fn soracloud_hf_shared_lease_pools_mut_for_testing(
         &mut self,
@@ -10778,6 +11020,13 @@ impl World {
         &mut self,
     ) -> &mut Storage<Hash, SoraHfPlacementRecordV1> {
         &mut self.soracloud_hf_placements
+    }
+
+    /// Provides mutable access to active Inrou placement records for tests and API scaffolding.
+    pub fn soracloud_inrou_service_placements_mut_for_testing(
+        &mut self,
+    ) -> &mut Storage<(String, String), SoraInrouServicePlacementRecordV1> {
+        &mut self.soracloud_inrou_service_placements
     }
 
     /// Provides mutable access to HF shared-lease memberships for tests and API scaffolding.
@@ -10906,6 +11155,7 @@ impl World {
             offline_to_online_transfers: Storage::default(),
             offline_lineages: Storage::default(),
             offline_lineage_operation_results: Storage::default(),
+            ministry_agenda_proposals: Storage::default(),
             governance_proposals: Storage::default(),
             governance_referenda: Storage::default(),
             governance_stage_approvals: Storage::default(),
@@ -10925,6 +11175,9 @@ impl World {
         world
             .rebuild_account_alias_index()
             .expect("duplicate account alias in world constructor");
+        world
+            .rebuild_account_scope_directory()
+            .expect("invalid account scope directory in world constructor");
         world
             .rebuild_account_rekey_records()
             .expect("invalid account rekey state in world constructor");
@@ -11080,6 +11333,28 @@ impl World {
         Ok(())
     }
 
+    fn rebuild_account_scope_directory(&mut self) -> Result<(), String> {
+        let rebuilt = {
+            let view = self.view();
+            let account_ids: Vec<_> = view.accounts().iter().map(|(id, _)| id.clone()).collect();
+            let mut rebuilt = BTreeMap::new();
+            for account_id in account_ids {
+                let Some(entry) = derive_account_scope_directory_entry(&view, &account_id)
+                    .map_err(|error| {
+                        format!("failed to derive account scope for {account_id}: {error}")
+                    })?
+                else {
+                    continue;
+                };
+                rebuilt.insert(account_id, entry);
+            }
+            rebuilt
+        };
+
+        self.account_scope_directory = rebuilt.into_iter().collect();
+        Ok(())
+    }
+
     fn rebuild_account_rekey_records(&mut self) -> Result<(), String> {
         let mut records = BTreeMap::new();
         let existing_records: Vec<_> = self
@@ -11216,11 +11491,11 @@ impl World {
     fn rebuild_asset_definition_indexes(&mut self) {
         let mut domain_definitions = BTreeMap::<DomainId, BTreeSet<AssetDefinitionId>>::new();
         for definition_id in self.asset_definitions.view().iter().map(|(id, _)| id) {
-            if definition_id.is_opaque_canonical() {
+            let Some(domain_id) = definition_id.try_domain() else {
                 continue;
-            }
+            };
             domain_definitions
-                .entry(definition_id.domain().clone())
+                .entry(domain_id.clone())
                 .or_default()
                 .insert(definition_id.clone());
         }
@@ -11408,6 +11683,7 @@ impl World {
     #[allow(clippy::too_many_lines)]
     pub fn view(&self) -> WorldView<'_> {
         WorldView {
+            dataspace_catalog: iroha_data_model::nexus::DataSpaceCatalog::default(),
             parameters: self.parameters.view(),
             peers: self.peers.view(),
             consensus_keys: self.consensus_keys.view(),
@@ -11422,6 +11698,7 @@ impl World {
             uaid_accounts: self.uaid_accounts.view(),
             account_aliases: self.account_aliases.view(),
             account_aliases_by_account: self.account_aliases_by_account.view(),
+            account_scope_directory: self.account_scope_directory.view(),
             opaque_uaids: self.opaque_uaids.view(),
             ram_lfe_program_policies: self.ram_lfe_program_policies.view(),
             identifier_policies: self.identifier_policies.view(),
@@ -11483,6 +11760,7 @@ impl World {
             soracloud_service_revisions: self.soracloud_service_revisions.view(),
             soracloud_service_deployments: self.soracloud_service_deployments.view(),
             soracloud_service_runtime: self.soracloud_service_runtime.view(),
+            soracloud_inrou_replica_runtime: self.soracloud_inrou_replica_runtime.view(),
             soracloud_service_audit_events: self.soracloud_service_audit_events.view(),
             soracloud_service_state_entries: self.soracloud_service_state_entries.view(),
             soracloud_decryption_request_records: self.soracloud_decryption_request_records.view(),
@@ -11507,6 +11785,7 @@ impl World {
                 .soracloud_private_inference_checkpoints
                 .view(),
             soracloud_model_host_capabilities: self.soracloud_model_host_capabilities.view(),
+            soracloud_inrou_host_capabilities: self.soracloud_inrou_host_capabilities.view(),
             soracloud_hf_sources: self.soracloud_hf_sources.view(),
             soracloud_hf_shared_lease_pools: self.soracloud_hf_shared_lease_pools.view(),
             soracloud_hf_shared_lease_members: self.soracloud_hf_shared_lease_members.view(),
@@ -11517,6 +11796,7 @@ impl World {
                 .soracloud_model_host_violation_evidence
                 .view(),
             soracloud_hf_placements: self.soracloud_hf_placements.view(),
+            soracloud_inrou_service_placements: self.soracloud_inrou_service_placements.view(),
             soracloud_mailbox_messages: self.soracloud_mailbox_messages.view(),
             soracloud_runtime_receipts: self.soracloud_runtime_receipts.view(),
             capacity_declarations: self.capacity_declarations.view(),
@@ -11563,6 +11843,7 @@ impl World {
             zk_assets: self.zk_assets.view(),
             elections: self.elections.view(),
             citizens: self.citizens.view(),
+            ministry_agenda_proposals: self.ministry_agenda_proposals.view(),
             governance_proposals: self.governance_proposals.view(),
             governance_referenda: self.governance_referenda.view(),
             governance_stage_approvals: self.governance_stage_approvals.view(),
@@ -11578,6 +11859,47 @@ impl World {
     }
 }
 
+fn derive_account_scope_directory_entry(
+    world: &(impl WorldReadOnly + ?Sized),
+    account_id: &AccountId,
+) -> Result<Option<AccountScopeDirectoryEntry>, ParseError> {
+    let Some(account) = world.accounts().get(account_id) else {
+        return Ok(None);
+    };
+
+    let mut entry = AccountScopeDirectoryEntry::default();
+    let primary_label_dataspace = account.as_ref().label().map(|label| {
+        entry.ensure_dataspace(label.dataspace);
+        if let Some(domain) = label.domain.clone() {
+            entry.bind_domain(label.dataspace, domain);
+        }
+        label.dataspace
+    });
+
+    if let Some(uaid) = account.as_ref().uaid().copied()
+        && let Some(bindings) = world.uaid_dataspaces().get(&uaid)
+    {
+        for (dataspace, accounts) in bindings.iter() {
+            if accounts.contains(account_id) {
+                entry.ensure_dataspace(*dataspace);
+            }
+        }
+    }
+
+    for alias in world.bound_account_aliases(account_id) {
+        entry.ensure_dataspace(alias.dataspace);
+        if let Some(domain) = alias.domain.clone() {
+            entry.bind_domain(alias.dataspace, domain);
+        }
+    }
+
+    if primary_label_dataspace.is_none_or(|dataspace| dataspace == DataSpaceId::GLOBAL) {
+        entry.ensure_dataspace(DataSpaceId::GLOBAL);
+    }
+
+    Ok(Some(entry))
+}
+
 /// Read-only view over world-level resources.
 ///
 /// Provides accessors to parameters, peers, domains, accounts, assets,
@@ -11585,6 +11907,8 @@ impl World {
 pub trait WorldReadOnly {
     /// Global parameters registry.
     fn parameters(&self) -> &Parameters;
+    /// Dataspace alias catalog used to qualify domain-scoped aliases.
+    fn dataspace_catalog(&self) -> &iroha_data_model::nexus::DataSpaceCatalog;
     /// Decode the `sumeragi_npos_parameters` custom payload when present.
     fn sumeragi_npos_parameters(&self) -> Option<SumeragiNposParameters> {
         sumeragi_npos_parameters_from_parameters(self.parameters())
@@ -11619,6 +11943,10 @@ pub trait WorldReadOnly {
     fn account_aliases_by_account(
         &self,
     ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountAlias>>;
+    /// Read-side account scope directory (read-only).
+    fn account_scope_directory(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, AccountScopeDirectoryEntry>;
     /// Opaque identifier to UAID index (read-only).
     fn opaque_uaids(&self) -> &impl StorageReadOnly<OpaqueAccountId, UniversalAccountId>;
     /// Global RAM-LFE program policy registry (read-only).
@@ -11853,8 +12181,10 @@ pub trait WorldReadOnly {
     >;
     /// Get stored contract code bytes by hash (read-only)
     fn contract_code(&self) -> &impl StorageReadOnly<iroha_crypto::Hash, Vec<u8>>;
-    /// Contract instances mapping (`namespace`, `contract_id`) -> `code_hash` (read-only)
-    fn contract_instances(&self) -> &impl StorageReadOnly<(String, String), iroha_crypto::Hash>;
+    /// Contract instances mapping `contract_address -> code_hash` (read-only)
+    fn contract_instances(
+        &self,
+    ) -> &impl StorageReadOnly<iroha_data_model::smart_contract::ContractAddress, iroha_crypto::Hash>;
     /// Durable smart-contract state keyed by logical path (read-only).
     fn smart_contract_state(&self) -> &impl StorageReadOnly<Name, Vec<u8>>;
     /// Admitted Soracloud service revisions keyed by `(service_name, service_version)` (read-only).
@@ -11867,6 +12197,10 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<Name, SoraServiceDeploymentStateV1>;
     /// Active Soracloud runtime state keyed by service name (read-only).
     fn soracloud_service_runtime(&self) -> &impl StorageReadOnly<Name, SoraServiceRuntimeStateV1>;
+    /// Active placed-replica runtime state keyed by `(service_name, service_version, replica_slot)` (read-only).
+    fn soracloud_inrou_replica_runtime(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String, String), SoraInrouReplicaRuntimeStateV1>;
     /// Soracloud lifecycle audit events keyed by deterministic sequence (read-only).
     fn soracloud_service_audit_events(&self)
     -> &impl StorageReadOnly<u64, SoraServiceAuditEventV1>;
@@ -11938,6 +12272,10 @@ pub trait WorldReadOnly {
     fn soracloud_model_host_capabilities(
         &self,
     ) -> &impl StorageReadOnly<AccountId, SoraModelHostCapabilityRecordV1>;
+    /// Active Inrou validator-host capability adverts keyed by validator account id (read-only).
+    fn soracloud_inrou_host_capabilities(
+        &self,
+    ) -> &impl StorageReadOnly<AccountId, SoraInrouHostCapabilityRecordV1>;
     /// Canonical Hugging Face sources keyed by source identifier (read-only).
     fn soracloud_hf_sources(&self) -> &impl StorageReadOnly<Hash, SoraHfSourceRecordV1>;
     /// HF shared-lease pools keyed by canonical pool identifier (read-only).
@@ -11958,6 +12296,10 @@ pub trait WorldReadOnly {
     ) -> &impl StorageReadOnly<Hash, SoraModelHostViolationEvidenceRecordV1>;
     /// Active HF placement records keyed by shared-lease pool identifier (read-only).
     fn soracloud_hf_placements(&self) -> &impl StorageReadOnly<Hash, SoraHfPlacementRecordV1>;
+    /// Active Inrou placement records keyed by `(service_name, service_version)` (read-only).
+    fn soracloud_inrou_service_placements(
+        &self,
+    ) -> &impl StorageReadOnly<(String, String), SoraInrouServicePlacementRecordV1>;
     /// Ordered Soracloud mailbox messages keyed by message id (read-only).
     fn soracloud_mailbox_messages(
         &self,
@@ -12077,6 +12419,10 @@ pub trait WorldReadOnly {
     fn elections(&self) -> &impl StorageReadOnly<String, ElectionState>;
     /// Registered citizens keyed by account id (read-only).
     fn citizens(&self) -> &impl StorageReadOnly<AccountId, CitizenshipRecord>;
+    /// Submitted Ministry agenda proposals keyed by `proposal_id` (read-only).
+    fn ministry_agenda_proposals(
+        &self,
+    ) -> &impl StorageReadOnly<String, iroha_data_model::ministry::AgendaProposalRecordV1>;
     /// Governance proposals (read-only) keyed by deterministic id.
     fn governance_proposals(&self) -> &impl StorageReadOnly<[u8; 32], GovernanceProposalRecord>;
     /// Parliament approvals recorded per referendum id (read-only).
@@ -12139,25 +12485,70 @@ pub trait WorldReadOnly {
         self.domains().iter().map(|(_, domain)| domain)
     }
 
+    /// Collect the account's dataspace -> domain hierarchy from primary label
+    /// materialization, Space Directory bindings, and bound aliases.
+    ///
+    /// Accounts materialized with a non-global primary label inherit that label's dataspace/domain
+    /// immediately. Unlabeled or universal-labeled accounts keep the universal dataspace as their
+    /// fallback materialization scope. Additional dataspaces come from UAID bindings and bound
+    /// aliases. Domains remain optional within each dataspace, so a dataspace entry may contain an
+    /// empty domain set.
+    fn account_scope_entry(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<Option<AccountScopeDirectoryEntry>, ParseError> {
+        if let Some(entry) = self.account_scope_directory().get(account_id) {
+            return Ok(Some(entry.clone()));
+        }
+        derive_account_scope_directory_entry(self, account_id)
+    }
+
+    /// Collect the account's dataspace -> domain hierarchy from the maintained account-scope
+    /// directory.
+    fn account_scope_hierarchy(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<BTreeMap<DataSpaceId, BTreeSet<DomainId>>, ParseError> {
+        match self.account_scope_entry(account_id)? {
+            Some(entry) => entry.hierarchy(self.dataspace_catalog()),
+            None => Ok(BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())])),
+        }
+    }
+
+    /// Collect the dataspaces linked to the account.
+    fn account_dataspaces(
+        &self,
+        account_id: &AccountId,
+    ) -> Result<BTreeSet<DataSpaceId>, ParseError> {
+        Ok(self
+            .account_scope_hierarchy(account_id)?
+            .into_keys()
+            .collect())
+    }
+
+    /// Collect the qualified domains linked to the account across every dataspace.
+    fn account_domains(&self, account_id: &AccountId) -> Result<BTreeSet<DomainId>, ParseError> {
+        Ok(self
+            .account_scope_hierarchy(account_id)?
+            .into_values()
+            .flatten()
+            .collect())
+    }
+
     /// Return `true` when the account has any alias whose alias-domain matches `id`.
     fn account_has_alias_domain(&self, account_id: &AccountId, id: &DomainId) -> bool {
-        let matches_alias = |alias: &AccountAlias| {
-            alias
-                .domain
-                .as_ref()
-                .is_some_and(|alias_domain| alias_domain.name() == id.name())
-        };
-
-        self.account_aliases_by_account()
-            .get(account_id)
-            .into_iter()
-            .flat_map(BTreeSet::iter)
-            .any(matches_alias)
-            || self
-                .accounts()
-                .get(account_id)
-                .and_then(|value| value.as_ref().label())
-                .is_some_and(matches_alias)
+        match self.account_domains(account_id) {
+            Ok(domains) => domains.contains(id),
+            Err(error) => {
+                warn!(
+                    account = %account_id,
+                    domain = %id,
+                    ?error,
+                    "account scope hierarchy could not be resolved"
+                );
+                false
+            }
+        }
     }
 
     /// Iterate accounts in domain.
@@ -12189,32 +12580,21 @@ pub trait WorldReadOnly {
             .map(move |value| AccountEntry::new(subject, value))
     }
 
-    /// List domain entities referenced by the account's bound aliases.
-    fn alias_domains_for_account(&self, account_id: &AccountId) -> Vec<DomainId> {
-        let mut domains = BTreeSet::new();
-        let mut maybe_collect = |alias: &AccountAlias| {
-            let Some(alias_domain) = alias.domain.as_ref() else {
-                return;
-            };
-            domains.extend(self.domains().iter().filter_map(|(domain_id, _)| {
-                (domain_id.name() == alias_domain.name()).then_some(domain_id.clone())
-            }));
-        };
-
-        if let Some(aliases) = self.account_aliases_by_account().get(account_id) {
-            for alias in aliases {
-                maybe_collect(alias);
-            }
-        }
+    /// Collect all aliases currently bound to the account, including the primary label.
+    fn bound_account_aliases(&self, account_id: &AccountId) -> Vec<AccountAlias> {
+        let mut aliases = self
+            .account_aliases_by_account()
+            .get(account_id)
+            .map_or_else(Vec::new, |aliases| aliases.iter().cloned().collect());
         if let Some(alias) = self
             .accounts()
             .get(account_id)
             .and_then(|value| value.as_ref().label())
+            && !aliases.iter().any(|bound| bound == alias)
         {
-            maybe_collect(alias);
+            aliases.push(alias.clone());
         }
-
-        domains.into_iter().collect()
+        aliases
     }
 
     /// List account subjects linked to a specific domain.
@@ -12410,8 +12790,11 @@ pub trait WorldReadOnly {
         Ok(f(account))
     }
 
-    /// Resolve the dataspace binding for a concrete account when a UAID-backed
+    /// Resolve one dataspace binding for a concrete account when a UAID-backed
     /// Space Directory entry exists.
+    ///
+    /// Prefer [`WorldReadOnly::account_scope_hierarchy`] when the caller needs the full
+    /// `1..many` dataspace and `0..many` domain view for the account.
     fn dataspace_for_account(&self, account_id: &AccountId) -> Option<DataSpaceId> {
         let account = self.account(account_id).ok()?;
         let uaid = account.value().uaid().copied()?;
@@ -12595,6 +12978,9 @@ macro_rules! impl_world_ro {
             fn parameters(&self) -> &Parameters {
                 &self.parameters
             }
+            fn dataspace_catalog(&self) -> &iroha_data_model::nexus::DataSpaceCatalog {
+                &self.dataspace_catalog
+            }
             fn peers(&self) -> &Peers {
                 &self.peers
             }
@@ -12635,6 +13021,11 @@ macro_rules! impl_world_ro {
                 &self,
             ) -> &impl StorageReadOnly<AccountId, BTreeSet<AccountAlias>> {
                 &self.account_aliases_by_account
+            }
+            fn account_scope_directory(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, AccountScopeDirectoryEntry> {
+                &self.account_scope_directory
             }
             fn opaque_uaids(
                 &self,
@@ -12892,7 +13283,12 @@ macro_rules! impl_world_ro {
             fn contract_code(&self) -> &impl StorageReadOnly<iroha_crypto::Hash, Vec<u8>> {
                 &self.contract_code
             }
-            fn contract_instances(&self) -> &impl StorageReadOnly<(String, String), iroha_crypto::Hash> {
+            fn contract_instances(
+                &self,
+            ) -> &impl StorageReadOnly<
+                iroha_data_model::smart_contract::ContractAddress,
+                iroha_crypto::Hash,
+            > {
                 &self.contract_instances
             }
             fn smart_contract_state(&self) -> &impl StorageReadOnly<Name, Vec<u8>> {
@@ -12912,6 +13308,11 @@ macro_rules! impl_world_ro {
                 &self,
             ) -> &impl StorageReadOnly<Name, SoraServiceRuntimeStateV1> {
                 &self.soracloud_service_runtime
+            }
+            fn soracloud_inrou_replica_runtime(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String, String), SoraInrouReplicaRuntimeStateV1> {
+                &self.soracloud_inrou_replica_runtime
             }
             fn soracloud_service_audit_events(
                 &self,
@@ -13004,6 +13405,11 @@ macro_rules! impl_world_ro {
             ) -> &impl StorageReadOnly<AccountId, SoraModelHostCapabilityRecordV1> {
                 &self.soracloud_model_host_capabilities
             }
+            fn soracloud_inrou_host_capabilities(
+                &self,
+            ) -> &impl StorageReadOnly<AccountId, SoraInrouHostCapabilityRecordV1> {
+                &self.soracloud_inrou_host_capabilities
+            }
             fn soracloud_hf_sources(&self) -> &impl StorageReadOnly<Hash, SoraHfSourceRecordV1> {
                 &self.soracloud_hf_sources
             }
@@ -13029,6 +13435,11 @@ macro_rules! impl_world_ro {
             }
             fn soracloud_hf_placements(&self) -> &impl StorageReadOnly<Hash, SoraHfPlacementRecordV1> {
                 &self.soracloud_hf_placements
+            }
+            fn soracloud_inrou_service_placements(
+                &self,
+            ) -> &impl StorageReadOnly<(String, String), SoraInrouServicePlacementRecordV1> {
+                &self.soracloud_inrou_service_placements
             }
             fn soracloud_mailbox_messages(
                 &self,
@@ -13234,6 +13645,12 @@ macro_rules! impl_world_ro {
             fn citizens(&self) -> &impl StorageReadOnly<AccountId, CitizenshipRecord> {
                 &self.citizens
             }
+            fn ministry_agenda_proposals(
+                &self,
+            ) -> &impl StorageReadOnly<String, iroha_data_model::ministry::AgendaProposalRecordV1>
+            {
+                &self.ministry_agenda_proposals
+            }
             fn governance_proposals(
                 &self,
             ) -> &impl StorageReadOnly<[u8; 32], GovernanceProposalRecord> {
@@ -13395,6 +13812,7 @@ impl<'world> WorldBlock<'world> {
             uaid_accounts,
             account_aliases,
             account_aliases_by_account,
+            account_scope_directory,
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
@@ -13457,6 +13875,7 @@ impl<'world> WorldBlock<'world> {
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_service_runtime,
+            soracloud_inrou_replica_runtime,
             soracloud_service_audit_events,
             soracloud_service_state_entries,
             soracloud_decryption_request_records,
@@ -13475,12 +13894,14 @@ impl<'world> WorldBlock<'world> {
             soracloud_private_inference_sessions,
             soracloud_private_inference_checkpoints,
             soracloud_model_host_capabilities,
+            soracloud_inrou_host_capabilities,
             soracloud_hf_sources,
             soracloud_hf_shared_lease_pools,
             soracloud_hf_shared_lease_members,
             soracloud_hf_shared_lease_audit_events,
             soracloud_model_host_violation_evidence,
             soracloud_hf_placements,
+            soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             capacity_declarations,
@@ -13527,6 +13948,7 @@ impl<'world> WorldBlock<'world> {
             zk_assets,
             elections,
             citizens,
+            ministry_agenda_proposals,
             governance_proposals,
             governance_referenda,
             governance_stage_approvals,
@@ -13565,6 +13987,7 @@ impl<'world> WorldBlock<'world> {
         soracloud_service_revisions.commit();
         soracloud_service_deployments.commit();
         soracloud_service_runtime.commit();
+        soracloud_inrou_replica_runtime.commit();
         soracloud_service_audit_events.commit();
         soracloud_service_state_entries.commit();
         soracloud_decryption_request_records.commit();
@@ -13583,12 +14006,14 @@ impl<'world> WorldBlock<'world> {
         soracloud_private_inference_sessions.commit();
         soracloud_private_inference_checkpoints.commit();
         soracloud_model_host_capabilities.commit();
+        soracloud_inrou_host_capabilities.commit();
         soracloud_hf_sources.commit();
         soracloud_hf_shared_lease_pools.commit();
         soracloud_hf_shared_lease_members.commit();
         soracloud_hf_shared_lease_audit_events.commit();
         soracloud_model_host_violation_evidence.commit();
         soracloud_hf_placements.commit();
+        soracloud_inrou_service_placements.commit();
         soracloud_mailbox_messages.commit();
         soracloud_runtime_receipts.commit();
         capacity_disputes.commit();
@@ -13639,6 +14064,7 @@ impl<'world> WorldBlock<'world> {
         zk_assets.commit();
         elections.commit();
         citizens.commit();
+        ministry_agenda_proposals.commit();
         governance_proposals.commit();
         governance_referenda.commit();
         governance_stage_approvals.commit();
@@ -13693,6 +14119,7 @@ impl<'world> WorldBlock<'world> {
         uaid_accounts.commit();
         account_aliases.commit();
         account_aliases_by_account.commit();
+        account_scope_directory.commit();
         opaque_uaids.commit();
         domains.commit();
         domain_selectors.commit();
@@ -13745,6 +14172,25 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         }
     }
 
+    fn refresh_account_scope_directory_entry(&mut self, account_id: &AccountId) {
+        match derive_account_scope_directory_entry(self, account_id) {
+            Ok(Some(entry)) => {
+                self.account_scope_directory
+                    .insert(account_id.clone(), entry);
+            }
+            Ok(None) => {
+                self.account_scope_directory.remove(account_id.clone());
+            }
+            Err(error) => {
+                warn!(
+                    account_id = %account_id,
+                    ?error,
+                    "failed to refresh account scope directory entry"
+                );
+            }
+        }
+    }
+
     pub(crate) fn insert_account_alias_binding(
         &mut self,
         label: AccountAlias,
@@ -13755,8 +14201,10 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             .insert(label.clone(), account_id.clone());
         if let Some(previous_account) = previous.as_ref() {
             self.remove_account_alias_from_reverse_index(previous_account, &label);
+            self.refresh_account_scope_directory_entry(previous_account);
         }
         self.add_account_alias_to_reverse_index(&account_id, &label);
+        self.refresh_account_scope_directory_entry(&account_id);
         previous
     }
 
@@ -13767,6 +14215,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         let removed = self.account_aliases.remove(label.clone());
         if let Some(account_id) = removed.as_ref() {
             self.remove_account_alias_from_reverse_index(account_id, label);
+            self.refresh_account_scope_directory_entry(account_id);
         }
         removed
     }
@@ -13782,6 +14231,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         for label in &labels {
             self.account_aliases.remove(label.clone());
         }
+        self.refresh_account_scope_directory_entry(account_id);
         labels
     }
 
@@ -13945,6 +14395,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         } else {
             self.uaid_dataspaces.insert(uaid, bindings);
         }
+        self.refresh_account_scope_directory_entry(&account_id);
     }
 
     /// Recompute the per-dataspace AXT policy map from Space Directory manifests and bindings.
@@ -14528,6 +14979,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             uaid_accounts,
             account_aliases,
             account_aliases_by_account,
+            account_scope_directory,
             opaque_uaids,
             ram_lfe_program_policies,
             identifier_policies,
@@ -14589,6 +15041,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_service_runtime,
+            soracloud_inrou_replica_runtime,
             soracloud_service_audit_events,
             soracloud_service_state_entries,
             soracloud_decryption_request_records,
@@ -14607,12 +15060,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             soracloud_private_inference_sessions,
             soracloud_private_inference_checkpoints,
             soracloud_model_host_capabilities,
+            soracloud_inrou_host_capabilities,
             soracloud_hf_sources,
             soracloud_hf_shared_lease_pools,
             soracloud_hf_shared_lease_members,
             soracloud_hf_shared_lease_audit_events,
             soracloud_model_host_violation_evidence,
             soracloud_hf_placements,
+            soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             capacity_declarations,
@@ -14640,6 +15095,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
             zk_assets,
             elections,
             citizens,
+            ministry_agenda_proposals,
             governance_proposals,
             governance_referenda,
             governance_stage_approvals,
@@ -14683,6 +15139,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         soracloud_service_revisions.apply();
         soracloud_service_deployments.apply();
         soracloud_service_runtime.apply();
+        soracloud_inrou_replica_runtime.apply();
         soracloud_service_audit_events.apply();
         soracloud_service_state_entries.apply();
         soracloud_decryption_request_records.apply();
@@ -14701,12 +15158,14 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         soracloud_private_inference_sessions.apply();
         soracloud_private_inference_checkpoints.apply();
         soracloud_model_host_capabilities.apply();
+        soracloud_inrou_host_capabilities.apply();
         soracloud_hf_sources.apply();
         soracloud_hf_shared_lease_pools.apply();
         soracloud_hf_shared_lease_members.apply();
         soracloud_hf_shared_lease_audit_events.apply();
         soracloud_model_host_violation_evidence.apply();
         soracloud_hf_placements.apply();
+        soracloud_inrou_service_placements.apply();
         soracloud_mailbox_messages.apply();
         soracloud_runtime_receipts.apply();
         capacity_disputes.apply();
@@ -14750,6 +15209,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         zk_assets.apply();
         elections.apply();
         citizens.apply();
+        ministry_agenda_proposals.apply();
         governance_proposals.apply();
         governance_referenda.apply();
         governance_stage_approvals.apply();
@@ -14802,6 +15262,7 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
         uaid_accounts.apply();
         account_aliases.apply();
         account_aliases_by_account.apply();
+        account_scope_directory.apply();
         opaque_uaids.apply();
         domains.apply();
         domain_selectors.apply();
@@ -15253,6 +15714,12 @@ impl<'block, 'world> WorldTransaction<'block, 'world> {
                         self.rebuild_space_directory_bindings(*uaid);
                         axt_policy_dirty = true;
                     }
+                    self.refresh_account_scope_directory_entry(account.account.id());
+                }
+                DataEvent::Domain(data_pre::DomainEvent::Account(
+                    data_pre::AccountEvent::Deleted(account_id),
+                )) => {
+                    self.account_scope_directory.remove(account_id.clone());
                 }
                 _ => {}
             }
@@ -15498,6 +15965,8 @@ impl State {
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) {
         let path = self.commit_roster_journal_path();
+        let mut journal = self.commit_roster_journal.write();
+        journal.upsert(commit_qc.clone(), checkpoint.clone(), stake_snapshot);
         if path.as_os_str().is_empty() {
             return;
         }
@@ -15516,8 +15985,6 @@ impl State {
             (Some(main), Some(tmp)) => Some(main.saturating_add(tmp)),
             _ => None,
         };
-        let mut journal = self.commit_roster_journal.write();
-        journal.upsert(commit_qc.clone(), checkpoint.clone(), stake_snapshot);
         if let Err(err) = journal.persist() {
             warn!(
                 ?err,
@@ -15578,6 +16045,7 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
         update_world: bool,
+        update_status: bool,
     ) -> bool {
         if !matches!(commit_qc.phase, crate::sumeragi::consensus::Phase::Commit) {
             warn!(
@@ -15661,8 +16129,10 @@ impl State {
         if update_world {
             self.upsert_commit_qc_in_world(commit_qc);
         }
-        status::record_commit_qc(commit_qc.clone());
-        status::record_validator_checkpoint(checkpoint.clone());
+        if update_status {
+            status::record_commit_qc(commit_qc.clone());
+            status::record_validator_checkpoint(checkpoint.clone());
+        }
         let sidecar_snapshot = stake_snapshot.clone();
         self.persist_commit_roster_journal(commit_qc, checkpoint, stake_snapshot);
         let sidecar = crate::kura::RosterSidecar::new(
@@ -15685,7 +16155,7 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
-        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true)
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, true, true)
     }
 
     fn record_commit_roster_without_world(
@@ -15694,7 +16164,16 @@ impl State {
         checkpoint: &ValidatorSetCheckpoint,
         stake_snapshot: Option<CommitStakeSnapshot>,
     ) -> bool {
-        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false)
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false, true)
+    }
+
+    fn record_commit_roster_without_world_or_status(
+        &self,
+        commit_qc: &Qc,
+        checkpoint: &ValidatorSetCheckpoint,
+        stake_snapshot: Option<CommitStakeSnapshot>,
+    ) -> bool {
+        self.record_commit_roster_internal(commit_qc, checkpoint, stake_snapshot, false, false)
     }
 
     fn restore_commit_roster_history(&self) {
@@ -16353,6 +16832,9 @@ impl State {
                 "storage migration refreshed UAID dataspace bindings from manifest records"
             );
         }
+        self.world
+            .rebuild_account_scope_directory()
+            .expect("account scope directory should rebuild during storage migration");
         // Defer AXT policy refresh until the runtime lane catalog is applied.
     }
 
@@ -17199,9 +17681,11 @@ impl State {
     pub fn block(&self, curr_block: BlockHeader) -> StateBlock<'_> {
         self.ensure_da_indexes_hydrated()
             .expect("failed to hydrate DA indexes from Kura");
+        let nexus_snapshot = self.nexus_snapshot();
         // Determine pre-block consensus seed and per-block gas limit before taking block locks.
         let (gas_limit_per_block, pre_block_npos_seed) = {
-            let world_view = self.world.view();
+            let mut world_view = self.world.view();
+            world_view.dataspace_catalog = nexus_snapshot.dataspace_catalog.clone();
             let gas_limit_per_block = gas_limit_from_parameters(world_view.parameters());
             let pre_block_npos_seed = crate::sumeragi::npos_seed_for_height_from_world(
                 &world_view,
@@ -17216,10 +17700,12 @@ impl State {
             self.telemetry.reset_block_fee_units();
         }
         // Acquire block hashes before the world lock to match `State::view` and avoid deadlocks.
+        let mut world = self.world.block();
+        world.dataspace_catalog = nexus_snapshot.dataspace_catalog.clone();
         let mut sb = StateBlock {
             state_ref: self,
             block_hashes: self.block_hashes.block(),
-            world: self.world.block(),
+            world,
             merge_ledger: &self.merge_ledger,
             transactions: self.transactions.block(),
             commit_topology: self.commit_topology.block(),
@@ -17763,7 +18249,9 @@ impl State {
     /// consensus paths that only need access to parameters/consensus keys.
     #[track_caller]
     pub fn world_view(&self) -> WorldView<'_> {
-        self.world.view()
+        let mut world = self.world.view();
+        world.dataspace_catalog = self.nexus_snapshot().dataspace_catalog;
+        world
     }
 
     /// Create a point-in-time snapshot tuned for query/IVM execution.
@@ -18096,8 +18584,12 @@ impl State {
         let block_hashes: Vec<HashOf<BlockHeader>> =
             self.block_hashes.view().iter().copied().collect();
         let block_hashes_wait = block_hashes_start.elapsed();
+        let nexus_start = Instant::now();
+        let nexus = self.nexus_snapshot();
+        let nexus_wait = nexus_start.elapsed();
         let world_start = Instant::now();
-        let world = self.world.view();
+        let mut world = self.world.view();
+        world.dataspace_catalog = nexus.dataspace_catalog.clone();
         let world_wait = world_start.elapsed();
         let transactions_start = Instant::now();
         let transactions = self.transactions.view();
@@ -18108,9 +18600,6 @@ impl State {
         let prev_commit_topology_start = Instant::now();
         let prev_commit_topology = self.prev_commit_topology.view();
         let prev_commit_topology_wait = prev_commit_topology_start.elapsed();
-        let nexus_start = Instant::now();
-        let nexus = self.nexus_snapshot();
-        let nexus_wait = nexus_start.elapsed();
         let _view_lock = self.view_lock.try_read().map_or_else(
             || {
                 self.note_view_lock_contention(caller);
@@ -19342,6 +19831,38 @@ impl State {
                     tx.remove(uaid);
                 } else {
                     tx.insert(uaid, manifests);
+                }
+            }
+            tx.commit();
+        }
+
+        // Drop account-scope directory entries targeting removed dataspaces so routed
+        // account-read scope cannot retain stale dataspace references after catalog updates.
+        let stale_account_scope_accounts: Vec<AccountId> = self
+            .world
+            .account_scope_directory
+            .view()
+            .iter()
+            .filter_map(|(account_id, entry)| {
+                entry
+                    .iter()
+                    .any(|(dataspace_id, _)| !dataspace_ids.contains(dataspace_id))
+                    .then_some(account_id.clone())
+            })
+            .collect();
+        if !stale_account_scope_accounts.is_empty() {
+            let mut tx = self.world.account_scope_directory.block();
+            for account_id in stale_account_scope_accounts {
+                let Some(mut entry) = tx.get(&account_id).cloned() else {
+                    continue;
+                };
+                if !entry.retain_dataspaces(&dataspace_ids) {
+                    continue;
+                }
+                if entry.is_empty() {
+                    tx.remove(account_id);
+                } else {
+                    tx.insert(account_id, entry);
                 }
             }
             tx.commit();
@@ -21294,6 +21815,13 @@ impl<'state> StateBlock<'state> {
             axt_current_slot,
             self.nexus.axt.replay_retention_slots.get(),
         );
+        let mut world = self.world.trasaction(
+            #[cfg(feature = "telemetry")]
+            Some(self.telemetry),
+            self.nexus.lane_config.clone(),
+            axt_current_slot,
+        );
+        world.dataspace_catalog = self.nexus.dataspace_catalog.clone();
         StateTransaction {
             committed_fragments: &mut self.committed_fragments,
             touched_lanes: &mut self.touched_lanes,
@@ -21302,12 +21830,7 @@ impl<'state> StateBlock<'state> {
             mode_cutover_next_set_in_tx: false,
             mode_cutover_activation_set_in_tx: false,
             confidential_registry_dirty: &mut self.confidential_registry_dirty,
-            world: self.world.trasaction(
-                #[cfg(feature = "telemetry")]
-                Some(self.telemetry),
-                self.nexus.lane_config.clone(),
-                axt_current_slot,
-            ),
+            world,
             block_hashes: self.block_hashes.transaction(),
             merge_ledger: self.merge_ledger,
             commit_topology: self.commit_topology.transaction(),
@@ -21359,6 +21882,7 @@ impl<'state> StateBlock<'state> {
             confidential_gas_used_in_tx: 0,
             confidential_gas_used_in_block_so_far: self.confidential_gas_used_in_block,
             tx_call_hash: None,
+            current_tx_hash: None,
             rwa_generated_id_ordinal: 0,
             executor_fuel_remaining: None,
             preverified_batch: self.preverified_batch.clone(),
@@ -21558,6 +22082,24 @@ impl<'state> StateBlock<'state> {
         block: &CommittedBlock,
         topology: Vec<PeerId>,
     ) -> Vec<EventBox> {
+        self.apply_without_execution_with_commit_qc(block, topology, None)
+    }
+
+    /// Apply post-execution block effects, optionally using an explicit commit certificate hint
+    /// instead of relying on the global status cache to recover per-block commit-roster evidence.
+    #[allow(clippy::too_many_lines)]
+    #[allow(clippy::needless_pass_by_value)]
+    #[iroha_logger::log(
+        skip_all,
+        fields(block_height = block.as_ref().header().height())
+    )]
+    #[must_use]
+    pub fn apply_without_execution_with_commit_qc(
+        &mut self,
+        block: &CommittedBlock,
+        topology: Vec<PeerId>,
+        commit_qc_hint: Option<&Qc>,
+    ) -> Vec<EventBox> {
         let block_hash = block.as_ref().hash();
         trace!(%block_hash, "Applying block");
 
@@ -21645,16 +22187,25 @@ impl<'state> StateBlock<'state> {
         let checkpoint_topology = topology;
         let checkpoint_block_height = block.as_ref().header().height().get();
         let checkpoint_block_hash = block.as_ref().hash();
+        let hinted_commit_cert = commit_qc_hint
+            .filter(|cert| {
+                cert.height == checkpoint_block_height
+                    && cert.subject_block_hash == checkpoint_block_hash
+                    && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
+            })
+            .cloned();
         let commit_cert_for_block = if checkpoint_topology.is_empty() {
             None
         } else {
-            crate::sumeragi::status::commit_qc_history()
-                .into_iter()
-                .find(|cert| {
-                    cert.height == checkpoint_block_height
-                        && cert.subject_block_hash == checkpoint_block_hash
-                        && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
-                })
+            hinted_commit_cert.clone().or_else(|| {
+                crate::sumeragi::status::commit_qc_history()
+                    .into_iter()
+                    .find(|cert| {
+                        cert.height == checkpoint_block_height
+                            && cert.subject_block_hash == checkpoint_block_hash
+                            && matches!(cert.phase, crate::sumeragi::consensus::Phase::Commit)
+                    })
+            })
         };
         let mut world_peers: Vec<PeerId> = self.world.peers().iter().cloned().collect();
         let (status_mode_tag, _, _, _) = crate::sumeragi::status::mode_tags();
@@ -21756,11 +22307,22 @@ impl<'state> StateBlock<'state> {
                         commit_cert.validator_set_hash_version,
                         None,
                     );
-                    let recorded = self.state_ref.record_commit_roster_without_world(
-                        &commit_cert,
-                        &checkpoint,
-                        stake_snapshot,
-                    );
+                    let recorded = if hinted_commit_cert
+                        .as_ref()
+                        .is_some_and(|hint| hint == &commit_cert)
+                    {
+                        self.state_ref.record_commit_roster_without_world_or_status(
+                            &commit_cert,
+                            &checkpoint,
+                            stake_snapshot,
+                        )
+                    } else {
+                        self.state_ref.record_commit_roster_without_world(
+                            &commit_cert,
+                            &checkpoint,
+                            stake_snapshot,
+                        )
+                    };
                     if recorded {
                         let should_update =
                             match self.world.commit_qcs.get(&commit_cert.subject_block_hash) {
@@ -22853,7 +23415,7 @@ mod transfer_transcript_tests {
         tx.tx_call_hash = Some(call_hash);
         let asset_definition: iroha_data_model::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
         let delta = TransferDeltaTranscript {
@@ -22894,7 +23456,7 @@ mod transfer_transcript_tests {
         let mut tx = block.transaction();
         let asset_definition: iroha_data_model::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
         let delta = TransferDeltaTranscript {
@@ -22943,7 +23505,7 @@ mod transfer_transcript_tests {
         let mut tx = block.transaction();
         let asset_definition: iroha_data_model::asset::AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
         let delta_a = TransferDeltaTranscript {
@@ -23020,7 +23582,8 @@ mod fastpq_tx_set_hash_tests {
     #[test]
     fn validate_and_record_transactions_sets_tx_set_hash() {
         let (authority, keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("valid domain");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("valid domain");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone()).build(&authority);
         let world = World::with([domain], [account], []);
@@ -23079,7 +23642,7 @@ mod fastpq_tx_set_hash_tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
             amount: Numeric::from(10u32),
@@ -23125,7 +23688,7 @@ mod fastpq_tx_set_hash_tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
             amount: Numeric::from(10u32),
@@ -23191,7 +23754,7 @@ mod fastpq_tx_set_hash_tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
             amount: Numeric::from(10u32),
@@ -23245,7 +23808,7 @@ mod block_proof_tests {
 
         let keypair = KeyPair::random();
         let chain: ChainId = "block-proof-tests".parse().expect("chain id");
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
         let tx =
@@ -23810,7 +24373,7 @@ mod replay_validation_tests {
         )]);
 
         let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let user_domain_id: DomainId = "users".parse().expect("domain id");
+        let user_domain_id: DomainId = DomainId::try_new("users", "universal").expect("domain id");
         let user_id = iroha_data_model::account::AccountId::new(user_keypair.public_key().clone());
         let tx_genesis = TransactionBuilder::new(chain_id.clone(), genesis_id.clone())
             .with_instructions([Log::new(iroha_logger::Level::INFO, "genesis".to_owned())])
@@ -23900,7 +24463,6 @@ mod replay_validation_tests {
 
         use iroha_crypto::{Algorithm, KeyPair};
         use iroha_data_model::{
-            name::Name,
             parameter::system::{Parameter, SumeragiNposParameters},
             peer::PeerId,
         };
@@ -23953,7 +24515,7 @@ mod replay_validation_tests {
                 .set_topology(topology_entries)
                 .append_parameter(Parameter::Custom(npos_params.into_custom_parameter()));
         genesis_builder = genesis_builder
-            .domain("wonderland".parse::<Name>().expect("domain id"))
+            .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
             .account(user_keypair.public_key().clone())
             .finish_domain();
         let genesis_block = genesis_builder
@@ -24026,8 +24588,7 @@ mod replay_validation_tests {
         };
         use iroha_crypto::{Algorithm, KeyPair, SignatureOf};
         use iroha_data_model::{
-            block::BlockSignature, consensus::VALIDATOR_SET_HASH_VERSION_V1, name::Name,
-            peer::PeerId,
+            block::BlockSignature, consensus::VALIDATOR_SET_HASH_VERSION_V1, peer::PeerId,
         };
         use iroha_genesis::{GENESIS_DOMAIN_ID, GenesisBuilder, GenesisTopologyEntry};
         use iroha_test_samples::{
@@ -24076,7 +24637,7 @@ mod replay_validation_tests {
             GenesisBuilder::new(chain_id.clone(), &executor_path, "ivm/libs/not/installed")
                 .set_topology(topology_entries);
         genesis_builder = genesis_builder
-            .domain("wonderland".parse::<Name>().expect("domain id"))
+            .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
             .account(user_keypair.public_key().clone())
             .finish_domain();
         let genesis_block = genesis_builder
@@ -24235,7 +24796,7 @@ mod replay_validation_tests {
         let chain_id = ChainId::from("iroha:test:replay-signature-rotation-recovery");
         let genesis_id = (*SAMPLE_GENESIS_ACCOUNT_ID).clone();
         let user_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
-        let user_domain: DomainId = "users".parse().expect("domain id");
+        let user_domain: DomainId = DomainId::try_new("users", "universal").expect("domain id");
         let user_id = AccountId::new(user_keypair.public_key().clone());
 
         crate::sumeragi::status::reset_commit_certs_for_tests();
@@ -24394,7 +24955,7 @@ mod permission_cache_tests {
     };
 
     fn wonderland_domain_id() -> DomainId {
-        "wonderland".parse().expect("domain id")
+        DomainId::try_new("wonderland", "universal").expect("domain id")
     }
 
     fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
@@ -24764,7 +25325,6 @@ mod permission_cache_tests {
         use std::{
             borrow::Cow,
             num::{NonZeroU64, NonZeroUsize},
-            str::FromStr,
             sync::Arc,
         };
 
@@ -24781,7 +25341,6 @@ mod permission_cache_tests {
             block::{BlockHeader, SignedBlock},
             domain::Domain,
             isi::{Grant, InstructionBox},
-            name::Name,
             prelude::PeerId,
             transaction::TransactionBuilder,
             trigger::TriggerId,
@@ -24866,7 +25425,7 @@ mod permission_cache_tests {
                     leader_pop,
                 )]);
         genesis_builder = genesis_builder
-            .domain(Name::from_str("wonderland").unwrap())
+            .domain(DomainId::try_new("wonderland", "universal").expect("domain id"))
             .account(registrar_keypair.public_key().clone())
             .account(owner_keypair.public_key().clone())
             .finish_domain();
@@ -26257,7 +26816,12 @@ impl StateTransaction<'_, '_> {
             let asset_id = changed.asset();
             let amount_str = changed.amount().to_string();
             let asset_definition_id = asset_id.definition().to_string();
-            let alias_domains = self.world.alias_domains_for_account(asset_id.account());
+            let alias_domains: Vec<String> = self
+                .world
+                .bound_account_aliases(asset_id.account())
+                .into_iter()
+                .filter_map(|alias| alias.domain.map(|domain| domain.to_string()))
+                .collect();
             let account_domain = self
                 .world
                 .accounts
@@ -26271,15 +26835,17 @@ impl StateTransaction<'_, '_> {
                 .or_else(|| {
                     alias_domains
                         .iter()
-                        .map(ToString::to_string)
-                        .find(|domain| matches!(domain.as_str(), "hbl" | "ubl" | "sbp"))
+                        .find(|domain| matches!(domain.as_str(), "banka" | "bankb" | "sbp"))
+                        .cloned()
                 })
-                .or_else(|| alias_domains.first().map(ToString::to_string))
+                .or_else(|| alias_domains.first().cloned())
                 .unwrap_or_else(|| account_event.origin_domain().to_string());
-            let asset_definition_name = (!asset_id.definition().is_opaque_canonical())
-                .then(|| asset_id.definition().name().as_ref().to_owned());
-            let asset_definition_domain = (!asset_id.definition().is_opaque_canonical())
-                .then(|| asset_id.definition().domain().to_string());
+            let asset_definition_name = asset_id
+                .definition()
+                .try_name()
+                .map(|name| name.as_ref().to_owned());
+            let asset_definition_domain =
+                asset_id.definition().try_domain().map(ToString::to_string);
             let account_id = asset_id.account().to_string();
             if let Ok(amount_i64) = amount_str.parse::<i64>() {
                 let mut details = norito::json::Map::new();
@@ -26359,9 +26925,142 @@ impl StateTransaction<'_, '_> {
                 self.execute_instructions(instructions.clone(), authority),
                 None,
             ),
+            ExecutableRef::ContractCall(invocation) => {
+                let record = crate::smartcontracts::code::fetch_bound_contract_record(
+                    self,
+                    &invocation.contract_address,
+                )
+                .ok_or_else(|| {
+                    ValidationFail::NotPermitted(format!(
+                        "contract instance `{}` not found in WSV",
+                        invocation.contract_address
+                    ))
+                })?;
+                let bytecode = record.code_bytes.clone();
+                let summary = {
+                    let mut cache = self.ivm_cache.lock();
+                    cache
+                        .summarize_program(bytecode.as_ref())
+                        .map_err(|e| ValidationFail::InternalError(e.to_string()))?
+                };
+                let meta = summary.metadata.clone();
+                let pipeline_cap = self.pipeline.ivm_max_cycles_upper_bound;
+                let mut eff_cycles = meta.max_cycles;
+                if eff_cycles == 0 {
+                    eff_cycles = u64::MAX;
+                }
+                if pipeline_cap > 0 {
+                    eff_cycles = eff_cycles.min(pipeline_cap);
+                }
+                if eff_cycles == u64::MAX {
+                    eff_cycles = 0;
+                }
+                let gas_cap_cycles = if eff_cycles == 0 {
+                    meta.max_cycles
+                } else {
+                    eff_cycles
+                };
+                let gas_cap = crate::smartcontracts::ivm::gas_limit_for_cycles(gas_cap_cycles);
+                let remaining_block_budget = if self.gas_limit_per_block == 0 {
+                    u64::MAX
+                } else {
+                    self.gas_limit_per_block
+                        .saturating_sub(self.gas_used_in_block_so_far)
+                };
+                let mut gas_limit = gas_cap.min(remaining_block_budget);
+                if gas_limit == u64::MAX {
+                    gas_limit = DEFAULT_TRIGGER_GAS_LIMIT;
+                }
+                let mut cached_runtime = {
+                    let mut cache = self.ivm_cache.lock();
+                    cache
+                        .take_or_create_cached_runtime(bytecode.as_ref(), gas_limit)
+                        .map_err(|e| ValidationFail::InternalError(e.to_string()))?
+                };
+                let mut vm = cached_runtime.vm;
+                let contract_call_context =
+                    crate::executor::parse_contract_invocation_execution_context(
+                        invocation,
+                        bytecode.as_ref(),
+                        record.contract_alias.clone(),
+                    )?;
+                if let Some(entrypoint_pc) = contract_call_context.entrypoint_pc() {
+                    vm.set_register(1, vm.memory.code_len());
+                    vm.set_program_counter(entrypoint_pc).map_err(|err| {
+                        let selector = contract_call_context
+                            .runtime_context()
+                            .map(|runtime| runtime.entrypoint)
+                            .unwrap_or_else(|| "main".to_owned());
+                        ValidationFail::NotPermitted(format!(
+                            "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                        ))
+                    })?;
+                }
+                let contract_runtime_context = contract_call_context.runtime_context();
+                let accounts = self.trigger_accounts_snapshot();
+                let mut host =
+                    crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
+                        authority.clone(),
+                        accounts,
+                        contract_call_context.args().clone(),
+                    );
+                let current_block_time_ms =
+                    u64::try_from(self._curr_block.creation_time().as_millis())
+                        .expect("block creation timestamp must fit into u64");
+                host.set_trigger_id(id.clone());
+                host.set_block_time_ms(current_block_time_ms);
+                let default_base = self._curr_block.height().get().saturating_mul(256);
+                host.set_nft_seq_base(nft_seq_base_override.unwrap_or(default_base));
+                #[cfg(feature = "telemetry")]
+                host.set_telemetry(self.telemetry.clone());
+                host.set_crypto_config(self.crypto());
+                host.set_halo2_config(&self.zk.halo2);
+                host.set_chain_id(self.chain_id());
+                host.set_durable_state_snapshot_from_world(&self.world);
+                host.set_public_inputs_from_parameters(self.world.parameters.get());
+                host.set_vrf_epoch_seeds_from_world(&self.world);
+                host.set_query_state(self);
+                host.set_contract_runtime_context(contract_runtime_context.clone());
+                host.set_zk_snapshots_from_world(&self.world, &self.zk)
+                    .map_err(|e| {
+                        ValidationFail::InternalError(format!("invalid ZK snapshot state: {e}"))
+                    })?;
+                if eff_cycles > 0 {
+                    vm.set_max_cycles(eff_cycles);
+                }
+                vm.set_gas_limit(gas_limit);
+                let run_result = vm.run_with_host(&mut host);
+                cached_runtime.vm = vm;
+                {
+                    let mut cache = self.ivm_cache.lock();
+                    cache.put_cached_runtime(&cached_runtime);
+                }
+                if let Err(e) = run_result {
+                    return Err(
+                        crate::smartcontracts::ivm::map_vm_error_with_context_to_validation(
+                            &cached_runtime.vm,
+                            &e,
+                        )
+                        .into(),
+                    );
+                }
+                let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
+                let queued = artifacts.apply_to_transaction(self, authority)?;
+                let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
+                (Ok(cvs.into()), None)
+            }
             ExecutableRef::Ivm(blob_hash) => {
                 if let Some(bytecode) = self.world.triggers.get_original_contract(blob_hash) {
                     let trigger_args = self.trigger_args_from_event(&event);
+                    let contract_call_context = self
+                        .world
+                        .triggers
+                        .inspect_by_id(id, |action| action.metadata().clone())
+                        .map(|metadata| {
+                            parse_contract_call_execution_context(&metadata, bytecode.as_ref())
+                        })
+                        .transpose()?
+                        .flatten();
                     let bytecode = bytecode.clone();
                     let summary = {
                         let mut cache = self.ivm_cache.lock();
@@ -26404,6 +27103,26 @@ impl StateTransaction<'_, '_> {
                             .map_err(|e| ValidationFail::InternalError(e.to_string()))?
                     };
                     let mut vm = cached_runtime.vm;
+                    if let Some(context) = contract_call_context.as_ref()
+                        && let Some(entrypoint_pc) = context.entrypoint_pc()
+                    {
+                        vm.set_register(1, vm.memory.code_len());
+                        vm.set_program_counter(entrypoint_pc).map_err(|err| {
+                            let selector = context
+                                .runtime_context()
+                                .map(|runtime| runtime.entrypoint)
+                                .unwrap_or_else(|| "main".to_owned());
+                            ValidationFail::NotPermitted(format!(
+                                "contract entrypoint `{selector}` resolved to invalid pc: {err}"
+                            ))
+                        })?;
+                    }
+                    let host_args = contract_call_context
+                        .as_ref()
+                        .map_or(trigger_args, |context| context.args().clone());
+                    let contract_runtime_context = contract_call_context
+                        .as_ref()
+                        .and_then(|context| context.runtime_context());
                     // Attach core IVM host adapter. Stateful syscalls enqueue ISIs
                     // which we collect after `vm.run()` and return as the trigger step.
                     let accounts = self.trigger_accounts_snapshot();
@@ -26411,7 +27130,7 @@ impl StateTransaction<'_, '_> {
                         crate::smartcontracts::ivm::host::CoreHostImpl::with_accounts_and_args(
                             authority.clone(),
                             accounts,
-                            trigger_args,
+                            host_args,
                         );
                     let current_block_time_ms =
                         u64::try_from(self._curr_block.creation_time().as_millis())
@@ -26432,6 +27151,7 @@ impl StateTransaction<'_, '_> {
                     host.set_public_inputs_from_parameters(self.world.parameters.get());
                     host.set_vrf_epoch_seeds_from_world(&self.world);
                     host.set_query_state(self);
+                    host.set_contract_runtime_context(contract_runtime_context.clone());
                     host.set_zk_snapshots_from_world(&self.world, &self.zk)
                         .map_err(|e| {
                             ValidationFail::InternalError(format!("invalid ZK snapshot state: {e}"))
@@ -26440,20 +27160,7 @@ impl StateTransaction<'_, '_> {
                         vm.set_max_cycles(eff_cycles);
                     }
                     vm.set_gas_limit(gas_limit);
-                    iroha_logger::info!(
-                        trigger_id = %id,
-                        authority = %authority,
-                        gas_limit,
-                        eff_cycles,
-                        "execute_trigger starting vm.run_with_host"
-                    );
                     let run_result = vm.run_with_host(&mut host);
-                    iroha_logger::info!(
-                        trigger_id = %id,
-                        authority = %authority,
-                        run_ok = run_result.is_ok(),
-                        "execute_trigger finished vm.run_with_host"
-                    );
                     cached_runtime.vm = vm;
                     {
                         let mut cache = self.ivm_cache.lock();
@@ -26470,19 +27177,8 @@ impl StateTransaction<'_, '_> {
                     }
                     // Collect queued ISIs from the host, execute them via the executor,
                     // and return them as the step.
-                    let artifacts = host.into_execution_artifacts(None)?;
-                    iroha_logger::info!(
-                        trigger_id = %id,
-                        authority = %authority,
-                        "execute_trigger applying queued ISIs from host"
-                    );
+                    let artifacts = host.into_execution_artifacts(contract_runtime_context)?;
                     let queued = artifacts.apply_to_transaction(self, authority)?;
-                    iroha_logger::info!(
-                        trigger_id = %id,
-                        authority = %authority,
-                        queued_isi_count = queued.len(),
-                        "execute_trigger finished applying queued ISIs from host"
-                    );
                     let cvs: ConstVec<InstructionBox> = ConstVec::from(queued);
                     (Ok(cvs.into()), None)
                 } else {
@@ -26534,7 +27230,9 @@ impl StateTransaction<'_, '_> {
     fn execution_step_from_executable(executable: &ExecutableRef) -> ExecutionStep {
         match executable {
             ExecutableRef::Instructions(instructions) => ExecutionStep(instructions.clone()),
-            ExecutableRef::Ivm(_) => ExecutionStep(ConstVec::new_empty()),
+            ExecutableRef::ContractCall(_) | ExecutableRef::Ivm(_) => {
+                ExecutionStep(ConstVec::new_empty())
+            }
         }
     }
 
@@ -26565,6 +27263,9 @@ impl StateTransaction<'_, '_> {
             Executable::Instructions(instructions) => {
                 self.execute_instructions(instructions.clone(), authority)
                     .expect("should be no errors");
+            }
+            Executable::ContractCall(_) => {
+                panic!("apply_executable does not support Executable::ContractCall")
             }
             Executable::Ivm(bytes) => {
                 let mut vm = IVM::new(0);
@@ -27122,6 +27823,27 @@ pub(crate) mod deserialize {
         )
     }
 
+    fn take_optional_default_lossy<T>(
+        map: &mut json::native::Map,
+        key: &str,
+    ) -> Result<T, json::Error>
+    where
+        T: JsonDeserialize + Default,
+    {
+        map.remove(key).map_or_else(
+            || Ok(T::default()),
+            |value| match json::value::from_value(value) {
+                Ok(parsed) => Ok(parsed),
+                Err(err) => {
+                    eprintln!(
+                        "snapshot compatibility: discarding persisted `{key}` value because it could not be decoded: {err}"
+                    );
+                    Ok(T::default())
+                }
+            },
+        )
+    }
+
     fn take_parameters_cell(
         map: &mut json::native::Map,
         key: &str,
@@ -27196,6 +27918,7 @@ pub(crate) mod deserialize {
         let account_aliases = take_optional_default(&mut map, "account_aliases")?;
         let account_aliases_by_account =
             take_optional_default(&mut map, "account_aliases_by_account")?;
+        let account_scope_directory = take_optional_default(&mut map, "account_scope_directory")?;
         let ram_lfe_program_policies = take_optional_default(&mut map, "ram_lfe_program_policies")?;
         let identifier_policies = take_optional_default(&mut map, "identifier_policies")?;
         let identifier_claims = take_optional_default(&mut map, "identifier_claims")?;
@@ -27253,11 +27976,13 @@ pub(crate) mod deserialize {
         let contract_instances = take_optional_default(&mut map, "contract_instances")?;
         let smart_contract_state = take_optional_default(&mut map, "smart_contract_state")?;
         let soracloud_service_revisions =
-            take_optional_default(&mut map, "soracloud_service_revisions")?;
+            take_optional_default_lossy(&mut map, "soracloud_service_revisions")?;
         let soracloud_service_deployments =
             take_optional_default(&mut map, "soracloud_service_deployments")?;
         let soracloud_service_runtime =
             take_optional_default(&mut map, "soracloud_service_runtime")?;
+        let soracloud_inrou_replica_runtime =
+            take_optional_default(&mut map, "soracloud_inrou_replica_runtime")?;
         let soracloud_service_audit_events =
             take_optional_default(&mut map, "soracloud_service_audit_events")?;
         let soracloud_service_state_entries =
@@ -27293,6 +28018,8 @@ pub(crate) mod deserialize {
             take_optional_default(&mut map, "soracloud_private_inference_checkpoints")?;
         let soracloud_model_host_capabilities =
             take_optional_default(&mut map, "soracloud_model_host_capabilities")?;
+        let soracloud_inrou_host_capabilities =
+            take_optional_default(&mut map, "soracloud_inrou_host_capabilities")?;
         let soracloud_hf_sources = take_optional_default(&mut map, "soracloud_hf_sources")?;
         let soracloud_hf_shared_lease_pools =
             take_optional_default(&mut map, "soracloud_hf_shared_lease_pools")?;
@@ -27303,6 +28030,8 @@ pub(crate) mod deserialize {
         let soracloud_model_host_violation_evidence =
             take_optional_default(&mut map, "soracloud_model_host_violation_evidence")?;
         let soracloud_hf_placements = take_optional_default(&mut map, "soracloud_hf_placements")?;
+        let soracloud_inrou_service_placements =
+            take_optional_default(&mut map, "soracloud_inrou_service_placements")?;
         let soracloud_mailbox_messages =
             take_optional_default(&mut map, "soracloud_mailbox_messages")?;
         let soracloud_runtime_receipts =
@@ -27311,6 +28040,8 @@ pub(crate) mod deserialize {
         let zk_assets = take_optional_default(&mut map, "zk_assets")?;
         let elections = take_optional_default(&mut map, "elections")?;
         let citizens = take_optional_default(&mut map, "citizens")?;
+        let ministry_agenda_proposals =
+            take_optional_default(&mut map, "ministry_agenda_proposals")?;
         let governance_proposals = take_optional_default(&mut map, "governance_proposals")?;
         let governance_referenda = take_optional_default(&mut map, "governance_referenda")?;
         let governance_stage_approvals =
@@ -27355,6 +28086,7 @@ pub(crate) mod deserialize {
             uaid_accounts: Storage::default(),
             account_aliases,
             account_aliases_by_account,
+            account_scope_directory,
             opaque_uaids: Storage::default(),
             ram_lfe_program_policies,
             identifier_policies,
@@ -27417,6 +28149,7 @@ pub(crate) mod deserialize {
             soracloud_service_revisions,
             soracloud_service_deployments,
             soracloud_service_runtime,
+            soracloud_inrou_replica_runtime,
             soracloud_service_audit_events,
             soracloud_service_state_entries,
             soracloud_decryption_request_records,
@@ -27435,12 +28168,14 @@ pub(crate) mod deserialize {
             soracloud_private_inference_sessions,
             soracloud_private_inference_checkpoints,
             soracloud_model_host_capabilities,
+            soracloud_inrou_host_capabilities,
             soracloud_hf_sources,
             soracloud_hf_shared_lease_pools,
             soracloud_hf_shared_lease_members,
             soracloud_hf_shared_lease_audit_events,
             soracloud_model_host_violation_evidence,
             soracloud_hf_placements,
+            soracloud_inrou_service_placements,
             soracloud_mailbox_messages,
             soracloud_runtime_receipts,
             capacity_declarations: Storage::default(),
@@ -27491,6 +28226,7 @@ pub(crate) mod deserialize {
             zk_assets,
             elections,
             citizens,
+            ministry_agenda_proposals,
             governance_proposals,
             governance_referenda,
             governance_stage_approvals,
@@ -27521,6 +28257,12 @@ pub(crate) mod deserialize {
             .rebuild_account_alias_index()
             .map_err(|message| json::Error::InvalidField {
                 field: "account_aliases".into(),
+                message,
+            })?;
+        world
+            .rebuild_account_scope_directory()
+            .map_err(|message| json::Error::InvalidField {
+                field: "account_scope_directory".into(),
                 message,
             })?;
         world
@@ -28196,7 +28938,7 @@ mod tests {
 
     fn asset_alias_test_world() -> (World, AssetDefinitionId) {
         let authority = AccountId::new(KeyPair::random().public_key().clone());
-        let domain_id: DomainId = "issuer".parse().expect("domain");
+        let domain_id: DomainId = DomainId::try_new("issuer", "universal").expect("domain");
         let definition_id =
             AssetDefinitionId::new(domain_id.clone(), "usd".parse().expect("asset name"));
         let definition = AssetDefinition::numeric(definition_id.clone())
@@ -28494,7 +29236,7 @@ mod tests {
         let validator = ALICE_ID.clone();
         let staker = BOB_ID.clone();
         let stake_asset_definition = AssetDefinitionId::new(
-            "wonderland".parse().expect("stake asset domain"),
+            DomainId::try_new("wonderland", "universal").expect("stake asset domain"),
             "stake".parse().expect("stake asset name"),
         );
         let reward_asset = AssetId::new(stake_asset_definition, validator.clone());
@@ -28620,7 +29362,7 @@ mod tests {
     };
 
     fn sample_domain_id() -> DomainId {
-        "wonderland".parse().expect("sample domain id")
+        DomainId::try_new("wonderland", "universal").expect("sample domain id")
     }
 
     fn new_account_in_domain(
@@ -28632,6 +29374,371 @@ mod tests {
 
     fn new_sample_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
         new_account_in_domain(account_id, &sample_domain_id())
+    }
+
+    #[test]
+    fn account_scope_hierarchy_tracks_dataspaces_and_domains() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: DataSpaceId::GLOBAL,
+                alias: "universal".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        stx.world.dataspace_catalog = dataspace_catalog;
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        Register::account(Account::new(authority.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register authority");
+        Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register account");
+
+        let universal_domain: DomainId =
+            DomainId::try_new("treasury", "universal").expect("domain");
+        let retail_domain: DomainId = DomainId::try_new("treasury", "retail").expect("domain");
+        let universal_alias = iroha_data_model::account::rekey::AccountAlias::new(
+            "rootdesk".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                universal_domain.name().clone(),
+            )),
+            DataSpaceId::GLOBAL,
+        );
+        let retail_alias = iroha_data_model::account::rekey::AccountAlias::new(
+            "retaildesk".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                retail_domain.name().clone(),
+            )),
+            retail_dataspace,
+        );
+
+        stx.world
+            .account_mut(&account_id)
+            .expect("account exists")
+            .set_label(Some(universal_alias.clone()));
+        stx.world
+            .insert_account_alias_binding(universal_alias.clone(), account_id.clone());
+        stx.world
+            .insert_account_alias_binding(retail_alias, account_id.clone());
+
+        let hierarchy = stx
+            .world
+            .account_scope_hierarchy(&account_id)
+            .expect("account hierarchy");
+        assert_eq!(
+            hierarchy.get(&DataSpaceId::GLOBAL),
+            Some(&BTreeSet::from([universal_domain.clone()])),
+            "universal dataspace should expose the bound universal domain",
+        );
+        assert_eq!(
+            hierarchy.get(&retail_dataspace),
+            Some(&BTreeSet::from([retail_domain.clone()])),
+            "retail dataspace should expose the bound retail domain",
+        );
+        assert_eq!(
+            stx.world
+                .account_dataspaces(&account_id)
+                .expect("account dataspaces"),
+            BTreeSet::from([DataSpaceId::GLOBAL, retail_dataspace]),
+            "accounts should expose the universal dataspace plus extra bindings",
+        );
+        assert_eq!(
+            stx.world
+                .account_domains(&account_id)
+                .expect("account domains"),
+            BTreeSet::from([universal_domain, retail_domain]),
+            "domains should flatten across all bound dataspaces",
+        );
+    }
+
+    #[test]
+    fn account_scope_directory_tracks_alias_bind_and_unbind() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        stx.world.dataspace_catalog = dataspace_catalog;
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        Register::account(Account::new(authority.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register authority");
+        Register::account(Account::new(account_id.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register account");
+
+        let retail_alias = iroha_data_model::account::rekey::AccountAlias::new(
+            "retaildesk".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                "treasury".parse::<Name>().expect("domain name"),
+            )),
+            retail_dataspace,
+        );
+
+        let initial_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("initial account scope")
+            .expect("materialized account should have an account scope entry")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            initial_scopes,
+            BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())]),
+            "materialized accounts should start in the universal dataspace only",
+        );
+
+        stx.world
+            .insert_account_alias_binding(retail_alias.clone(), account_id.clone());
+        let bound_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("bound account scope")
+            .expect("bound account scope entry")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            bound_scopes,
+            BTreeMap::from([
+                (DataSpaceId::GLOBAL, BTreeSet::new()),
+                (
+                    retail_dataspace,
+                    BTreeSet::from([iroha_data_model::account::rekey::AccountAliasDomain::new(
+                        "treasury".parse::<Name>().expect("domain name"),
+                    )]),
+                ),
+            ]),
+            "alias binds should immediately refresh the account scope directory",
+        );
+
+        stx.world.remove_account_alias_binding(&retail_alias);
+        let unbound_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("unbound account scope")
+            .expect("account scope entry should remain after unbind")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            unbound_scopes,
+            BTreeMap::from([(DataSpaceId::GLOBAL, BTreeSet::new())]),
+            "alias unbinds should remove the extra dataspace from the account scope directory",
+        );
+    }
+
+    #[test]
+    fn account_scope_directory_uses_primary_label_materialization_for_private_accounts() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        stx.world.dataspace_catalog = dataspace_catalog;
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        let private_domain = DomainId::try_new("treasury", "retail").expect("domain");
+        let private_primary_label = iroha_data_model::account::rekey::AccountAlias::new(
+            "retaildesk".parse().expect("label"),
+            Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
+                private_domain.name().clone(),
+            )),
+            retail_dataspace,
+        );
+        stx.world.domains.insert(
+            private_domain.clone(),
+            Domain::new(private_domain.clone()).build(&authority),
+        );
+        let (authority_id, authority_value) = Account::new(authority.clone())
+            .build(&authority)
+            .into_key_value();
+        stx.world.accounts.insert(authority_id, authority_value);
+        let (account_key, account_value) = Account::new(account_id.clone())
+            .with_label(Some(private_primary_label.clone()))
+            .build(&authority)
+            .into_key_value();
+        stx.world.accounts.insert(account_key, account_value);
+
+        let scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("account scope")
+            .expect("materialized account should have an account scope entry")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            scopes,
+            BTreeMap::from([(
+                retail_dataspace,
+                BTreeSet::from([iroha_data_model::account::rekey::AccountAliasDomain::new(
+                    "treasury".parse::<Name>().expect("domain name"),
+                )]),
+            )]),
+            "private primary labels should materialize the account scope in that private dataspace without a universal fallback",
+        );
+        assert_eq!(
+            stx.world
+                .account_scope_hierarchy(&account_id)
+                .expect("account hierarchy"),
+            BTreeMap::from([(retail_dataspace, BTreeSet::from([private_domain]))]),
+            "hierarchy should resolve the primary-label dataspace/domain pair",
+        );
+    }
+
+    #[test]
+    fn account_scope_directory_tracks_manifest_driven_uaid_binding_changes() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::default(), kura, query_handle);
+        let block = new_dummy_block_with_payload(|_| {});
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let treasury_dataspace = DataSpaceId::new(18);
+        let dataspace_catalog = iroha_data_model::nexus::DataSpaceCatalog::new(vec![
+            iroha_data_model::nexus::DataSpaceMetadata::default(),
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            iroha_data_model::nexus::DataSpaceMetadata {
+                id: treasury_dataspace,
+                alias: "treasury".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        stx.nexus.dataspace_catalog = dataspace_catalog.clone();
+        stx.world.dataspace_catalog = dataspace_catalog;
+
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let account_id = AccountId::new(KeyPair::random().public_key().clone());
+        let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::account-scope-refresh"));
+        Register::account(Account::new(authority.clone()))
+            .execute(&authority, &mut stx)
+            .expect("register authority");
+        Register::account(Account::new(account_id.clone()).with_uaid(Some(uaid)))
+            .execute(&authority, &mut stx)
+            .expect("register account");
+
+        let manifest_record = |dataspace| {
+            let manifest = AssetPermissionManifest {
+                version: ManifestVersion::default(),
+                uaid,
+                dataspace,
+                issued_ms: 0,
+                activation_epoch: 1,
+                expiry_epoch: None,
+                entries: Vec::new(),
+            };
+            let mut record = SpaceDirectoryManifestRecord::new(manifest);
+            record.lifecycle.mark_activated(1);
+            record
+        };
+
+        let mut retail_set = SpaceDirectoryManifestSet::default();
+        retail_set.upsert(manifest_record(retail_dataspace));
+        stx.world.space_directory_manifests.insert(uaid, retail_set);
+        stx.world.rebuild_space_directory_bindings(uaid);
+
+        let retail_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("retail account scope")
+            .expect("account scope entry after retail manifest")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            retail_scopes,
+            BTreeMap::from([
+                (DataSpaceId::GLOBAL, BTreeSet::new()),
+                (retail_dataspace, BTreeSet::new()),
+            ]),
+            "UAID bindings should surface the manifest dataspace in the account scope directory",
+        );
+
+        let mut treasury_set = SpaceDirectoryManifestSet::default();
+        treasury_set.upsert(manifest_record(treasury_dataspace));
+        stx.world
+            .space_directory_manifests
+            .insert(uaid, treasury_set);
+        stx.world.rebuild_space_directory_bindings(uaid);
+
+        let treasury_scopes = stx
+            .world
+            .account_scope_entry(&account_id)
+            .expect("treasury account scope")
+            .expect("account scope entry after manifest rotation")
+            .iter()
+            .map(|(dataspace_id, domains)| (*dataspace_id, domains.clone()))
+            .collect::<BTreeMap<_, _>>();
+        assert_eq!(
+            treasury_scopes,
+            BTreeMap::from([
+                (DataSpaceId::GLOBAL, BTreeSet::new()),
+                (treasury_dataspace, BTreeSet::new()),
+            ]),
+            "manifest-driven UAID binding changes should refresh the account scope directory",
+        );
     }
 
     fn make_tlv(ty: PointerType, payload: &[u8]) -> Vec<u8> {
@@ -28660,8 +29767,8 @@ mod tests {
 
     #[test]
     fn trigger_args_from_asset_event_use_destination_account_domain() {
-        let recipient_domain: DomainId = "centralbank".parse().unwrap();
-        let asset_domain: DomainId = "cbuae".parse().unwrap();
+        let recipient_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
+        let asset_domain: DomainId = DomainId::try_new("cbuae", "universal").unwrap();
         let (subject, _) = gen_account_in("centralbank");
         let recipient = subject.clone();
         let asset_definition = AssetDefinitionId::new(asset_domain, "aed".parse().unwrap());
@@ -28707,8 +29814,8 @@ mod tests {
 
     #[test]
     fn trigger_args_from_asset_event_use_account_label_domain_when_subject_links_missing() {
-        let recipient_domain: DomainId = "centralbank".parse().unwrap();
-        let asset_domain: DomainId = "cbuae".parse().unwrap();
+        let recipient_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
+        let asset_domain: DomainId = DomainId::try_new("cbuae", "universal").unwrap();
         let (subject, _) = gen_account_in("ghost");
         let account_label =
             alias_in_domain(&recipient_domain, "admin1".parse().expect("valid label"));
@@ -29043,7 +30150,7 @@ mod tests {
         };
 
         let (account_id, _keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let world = World::with(
             [Domain::new(domain_id.clone()).build(&account_id)],
             [new_account_in_domain(&account_id, &domain_id).build(&account_id)],
@@ -29216,7 +30323,7 @@ mod tests {
     #[test]
     fn world_rebuild_account_indexes_populates_storage() {
         let mut world = World::default();
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let owner_id = AccountId::new(keypair.public_key().clone());
         let domain = iroha_data_model::domain::Domain {
@@ -29270,7 +30377,7 @@ mod tests {
 
         let provider_id = ProviderId::new([9_u8; 32]);
         let keypair = KeyPair::random();
-        let domain_id: DomainId = "providers".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("providers", "universal").expect("domain id");
         let owner_id = AccountId::new(keypair.public_key().clone());
         let owner_domain = iroha_data_model::domain::Domain {
             id: domain_id.clone(),
@@ -30472,6 +31579,84 @@ mod tests {
     }
 
     #[test]
+    fn set_nexus_prunes_account_scope_directory_for_removed_dataspaces() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new_for_testing(World::default(), kura, query_handle);
+
+        let retained = DataSpaceId::GLOBAL;
+        let removed = DataSpaceId::new(7);
+        let mixed_account = AccountId::new(KeyPair::random().public_key().clone());
+        let stale_only_account = AccountId::new(KeyPair::random().public_key().clone());
+
+        let initial_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![
+                DataSpaceMetadata {
+                    id: retained,
+                    alias: "global".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+                DataSpaceMetadata {
+                    id: removed,
+                    alias: "historical".to_string(),
+                    description: None,
+                    fault_tolerance: 1,
+                },
+            ])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(initial_nexus)
+            .expect("set initial nexus config");
+
+        let mut mixed_entry = AccountScopeDirectoryEntry::default();
+        mixed_entry.ensure_dataspace(retained);
+        mixed_entry.ensure_dataspace(removed);
+        let mut stale_only_entry = AccountScopeDirectoryEntry::default();
+        stale_only_entry.ensure_dataspace(removed);
+
+        let mut wb = state.world.block();
+        wb.account_scope_directory
+            .insert(mixed_account.clone(), mixed_entry);
+        wb.account_scope_directory
+            .insert(stale_only_account.clone(), stale_only_entry);
+        wb.commit();
+
+        let updated_nexus = iroha_config::parameters::actual::Nexus {
+            enabled: true,
+            dataspace_catalog: DataSpaceCatalog::new(vec![DataSpaceMetadata {
+                id: retained,
+                alias: "global".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            }])
+            .expect("dataspace catalog"),
+            ..iroha_config::parameters::actual::Nexus::default()
+        };
+        state
+            .set_nexus(updated_nexus)
+            .expect("set updated nexus config");
+
+        let view = state.world.account_scope_directory.view();
+        let mixed = view
+            .get(&mixed_account)
+            .expect("mixed account scope entry should remain");
+        assert!(
+            mixed
+                .iter()
+                .all(|(dataspace_id, _)| *dataspace_id == retained),
+            "stale dataspaces should be pruned from mixed account scope entries",
+        );
+        assert!(
+            view.get(&stale_only_account).is_none(),
+            "entries should be removed when every dataspace becomes stale",
+        );
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines)]
     fn set_nexus_prunes_lane_state_when_lane_dataspace_changes() {
         let kura = Kura::blank_kura_for_testing();
@@ -31598,7 +32783,7 @@ mod tests {
         let (base_2, base_2_kp) = bls_account_in("wonderland");
         let (extra_1, extra_1_kp) = bls_account_in("wonderland");
         let (extra_2, extra_2_kp) = bls_account_in("wonderland");
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let multisig_members = (0..5)
             .map(|_| {
                 let kp = KeyPair::random_with_algorithm(Algorithm::Ed25519);
@@ -31762,7 +32947,7 @@ mod tests {
         let (base_2, base_2_kp) = bls_account_in("wonderland");
         let (extra_1, extra_1_kp) = bls_account_in("wonderland");
         let (extra_2, extra_2_kp) = bls_account_in("wonderland");
-        let domain: DomainId = "wonderland".parse().expect("domain id");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let world = World::with(
             [Domain::new(domain.clone()).build(&ALICE_ID)],
             [
@@ -34150,6 +35335,108 @@ mod tests {
     }
 
     #[test]
+    fn apply_without_execution_with_commit_qc_hint_persists_roster_without_status_history() {
+        let _guard = status::commit_history_test_guard();
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_for_testing(World::default(), Arc::clone(&kura), query_handle);
+
+        let kp_a = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let kp_b = KeyPair::random_with_algorithm(iroha_crypto::Algorithm::BlsNormal);
+        let roster = vec![
+            PeerId::new(kp_a.public_key().clone()),
+            PeerId::new(kp_b.public_key().clone()),
+        ];
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 1);
+        let signed_block = iroha_data_model::block::builder::BlockBuilder::new(header)
+            .build_with_signature(1, kp_b.private_key());
+
+        let mut state_block = state.block(signed_block.header());
+        let valid = ValidBlock::validate_unchecked(signed_block, &mut state_block).unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        let signers_bitmap = signer_bitmap(&[0, 1], roster.len());
+        let zero_root = iroha_crypto::Hash::prehashed([0u8; iroha_crypto::Hash::LENGTH]);
+        let height = committed.as_ref().header().height().get();
+        let view = committed.as_ref().header().view_change_index();
+        let vote = crate::sumeragi::consensus::Vote {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            block_hash: committed.as_ref().hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view,
+            epoch: 0,
+            highest_qc: None,
+            signer: 0,
+            bls_sig: Vec::new(),
+        };
+        let preimage = crate::sumeragi::consensus::vote_preimage(
+            &super::DEFAULT_TEST_CHAIN_ID,
+            crate::sumeragi::consensus::PERMISSIONED_TAG,
+            &vote,
+        );
+        let signatures: Vec<Vec<u8>> = [kp_a, kp_b]
+            .iter()
+            .map(|kp| {
+                Signature::new(kp.private_key(), &preimage)
+                    .payload()
+                    .to_vec()
+            })
+            .collect();
+        let sig_refs: Vec<&[u8]> = signatures.iter().map(Vec::as_slice).collect();
+        let aggregate_signature = iroha_crypto::bls_normal_aggregate_signatures(&sig_refs)
+            .expect("aggregate commit QC signatures");
+        let commit_cert = Qc {
+            phase: crate::sumeragi::consensus::Phase::Commit,
+            subject_block_hash: committed.as_ref().hash(),
+            parent_state_root: zero_root,
+            post_state_root: zero_root,
+            height,
+            view,
+            epoch: 0,
+            mode_tag: crate::sumeragi::consensus::PERMISSIONED_TAG.to_string(),
+            highest_qc: None,
+            validator_set_hash: HashOf::new(&roster),
+            validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+            validator_set: roster.clone(),
+            aggregate: crate::sumeragi::consensus::QcAggregate {
+                signers_bitmap: signers_bitmap.clone(),
+                bls_aggregate_signature: aggregate_signature,
+            },
+        };
+
+        let _ = state_block.apply_without_execution_with_commit_qc(
+            &committed,
+            roster.clone(),
+            Some(&commit_cert),
+        );
+        state_block.commit().expect("commit");
+
+        let history = status::commit_qc_history();
+        assert!(
+            history.is_empty(),
+            "explicit commit-QC hints should not populate status history during state apply"
+        );
+        let snapshot = state
+            .commit_roster_snapshot_for_block(height, committed.as_ref().hash())
+            .expect("commit-roster snapshot");
+        assert_eq!(snapshot.commit_qc, commit_cert);
+        let view = state.view();
+        let stored = view.world().commit_qcs().get(&committed.as_ref().hash());
+        assert_eq!(
+            stored,
+            Some(&snapshot.commit_qc),
+            "explicit commit-QC hints should still persist durable roster evidence"
+        );
+
+        status::reset_commit_certs_for_tests();
+        status::reset_validator_checkpoints_for_tests();
+    }
+
+    #[test]
     fn commit_roster_record_does_not_persist_sidecar_to_kura() {
         let _guard = status::commit_history_test_guard();
         status::reset_commit_certs_for_tests();
@@ -35195,7 +36482,8 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "zero-snapshot".parse().expect("domain id");
+        let domain_id: DomainId =
+            DomainId::try_new("zero-snapshot", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -36023,7 +37311,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "preserve".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("preserve", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -36147,7 +37435,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "lane-change".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("lane-change", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -36750,7 +38038,7 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::expiry"));
         let dataspace = DataSpaceId::new(11);
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -36865,7 +38153,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -36968,7 +38256,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "rotate".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("rotate", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -37090,7 +38378,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "zero-hash".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("zero-hash", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -37177,7 +38465,7 @@ mod tests {
         .expect("lane catalog");
         let lane_config = RuntimeLaneConfig::from_catalog(&lane_catalog);
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
         let account = new_account_in_domain(&account_id, &domain_id)
@@ -37275,7 +38563,7 @@ mod tests {
 
         let mut delta = DetachedStateTransactionDelta::default();
         let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         delta.record_mint_consumption(def_id.clone(), 1);
@@ -37285,7 +38573,7 @@ mod tests {
 
     #[test]
     fn detached_can_modify_nft_metadata_allows_domain_owner() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
@@ -37306,7 +38594,7 @@ mod tests {
 
     #[test]
     fn detached_can_modify_nft_metadata_checks_grants_and_revokes() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
@@ -37355,7 +38643,7 @@ mod tests {
 
     #[test]
     fn detached_can_modify_account_metadata_allows_domain_owner() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
@@ -37374,8 +38662,10 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_domain_denies_non_owner() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let transferred_domain_id: DomainId = "foo".parse().expect("foo domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let transferred_domain_id: DomainId =
+            DomainId::try_new("foo", "universal").expect("foo domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -37406,8 +38696,10 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_domain_considers_pending_domain_transfers() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let transferred_domain_id: DomainId = "foo".parse().expect("foo domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let transferred_domain_id: DomainId =
+            DomainId::try_new("foo", "universal").expect("foo domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -37462,8 +38754,10 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_asset_definition_denies_non_owner() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let definition_domain_id: DomainId = "defs".parse().expect("defs domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let definition_domain_id: DomainId =
+            DomainId::try_new("defs", "universal").expect("defs domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -37502,8 +38796,10 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_asset_definition_considers_pending_owner_transfer() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let definition_domain_id: DomainId = "defs".parse().expect("defs domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let definition_domain_id: DomainId =
+            DomainId::try_new("defs", "universal").expect("defs domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -37557,7 +38853,8 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_nft_denies_non_owner() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -37590,7 +38887,8 @@ mod tests {
 
     #[test]
     fn detached_can_transfer_nft_considers_pending_domain_transfers() {
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
@@ -37631,7 +38929,7 @@ mod tests {
 
     #[test]
     fn detached_can_modify_account_metadata_respects_role_permission_ops() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
@@ -37691,7 +38989,7 @@ mod tests {
 
     #[test]
     fn detached_can_modify_nft_metadata_respects_role_grant_order() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
@@ -37751,7 +39049,7 @@ mod tests {
 
     #[test]
     fn detached_can_modify_nft_metadata_respects_role_permission_ops() {
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
@@ -37814,7 +39112,7 @@ mod tests {
     fn detached_merge_rejects_permission_revoke_without_grant() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id).build(&ALICE_ID);
         let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
@@ -37856,7 +39154,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -37864,7 +39162,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -37875,7 +39173,7 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");
         let other_asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "tulip".parse().unwrap(),
         );
         Register::asset_definition({
@@ -37921,7 +39219,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -37930,7 +39228,7 @@ mod tests {
             .expect("register account");
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -37980,8 +39278,8 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let wonderland: DomainId = "wonderland".parse().expect("domain id");
-        let denoland: DomainId = "denoland".parse().expect("domain id");
+        let wonderland: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let denoland: DomainId = DomainId::try_new("denoland", "universal").expect("domain id");
         for domain_id in [&wonderland, &denoland] {
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)
@@ -38034,20 +39332,16 @@ mod tests {
             BTreeSet::from([cactus_id.clone()]),
             "denoland should only expose its own definitions"
         );
-        let synthetic_aid_domain: DomainId = "aid".parse().expect("synthetic label");
         assert!(
-            stx.world
-                .asset_definitions_in_domain_iter(&synthetic_aid_domain)
-                .next()
-                .is_none(),
-            "opaque aid asset definitions must not be exposed through any domain index"
+            opaque_id.try_domain().is_none(),
+            "opaque asset definitions must not expose a synthetic domain projection"
         );
         assert!(
             stx.world
                 .domain_asset_definitions
-                .get(&synthetic_aid_domain)
-                .is_none(),
-            "opaque aid asset definitions must not create internal aid-domain index entries"
+                .iter()
+                .all(|(_, definitions)| !definitions.contains(&opaque_id)),
+            "opaque asset definitions must not create internal domain index entries"
         );
 
         Unregister::asset_definition(cactus_id.clone())
@@ -38076,7 +39370,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -38085,7 +39379,7 @@ mod tests {
             .expect("register account");
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38144,7 +39438,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -38153,7 +39447,7 @@ mod tests {
             .expect("register account");
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38233,7 +39527,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -38242,7 +39536,7 @@ mod tests {
             .expect("register account");
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38253,7 +39547,7 @@ mod tests {
         .execute(&ALICE_ID, &mut stx)
         .expect("register asset definition");
         let other_asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "tulip".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38313,7 +39607,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -38321,7 +39615,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38360,7 +39654,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -38368,7 +39662,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .expect("register account");
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -38406,11 +39700,12 @@ mod tests {
         use iroha_test_samples::ALICE_ID;
 
         fn build_world() -> (World, DomainId, AssetDefinitionId, AssetId, AccountId) {
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
             let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             let asset_def = {
@@ -38592,8 +39887,10 @@ mod tests {
 
         let _guard = crate::sumeragi::witness::exec_witness_guard();
         crate::sumeragi::witness::start_block();
-        let asset_def_id =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset_def_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_def_id, ALICE_ID.clone());
         crate::sumeragi::witness::record_write_asset(
             &asset_id,
@@ -38636,14 +39933,14 @@ mod tests {
 
         {
             let mut stx = state_block.transaction();
-            let domain_id: DomainId = "wonderland".parse()?;
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             Register::asset_definition({
                 let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse()?,
+                    DomainId::try_new("wonderland", "universal")?,
                     "rose".parse()?,
                 );
                 AssetDefinition::numeric(__asset_definition_id.clone())
@@ -38654,8 +39951,10 @@ mod tests {
         }
 
         let trigger_id: TriggerId = "failing_time_trigger".parse()?;
-        let asset_def_id: AssetDefinitionId =
-            iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+        let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        );
         let alice_asset = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
         let failing_instruction: InstructionBox =
             Transfer::asset_numeric(alice_asset, 1_u32, BOB_ID.clone()).into();
@@ -38750,7 +40049,7 @@ mod tests {
         let mut state_block1 = state.block(header1);
         {
             let mut stx = state_block1.transaction();
-            let domain_id: DomainId = "wonderland".parse()?;
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)?;
             Register::account(new_sample_account(&ALICE_ID))
@@ -38841,7 +40140,8 @@ mod tests {
         let mut block1 = state.block(header1);
         {
             let mut stx = block1.transaction();
-            let domain_id: DomainId = "wonderland".parse().expect("domain id");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("domain id");
             Register::domain(Domain::new(domain_id))
                 .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut stx)
                 .expect("register domain");
@@ -38976,7 +40276,7 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -38984,7 +40284,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -39074,7 +40374,7 @@ mod tests {
         let trigger_id: TriggerId = "rollback_trigger".parse().unwrap();
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
 
@@ -39085,9 +40385,11 @@ mod tests {
         {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -39097,7 +40399,7 @@ mod tests {
                 AssetDefinition::numeric(__asset_definition_id.clone())
                     .with_name(__asset_definition_id.name().to_string())
             });
-            let fail_isi = Unregister::domain("dummy".parse().unwrap());
+            let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
             let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
             let trigger = Trigger::new(
                 trigger_id.clone(),
@@ -39271,9 +40573,11 @@ mod tests {
             let mut state_block = state.block(block1.as_ref().header());
             let mut stx = state_block.transaction();
 
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -39319,7 +40623,7 @@ mod tests {
             ])
             .expect("opaque asset definition id");
             let args_json = format!(
-                r#"{{"action":"create","request_id":"cd38ea58-bc66-4844-921f-22af49b6cf3d","asset_id":"{}","asset_definition_blob_hex":"4e5254300000035dc38f291ebaa4035dc38f291ebaa4000900000000000000003666540b910988cf0001000000000000002e01000000000000003d0100000000000000340100000000000000be0100000000000000b80100000000000000a80100000000000000420100000000000000390100000000000000b30100000000000000d90100000000000000590100000000000000070100000000000000700100000000000000f101000000000000001801000000000000009e","fi_id":"hbl","to_account_id":"{}","amount_i64":53378,"requested_by_actor_id":"operator1@hbl","created_at_ms":1773904751245,"expires_at_ms":1773905351245}}"#,
+                r#"{{"action":"create","request_id":"cd38ea58-bc66-4844-921f-22af49b6cf3d","asset_id":"{}","asset_definition_blob_hex":"4e5254300000035dc38f291ebaa4035dc38f291ebaa4000900000000000000003666540b910988cf0001000000000000002e01000000000000003d0100000000000000340100000000000000be0100000000000000b80100000000000000a80100000000000000420100000000000000390100000000000000b30100000000000000d90100000000000000590100000000000000070100000000000000700100000000000000f101000000000000001801000000000000009e","fi_id":"banka","to_account_id":"{}","amount_i64":53378,"requested_by_actor_id":"operator1@banka","created_at_ms":1773904751245,"expires_at_ms":1773905351245}}"#,
                 opaque_asset_id,
                 (*BOB_ID).to_string()
             );
@@ -39358,7 +40662,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(World::default(), kura, query_handle);
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let rose_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
             domain_id.clone(),
             "rose".parse().unwrap(),
@@ -39468,7 +40772,7 @@ mod tests {
                 Permission::from(
                     iroha_executor_data_model::permission::account::CanManageAccountAlias {
                         scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                            AccountAliasDomain::new(domain_id.name().clone()),
+                            domain_id.clone(),
                         ),
                     },
                 ),
@@ -39492,7 +40796,7 @@ mod tests {
                 Permission::from(
                     iroha_executor_data_model::permission::account::CanResolveAccountAlias {
                         scope: iroha_executor_data_model::permission::account::AccountAliasPermissionScope::Domain(
-                            AccountAliasDomain::new(domain_id.name().clone()),
+                            domain_id.clone(),
                         ),
                     },
                 ),
@@ -39577,7 +40881,7 @@ mod tests {
         let trigger_id: TriggerId = "rollback_trigger_detached".parse().unwrap();
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
 
@@ -39588,9 +40892,11 @@ mod tests {
         {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -39600,7 +40906,7 @@ mod tests {
                 AssetDefinition::numeric(__asset_definition_id.clone())
                     .with_name(__asset_definition_id.name().to_string())
             });
-            let fail_isi = Unregister::domain("dummy".parse().unwrap());
+            let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
             let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
             let trigger = Trigger::new(
                 trigger_id.clone(),
@@ -39768,7 +41074,8 @@ mod tests {
             crate::executor::LoadedExecutor::load(raw).expect("load executor"),
         );
 
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID);
         let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
         let mut executor_block = world.executor.block();
@@ -39839,7 +41146,8 @@ mod tests {
         use crate::{block::BlockBuilder, tx::AcceptedTransaction};
 
         // Seed the world with a domain and ALICE account to author the trigger.
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID);
         let account = new_sample_account(&ALICE_ID).build(&ALICE_ID);
         let world = World::with([domain], [account], []);
 
@@ -39851,7 +41159,7 @@ mod tests {
         let trigger_id: TriggerId = "rollback_trigger_block".parse().unwrap();
         let asset_definition_id: AssetDefinitionId =
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
 
@@ -39861,7 +41169,7 @@ mod tests {
             AssetDefinition::numeric(__asset_definition_id.clone())
                 .with_name(__asset_definition_id.name().to_string())
         });
-        let fail_isi = Unregister::domain("dummy".parse().unwrap());
+        let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
         let instructions: [InstructionBox; 2] = [create_asset.into(), fail_isi.into()];
         let register_trigger = Register::trigger(Trigger::new(
             trigger_id.clone(),
@@ -40894,7 +42202,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -40902,7 +42210,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -41100,9 +42408,11 @@ mod tests {
         });
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -41264,15 +42574,17 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let trigger_id: TriggerId = "time_retry_once".parse().unwrap();
-        let asset_definition_id =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "retrycoin".parse().unwrap());
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "retrycoin".parse().unwrap(),
+        );
         let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
         let retry_policy = TimeTriggerRetryPolicy {
             max_retries: NonZeroU32::new(1).unwrap(),
             retry_after_ms: NonZeroU64::new(5).unwrap(),
         };
         let world = World::with(
-            [Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID)],
+            [Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID)],
             [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
             [],
         );
@@ -41421,7 +42733,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let trigger_id: TriggerId = "time_retry_exhausted".parse().unwrap();
         let asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "exhaustcoin".parse().unwrap(),
         );
         let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
@@ -41430,7 +42742,7 @@ mod tests {
             retry_after_ms: NonZeroU64::new(5).unwrap(),
         };
         let world = World::with(
-            [Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID)],
+            [Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID)],
             [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
             [],
         );
@@ -41559,7 +42871,7 @@ mod tests {
         let query_handle = LiveQueryStore::start_test();
         let trigger_id: TriggerId = "time_retry_periodic".parse().unwrap();
         let asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "periodiccoin".parse().unwrap(),
         );
         let alice_asset_id = AssetId::new(asset_definition_id.clone(), ALICE_ID.clone());
@@ -41568,7 +42880,7 @@ mod tests {
             retry_after_ms: NonZeroU64::new(5).unwrap(),
         };
         let world = World::with(
-            [Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID)],
+            [Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID)],
             [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
             [],
         );
@@ -41811,7 +43123,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -41881,9 +43193,11 @@ mod tests {
         });
         let mut state_block = state.block(block1.as_ref().header());
         let mut stx = state_block.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -41959,9 +43273,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -42031,9 +43347,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -42110,9 +43428,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -42182,9 +43502,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -42217,8 +43539,9 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(2).unwrap(), None, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
-        let event =
-            data_pre::DomainEvent::Created(Domain::new("alpha".parse().unwrap()).build(&ALICE_ID));
+        let event = data_pre::DomainEvent::Created(
+            Domain::new(DomainId::try_new("alpha", "universal").unwrap()).build(&ALICE_ID),
+        );
         stx.world
             .internal_event_buf
             .push(Arc::new(DataEvent::Domain(event)));
@@ -42253,9 +43576,11 @@ mod tests {
         let header = BlockHeader::new(NonZeroU64::new(1).unwrap(), None, None, None, 0, 0);
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
-        Register::domain(Domain::new("wonderland".parse().unwrap()))
-            .execute(&ALICE_ID, &mut stx)
-            .unwrap();
+        Register::domain(Domain::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+        ))
+        .execute(&ALICE_ID, &mut stx)
+        .unwrap();
         Register::account(new_sample_account(&ALICE_ID))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -42296,7 +43621,7 @@ mod tests {
         let state = State::new(World::default(), kura, query_handle);
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -42307,9 +43632,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -42398,9 +43725,11 @@ mod tests {
         let mut state_block = state.block(header);
         {
             let mut stx = state_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&ALICE_ID, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
             Register::account(new_sample_account(&ALICE_ID))
                 .execute(&ALICE_ID, &mut stx)
                 .unwrap();
@@ -42427,8 +43756,8 @@ mod tests {
         let mut state_block = state.block(header);
         let mut stx = state_block.transaction();
 
-        let alpha_domain: DomainId = "alpha".parse().unwrap();
-        let beta_domain: DomainId = "beta".parse().unwrap();
+        let alpha_domain: DomainId = DomainId::try_new("alpha", "universal").unwrap();
+        let beta_domain: DomainId = DomainId::try_new("beta", "universal").unwrap();
         let event_a = data_pre::DomainEvent::Created(Domain::new(alpha_domain).build(&ALICE_ID));
         let event_b = data_pre::DomainEvent::Created(Domain::new(beta_domain).build(&ALICE_ID));
         stx.world
@@ -42534,8 +43863,8 @@ mod tests {
         let block = new_dummy_block_with_payload(|_| {});
         let mut state_block = state.block(block.as_ref().header());
 
-        let holder_domain_id: DomainId = "holders".parse().unwrap();
-        let nft_domain_id: DomainId = "nfts".parse().unwrap();
+        let holder_domain_id: DomainId = DomainId::try_new("holders", "universal").unwrap();
+        let nft_domain_id: DomainId = DomainId::try_new("nfts", "universal").unwrap();
         let holder_id = AccountId::new(KeyPair::random().into_parts().0);
         let nft_id: NftId = "ticket$nfts".parse().unwrap();
         let role_id: RoleId = "nft_cleanup_delta".parse().unwrap();
@@ -42738,7 +44067,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -42746,7 +44075,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -42872,7 +44201,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -42880,7 +44209,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -42956,7 +44285,8 @@ mod tests {
 
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&BOB_ID);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&BOB_ID);
         let alice_account = new_sample_account(&ALICE_ID).build(&BOB_ID);
         let bob_account = new_sample_account(&BOB_ID).build(&BOB_ID);
         let world = World::with([domain], [alice_account, bob_account], []);
@@ -43262,7 +44592,7 @@ mod tests {
 
     #[test]
     fn asset_account_range() {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
 
         let account_id = gen_account_in("wonderland").0;
 
@@ -43297,7 +44627,7 @@ mod tests {
 
     #[test]
     fn asset_account_definition_range_includes_all_scopes() {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = gen_account_in("wonderland").0;
         let target_definition = AssetDefinitionId::new(domain_id.clone(), "rose".parse().unwrap());
         let other_definition = AssetDefinitionId::new(domain_id, "tulip".parse().unwrap());
@@ -43339,7 +44669,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -43347,7 +44677,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -43397,7 +44727,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -43405,7 +44735,7 @@ mod tests {
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         Register::asset_definition({
@@ -43460,9 +44790,9 @@ mod tests {
 
     #[test]
     fn detached_merge_removes_asset_metadata_on_zero_balance() {
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
@@ -43544,6 +44874,7 @@ mod tests {
                 entrypoint: "main".to_string(),
                 args: Vec::new(),
                 env: std::collections::BTreeMap::new(),
+                inrou: None,
                 required_config_names: Vec::new(),
                 required_secret_names: Vec::new(),
                 config_exports: Vec::new(),
@@ -43572,6 +44903,8 @@ mod tests {
                 schema_version: iroha_data_model::soracloud::SORA_SERVICE_MANIFEST_VERSION_V1,
                 service_name: service_name.clone(),
                 service_version: service_version.clone(),
+                execution_plane:
+                    iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService,
                 container: iroha_data_model::soracloud::SoraContainerManifestRefV1 {
                     manifest_hash: Hash::new(b"container"),
                     expected_schema_version:
@@ -43585,7 +44918,9 @@ mod tests {
                     health_window_secs: std::num::NonZeroU32::new(30).expect("nonzero"),
                     automatic_rollback_failures: std::num::NonZeroU32::new(1).expect("nonzero"),
                 },
+                economics: iroha_data_model::soracloud::SoraHttpServiceEconomicsV1::default(),
                 state_bindings: Vec::new(),
+                lease_volumes: Vec::new(),
                 handlers: vec![iroha_data_model::soracloud::SoraServiceHandlerV1 {
                     handler_name: "query".parse().expect("valid name"),
                     class: iroha_data_model::soracloud::SoraServiceHandlerClassV1::Query,
@@ -43627,6 +44962,8 @@ mod tests {
                     secret_generation: 0,
                     service_configs: std::collections::BTreeMap::new(),
                     service_secrets: std::collections::BTreeMap::new(),
+                    service_lease: None,
+                    lease_volume_states: Vec::new(),
                 },
             );
         world.soracloud_service_runtime_mut_for_testing().insert(

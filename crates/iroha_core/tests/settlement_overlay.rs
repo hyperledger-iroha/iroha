@@ -35,18 +35,18 @@ use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
 fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
     let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
 
     let delivery_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "bond".parse().unwrap(),
     );
     let payment_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "usd".parse().unwrap(),
     );
 
@@ -80,18 +80,18 @@ fn settlement_state() -> (State, AssetDefinitionId, AssetDefinitionId) {
 fn settlement_state_with_payment_spec(
     payment_spec: NumericSpec,
 ) -> (State, AssetDefinitionId, AssetDefinitionId) {
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
     let alice = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let bob = Account::new(BOB_ID.clone()).build(&ALICE_ID);
 
     let delivery_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "bond".parse().unwrap(),
     );
     let payment_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "usd".parse().unwrap(),
     );
 

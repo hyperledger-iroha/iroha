@@ -218,13 +218,13 @@ Common envelope: `InstructionExecutionError` with variants for evaluation errors
 
 CLI / Torii asset-definition id + alias examples:
 - Register with canonical Base58 id + explicit name + long alias:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
 - Register with canonical Base58 id + explicit name + short alias:
   - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - Mint by alias + account components:
-  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
 - Resolve alias to canonical Base58 id:
-  - `POST /v1/assets/aliases/resolve` with JSON `{ "alias": "pkr#ubl.sbp" }`
+  - `POST /v1/assets/aliases/resolve` with JSON `{ "alias": "pkr#bankb.sbp" }`
 
 Migration note:
 - `name#domain` textual asset-definition IDs remain intentionally unsupported in the first release; use canonical Base58 IDs or resolve a dotted alias.

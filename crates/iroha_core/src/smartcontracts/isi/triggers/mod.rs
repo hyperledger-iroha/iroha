@@ -218,7 +218,13 @@ pub mod isi {
             let owner = new_trigger.action().authority().clone();
             let is_genesis = state_transaction._curr_block.is_genesis();
             let mut is_domain_owner = false;
-            for domain_id in state_transaction.world.alias_domains_for_account(&owner) {
+            for alias in state_transaction.world.bound_account_aliases(&owner) {
+                let Some(domain_id) = alias
+                    .domain_id(&state_transaction.nexus.dataspace_catalog)
+                    .expect("bound account alias dataspace must exist in catalog")
+                else {
+                    continue;
+                };
                 let domain_owner = state_transaction
                     .world
                     .domain(&domain_id)
@@ -937,7 +943,7 @@ mod tests {
             .set_height(NonZeroU64::new(2).expect("nonzero"));
 
         // Create domain and accounts
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -1015,7 +1021,7 @@ mod tests {
         stx._curr_block
             .set_height(NonZeroU64::new(2).expect("nonzero"));
 
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -1116,7 +1122,7 @@ mod tests {
             .set_height(NonZeroU64::new(2).expect("nonzero"));
 
         // Create domain and account
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -1164,7 +1170,7 @@ mod tests {
         stx._curr_block
             .set_height(NonZeroU64::new(2).expect("nonzero"));
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -1216,7 +1222,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -1267,7 +1273,7 @@ mod tests {
             0,
         ));
         let mut stx = state_block.transaction();
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -1337,7 +1343,7 @@ mod tests {
             0,
         ));
         let mut stx = state_block.transaction();
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -1407,7 +1413,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();
@@ -1449,7 +1455,7 @@ mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let world = World::with(
-            [Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID)],
+            [Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&ALICE_ID)],
             [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
             [],
         );
@@ -1500,7 +1506,7 @@ mod tests {
         let mut state_block = state.block(block.as_ref().header());
         let mut stx = state_block.transaction();
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         Register::domain(Domain::new(domain_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .unwrap();

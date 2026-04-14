@@ -52,8 +52,8 @@ def _write_valid_repo(root: Path) -> None:
             "mcpServers": {
                 "iroha-taira": {
                     "type": "http",
-                    "url": "https://taira.sora.org/v1/mcp",
-                    "note": "preset",
+                    "url": "https://<taira-node-hostname>/v1/mcp",
+                    "note": "Replace <taira-node-hostname> with the direct public Torii hostname you want to use. https://taira.sora.org/v1/mcp is convenience-only.",
                 }
             }
         },
@@ -92,12 +92,14 @@ def _write_valid_repo(root: Path) -> None:
             [
                 "---",
                 "name: sora-taira-testnet",
-                'description: "Use https://taira.sora.org/v1/mcp and keep authority/private_key runtime-only."',
+                'description: "Use https://<taira-node>/v1/mcp and keep authority/private_key runtime-only."',
                 "---",
                 "",
                 "# SORA Taira Testnet",
                 "",
-                "Use https://taira.sora.org/v1/mcp.",
+                "Use https://<taira-node>/v1/mcp.",
+                "",
+                "Treat https://taira.sora.org/v1/mcp as a convenience endpoint only.",
                 "",
                 "- Use iroha.transactions.submit_and_wait.",
                 "- Keep authority and private_key runtime-only.",

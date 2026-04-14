@@ -8,7 +8,7 @@ use std::{
 };
 
 use iroha_config::parameters::actual::{BlockSync as Config, ConsensusMode};
-use iroha_crypto::{Hash, HashOf};
+use iroha_crypto::{Hash, HashOf, PublicKey};
 use iroha_data_model::{
     block::{BlockHeader, SignedBlock},
     consensus::{Qc, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
@@ -1059,6 +1059,7 @@ mod gossip_backoff_tests {
             kura,
             peer,
             trusted_peers: BTreeSet::new(),
+            trusted_pops: BTreeMap::new(),
             gossip_period: Duration::from_secs(1),
             gossip_max_period: Duration::from_secs(8),
             gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -2076,6 +2077,7 @@ pub struct BlockSynchronizer {
     kura: Arc<Kura>,
     peer: Peer,
     trusted_peers: BTreeSet<PeerId>,
+    trusted_pops: BTreeMap<PublicKey, Vec<u8>>,
     gossip_period: Duration,
     gossip_max_period: Duration,
     gossip_size: NonZeroU32,
@@ -2318,6 +2320,7 @@ impl BlockSynchronizer {
         kura: Arc<Kura>,
         peer: Peer,
         trusted_peers: BTreeSet<PeerId>,
+        trusted_pops: BTreeMap<PublicKey, Vec<u8>>,
         network: IrohaNetwork,
         state: Arc<State>,
         telemetry: Option<Telemetry>,
@@ -2331,6 +2334,7 @@ impl BlockSynchronizer {
         Self {
             peer,
             trusted_peers,
+            trusted_pops,
             sumeragi,
             kura,
             gossip_period,
@@ -3280,6 +3284,14 @@ mod roster_metadata_tests {
             validator_checkpoint: checkpoint.clone(),
             stake_snapshot: None,
         };
+        let placeholder: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+                header.set_height(NonZeroU64::new(1).expect("non-zero height"));
+                header.set_prev_block_hash(None);
+            })
+            .into();
+        kura.store_block(Arc::new(placeholder))
+            .expect("store placeholder parent");
         let successor = sample_successor_block(block_hash, Some(evidence));
         kura.store_block(Arc::new(successor))
             .expect("store successor block");
@@ -3316,6 +3328,14 @@ mod roster_metadata_tests {
             validator_checkpoint: checkpoint,
             stake_snapshot: None,
         };
+        let placeholder: SignedBlock =
+            ValidBlock::new_dummy_and_modify_header(KeyPair::random().private_key(), |header| {
+                header.set_height(NonZeroU64::new(1).expect("non-zero height"));
+                header.set_prev_block_hash(None);
+            })
+            .into();
+        kura.store_block(Arc::new(placeholder))
+            .expect("store placeholder parent");
         let successor = sample_successor_block(block_hash, Some(evidence));
         kura.store_block(Arc::new(successor))
             .expect("store successor block");
@@ -4399,6 +4419,36 @@ pub mod message {
             );
         }
 
+        if let Some(sidecar) = kura.read_roster_metadata(block_height) {
+            if sidecar.block_hash != block_hash {
+                if let Some(suppressed_since_last) =
+                    allow_block_sync_roster_sidecar_mismatch_warning(
+                        block_height,
+                        block_hash,
+                        sidecar.block_hash,
+                    )
+                {
+                    warn!(
+                        expected_height = block_height,
+                        expected = %block_hash,
+                        sidecar_height = sidecar.height,
+                        sidecar_hash = %sidecar.block_hash,
+                        suppressed_since_last,
+                        "ignoring roster sidecar with mismatched target"
+                    );
+                }
+            } else {
+                return filter_metadata(
+                    fill_snapshot(RosterMetadata {
+                        commit_qc: sidecar.commit_qc,
+                        validator_checkpoint: sidecar.validator_checkpoint,
+                        stake_snapshot: sidecar.stake_snapshot,
+                    }),
+                    "roster_sidecar",
+                );
+            }
+        }
+
         if let Some(metadata) =
             roster_metadata_from_successor_block_evidence(kura, block_height, block_hash)
         {
@@ -4482,6 +4532,59 @@ pub mod message {
             return incoming.cloned();
         }
         fallback.filter(|_| fallback_valid)
+    }
+
+    fn attach_share_block_sync_qc_candidate(
+        update: &mut crate::sumeragi::message::BlockSyncUpdate,
+        candidate_qc: Option<Qc>,
+        consensus_mode: ConsensusMode,
+        block_height: u64,
+        block_hash: HashOf<BlockHeader>,
+    ) {
+        let Some(qc) = candidate_qc else {
+            return;
+        };
+
+        let attach_qc = match consensus_mode {
+            ConsensusMode::Permissioned => true,
+            ConsensusMode::Npos => {
+                if let Some(snapshot) = update.stake_snapshot.as_ref() {
+                    if snapshot.matches_roster(&qc.validator_set) {
+                        true
+                    } else {
+                        warn!(
+                            height = block_height,
+                            block = %block_hash,
+                            "dropping block sync QC with mismatched stake snapshot"
+                        );
+                        false
+                    }
+                } else {
+                    warn!(
+                        height = block_height,
+                        block = %block_hash,
+                        "dropping block sync QC without stake snapshot"
+                    );
+                    false
+                }
+            }
+        };
+        if !attach_qc {
+            return;
+        }
+
+        if update
+            .commit_qc
+            .as_ref()
+            .is_some_and(|existing| existing != &qc)
+        {
+            debug!(
+                height = block_height,
+                block = %block_hash,
+                "replacing block sync roster commit certificate with sanitized QC candidate"
+            );
+        }
+        update.commit_qc = Some(qc);
     }
 
     struct BlockSyncValidationContext {
@@ -4653,6 +4756,7 @@ pub mod message {
             topology,
             block_signers,
             stake_snapshot,
+            None,
         )
     }
 
@@ -4667,6 +4771,7 @@ pub mod message {
         topology: &Topology,
         block_signers: &BTreeSet<ValidatorIndex>,
         stake_snapshot: Option<&CommitStakeSnapshot>,
+        fallback_pops: Option<&BTreeMap<PublicKey, Vec<u8>>>,
     ) -> Option<Qc> {
         let consensus_mode = consensus_mode_for_block_sync_from_world(
             world,
@@ -4794,6 +4899,16 @@ pub mod message {
                 pops.insert(peer.public_key().clone(), pop);
             }
         }
+        if let Some(fallback_pops) = fallback_pops {
+            for peer in topology.as_ref() {
+                if pops.contains_key(peer.public_key()) {
+                    continue;
+                }
+                if let Some(pop) = fallback_pops.get(peer.public_key()) {
+                    pops.insert(peer.public_key().clone(), pop.clone());
+                }
+            }
+        }
         let empty_signers = BTreeSet::new();
         let qc_block_signers = if qc_from_cache {
             &empty_signers
@@ -4917,12 +5032,31 @@ pub mod message {
             (signers.len() >= quorum).then_some(signers)
         }
 
+        #[allow(dead_code)]
         fn filter_blocks_with_valid_signatures(
             entries: Vec<(SignedBlock, Option<Qc>)>,
             rosters: &BTreeMap<HashOf<BlockHeader>, RosterMetadata>,
             fallback_topology: Option<&Topology>,
             state: &State,
             fallback_consensus_mode: ConsensusMode,
+        ) -> (Vec<(SignedBlock, Option<Qc>)>, usize) {
+            Self::filter_blocks_with_valid_signatures_with_pops(
+                entries,
+                rosters,
+                fallback_topology,
+                state,
+                fallback_consensus_mode,
+                None,
+            )
+        }
+
+        fn filter_blocks_with_valid_signatures_with_pops(
+            entries: Vec<(SignedBlock, Option<Qc>)>,
+            rosters: &BTreeMap<HashOf<BlockHeader>, RosterMetadata>,
+            fallback_topology: Option<&Topology>,
+            state: &State,
+            fallback_consensus_mode: ConsensusMode,
+            fallback_pops: Option<&BTreeMap<PublicKey, Vec<u8>>>,
         ) -> (Vec<(SignedBlock, Option<Qc>)>, usize) {
             let mut dropped = 0usize;
             let fallback_topology = fallback_topology.cloned();
@@ -4987,6 +5121,7 @@ pub mod message {
                         &topology,
                         &block_signers,
                         stake_snapshot,
+                        fallback_pops,
                     );
                     (context, signature_check, sanitized_qc)
                 };
@@ -5445,13 +5580,15 @@ pub mod message {
                         let commit_topology = block_sync.state.commit_topology_snapshot();
                         (!commit_topology.is_empty()).then(|| Topology::new(commit_topology))
                     };
-                    let (filtered_blocks, dropped) = Self::filter_blocks_with_valid_signatures(
-                        paired,
-                        &roster_by_hash,
-                        fallback_topology.as_ref(),
-                        &block_sync.state,
-                        block_sync.fallback_consensus_mode,
-                    );
+                    let (filtered_blocks, dropped) =
+                        Self::filter_blocks_with_valid_signatures_with_pops(
+                            paired,
+                            &roster_by_hash,
+                            fallback_topology.as_ref(),
+                            &block_sync.state,
+                            block_sync.fallback_consensus_mode,
+                            Some(&block_sync.trusted_pops),
+                        );
                     if dropped > 0 {
                         warn!(
                             dropped,
@@ -5547,37 +5684,13 @@ pub mod message {
                                 .clone_from(&metadata.validator_checkpoint);
                             msg.stake_snapshot.clone_from(&metadata.stake_snapshot);
                         }
-                        if msg.commit_qc.is_none() {
-                            if let Some(qc) = incoming_qc.or(derived_qc) {
-                                let attach_qc = match consensus_mode {
-                                    ConsensusMode::Permissioned => true,
-                                    ConsensusMode::Npos => {
-                                        if let Some(snapshot) = msg.stake_snapshot.as_ref() {
-                                            if snapshot.matches_roster(&qc.validator_set) {
-                                                true
-                                            } else {
-                                                warn!(
-                                                    height = block_height,
-                                                    block = %block_hash,
-                                                    "dropping block sync QC with mismatched stake snapshot"
-                                                );
-                                                false
-                                            }
-                                        } else {
-                                            warn!(
-                                                height = block_height,
-                                                block = %block_hash,
-                                                "dropping block sync QC without stake snapshot"
-                                            );
-                                            false
-                                        }
-                                    }
-                                };
-                                if attach_qc {
-                                    msg.commit_qc = Some(qc);
-                                }
-                            }
-                        }
+                        attach_share_block_sync_qc_candidate(
+                            &mut msg,
+                            incoming_qc.or(derived_qc),
+                            consensus_mode,
+                            block_height,
+                            block_hash,
+                        );
                         let update = crate::sumeragi::message::BlockMessage::BlockSyncUpdate(msg);
                         let sumeragi = block_sync.sumeragi.clone();
                         let enqueue = tokio::task::spawn_blocking(move || {
@@ -5736,8 +5849,12 @@ pub mod message {
         };
 
         use iroha_config::parameters::actual::ConsensusMode;
-        use iroha_crypto::{Hash, KeyPair};
-        use iroha_data_model::peer::{Peer, PeerId};
+        use iroha_crypto::{Hash, HashOf, KeyPair, SignatureOf};
+        use iroha_data_model::{
+            block::{BlockHeader, BlockSignature, SignedBlock},
+            consensus::{Qc, QcAggregate, VALIDATOR_SET_HASH_VERSION_V1, ValidatorSetCheckpoint},
+            peer::{Peer, PeerId},
+        };
         use tokio::sync::oneshot;
 
         use super::*;
@@ -5746,7 +5863,9 @@ pub mod message {
             kura::Kura,
             query::store::LiveQueryStore,
             state::{State, World},
-            sumeragi::{test_sumeragi_handle, test_sumeragi_handle_with_payload_cap},
+            sumeragi::{
+                message::BlockMessage, test_sumeragi_handle, test_sumeragi_handle_with_payload_cap,
+            },
         };
 
         #[test]
@@ -5776,6 +5895,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -5889,6 +6009,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -5947,6 +6068,144 @@ pub mod message {
         }
 
         #[test]
+        fn share_blocks_preserves_roster_commit_sidecars() {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .enable_time()
+                .build()
+                .expect("tokio runtime");
+
+            runtime.block_on(async {
+                let (sumeragi, block_payload_rx) = test_sumeragi_handle_with_payload_cap(1, 0);
+                let kura = Kura::blank_kura_for_testing();
+                let state = Arc::new(State::new_for_testing(
+                    World::new(),
+                    Arc::clone(&kura),
+                    LiveQueryStore::start_test(),
+                ));
+                let local_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let peer = Peer::new(
+                    "127.0.0.1:0".parse().expect("valid socket address"),
+                    local_peer_id,
+                );
+                let sender_peer_id = PeerId::new(KeyPair::random().public_key().clone());
+                let mut block_sync = BlockSynchronizer {
+                    sumeragi,
+                    kura,
+                    peer,
+                    trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
+                    gossip_period: Duration::from_secs(1),
+                    gossip_max_period: Duration::from_secs(1),
+                    gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
+                    gossip_backoff: Duration::from_secs(1),
+                    gossip_next_deadline: Instant::now(),
+                    network: crate::IrohaNetwork::closed_for_tests(),
+                    relay_ttl: 1,
+                    block_sync_frame_cap: 16 * 1024,
+                    state,
+                    telemetry: None,
+                    seen_blocks: BTreeSet::new(),
+                    unknown_prev_hashes: BTreeMap::new(),
+                    unknown_prev_global_hashes: BTreeMap::new(),
+                    request_tracker: BlockSyncRequestTracker::new(block_sync_request_ttl(
+                        Duration::from_secs(1),
+                        Duration::from_secs(1),
+                    )),
+                    latest_height: 0,
+                    last_peers: BTreeSet::new(),
+                    last_drop_count: 0,
+                    last_drop_at: None,
+                    fallback_consensus_mode: ConsensusMode::Permissioned,
+                };
+                block_sync
+                    .request_tracker
+                    .record_request(sender_peer_id.clone(), Instant::now());
+
+                let validator = KeyPair::random();
+                let validator_peer = PeerId::new(validator.public_key().clone());
+                let header = BlockHeader {
+                    height: NonZeroU64::new(1).expect("non-zero"),
+                    prev_block_hash: None,
+                    merkle_root: None,
+                    result_merkle_root: None,
+                    da_proof_policies_hash: None,
+                    da_commitments_hash: None,
+                    da_pin_intents_hash: None,
+                    prev_roster_evidence_hash: None,
+                    sccp_commitment_root: None,
+                    creation_time_ms: 0,
+                    view_change_index: 0,
+                    confidential_features: None,
+                };
+                let block_signature = BlockSignature::new(
+                    0,
+                    SignatureOf::from_hash(validator.private_key(), header.hash()),
+                );
+                let block =
+                    SignedBlock::presigned_with_da(block_signature, header, Vec::new(), None);
+                let validator_set = vec![validator_peer];
+                let signers_bitmap = vec![0b0000_0001];
+                let zero_root = Hash::prehashed([0u8; Hash::LENGTH]);
+                let commit_qc = Qc {
+                    phase: Phase::Commit,
+                    subject_block_hash: block.hash(),
+                    parent_state_root: zero_root,
+                    post_state_root: zero_root,
+                    height: 1,
+                    view: 0,
+                    epoch: 0,
+                    mode_tag: PERMISSIONED_TAG.to_string(),
+                    highest_qc: None,
+                    validator_set_hash: HashOf::new(&validator_set),
+                    validator_set_hash_version: VALIDATOR_SET_HASH_VERSION_V1,
+                    validator_set: validator_set.clone(),
+                    aggregate: QcAggregate {
+                        signers_bitmap: signers_bitmap.clone(),
+                        bls_aggregate_signature: vec![0xAB; 96],
+                    },
+                };
+                let checkpoint = ValidatorSetCheckpoint::new(
+                    1,
+                    0,
+                    block.hash(),
+                    zero_root,
+                    zero_root,
+                    validator_set,
+                    signers_bitmap,
+                    vec![0xAB; 96],
+                    VALIDATOR_SET_HASH_VERSION_V1,
+                    None,
+                );
+                let msg = message::Message::ShareBlocks(message::ShareBlocks::new(
+                    vec![block.clone()],
+                    sender_peer_id,
+                    vec![None],
+                    vec![RosterMetadata {
+                        commit_qc: Some(commit_qc.clone()),
+                        validator_checkpoint: Some(checkpoint.clone()),
+                        stake_snapshot: None,
+                    }],
+                ));
+
+                let bytes = msg.encode();
+                let decoded = message::Message::decode(&mut bytes.as_slice())
+                    .expect("share blocks message should decode after wire roundtrip");
+
+                decoded.handle_message(&mut block_sync).await;
+
+                let queued = block_payload_rx
+                    .try_recv()
+                    .expect("share blocks should enqueue a block sync update");
+                let BlockMessage::BlockSyncUpdate(update) = queued.message() else {
+                    panic!("expected block sync update");
+                };
+                assert_eq!(update.block.hash(), block.hash());
+                assert_eq!(update.commit_qc, Some(commit_qc));
+                assert_eq!(update.validator_checkpoint, Some(checkpoint));
+            });
+        }
+
+        #[test]
         fn get_blocks_after_drops_unregistered_peer_requests() {
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_time()
@@ -5983,6 +6242,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -6063,6 +6323,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -6151,6 +6412,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_millis(1),
                     gossip_max_period: Duration::from_millis(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -6252,6 +6514,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_millis(1),
                     gossip_max_period: Duration::from_millis(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -6339,6 +6602,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_millis(1),
                     gossip_max_period: Duration::from_millis(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -6416,6 +6680,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::from([trusted_peer_id.clone()]),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -6495,6 +6760,7 @@ pub mod message {
                     kura,
                     peer,
                     trusted_peers: BTreeSet::new(),
+                    trusted_pops: BTreeMap::new(),
                     gossip_period: Duration::from_secs(1),
                     gossip_max_period: Duration::from_secs(1),
                     gossip_size: NonZeroU32::new(1).expect("non-zero gossip size"),
@@ -7615,6 +7881,137 @@ pub mod message {
             assert_eq!(filtered.len(), 1);
             assert_eq!(filtered[0].0.hash(), block.hash());
             assert!(filtered[0].1.is_some());
+        }
+
+        #[test]
+        fn share_blocks_prefers_sanitized_qc_over_conflicting_roster_metadata() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_validator = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_validator.public_key().clone()),
+            ]);
+            let state = state_with_consensus_key_pops(&[&kp_leader, &kp_validator]);
+            let state_view = state.view();
+            let (chain_id, mode_tag) = test_chain_config();
+
+            let mut block: SignedBlock = unique_dummy_block(kp_leader.private_key(), |header| {
+                header.set_height(nonzero_ext::nonzero!(2_u64));
+            })
+            .into();
+            let signature_topology =
+                signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+            let leader_candidates = [&kp_leader, &kp_validator];
+            let leader = leader_keypair(&signature_topology, &leader_candidates);
+            block = sign_block_for_topology(block, &signature_topology, &[leader]);
+
+            let good_qc = qc_from_signers_with_aggregate(
+                &chain_id,
+                &mode_tag,
+                block.hash(),
+                block.header().height().get(),
+                block.header().view_change_index(),
+                0,
+                signer_indices_for_topology(&signature_topology, &[&kp_leader, &kp_validator]),
+                &signature_topology,
+                &topology,
+                &[kp_leader.clone(), kp_validator.clone()],
+            );
+
+            let mut stale_qc = good_qc.clone();
+            stale_qc.aggregate.signers_bitmap = vec![0b0000_0001];
+
+            let mut update = crate::sumeragi::message::BlockSyncUpdate::from(&block);
+            update.commit_qc = Some(stale_qc);
+
+            super::attach_share_block_sync_qc_candidate(
+                &mut update,
+                Some(good_qc.clone()),
+                ConsensusMode::Permissioned,
+                block.header().height().get(),
+                block.hash(),
+            );
+
+            assert_eq!(
+                update.commit_qc,
+                Some(good_qc),
+                "sanitized incoming QC should override stale roster-sidecar commit metadata",
+            );
+        }
+
+        #[test]
+        fn filter_blocks_uses_trusted_pops_for_lagging_re_registration_qc() {
+            let kp_leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let kp_rejoined = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+            let topology = Topology::new(vec![
+                PeerId::new(kp_leader.public_key().clone()),
+                PeerId::new(kp_rejoined.public_key().clone()),
+            ]);
+
+            // Simulate a restarted peer that has only replayed the pre-re-registration world.
+            let state = state_with_consensus_key_pops(&[&kp_leader]);
+            let state_view = state.view();
+            let (chain_id, mode_tag) = test_chain_config();
+
+            let leader_candidates = [&kp_leader, &kp_rejoined];
+            let (mut block, signature_topology) = (0_u64..8)
+                .find_map(|candidate_view| {
+                    let block: SignedBlock =
+                        unique_dummy_block(kp_leader.private_key(), |header| {
+                            header.set_height(nonzero_ext::nonzero!(1_u64));
+                            header.set_prev_block_hash(None);
+                            header.set_view_change_index(candidate_view);
+                        })
+                        .into();
+                    let signature_topology =
+                        signature_topology_for_block(&block, &topology, &state_view, &mode_tag);
+                    let leader = leader_keypair(&signature_topology, &leader_candidates);
+                    (leader.public_key() == kp_leader.public_key())
+                        .then_some((block, signature_topology))
+                })
+                .expect("test must find a view where the block signer stays in the lagging world");
+            let leader = leader_keypair(&signature_topology, &leader_candidates);
+            block = sign_block_for_topology(block, &signature_topology, &[leader]);
+
+            let qc = qc_from_signers_with_aggregate(
+                &chain_id,
+                &mode_tag,
+                block.hash(),
+                block.header().height().get(),
+                block.header().view_change_index(),
+                0,
+                signer_indices_for_topology(&signature_topology, &[&kp_leader, &kp_rejoined]),
+                &signature_topology,
+                &topology,
+                &[kp_leader.clone(), kp_rejoined.clone()],
+            );
+
+            let (without_fallback, dropped) = super::Message::filter_blocks_with_valid_signatures(
+                vec![(block.clone(), Some(qc.clone()))],
+                &BTreeMap::new(),
+                Some(&topology),
+                &state,
+                ConsensusMode::Permissioned,
+            );
+            assert_eq!(dropped, 0);
+            assert_eq!(without_fallback, vec![(block.clone(), None)]);
+
+            let trusted_pops = BTreeMap::from([(
+                kp_rejoined.public_key().clone(),
+                iroha_crypto::bls_normal_pop_prove(kp_rejoined.private_key())
+                    .expect("trusted peer pop"),
+            )]);
+            let (with_fallback, dropped) =
+                super::Message::filter_blocks_with_valid_signatures_with_pops(
+                    vec![(block.clone(), Some(qc.clone()))],
+                    &BTreeMap::new(),
+                    Some(&topology),
+                    &state,
+                    ConsensusMode::Permissioned,
+                    Some(&trusted_pops),
+                );
+            assert_eq!(dropped, 0);
+            assert_eq!(with_fallback, vec![(block, Some(qc))]);
         }
 
         #[test]

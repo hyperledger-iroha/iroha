@@ -238,6 +238,7 @@ mod tests {
     use crate::fastpq::{
         FastpqPublicInputsTemplate, authority_digest, batches_from_bundles, transition_batch_to_dto,
     };
+    use iroha_data_model::domain::DomainId;
     use iroha_data_model::fastpq::{
         TransferDeltaTranscript, TransferTranscript, TransferTranscriptBundle,
     };
@@ -333,7 +334,7 @@ mod tests {
                     from_account: (*ALICE_ID).clone(),
                     to_account: (*BOB_ID).clone(),
                     asset_definition: iroha_data_model::asset::AssetDefinitionId::new(
-                        "wonderland".parse().unwrap(),
+                        DomainId::try_new("wonderland", "universal").unwrap(),
                         "rose".parse().unwrap(),
                     ),
                     amount: Numeric::from(10u32),

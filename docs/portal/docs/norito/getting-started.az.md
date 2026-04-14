@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/getting-started.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 8e153602cfb465bd5f65bab0cf97c44604bba982a7a7f1edc8d5af8fd67a9e29
-source_last_modified: "2026-01-22T16:26:46.504508+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 3754b8549f90a4f325bb58a6b4e24bc052ec65d46a6352995c13555a8d5544bf
+source_last_modified: "2026-04-08T09:18:21.504260+00:00"
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -22,7 +22,7 @@ Iroha qovşağına.
 2. Dəstəkləyən ikili faylları yaradın və ya endirin:
    - `koto_compile` – Kotodama kompilyatoru IVM/Norito bayt kodunu yayan
    - `ivm_run` və `ivm_tool` - yerli icra və yoxlama kommunalları
-   - `iroha_cli` - Torii vasitəsilə müqavilə yerləşdirilməsi üçün istifadə olunur
+   - `iroha` - Torii vasitəsilə müqavilə yerləşdirilməsi üçün istifadə olunur
 
    Makefile deposu bu ikili faylları `PATH`-də gözləyir. Siz də edə bilərsiniz
    əvvəlcədən qurulmuş artefaktları yükləyin və ya onları mənbədən qurun. Əgər tərtib etsəniz
@@ -34,7 +34,7 @@ Iroha qovşağına.
 
 3. Yerləşdirmə mərhələsinə çatdığınız zaman Iroha qovşağının işlədiyinə əmin olun. The
    Aşağıdakı nümunələr Torii-in sizin konfiqurasiya edilmiş URL-də əldə edilə biləcəyini güman edir.
-   `iroha_cli` profili (`~/.config/iroha/cli.toml`).
+   `iroha` profili (`~/.config/iroha/cli.toml`).
 
 ## 1. Kotodama müqaviləsini tərtib edin
 
@@ -80,14 +80,14 @@ ivm_run target/examples/hello.to --args '{}'
 Lokal olaraq işləmək, dərc etməzdən əvvəl müqavilə məntiqi üzrə iterasiya zamanı faydalıdır
 zəncir üzərində.
 
-## 4. `iroha_cli` vasitəsilə yerləşdirin
+## 4. `iroha` vasitəsilə yerləşdirin
 
 Müqavilədən razı qaldığınız zaman onu CLI-dən istifadə edərək qovşaqda yerləşdirin.
 Səlahiyyət hesabını, onun imza açarını və ya `.to` faylını və ya
 Base64 faydalı yükü:
 
 ```sh
-iroha_cli app contracts deploy \
+iroha app contracts deploy \
   --authority <i105-account-id> \
   --private-key <hex-encoded-private-key> \
   --code-file target/examples/hello.to
@@ -98,14 +98,13 @@ nəticədə əməliyyat statusu. Əməliyyat həyata keçirildikdən sonra kod
 Cavabda göstərilən hash manifestləri və ya siyahı nümunələrini əldə etmək üçün istifadə edilə bilər:
 
 ```sh
-iroha_cli app contracts manifest get --code-hash 0x<hash>
-iroha_cli app contracts instances --namespace apps --table
+iroha app contracts manifest get --code-hash 0x<hash>
 ```
 
 ## 5. Torii-ə qarşı işləyin
 
 Qeydə alınmış bayt kodu ilə siz təlimat təqdim etməklə onu işə sala bilərsiniz
-saxlanılan koda istinad edir (məsələn, `iroha_cli ledger transaction submit` vasitəsilə
+saxlanılan koda istinad edir (məsələn, `iroha app contracts call --contract-address <contract-address> --entrypoint main --wait` vasitəsilə
 və ya proqram müştəriniz). Hesab icazələrinin istədiyinizə icazə verdiyinə əmin olun
 sistem zəngləri (`set_account_detail`, `transfer_asset` və s.).
 
@@ -118,7 +117,7 @@ sistem zəngləri (`set_account_detail`, `transfer_asset` və s.).
   hər ikisi ABI v1-i hədəfləyir (siyahı üçün arqumentlər olmadan `koto_compile --abi`-i işə salın
   dəstək).
 - CLI hex və ya Base64 imza açarlarını qəbul edir. Test üçün istifadə edə bilərsiniz
-  `iroha_cli tools crypto keypair` tərəfindən buraxılan açarlar.
+  `kagami keys --json` tərəfindən buraxılan açarlar.
 - Norito faydalı yükləri sazlayarkən, `ivm_tool disassemble` alt əmri kömək edir
   təlimatları Kotodama mənbəyi ilə əlaqələndirin.
 

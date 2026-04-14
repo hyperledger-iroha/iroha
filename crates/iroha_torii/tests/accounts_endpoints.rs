@@ -12,7 +12,12 @@ use iroha_core::{
     query::store::LiveQueryStore,
     state::{State, World},
 };
-use iroha_data_model::{Registrable, account::Account, domain::Domain, peer::PeerId};
+use iroha_data_model::{
+    Registrable,
+    account::Account,
+    domain::{Domain, DomainId},
+    peer::PeerId,
+};
 #[cfg(feature = "telemetry")]
 use iroha_primitives::time::TimeSource;
 use iroha_test_samples::ALICE_ID;
@@ -30,7 +35,8 @@ async fn accounts_endpoints_exist() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let mut world = World::with_assets([domain], [account], [], [], []);

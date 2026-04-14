@@ -23,6 +23,8 @@ struct StoredArgs {
     seed: Option<u64>,
     tps: f64,
     max_inflight: u32,
+    #[norito(default = "default_submitters")]
+    submitters: u32,
     #[norito(default)]
     workload_profile: u8,
     #[norito(default)]
@@ -80,6 +82,10 @@ fn default_progress_timeout_ms() -> u64 {
         .expect("default progress timeout should fit into u64")
 }
 
+fn default_submitters() -> u32 {
+    1
+}
+
 impl StoredArgs {
     fn from_args(args: &IzanamiArgs) -> Result<Self> {
         let peers = u32::try_from(args.peers)
@@ -98,6 +104,8 @@ impl StoredArgs {
                 args.max_inflight
             )
         })?;
+        let submitters = u32::try_from(args.submitters)
+            .map_err(|_| eyre!("submitters {} exceeds persistence limits", args.submitters))?;
         let fault_min_ms = duration_to_ms(args.fault_interval_min, "fault interval min")?;
         let fault_max_ms = duration_to_ms(args.fault_interval_max, "fault interval max")?;
         Ok(Self {
@@ -107,6 +115,7 @@ impl StoredArgs {
             seed: args.seed,
             tps: args.tps,
             max_inflight,
+            submitters,
             workload_profile: workload_profile_to_u8(args.workload_profile),
             allow_contract_deploy_in_stable: args.allow_contract_deploy_in_stable,
             log_filter: args.log_filter.clone(),
@@ -140,6 +149,7 @@ impl StoredArgs {
             seed: self.seed,
             tps: self.tps,
             max_inflight: self.max_inflight as usize,
+            submitters: self.submitters as usize,
             workload_profile: workload_profile_from_u8(self.workload_profile),
             allow_contract_deploy_in_stable: self.allow_contract_deploy_in_stable,
             log_filter: self.log_filter,
@@ -352,12 +362,16 @@ mod tests {
             seed: Some(123),
             tps: 12.5,
             max_inflight: 64,
+            submitters: 3,
             workload_profile: WorkloadProfile::Chaos,
             allow_contract_deploy_in_stable: true,
             log_filter: "debug".to_string(),
             fault_interval_min: Duration::from_secs(3),
             fault_interval_max: Duration::from_secs(9),
             faults: FaultArgs {
+                crash_restart: true,
+                wipe_storage: false,
+                spam_invalid_transactions: true,
                 network_latency: false,
                 network_partition: true,
                 cpu_stress: false,
@@ -381,6 +395,7 @@ mod tests {
         assert_eq!(loaded.seed, args.seed);
         assert_eq!(loaded.tps, args.tps);
         assert_eq!(loaded.max_inflight, args.max_inflight);
+        assert_eq!(loaded.submitters, args.submitters);
         assert_eq!(loaded.workload_profile, args.workload_profile);
         assert_eq!(
             loaded.allow_contract_deploy_in_stable,
@@ -436,6 +451,7 @@ mod tests {
         assert_eq!(loaded.seed, legacy.seed);
         assert_eq!(loaded.tps, legacy.tps);
         assert_eq!(loaded.max_inflight, legacy.max_inflight as usize);
+        assert_eq!(loaded.submitters, 1);
         assert_eq!(loaded.workload_profile, WorkloadProfile::Stable);
         assert!(!loaded.allow_contract_deploy_in_stable);
         assert_eq!(loaded.log_filter, legacy.log_filter);

@@ -10,8 +10,10 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use iroha_crypto::{Hash, HashOf};
 use iroha_data_model::{
-    account::AccountId,
-    nexus::{AssetPermissionManifest, DataSpaceId, UniversalAccountId},
+    account::{AccountId, rekey::AccountAliasDomain},
+    domain::DomainId,
+    error::ParseError,
+    nexus::{AssetPermissionManifest, DataSpaceCatalog, DataSpaceId, UniversalAccountId},
 };
 use iroha_schema::IntoSchema;
 use mv::storage::StorageReadOnly;
@@ -164,6 +166,130 @@ impl UaidDataspaceBindings {
     }
 }
 
+/// Deterministic mapping from a canonical account id to the dataspaces and domains where it is
+/// visible for routed read queries.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Encode, Decode, IntoSchema)]
+pub struct AccountScopeDirectoryEntry {
+    entries: BTreeMap<DataSpaceId, BTreeSet<AccountAliasDomain>>,
+}
+
+impl AccountScopeDirectoryEntry {
+    /// Returns `true` when the account has no routed dataspace scope.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// Iterate account scope entries (`dataspace_id`, `domains`).
+    pub fn iter(&self) -> impl Iterator<Item = (&DataSpaceId, &BTreeSet<AccountAliasDomain>)> {
+        self.entries.iter()
+    }
+
+    /// Ensure the account is visible in `dataspace`.
+    pub fn ensure_dataspace(&mut self, dataspace: DataSpaceId) {
+        self.entries.entry(dataspace).or_default();
+    }
+
+    /// Bind `domain_id` under `dataspace`.
+    pub fn bind_domain(&mut self, dataspace: DataSpaceId, domain: AccountAliasDomain) {
+        self.entries.entry(dataspace).or_default().insert(domain);
+    }
+
+    /// Resolve the stored dataspace -> alias-domain scope into fully-qualified [`DomainId`]s.
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] if the current dataspace catalog cannot qualify a stored
+    /// dataspace/domain scope pair.
+    pub fn hierarchy(
+        &self,
+        dataspace_catalog: &DataSpaceCatalog,
+    ) -> Result<BTreeMap<DataSpaceId, BTreeSet<DomainId>>, ParseError> {
+        let mut hierarchy = BTreeMap::new();
+        for (dataspace, domains) in &self.entries {
+            let resolved = hierarchy.entry(*dataspace).or_insert_with(BTreeSet::new);
+            for domain in domains {
+                let dataspace_alias = dataspace_catalog
+                    .by_id(*dataspace)
+                    .ok_or_else(|| ParseError::new("dataspace catalog entry is missing"))?
+                    .alias
+                    .clone();
+                resolved.insert(DomainId::try_new(domain.name(), &dataspace_alias)?);
+            }
+        }
+        Ok(hierarchy)
+    }
+
+    /// Retain only dataspaces included in `allowed`.
+    ///
+    /// Returns `true` when at least one dataspace entry was removed.
+    pub fn retain_dataspaces(&mut self, allowed: &BTreeSet<DataSpaceId>) -> bool {
+        let before = self.entries.len();
+        self.entries
+            .retain(|dataspace, _domains| allowed.contains(dataspace));
+        self.entries.len() != before
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonSerialize for UaidDataspaceBindings {
+    fn json_serialize(&self, out: &mut String) {
+        use base64::Engine as _;
+
+        let bytes = norito::to_bytes(self)
+            .expect("UaidDataspaceBindings Norito serialization must succeed");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        norito::json::JsonSerialize::json_serialize(&encoded, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for UaidDataspaceBindings {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        use base64::Engine as _;
+
+        let encoded = parser.parse_string()?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded.as_str())
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+        let archived = norito::from_bytes::<UaidDataspaceBindings>(&bytes)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+        norito::core::NoritoDeserialize::try_deserialize(archived)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonSerialize for AccountScopeDirectoryEntry {
+    fn json_serialize(&self, out: &mut String) {
+        use base64::Engine as _;
+
+        let bytes = norito::to_bytes(self)
+            .expect("AccountScopeDirectoryEntry Norito serialization must succeed");
+        let encoded = base64::engine::general_purpose::STANDARD.encode(bytes);
+        norito::json::JsonSerialize::json_serialize(&encoded, out);
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for AccountScopeDirectoryEntry {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        use base64::Engine as _;
+
+        let encoded = parser.parse_string()?;
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(encoded.as_str())
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+        let archived = norito::from_bytes::<AccountScopeDirectoryEntry>(&bytes)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))?;
+        norito::core::NoritoDeserialize::try_deserialize(archived)
+            .map_err(|err| norito::json::Error::Message(err.to_string()))
+    }
+}
+
 /// Manifest record tracked by the Space Directory host.
 #[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
 pub struct SpaceDirectoryManifestRecord {
@@ -300,6 +426,7 @@ mod tests {
     use iroha_data_model::nexus::ManifestVersion;
     use iroha_data_model::{account::Account, domain::Domain, prelude::*};
     use iroha_test_samples::gen_account_in;
+    use norito::json;
 
     use super::*;
     use crate::state::World;
@@ -359,6 +486,30 @@ mod tests {
         assert!(!bindings.is_bound_to(DataSpaceId::new(8), &account_id));
     }
 
+    #[test]
+    fn bindings_json_roundtrip() {
+        let mut bindings = UaidDataspaceBindings::default();
+        let (account_id, _) = gen_account_in("wonderland");
+        bindings.bind_account(DataSpaceId::new(9), account_id);
+
+        let encoded = json::to_json(&bindings).expect("bindings should serialize to JSON");
+        let decoded: UaidDataspaceBindings =
+            json::from_str(&encoded).expect("bindings should deserialize from JSON");
+        assert_eq!(decoded, bindings);
+    }
+
+    #[test]
+    fn account_scope_entry_json_roundtrip() {
+        let mut entry = AccountScopeDirectoryEntry::default();
+        entry.ensure_dataspace(DataSpaceId::GLOBAL);
+        entry.ensure_dataspace(DataSpaceId::new(12));
+
+        let encoded = json::to_json(&entry).expect("scope entry should serialize to JSON");
+        let decoded: AccountScopeDirectoryEntry =
+            json::from_str(&encoded).expect("scope entry should deserialize from JSON");
+        assert_eq!(decoded, entry);
+    }
+
     fn world_with_uaid(
         uaid: UniversalAccountId,
         dataspace: DataSpaceId,
@@ -366,7 +517,8 @@ mod tests {
         manifest_active: bool,
     ) -> (World, AccountId) {
         let (authority, _) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("static domain id");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("static domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = Account::new(authority.clone())
             .with_uaid(Some(uaid))

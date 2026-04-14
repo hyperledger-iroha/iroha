@@ -43,6 +43,8 @@ pub mod endorsement;
 /// Governance instruction module
 #[cfg(feature = "governance")]
 pub mod governance;
+/// Ministry agenda intake instructions.
+pub mod ministry;
 
 /// Owned trait-object wrapper for any [`crate::isi::Instruction`].
 ///
@@ -137,6 +139,11 @@ impl From<crate::isi::bridge::SubmitBridgeProof> for InstructionBox {
 }
 impl From<crate::isi::bridge::RecordBridgeReceipt> for InstructionBox {
     fn from(i: crate::isi::bridge::RecordBridgeReceipt) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::bridge::RecordSccpMessage> for InstructionBox {
+    fn from(i: crate::isi::bridge::RecordSccpMessage) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -412,6 +419,24 @@ impl From<crate::isi::soracloud::ReconcileSoracloudModelHosts> for InstructionBo
     }
 }
 
+impl From<crate::isi::soracloud::AdvertiseSoracloudInrouHost> for InstructionBox {
+    fn from(i: crate::isi::soracloud::AdvertiseSoracloudInrouHost) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::WithdrawSoracloudInrouHost> for InstructionBox {
+    fn from(i: crate::isi::soracloud::WithdrawSoracloudInrouHost) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::ReconcileSoracloudInrouPlacements> for InstructionBox {
+    fn from(i: crate::isi::soracloud::ReconcileSoracloudInrouPlacements) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
 impl From<crate::isi::soracloud::ReportSoracloudModelHostViolation> for InstructionBox {
     fn from(i: crate::isi::soracloud::ReportSoracloudModelHostViolation) -> Self {
         InstructionBox(Box::new(i))
@@ -576,6 +601,24 @@ impl From<crate::isi::soracloud::AdvanceSoracloudRollout> for InstructionBox {
 
 impl From<crate::isi::soracloud::SetSoracloudRuntimeState> for InstructionBox {
     fn from(i: crate::isi::soracloud::SetSoracloudRuntimeState) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::SetSoracloudInrouReplicaRuntimeState> for InstructionBox {
+    fn from(i: crate::isi::soracloud::SetSoracloudInrouReplicaRuntimeState) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState> for InstructionBox {
+    fn from(i: crate::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+
+impl From<crate::isi::soracloud::ReportSoracloudServiceLeaseUsage> for InstructionBox {
+    fn from(i: crate::isi::soracloud::ReportSoracloudServiceLeaseUsage) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -1046,6 +1089,11 @@ impl From<crate::isi::governance::FinalizeReferendum> for InstructionBox {
 #[cfg(feature = "governance")]
 impl From<crate::isi::governance::ApproveGovernanceProposal> for InstructionBox {
     fn from(i: crate::isi::governance::ApproveGovernanceProposal) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::ministry::SubmitAgendaProposal> for InstructionBox {
+    fn from(i: crate::isi::ministry::SubmitAgendaProposal) -> Self {
         InstructionBox(Box::new(i))
     }
 }
@@ -2008,6 +2056,7 @@ pub use contract_alias::*;
 pub use domain_link::*;
 pub use identifier::*;
 pub use kaigi::*;
+pub use ministry::*;
 pub use mint_burn::*;
 pub use nexus::*;
 pub use offline::*;
@@ -2786,7 +2835,7 @@ pub mod prelude {
         asset_transfer_control::{
             SetAssetTransferBlacklist, SetAssetTransferControl, SetAssetTransferFreeze,
         },
-        bridge::{RecordBridgeReceipt, SubmitBridgeProof},
+        bridge::{RecordBridgeReceipt, RecordSccpMessage, SubmitBridgeProof},
         confidential::{
             PublishPedersenParams, PublishPoseidonParams, SetPedersenParamsLifecycle,
             SetPoseidonParamsLifecycle,
@@ -2801,6 +2850,7 @@ pub mod prelude {
         identifier::{
             ActivateIdentifierPolicy, ClaimIdentifier, RegisterIdentifierPolicy, RevokeIdentifier,
         },
+        ministry::SubmitAgendaProposal,
         nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
         ram_lfe::{
             ActivateRamLfeProgramPolicy, DeactivateRamLfeProgramPolicy, RegisterRamLfeProgramPolicy,
@@ -2820,8 +2870,9 @@ pub mod prelude {
         soracloud::{
             AdvanceSoracloudRollout, DeploySoracloudService, MutateSoracloudState,
             RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
-            RecordSoracloudMailboxMessage, RecordSoracloudRuntimeReceipt, RollbackSoracloudService,
-            RunSoracloudFheJob, SetSoracloudRuntimeState, UpgradeSoracloudService,
+            RecordSoracloudMailboxMessage, RecordSoracloudRuntimeReceipt,
+            ReportSoracloudServiceLeaseUsage, RollbackSoracloudService, RunSoracloudFheJob,
+            SetSoracloudRuntimeState, UpgradeSoracloudService,
         },
         soradns::{
             AddReleaseSigner, PublishDirectory, RemoveReleaseSigner, RevokeResolver,
@@ -2912,6 +2963,29 @@ mod tests {
     fn decode_unregistered_instruction() {
         let registry = InstructionRegistry::new();
         assert!(registry.decode("missing", &[]).is_none());
+    }
+
+    #[test]
+    fn record_sccp_message_registry_roundtrip_preserves_payload_bytes() {
+        let registry = InstructionRegistry::new().register::<RecordSccpMessage>();
+        let instruction = RecordSccpMessage::new(vec![0xAA, 0xBB, 0xCC]);
+        let bytes = instruction.encode();
+        let framed = registry
+            .frame_payload_for_type(std::any::type_name::<RecordSccpMessage>(), &bytes)
+            .expect("record sccp message must be registered")
+            .expect("record sccp message must frame");
+        let decoded = InstructionRegistry::decode(
+            &registry,
+            std::any::type_name::<RecordSccpMessage>(),
+            &framed,
+        )
+        .expect("record sccp message must be registered")
+        .expect("record sccp message must decode");
+        let decoded = decoded
+            .as_any()
+            .downcast_ref::<RecordSccpMessage>()
+            .expect("decoded instruction type");
+        assert_eq!(decoded.payload_bytes, vec![0xAA, 0xBB, 0xCC]);
     }
 
     #[test]
@@ -3129,14 +3203,14 @@ mod tests {
         let local_registry = crate::instruction_registry::default();
 
         // Build a small suite of representative instructions
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let account_id = AccountId::new(
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
                 .unwrap(),
         );
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
@@ -3188,7 +3262,7 @@ mod tests {
 
     #[test]
     fn revoke_encode_as_instruction_box_uses_encode() {
-        let _domain: DomainId = "wonderland".parse().unwrap();
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let signatory = "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
             .parse()
             .unwrap();
@@ -3271,14 +3345,14 @@ mod tests {
         // Ensure the total ordering of InstructionBox is stable after Norito roundtrip.
         let _guard = RegistryGuard::set(crate::instruction_registry::default());
 
-        let domain_id: DomainId = "alice".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("alice", "universal").unwrap();
         let account_id = AccountId::new(
             "ed0120EDF6D7B52C7032D03AEC696F2068BD53101528F3C7B6081BFF05A1662D7FC245"
                 .parse()
                 .expect("public key"),
         );
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "alice".parse().unwrap(),
+            DomainId::try_new("alice", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def_id.clone(), account_id.clone());
@@ -3322,7 +3396,7 @@ mod tests {
         let local_registry = crate::instruction_registry::default();
 
         // Common fixtures
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let account_a = AccountId::new(
             "ed0120AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
                 .parse()
@@ -3334,7 +3408,7 @@ mod tests {
                 .unwrap(),
         );
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def_id.clone(), account_a.clone());

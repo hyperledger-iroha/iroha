@@ -43,3 +43,24 @@ impl RecordBridgeReceipt {
         Self { receipt }
     }
 }
+
+isi! {
+    /// Record an SCCP message payload for block-level commitment anchoring.
+    #[cfg_attr(
+        feature = "json",
+        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
+    )]
+    pub struct RecordSccpMessage {
+        /// Canonical SCCP payload bytes.
+        pub payload_bytes: Vec<u8>,
+    }
+}
+
+impl crate::seal::Instruction for RecordSccpMessage {}
+
+impl RecordSccpMessage {
+    /// Construct a new SCCP message record instruction for the provided payload bytes.
+    pub fn new(payload_bytes: Vec<u8>) -> Self {
+        Self { payload_bytes }
+    }
+}

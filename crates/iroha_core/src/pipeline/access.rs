@@ -32,7 +32,7 @@ use iroha_data_model::{
         CanonicalStateKey, DomainMetadataKey, NftMetadataKey, RwaMetadataKey,
         StateAccessSetAdvisory, TriggerMetadataKey, TxQueueKey,
     },
-    transaction::SignedTransaction,
+    transaction::{SignedTransaction, executable::ContractInvocation},
 };
 use iroha_primitives::json::Json;
 use ivm::host::IVMHost;
@@ -41,8 +41,8 @@ use parking_lot::RwLock;
 
 use crate::{
     executor::parse_gas_limit,
-    smartcontracts::ivm::host::QueryStateSource,
     smartcontracts::triggers::set::{ExecutableRef, SetReadOnly},
+    smartcontracts::{code, ivm::host::QueryStateSource},
     state::{StateReadOnly, WorldReadOnly},
 };
 
@@ -217,6 +217,41 @@ fn parse_contract_call_execution_context(
     }))
 }
 
+fn parse_contract_invocation_execution_context(
+    invocation: &ContractInvocation,
+    bytecode: &[u8],
+) -> Result<ContractCallExecutionContext, String> {
+    let selector = invocation.entrypoint.trim();
+    if selector.is_empty() {
+        return Err("contract entrypoint must not be empty".to_owned());
+    }
+
+    let parsed = ivm::ProgramMetadata::parse(bytecode)
+        .map_err(|err| format!("invalid contract artifact for contract call dispatch: {err}"))?;
+    let prefix_len = parsed.prefix_len() as u64;
+    let contract_interface = parsed
+        .contract_interface
+        .as_ref()
+        .ok_or_else(|| "contract call requires a self-describing contract artifact".to_owned())?;
+    let descriptor = contract_interface
+        .entrypoints
+        .iter()
+        .find(|candidate| candidate.name == selector)
+        .ok_or_else(|| format!("unknown contract entrypoint `{selector}`"))?;
+    if !matches!(
+        descriptor.kind,
+        iroha_data_model::smart_contract::manifest::EntryPointKind::Public
+    ) {
+        return Err(format!("contract entrypoint `{selector}` is not public"));
+    }
+
+    Ok(ContractCallExecutionContext {
+        entrypoint: Some(selector.to_owned()),
+        entrypoint_pc: Some(prefix_len + descriptor.entry_pc),
+        args: invocation.payload.clone().unwrap_or_default(),
+    })
+}
+
 fn apply_contract_call_execution_context(
     vm: &mut ivm::IVM,
     context: Option<&ContractCallExecutionContext>,
@@ -324,6 +359,54 @@ where
             derive_from_isi_batch_with_state(batch.as_ref(), state_ro),
             None,
         ),
+        Executable::ContractCall(call) => {
+            if let Some(view) = state_ro
+                && let Some(record) =
+                    code::fetch_bound_contract_record(view, &call.contract_address)
+            {
+                if let Some((set, source)) = manifest_access_set(
+                    &record.manifest,
+                    record.code_hash,
+                    record.code_bytes.as_ref(),
+                    view.pipeline().access_set_cache_enabled,
+                    Some(call.entrypoint.as_str()),
+                ) {
+                    return (set, Some(source));
+                }
+
+                if matches!(ivm_strategy, IvmStrategy::DynamicThenConservative) {
+                    let set = tx_gas_limit(tx)
+                        .and_then(|gas_limit| {
+                            let context = parse_contract_invocation_execution_context(
+                                call,
+                                record.code_bytes.as_ref(),
+                            )?;
+                            derive_from_ivm_dynamic_with_context(
+                                record.code_bytes.as_ref(),
+                                tx.authority(),
+                                Some(context),
+                                view,
+                                gas_limit,
+                            )
+                        })
+                        .unwrap_or_else(|_| AccessSet::global());
+                    let source = if set.read_keys.is_empty()
+                        && set.write_keys.len() == 1
+                        && set.write_keys.contains("*")
+                    {
+                        AccessSetSource::ConservativeFallback
+                    } else {
+                        AccessSetSource::PrepassMerge
+                    };
+                    return (set, Some(source));
+                }
+            }
+
+            (
+                AccessSet::global(),
+                Some(AccessSetSource::ConservativeFallback),
+            )
+        }
         Executable::IvmProved(proved) => (
             derive_from_isi_batch_with_state(proved.overlay.as_ref(), state_ro),
             None,
@@ -494,7 +577,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
         }
         if let Some(rest) = raw.strip_prefix("domain.detail:") {
             let (id, key) = rest.split_once(':')?;
-            let id: DomainId = id.parse().ok()?;
+            let id = DomainId::parse_fully_qualified(id).ok()?;
             let key: Name = key.parse().ok()?;
             canonical.push(CanonicalStateKey::DomainMetadata(DomainMetadataKey {
                 id,
@@ -597,7 +680,7 @@ fn access_set_from_hint_keys(read_keys: &[String], write_keys: &[String]) -> Opt
             return Some(());
         }
         if let Some(rest) = raw.strip_prefix("domain:") {
-            let id: DomainId = rest.parse().ok()?;
+            let id = DomainId::parse_fully_qualified(rest).ok()?;
             canonical.push(CanonicalStateKey::Domain(id));
             return Some(());
         }
@@ -762,6 +845,9 @@ fn is_entrypoint_hint_safe_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_NAME_DECODE
             | ivm::syscalls::SYSCALL_JSON_ENCODE
             | ivm::syscalls::SYSCALL_JSON_DECODE
+            | ivm::syscalls::SYSCALL_JSON_OBJECT
+            | ivm::syscalls::SYSCALL_JSON_SET_I64
+            | ivm::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
             | ivm::syscalls::SYSCALL_SCHEMA_ENCODE
             | ivm::syscalls::SYSCALL_SCHEMA_DECODE
             | ivm::syscalls::SYSCALL_SCHEMA_INFO
@@ -773,6 +859,7 @@ fn is_entrypoint_hint_safe_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_STATE_SET
             | ivm::syscalls::SYSCALL_STATE_DEL
             | ivm::syscalls::SYSCALL_GET_AUTHORITY
+            | ivm::syscalls::SYSCALL_CALL_CONTRACT
             | ivm::syscalls::SYSCALL_CURRENT_TIME_MS
             | ivm::syscalls::SYSCALL_SM3_HASH
             | ivm::syscalls::SYSCALL_SM2_VERIFY
@@ -816,6 +903,9 @@ fn is_state_only_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_NAME_DECODE
             | ivm::syscalls::SYSCALL_JSON_ENCODE
             | ivm::syscalls::SYSCALL_JSON_DECODE
+            | ivm::syscalls::SYSCALL_JSON_OBJECT
+            | ivm::syscalls::SYSCALL_JSON_SET_I64
+            | ivm::syscalls::SYSCALL_JSON_SET_ACCOUNT_ID
             | ivm::syscalls::SYSCALL_SCHEMA_ENCODE
             | ivm::syscalls::SYSCALL_SCHEMA_DECODE
             | ivm::syscalls::SYSCALL_SCHEMA_INFO
@@ -827,6 +917,7 @@ fn is_state_only_syscall(number: u8) -> bool {
             | ivm::syscalls::SYSCALL_STATE_SET
             | ivm::syscalls::SYSCALL_STATE_DEL
             | ivm::syscalls::SYSCALL_GET_AUTHORITY
+            | ivm::syscalls::SYSCALL_CALL_CONTRACT
             | ivm::syscalls::SYSCALL_CURRENT_TIME_MS
             | ivm::syscalls::SYSCALL_SM3_HASH
             | ivm::syscalls::SYSCALL_SM2_VERIFY
@@ -887,6 +978,12 @@ where
 
     // Logging is side-effect-free; keep it conflict-free.
     if any.downcast_ref::<Log>().is_some() {
+        return set;
+    }
+    if any
+        .downcast_ref::<iroha_data_model::isi::bridge::RecordSccpMessage>()
+        .is_some()
+    {
         return set;
     }
 
@@ -1176,6 +1273,22 @@ where
                 ));
             }
         }
+        ExecutableRef::ContractCall(invocation) => {
+            if let Some(record) =
+                code::fetch_bound_contract_record(state_ro, &invocation.contract_address)
+                && let Some((hinted, _source)) = manifest_access_set(
+                    &record.manifest,
+                    record.code_hash,
+                    record.code_bytes.as_ref(),
+                    state_ro.pipeline().access_set_cache_enabled,
+                    Some(invocation.entrypoint.as_str()),
+                )
+            {
+                set.union_with(hinted);
+            } else {
+                set.union_with(AccessSet::global());
+            }
+        }
         ExecutableRef::Ivm(hash) => {
             let Some(code) = triggers.get_original_contract(&hash) else {
                 return set;
@@ -1293,8 +1406,8 @@ fn add_asset_rw(set: &mut AccessSet, id: &AssetId) {
     set.add_write(k);
     // Asset operations rely on the owning account/domain and definition state.
     add_account_r(set, id.account());
-    if !id.definition().is_opaque_canonical() {
-        add_domain_r(set, id.definition().domain());
+    if let Some(domain) = id.definition().try_domain() {
+        add_domain_r(set, domain);
     }
     add_asset_def_r(set, id.definition());
 }
@@ -1374,10 +1487,29 @@ fn derive_from_ivm_dynamic<R>(
 where
     R: StateReadOnly + QueryStateSource,
 {
+    let contract_call_context = parse_contract_call_execution_context(metadata, bytecode)?;
+    derive_from_ivm_dynamic_with_context(
+        bytecode,
+        authority,
+        contract_call_context,
+        state_ro,
+        gas_limit,
+    )
+}
+
+fn derive_from_ivm_dynamic_with_context<R>(
+    bytecode: &[u8],
+    authority: &AccountId,
+    contract_call_context: Option<ContractCallExecutionContext>,
+    state_ro: &R,
+    gas_limit: u64,
+) -> Result<AccessSet, String>
+where
+    R: StateReadOnly + QueryStateSource,
+{
     // Execute VM with CoreHost to collect queued ISIs; do not apply.
     ivm::ProgramMetadata::parse(bytecode).map_err(|e| format!("ivm.metadata: {e}"))?;
     let mut vm = ivm::IVM::new(gas_limit);
-    let contract_call_context = parse_contract_call_execution_context(metadata, bytecode)?;
     // Supply accounts snapshot for vendor helpers to become deterministic.
     let accounts = state_ro.accounts_snapshot();
     let mut host = if let Some(context) = contract_call_context.as_ref() {
@@ -1481,7 +1613,7 @@ mod tests {
     const TEST_GAS_LIMIT: u64 = 50_000_000;
 
     fn wonderland_domain_id() -> DomainId {
-        "wonderland".parse().expect("static domain id")
+        DomainId::try_new("wonderland", "universal").expect("static domain id")
     }
 
     fn new_wonderland_account(account_id: &AccountId) -> iroha_data_model::account::NewAccount {
@@ -1518,7 +1650,7 @@ mod tests {
         let (bob, _) = iroha_test_samples::gen_account_in("wonderland");
         let domain_id = wonderland_domain_id();
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
         let src = AssetId::of(ad.clone(), alice.clone());
@@ -1577,7 +1709,7 @@ mod tests {
         let domain_id = wonderland_domain_id();
         let account = new_wonderland_account(&alice);
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
         let asset_def = AssetDefinition::numeric(asset_def_id.clone());
@@ -1610,7 +1742,8 @@ mod tests {
     fn ivm_access_dynamic_prepass_set_account_detail_sentinel() {
         // World and state for view
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1733,7 +1866,8 @@ mod tests {
     #[test]
     fn ivm_access_dynamic_prepass_requires_gas_limit() {
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1851,7 +1985,8 @@ mod tests {
 
         // World/state setup with one account to own the manifest
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1866,7 +2001,7 @@ mod tests {
 
         // Insert manifest with access-set hints into WSV
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def, alice.clone());
@@ -1925,7 +2060,8 @@ mod tests {
         access_set_cache_clear();
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -1938,7 +2074,7 @@ mod tests {
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
 
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def, alice.clone());
@@ -1983,7 +2119,8 @@ mod tests {
         access_set_cache_clear();
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -2060,7 +2197,8 @@ mod tests {
         use nonzero_ext::nonzero;
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -2113,7 +2251,8 @@ mod tests {
         use nonzero_ext::nonzero;
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -2204,7 +2343,8 @@ mod tests {
         use nonzero_ext::nonzero;
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -2278,7 +2418,8 @@ mod tests {
         use nonzero_ext::nonzero;
 
         let (alice, kp) = iroha_test_samples::gen_account_in("wonderland");
-        let domain: Domain = Domain::new("wonderland".parse().unwrap()).build(&alice);
+        let domain: Domain =
+            Domain::new(DomainId::try_new("wonderland", "universal").unwrap()).build(&alice);
         let account = build_wonderland_account(&alice);
         let world = World::with([domain], [account], []);
         let kura = crate::kura::Kura::blank_kura_for_testing();
@@ -2301,7 +2442,7 @@ mod tests {
         let code_hash = iroha_crypto::Hash::new(&prog[parsed.header_len..]);
 
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def, alice.clone());
@@ -2432,7 +2573,7 @@ mod tests {
         let mut st_block = state.block(header);
         {
             let mut stx = st_block.transaction();
-            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&alice, &mut stx)
                 .unwrap();
@@ -2440,7 +2581,7 @@ mod tests {
                 .execute(&alice, &mut stx)
                 .unwrap();
             let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             );
             Register::asset_definition({
@@ -2485,7 +2626,7 @@ mod tests {
         );
 
         let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def_id.clone(), alice.clone());
@@ -2509,9 +2650,11 @@ mod tests {
         let mut st_block = state.block(header);
         {
             let mut stx = st_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&alice, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&alice, &mut stx)
+            .unwrap();
             Register::account(new_wonderland_account(&alice))
                 .execute(&alice, &mut stx)
                 .unwrap();
@@ -2570,9 +2713,11 @@ mod tests {
         let mut st_block = state.block(header);
         let (code_hash, trigger_id, hints) = {
             let mut stx = st_block.transaction();
-            Register::domain(Domain::new("wonderland".parse().unwrap()))
-                .execute(&alice, &mut stx)
-                .unwrap();
+            Register::domain(Domain::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+            ))
+            .execute(&alice, &mut stx)
+            .unwrap();
             Register::account(new_wonderland_account(&alice))
                 .execute(&alice, &mut stx)
                 .unwrap();

@@ -3577,7 +3577,7 @@ mod tests {
     }
 
     fn sample_domain_id(name: &str) -> DomainId {
-        DomainId::from_str(name).expect("domain id")
+        DomainId::try_new(name, "universal").expect("domain id")
     }
 
     fn repo_rans_tables_path() -> PathBuf {

@@ -32,7 +32,7 @@ fn domainid_allowed_under_abi_current() {
     vm.load_program(&meta.encode()).expect("load v1 meta");
 
     // Prepare DomainId TLV
-    let did: DomainId = "wonder".parse().unwrap();
+    let did: DomainId = DomainId::try_new("wonder", "universal").unwrap();
     let payload = to_bytes(&did).expect("encode DomainId");
     let tlv = tlv_envelope(PointerType::DomainId as u16, &payload);
     vm.memory.preload_input(0, &tlv).expect("preload input");

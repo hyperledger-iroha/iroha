@@ -60,6 +60,18 @@ public struct ToriiOfflineDeviceBinding: Codable, Sendable, Equatable {
         case iosBundleId = "ios_bundle_id"
         case iosEnvironment = "ios_environment"
     }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(platform, forKey: .platform)
+        try container.encode(attestationKeyId, forKey: .attestationKeyId)
+        try container.encode(deviceId, forKey: .deviceId)
+        try container.encode(offlinePublicKey, forKey: .offlinePublicKey)
+        try container.encode(attestationReportBase64, forKey: .attestationReportBase64)
+        try container.encode(iosTeamId, forKey: .iosTeamId)
+        try container.encode(iosBundleId, forKey: .iosBundleId)
+        try container.encode(iosEnvironment, forKey: .iosEnvironment)
+    }
 }
 
 public struct ToriiOfflineDeviceProof: Codable, Sendable, Equatable {
@@ -632,7 +644,11 @@ public enum ToriiOfflineCashCodec {
     public static func canonicalData<T: Encodable>(_ value: T) throws -> Data {
         let encoder = JSONEncoder()
         if #available(iOS 11.0, macOS 10.13, *) {
-            encoder.outputFormatting = [.sortedKeys]
+            if #available(iOS 13.0, macOS 10.15, *) {
+                encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+            } else {
+                encoder.outputFormatting = [.sortedKeys]
+            }
         }
         return try encoder.encode(value)
     }

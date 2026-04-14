@@ -1,7 +1,5 @@
 //! Roundtrip coverage for streaming capability ticket events.
 
-use std::str::FromStr;
-
 use iroha_crypto::{Algorithm, Hash, KeyPair, Signature};
 use iroha_data_model::{
     metadata::Metadata,
@@ -24,7 +22,7 @@ fn sample_hash(seed: u8) -> Hash {
 }
 
 fn seeded_account(domain: &str, seed: u8) -> AccountId {
-    let _domain_id = DomainId::from_str(domain).expect("domain id");
+    let _domain_id = DomainId::try_new(domain, "universal").expect("domain id");
     let key_pair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
     AccountId::new(key_pair.public_key().clone())
 }
@@ -138,7 +136,7 @@ fn ticket_ready_roundtrip() {
     let route = sample_route(0x11).with_ticket(ticket_envelope.clone());
     assert!(route.ticket_envelope().is_some());
     let binding = StreamingRouteBinding::new(route.clone(), 10, 42, true);
-    let domain_id = DomainId::from_str("nsc").expect("domain id");
+    let domain_id = DomainId::try_new("nsc", "universal").expect("domain id");
     let ticket = sample_ticket_record();
     let event = DomainEvent::StreamingTicketReady(StreamingTicketReady::new(
         domain_id.clone(),
@@ -160,7 +158,7 @@ fn ticket_ready_roundtrip() {
 #[test]
 fn ticket_revoked_roundtrip() {
     let event = DomainEvent::StreamingTicketRevoked(StreamingTicketRevoked::new(
-        DomainId::from_str("nsc").expect("domain id"),
+        DomainId::try_new("nsc", "universal").expect("domain id"),
         sample_hash(0x10),
         sample_hash(0x20),
         sample_hash(0x21),

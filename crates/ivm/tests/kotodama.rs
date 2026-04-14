@@ -1,6 +1,6 @@
 //! Tests for Kotodama parsing, semantics, and compilation.
 
-use std::{convert::TryInto, str::FromStr};
+use std::convert::TryInto;
 
 use iroha_crypto as _;
 use iroha_data_model::nexus::{DataSpaceId, LaneId};
@@ -1062,8 +1062,8 @@ fn contains_ephemeral_true_and_false() {
         fn f() -> int {
             let m = Map::new();
             m[7] = 111;
-            let t = contains(m, 7);
-            let f = contains(m, 8);
+            let t = m.contains(7);
+            let f = m.contains(8);
             // return t*2 + f to disambiguate (expect 2*1+0=2)
             return t*2 + f;
         }
@@ -1083,8 +1083,8 @@ fn contains_durable_true_then_false() {
         state Map<int,int> m;
         fn f() -> int {
             m[7] = 1;
-            let t = contains(m, 7);
-            let f = contains(m, 8);
+            let t = m.contains(7);
+            let f = m.contains(8);
             return t*2 + f;
         }
     "#;
@@ -1122,7 +1122,7 @@ fn method_sugar_contains_ephemeral() {
 #[test]
 fn contains_rejects_wrong_types() {
     let src = r#"
-        fn f() { let m = Map::new(); let x = contains(7, m); }
+        fn f() { let m = Map::new(); let x = 7.contains(m); }
     "#;
     let prog = parse(src).expect("parse ok");
     let err = analyze(&prog).expect_err("expected type error");
@@ -1130,54 +1130,6 @@ fn contains_rejects_wrong_types() {
         err.message
             .contains("contains expects Map<K,V> as first arg")
     );
-}
-
-#[test]
-fn get_or_default_ephemeral() {
-    let src = r#"
-        fn f() -> int {
-            let m = Map::new();
-            m[7] = 111;
-            let a = get_or_default(m, 7, 5);
-            let b = get_or_default(m, 8, 9);
-            return a*2 + b;
-        }
-    "#;
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.load_program(&code).unwrap();
-    match vm.run() {
-        Ok(()) => {
-            assert_eq!(vm.register(10), 111 * 2 + 9);
-        }
-        Err(err) => {
-            eprintln!("run err: {:?} pc={}", err, vm.pc());
-            panic!("execute");
-        }
-    }
-}
-
-#[test]
-fn get_or_default_durable() {
-    let src = r#"
-        state Map<int,int> m;
-        fn f() -> int {
-            m[7] = 111;
-            let a = get_or_default(m, 7, 5);
-            let b = get_or_default(m, 8, 9);
-            return a*2 + b;
-        }
-    "#;
-    let code = ivm::KotodamaCompiler::new()
-        .compile_source(src)
-        .expect("compile");
-    let mut vm = ivm::IVM::new(u64::MAX);
-    vm.set_host(ivm::CoreHost::new());
-    vm.load_program(&code).unwrap();
-    vm.run().expect("execute");
-    assert_eq!(vm.register(10), 111 * 2 + 9);
 }
 
 #[test]
@@ -1696,7 +1648,7 @@ fn map_get_handles_spills() {
         src.push_str(&format!("a{i}"));
     }
     src.push_str(";\n");
-    src.push_str("  let hit = std::map::has(m, k);\n");
+    src.push_str("  let hit = m.contains(k);\n");
     src.push_str("  return sum + v + hit;\n}\n");
 
     let prog = parse(&src).expect("parse spill map-get");
@@ -1808,7 +1760,7 @@ fn map_load_pair_handles_spilled_map_base() {
         src.push_str(&format!("a{i}"));
     }
     src.push_str(";\n");
-    src.push_str("  let hit = std::map::has(m, 7);\n");
+    src.push_str("  let hit = m.contains(7);\n");
     src.push_str("  return sum + hit;\n}\n");
 
     let prog = parse(&src).expect("parse spill map-load");
@@ -1931,6 +1883,7 @@ fn manifest_includes_entrypoints_and_features() {
                 setvl(8);
                 assert(true);
                 let current = counter;
+                let _digest = poseidon2(current, 1);
                 if current > 0 {
                     info("counter tick");
                 } else {
@@ -2005,9 +1958,9 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
     use iroha_data_model::{
         account::AccountId,
         asset::id::{AssetDefinitionId, AssetId},
-        domain::DomainId,
     };
 
+    let asset_literal = "62Fk4FPcMuLvW5QjDGNF2a4jAmjM";
     let src = r#"
         fn main() {
             let acc = account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB");
@@ -2027,19 +1980,20 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
     )
     .map(iroha_data_model::account::ParsedAccountId::into_account_id)
     .expect("parse encoded account literal");
-    let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
-        "rose".parse().unwrap(),
-    );
-    let domain: DomainId = "wonderland".parse().expect("domain");
+    let asset_def =
+        AssetDefinitionId::parse_address_literal(asset_literal).expect("parse canonical asset");
+    assert!(asset_def.is_opaque_canonical());
     let asset_id = AssetId::of(asset_def.clone(), account.clone());
 
     assert!(hints.read_keys.contains(&format!("account:{account}")));
-    assert!(hints.read_keys.contains(&format!("domain:{domain}")));
     assert!(hints.read_keys.contains(&format!("asset_def:{asset_def}")));
     assert!(hints.read_keys.contains(&format!("asset:{asset_id}")));
     assert!(hints.write_keys.contains(&format!("asset_def:{asset_def}")));
     assert!(hints.write_keys.contains(&format!("asset:{asset_id}")));
+    assert!(
+        !hints.read_keys.iter().any(|key| key.starts_with("domain:")),
+        "opaque canonical asset definitions should not synthesize domain hints",
+    );
 
     let entrypoints = manifest.entrypoints.expect("entrypoints must be present");
     let main = entrypoints
@@ -2047,11 +2001,14 @@ fn manifest_includes_isi_access_hints_for_static_targets() {
         .find(|entry| entry.name == "main")
         .expect("main entrypoint");
     assert!(main.read_keys.contains(&format!("account:{account}")));
-    assert!(main.read_keys.contains(&format!("domain:{domain}")));
     assert!(main.read_keys.contains(&format!("asset_def:{asset_def}")));
     assert!(main.read_keys.contains(&format!("asset:{asset_id}")));
     assert!(main.write_keys.contains(&format!("asset_def:{asset_def}")));
     assert!(main.write_keys.contains(&format!("asset:{asset_id}")));
+    assert!(
+        !main.read_keys.iter().any(|key| key.starts_with("domain:")),
+        "opaque canonical asset definitions should not synthesize domain hints",
+    );
 }
 
 #[test]
@@ -2260,6 +2217,7 @@ seiyaku MyC {
   hajimari() {
     setvl(8);
     assert(true);
+    let _digest = poseidon2(1, 2);
     let a = 1;
   }
 }
@@ -2338,20 +2296,20 @@ fn branch(b: bool) -> int {
         .position(|word| ((word >> 24) as u8) == instruction::wide::control::BNE)
         .expect("expected BNE in lowered branch");
 
-    assert!(
-        words.len() > bne_index + 2,
-        "BNE should be followed by two JAL instructions"
-    );
-
     let bne_word = words[bne_index];
     let imm = (bne_word & 0xFF) as u8 as i8;
     assert_eq!(
-        imm, 2,
-        "BNE should skip the immediate JAL with offset 2 to support wide immediates"
+        imm, 26,
+        "BNE should skip the full fixed-size else transfer stub and land on the then transfer stub"
     );
 
     let jal_else = words[bne_index + 1];
-    let jal_then = words[bne_index + 2];
+    let then_stub_index = bne_index + imm as usize;
+    assert!(
+        words.len() > then_stub_index,
+        "BNE target should land on the start of the second control-transfer stub"
+    );
+    let jal_then = words[then_stub_index];
     assert_eq!(
         (jal_else >> 24) as u8,
         instruction::wide::control::JAL,
@@ -2370,13 +2328,15 @@ fn compile_poseidon2_and_assert_eq() {
     let src = "fn f(a, b) { let h = poseidon2(a, b); }";
     let code = Compiler::new().compile_source(src).expect("compile failed");
     assert!(!code.is_empty());
+    let (meta, _) = parse_meta_offset(&code).unwrap();
+    assert_ne!(meta.mode & 0x01, 0, "poseidon2 should enable ZK mode");
 
-    // assert_eq succeeds
+    // assert_eq succeeds without enabling ZK mode
     let src = "fn g(a, b) { assert_eq(a, b); }";
     let code = Compiler::new().compile_source(src).expect("compile failed");
 
     let (meta, _) = parse_meta_offset(&code).unwrap();
-    assert!(meta.mode & 0x01 != 0);
+    assert_eq!(meta.mode & 0x01, 0);
 
     let mut vm = ivm::IVM::new(u64::MAX);
     vm.set_register(10, 1);
@@ -2873,27 +2833,27 @@ fn compile_unary_ops() {
 }
 
 #[test]
-fn std_map_aliases_and_iter_helpers_parse_and_type() {
-    // Ensure std::map::* aliases normalize and typecheck
+fn map_methods_and_iter_helpers_parse_and_type() {
+    // Ensure the new method syntax coexists with the remaining iterator helpers.
     let src = r#"
         fn f(m: Map<int,int>) {
-            let a = std::map::has(m, 1);
-            let b = std::map::get_or_insert_default(m, 2);
+            let a = m.contains(1);
+            let b = m.ensure(2);
             let c = std::map::keys_take2(m, 0, 1);
             let d = std::map::values_take2(m, 0, 0);
         }
     "#;
-    let prog = parse(src).expect("parse std::map aliases");
-    analyze(&prog).expect("analyze std::map aliases");
+    let prog = parse(src).expect("parse map methods");
+    analyze(&prog).expect("analyze map methods");
 }
 
 #[test]
-fn ir_lower_has_alias_ephemeral() {
-    // has(m,k) should lower like contains(m,k) on non-state param maps: MapLoadPair + Eq
+fn ir_lower_contains_method_ephemeral() {
+    // m.contains(k) should lower like contains(m,k) on non-state param maps: MapLoadPair + Eq
     use ivm::kotodama::ir::Instr;
-    let src = "fn f(m: Map<int,int>, k: int) { let x = has(m,k); }";
-    let prog = parse(src).expect("parse has");
-    let typed = analyze(&prog).expect("analyze has");
+    let src = "fn f(m: Map<int,int>, k: int) { let x = m.contains(k); }";
+    let prog = parse(src).expect("parse contains");
+    let typed = analyze(&prog).expect("analyze contains");
     let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
     let f = &ir.functions[0];
     let mut saw_load_pair = false;
@@ -2906,113 +2866,6 @@ fn ir_lower_has_alias_ephemeral() {
         }
     }
     assert!(saw_load_pair && saw_eq);
-}
-
-#[test]
-fn ir_lower_get_or_insert_default_ephemeral() {
-    // get_or_insert_default on non-state param map should emit MapLoadPair, Branch, MapSet
-    use ivm::kotodama::ir::{Instr, Terminator};
-    let src = "fn f(m: Map<int,int>, k: int) -> int { return get_or_insert_default(m, k); }";
-    let prog = parse(src).expect("parse get_or_insert_default");
-    let typed = analyze(&prog).expect("analyze get_or_insert_default");
-    let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
-    let f = &ir.functions[0];
-    let mut saw_pair = false;
-    let mut saw_set = false;
-    let mut saw_branch = false;
-    for bb in &f.blocks {
-        for ins in &bb.instrs {
-            match ins {
-                Instr::MapLoadPair { .. } => saw_pair = true,
-                Instr::MapSet { .. } => saw_set = true,
-                _ => {}
-            }
-        }
-        if matches!(bb.terminator, Terminator::Branch { .. }) {
-            saw_branch = true;
-        }
-    }
-    assert!(saw_pair && saw_set && saw_branch);
-}
-
-#[test]
-fn semantic_get_or_insert_default_pointer_requires_explicit_default() {
-    let src = "fn f(m: Map<int, Name>) { let _ = get_or_insert_default(m, 1); }";
-    let prog = parse(src).expect("parse pointer map without default");
-    let err =
-        analyze(&prog).expect_err("pointer-valued get_or_insert_default should require default");
-    assert!(
-        err.message
-            .contains("requires an explicit default for pointer-valued maps")
-    );
-}
-
-#[test]
-fn semantic_get_or_insert_default_non_int_requires_explicit_default() {
-    let src = "fn f(m: Map<int, bool>) { let _ = get_or_insert_default(m, 1); }";
-    let prog = parse(src).expect("parse bool map without default");
-    let err = analyze(&prog).expect_err("non-int map should require explicit default");
-    assert!(
-        err.message
-            .contains("auto-default is only available for Map<*,int>")
-    );
-}
-
-#[test]
-fn ir_lower_get_or_insert_default_pointer_variants_use_pointer_syscalls() {
-    use ivm::kotodama::ir::Instr;
-    let cases = [
-        ("Name", r#"name("alias")"#),
-        (
-            "AccountId",
-            r#"account_id("sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB")"#,
-        ),
-        (
-            "AssetDefinitionId",
-            r#"asset_definition("62Fk4FPcMuLvW5QjDGNF2a4jAmjM")"#,
-        ),
-        ("DomainId", r#"domain("wonderland")"#),
-        ("NftId", r#"nft_id("rose:uuid:0123$wonderland")"#),
-    ];
-    for (ty, ctor) in cases {
-        let src = format!(
-            r#"
-        seiyaku C {{
-            state S: Map<int, {ty}>;
-            fn hajimari() -> {ty} {{
-                return get_or_insert_default(S, 7, {ctor});
-            }}
-        }}
-        "#
-        );
-        let prog = parse(&src).expect("parse pointer durable map");
-        let typed = analyze(&prog).expect("analyze pointer durable map");
-        let ir = ivm::kotodama::ir::lower(&typed).expect("lower");
-        let func = ir
-            .functions
-            .iter()
-            .find(|f| f.name == "hajimari")
-            .expect("hajimari lowered");
-        let mut saw_pointer_to = false;
-        let mut saw_pointer_from = false;
-        for bb in &func.blocks {
-            for ins in &bb.instrs {
-                match ins {
-                    Instr::PointerToNorito { .. } => saw_pointer_to = true,
-                    Instr::PointerFromNorito { .. } => saw_pointer_from = true,
-                    _ => {}
-                }
-            }
-        }
-        assert!(
-            saw_pointer_to,
-            "durable else branch should encode pointer defaults for {ty}"
-        );
-        assert!(
-            saw_pointer_from,
-            "durable then branch should decode stored pointer for {ty}"
-        );
-    }
 }
 
 #[test]
@@ -3111,64 +2964,6 @@ fn ir_tuple_pack_and_get_general() {
 }
 
 #[test]
-fn runtime_durable_get_or_insert_default_state_map() {
-    // Durable path: Map<int,int> declared in state; first call inserts 0; second returns 0 without inserting again.
-    use std::collections::HashMap;
-
-    use ivm::{
-        IVM, PointerType,
-        kotodama::compiler::Compiler,
-        mock_wsv::{AccountId, MockWorldStateView, WsvHost},
-        validate_tlv_bytes,
-    };
-    let src = r#"
-        seiyaku C {
-            state S: Map<int,int>;
-            fn hajimari() {
-                let x = get_or_insert_default(S, 7);
-                assert(x == 0);
-                let y = get_or_insert_default(S, 7);
-                assert(y == 0);
-            }
-        }
-    "#;
-    let code = Compiler::new()
-        .compile_source(src)
-        .expect("compile durable gid");
-    let mut vm = IVM::new(u64::MAX);
-    vm.load_program(&code).expect("load");
-    let wsv = MockWorldStateView::new();
-    let _domain: ivm::mock_wsv::DomainId = "wonderland".parse().expect("domain id");
-    let alice: AccountId = AccountId::new(
-        "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
-            .parse()
-            .expect("public key"),
-    );
-    let host = WsvHost::new_with_subject(wsv, alice.clone(), HashMap::new());
-    vm.set_host(host);
-    // Run hajimari
-    vm.run().expect("exec");
-    // Verify durable state was set at path "S/7"
-    let host_ref = vm.host_mut_any().unwrap();
-    let host = host_ref.downcast_ref::<WsvHost>().unwrap();
-    let base = iroha_data_model::prelude::Name::from_str("S").expect("valid Name literal");
-    let expected_path = format!("{}/{}", base.as_ref(), 7);
-    let mut val = host.wsv.sc_get(&expected_path);
-    if val.is_none() {
-        // Durable state maps produced by std::map lowerings namespace entries with a sentinel
-        // prefix: 0x01 followed by seven zero bytes, then the "<base>/<key>" path.
-        let namespaced_path = format!("{}\0\0\0\0\0\0\0{}", char::from(0x01), expected_path);
-        val = host.wsv.sc_get(&namespaced_path);
-    }
-    let val = val.expect("durable state entry should exist");
-    let tlv = validate_tlv_bytes(&val).expect("state entry should use NoritoBytes TLV");
-    assert_eq!(tlv.type_id, PointerType::NoritoBytes);
-    let stored: i64 =
-        norito::decode_from_bytes(tlv.payload).expect("durable int value should be Norito i64");
-    assert_eq!(stored, 0);
-}
-
-#[test]
 fn vrf_and_pointer_syscalls_present() {
     let src = r#"
         fn main() {
@@ -3198,7 +2993,7 @@ fn vrf_and_pointer_syscalls_present() {
     assert!(has(syscalls::SYSCALL_VRF_VERIFY_BATCH as u8));
     assert!(has(syscalls::SYSCALL_POINTER_TO_NORITO as u8));
     assert!(has(syscalls::SYSCALL_POINTER_FROM_NORITO as u8));
-    assert!(has(syscalls::SYSCALL_SCHEMA_INFO as u8));
+    assert!(has(syscalls::SYSCALL_SCHEMA_INFO_DIRECT as u8));
 }
 
 #[test]

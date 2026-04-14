@@ -1,7 +1,6 @@
 //! Constant values used in Torii that might be re-used by client libraries as well.
 use iroha_data_model::{
     account::{AccountAlias, AccountId, OpaqueAccountId},
-    domain::DomainId,
     nexus::UniversalAccountId,
     transaction::error::TransactionRejectionReason,
 };
@@ -72,6 +71,12 @@ pub mod uri {
     pub const PROFILE: &str = "/debug/pprof/profile";
     /// Base path for governance API endpoints
     pub const GOV_BASE: &str = "/v1/gov";
+    /// Base path for Ministry API endpoints.
+    pub const MINISTRY_BASE: &str = "/v1/ministry";
+    /// Ministry: build a draft agenda proposal transaction for local signing.
+    pub const MINISTRY_AGENDA_PROPOSAL_DRAFT: &str = "/v1/ministry/agenda/proposals/draft";
+    /// Ministry: fetch a submitted agenda proposal by proposal id.
+    pub const MINISTRY_AGENDA_PROPOSAL_GET: &str = "/v1/ministry/agenda/proposals/{proposal_id}";
     /// Governance: create a proposal to deploy IVM bytecode (.to)
     pub const GOV_PROPOSE_DEPLOY: &str = "/v1/gov/proposals/deploy-contract";
     /// Governance: submit a ZK ballot (default mode)
@@ -100,8 +105,8 @@ pub mod uri {
     pub const GOV_TALLY_GET: &str = "/v1/gov/tally/{id}";
     /// Governance: convenience endpoint to apply protected namespaces parameter
     pub const GOV_PROTECTED_SET: &str = "/v1/gov/protected-namespaces";
-    /// Governance: list active contract instances for a namespace
-    pub const GOV_INSTANCES_BY_NS: &str = "/v1/gov/instances/{ns}";
+    /// Governance: read the active binding for a canonical contract address
+    pub const GOV_CONTRACT_GET: &str = "/v1/gov/contracts/{contract_address}";
     /// Node: capabilities advert (runtime ABI version, etc.)
     pub const NODE_CAPABILITIES: &str = "/v1/node/capabilities";
     /// Runtime: get the active ABI version
@@ -276,10 +281,6 @@ pub struct AccountReadResponse {
     #[norito(default)]
     #[norito(skip_serializing_if = "Vec::is_empty")]
     pub opaque_ids: Vec<OpaqueAccountId>,
-    /// Domains currently linked to the subject in state indexes.
-    #[norito(default)]
-    #[norito(skip_serializing_if = "Vec::is_empty")]
-    pub linked_domains: Vec<DomainId>,
 }
 
 #[cfg(test)]
@@ -364,7 +365,6 @@ mod tests {
             )),
             uaid: None,
             opaque_ids: Vec::new(),
-            linked_domains: Vec::new(),
         };
 
         let encoded = norito::to_bytes(&response).expect("encode account response");

@@ -4,9 +4,9 @@ direction: rtl
 source: docs/portal/docs/norito/examples/register-and-mint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: c30c710be94cd99f3c7a0484040155bf63ff4dc0d464d76237bddc8bf589ef26
-source_last_modified: "2025-11-07T11:59:47.168250+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 470eb5de8cd9a7f94275062d1e8c3a448a2d734bf86f650ce94a3971baa3527d
+source_last_modified: "2026-04-08T09:19:38.793794+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -22,7 +22,7 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 - تأكد من وجود حساب الوجهة (مثل `<i105-account-id>`) بما يعكس مرحلة الإعداد في كل بدء سريع للـ SDK.
 - استدعِ نقطة الدخول `register_and_mint` لإنشاء تعريف أصل ROSE وسك 250 وحدة لأليس في معاملة واحدة.
-- تحقق من الأرصدة عبر `client.request(FindAccountAssets)` أو `iroha_cli ledger assets list --account <i105-account-id>` لتأكيد نجاح السك.
+- تحقق من الأرصدة عبر `client.request(FindAccountAssets)` أو `iroha ledger asset list all --verbose` لتأكيد نجاح السك.
 
 ## أدلة SDK ذات صلة
 

@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4e686495c642a08740504c4bb5f88e623c89a896787388b61e4451f550f87af6
 source_last_modified: "2026-03-26T13:01:47.376183+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 - 確保目標帳戶（例如，Alice 的 `<i105-account-id>`）存在，鏡像每個 SDK 快速入門中的設定階段。
 - 呼叫 `register_and_mint` 入口點來建立 ROSE 資產定義並在一筆交易中向 Alice 鑄造 250 個單位。
-- 透過`client.request(FindAccountAssets)`或`iroha_cli ledger asset list --account <i105-account-id>`驗證餘額以確認鑄幣成功。
+- 透過`client.request(FindAccountAssets)`或`iroha ledger asset list all --verbose`驗證餘額以確認鑄幣成功。
 
 ## 相關SDK指南
 

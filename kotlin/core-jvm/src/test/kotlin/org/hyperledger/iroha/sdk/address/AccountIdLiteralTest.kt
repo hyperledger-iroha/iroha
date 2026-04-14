@@ -23,7 +23,7 @@ class AccountIdLiteralTest {
     fun rejectsDomainSuffixedLiterals() {
         val address = sampleI105(0x33)
         val error = assertFailsWith<IllegalArgumentException> {
-            requireCanonicalI105Address("$address@hbl.dataspace", "accountId")
+            requireCanonicalI105Address("$address@banka.dataspace", "accountId")
         }
         assertEquals(
             "accountId must use canonical I105 encoded account without @domain",

@@ -198,13 +198,13 @@ Enveloppe commune : `InstructionExecutionError` avec des variantes pour les err
 - Mise à jour des paramètres :
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` met à jour et émet `ConfigurationEvent::Changed`.CLI / Torii ID de définition d'actif + exemples d'alias :
 - Inscrivez-vous avec un identifiant Base58 canonique + un nom explicite + un alias long :
-  -`iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
+  -`iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
 - Inscrivez-vous avec l'identifiant canonique Base58 + le nom explicite + l'alias court :
   -`iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - Mint par alias + composants du compte :
-  -`iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
+  -`iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
 - Résoudre l'alias en identifiant canonique Base58 :
-  - `POST /v1/assets/aliases/resolve` avec JSON `{ "alias": "pkr#ubl.sbp" }`
+  - `POST /v1/assets/aliases/resolve` avec JSON `{ "alias": "pkr#bankb.sbp" }`
 
 Remarque sur la migration :
 - Les ID de définition d'actif textuel `name#domain` restent intentionnellement non pris en charge dans la première version ; utilisez des identifiants canoniques Base58 ou résolvez un alias en pointillés.

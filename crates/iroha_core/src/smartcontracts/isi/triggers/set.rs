@@ -17,7 +17,7 @@ use iroha_data_model::{
     isi::error::{InstructionExecutionError, MathError},
     prelude::*,
     query::error::FindError,
-    transaction::IvmBytecode,
+    transaction::{IvmBytecode, executable::ContractInvocation},
     trigger::action::EnsureTriggerAuthority,
 };
 use iroha_logger::prelude::*;
@@ -288,6 +288,7 @@ impl json::JsonDeserialize for IvmBytecodeEntry {
 #[derive(Debug, Clone, Encode, Decode, PartialEq, Eq)]
 enum ExecutableRefDto {
     Ivm(HashOf<IvmBytecode>),
+    ContractCall(ContractInvocation),
     Instructions(ConstVec<InstructionBox>),
 }
 
@@ -295,6 +296,9 @@ impl From<&ExecutableRef> for ExecutableRefDto {
     fn from(r: &ExecutableRef) -> Self {
         match r {
             ExecutableRef::Ivm(h) => ExecutableRefDto::Ivm(*h),
+            ExecutableRef::ContractCall(invocation) => {
+                ExecutableRefDto::ContractCall(invocation.clone())
+            }
             ExecutableRef::Instructions(v) => ExecutableRefDto::Instructions(v.clone()),
         }
     }
@@ -305,6 +309,7 @@ impl TryFrom<ExecutableRefDto> for ExecutableRef {
     fn try_from(dto: ExecutableRefDto) -> Result<Self, Self::Error> {
         Ok(match dto {
             ExecutableRefDto::Ivm(h) => ExecutableRef::Ivm(h),
+            ExecutableRefDto::ContractCall(invocation) => ExecutableRef::ContractCall(invocation),
             ExecutableRefDto::Instructions(v) => ExecutableRef::Instructions(v),
         })
     }
@@ -434,6 +439,7 @@ pub trait SetReadOnly {
                 };
                 Executable::Ivm(original_contract)
             }
+            ExecutableRef::ContractCall(invocation) => Executable::ContractCall(invocation),
             ExecutableRef::Instructions(isi) => Executable::Instructions(isi),
         };
 
@@ -1024,6 +1030,7 @@ impl<'block, 'set> SetTransaction<'block, 'set> {
                 }
                 ExecutableRef::Ivm(hash)
             }
+            Executable::ContractCall(invocation) => ExecutableRef::ContractCall(invocation),
             Executable::Instructions(instructions) => ExecutableRef::Instructions(instructions),
         };
         map(self).insert(
@@ -1286,6 +1293,8 @@ fn replace_by_call_authority(
 pub enum ExecutableRef {
     /// Loaded IVM
     Ivm(HashOf<IvmBytecode>),
+    /// By-reference deployed contract invocation.
+    ContractCall(ContractInvocation),
     /// Vector of ISI
     Instructions(ConstVec<InstructionBox>),
 }
@@ -1294,6 +1303,9 @@ impl core::fmt::Debug for ExecutableRef {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Ivm(hash) => f.debug_tuple("Ivm").field(hash).finish(),
+            Self::ContractCall(invocation) => {
+                f.debug_tuple("ContractCall").field(invocation).finish()
+            }
             Self::Instructions(instructions) => {
                 f.debug_tuple("Instructions").field(instructions).finish()
             }
@@ -1310,6 +1322,11 @@ impl FastJsonWrite for ExecutableRef {
                 norito::json::write_json_string("Ivm", out);
                 out.push(':');
                 JsonSerializeTrait::json_serialize(hash, out);
+            }
+            ExecutableRef::ContractCall(invocation) => {
+                norito::json::write_json_string("ContractCall", out);
+                out.push(':');
+                JsonSerializeTrait::json_serialize(invocation, out);
             }
             ExecutableRef::Instructions(instrs) => {
                 norito::json::write_json_string("Instructions", out);
@@ -1345,6 +1362,7 @@ impl json::JsonDeserialize for ExecutableRef {
         let (key, inner) = map.into_iter().next().expect("checked map length");
         match key.as_str() {
             "Ivm" => json::from_value(inner).map(ExecutableRef::Ivm),
+            "ContractCall" => json::from_value(inner).map(ExecutableRef::ContractCall),
             "Instructions" => json::from_value(inner).map(ExecutableRef::Instructions),
             other => Err(json::Error::unknown_field(other)),
         }

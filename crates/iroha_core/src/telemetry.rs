@@ -10701,7 +10701,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), true);
         let asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "sora".parse().unwrap(),
+            DomainId::try_new("sora", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let label = asset_id.to_string();
@@ -10853,7 +10853,7 @@ mod tests {
         let metrics = Arc::new(Metrics::default());
         let telemetry = StateTelemetry::new(metrics.clone(), false);
         let asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "sora".parse().unwrap(),
+            DomainId::try_new("sora", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let label = asset_id.to_string();
@@ -12331,8 +12331,8 @@ mod tests {
 
         telemetry.record_manifest_activation(None, "manifest_inserted");
         let activation = GovernanceManifestActivation {
-            namespace: "apps".to_string(),
-            contract_id: "demo.contract".to_string(),
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .to_string(),
             code_hash_hex: "deadbeef".to_string(),
             abi_hash_hex: Some("cafebabe".to_string()),
             height: 9,
@@ -12358,7 +12358,7 @@ mod tests {
             .read()
             .expect("governance manifest cache lock poisoned");
         assert_eq!(recent.len(), 1);
-        assert_eq!(recent[0].namespace, activation.namespace);
+        assert_eq!(recent[0].contract_address, activation.contract_address);
     }
 
     impl SystemUnderTest {
@@ -13012,7 +13012,7 @@ mod tests {
 
         let trigger_id: TriggerId = "telemetry_time_trigger".parse().expect("trigger id");
         let missing_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "ghost".parse().unwrap(),
+            DomainId::try_new("ghost", "universal").unwrap(),
             "ghost".parse().unwrap(),
         );
         let missing_asset = AssetId::new(missing_def, sut.account_id.clone());

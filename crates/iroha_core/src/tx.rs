@@ -58,8 +58,7 @@ use crate::{
         extract_lane_identity_metadata as extract_directory_lane_identity_metadata,
     },
     queue::evaluate_policy_with_catalog,
-    smartcontracts::Execute,
-    smartcontracts::ivm::cache::IvmCache,
+    smartcontracts::{Execute, code, ivm::cache::IvmCache},
     state::{StateBlock, StateReadOnlyWithTransactions, StateTransaction, WorldReadOnly},
 };
 
@@ -101,25 +100,20 @@ static CONTRACT_MANIFEST_METADATA_NAME: LazyLock<iroha_data_model::name::Name> =
         iroha_data_model::name::Name::from_str(MANIFEST_METADATA_KEY)
             .expect("static contract manifest metadata key")
     });
-static GOV_NAMESPACE_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("gov_namespace").expect("static governance metadata key")
-});
-static GOV_CONTRACT_ID_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("gov_contract_id")
-        .expect("static governance metadata key")
-});
+static GOV_CONTRACT_ADDRESS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> =
+    LazyLock::new(|| {
+        iroha_data_model::name::Name::from_str("gov_contract_address")
+            .expect("static governance metadata key")
+    });
 static GOV_APPROVERS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
     iroha_data_model::name::Name::from_str("gov_manifest_approvers")
         .expect("static governance metadata key")
 });
-static CONTRACT_NAMESPACE_METADATA_KEY: LazyLock<iroha_data_model::name::Name> =
+static CONTRACT_ADDRESS_METADATA_KEY: LazyLock<iroha_data_model::name::Name> =
     LazyLock::new(|| {
-        iroha_data_model::name::Name::from_str("contract_namespace")
-            .expect("static contract namespace metadata key")
+        iroha_data_model::name::Name::from_str("contract_address")
+            .expect("static contract address metadata key")
     });
-static CONTRACT_ID_METADATA_KEY: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
-    iroha_data_model::name::Name::from_str("contract_id").expect("static contract id metadata key")
-});
 static HEARTBEAT_METADATA_NAME: LazyLock<iroha_data_model::name::Name> = LazyLock::new(|| {
     iroha_data_model::name::Name::from_str("sumeragi_heartbeat")
         .expect("static heartbeat metadata key")
@@ -561,6 +555,7 @@ fn is_time_sensitive_instruction(instruction: &InstructionBox) -> bool {
         || any.is::<iroha_data_model::isi::governance::ApproveGovernanceProposal>()
         || any.is::<iroha_data_model::isi::governance::EnactReferendum>()
         || any.is::<iroha_data_model::isi::governance::FinalizeReferendum>()
+        || any.is::<iroha_data_model::isi::ministry::SubmitAgendaProposal>()
 }
 
 fn is_time_sensitive_executable(executable: &Executable) -> bool {
@@ -568,6 +563,7 @@ fn is_time_sensitive_executable(executable: &Executable) -> bool {
         Executable::Instructions(instructions) => {
             instructions.iter().any(is_time_sensitive_instruction)
         }
+        Executable::ContractCall(_) => true,
         Executable::IvmProved(proved) => proved.overlay.iter().any(is_time_sensitive_instruction),
         Executable::Ivm(_) => true,
     }
@@ -616,7 +612,7 @@ pub(crate) fn allows_unregistered_authority(
 
             instructions_allow_multisig_envelope_authority(instructions)
         }
-        Executable::IvmProved(_) | Executable::Ivm(_) => false,
+        Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => false,
     }
 }
 
@@ -1439,28 +1435,21 @@ impl<'tx> AcceptedTransaction<'tx> {
                     ));
                 }
             }
+            Executable::ContractCall(_) => {
+                iroha_data_model::transaction::require_transaction_gas_limit(tx.metadata())
+                    .map_err(|err| {
+                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                            reason: err.to_string(),
+                        })
+                    })?;
+            }
             Executable::IvmProved(proved) => {
-                let gas_limit_key = iroha_data_model::name::Name::from_str("gas_limit")
-                    .expect("static gas_limit key");
-                let Some(raw_gas_limit) = tx.metadata().get(&gas_limit_key) else {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "missing gas_limit in transaction metadata".into(),
-                        },
-                    ));
-                };
-                let gas_limit = raw_gas_limit.try_into_any_norito::<u64>().map_err(|err| {
-                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                        reason: format!("invalid gas_limit metadata: {err}"),
-                    })
-                })?;
-                if gas_limit == 0 {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "gas_limit must be positive".into(),
-                        },
-                    ));
-                }
+                iroha_data_model::transaction::require_transaction_gas_limit(tx.metadata())
+                    .map_err(|err| {
+                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                            reason: err.to_string(),
+                        })
+                    })?;
 
                 let instruction_limit = limits.max_instructions().get();
                 let instruction_count = u64::try_from(proved.overlay.len()).unwrap_or(u64::MAX);
@@ -1536,27 +1525,12 @@ impl<'tx> AcceptedTransaction<'tx> {
                 }
             }
             Executable::Ivm(smart_contract) => {
-                let gas_limit_key = iroha_data_model::name::Name::from_str("gas_limit")
-                    .expect("static gas_limit key");
-                let Some(raw_gas_limit) = tx.metadata().get(&gas_limit_key) else {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "missing gas_limit in transaction metadata".into(),
-                        },
-                    ));
-                };
-                let gas_limit = raw_gas_limit.try_into_any_norito::<u64>().map_err(|err| {
-                    AcceptTransactionFail::TransactionLimit(TransactionLimitError {
-                        reason: format!("invalid gas_limit metadata: {err}"),
-                    })
-                })?;
-                if gas_limit == 0 {
-                    return Err(AcceptTransactionFail::TransactionLimit(
-                        TransactionLimitError {
-                            reason: "gas_limit must be positive".into(),
-                        },
-                    ));
-                }
+                iroha_data_model::transaction::require_transaction_gas_limit(tx.metadata())
+                    .map_err(|err| {
+                        AcceptTransactionFail::TransactionLimit(TransactionLimitError {
+                            reason: err.to_string(),
+                        })
+                    })?;
 
                 let ivm_bytecode_size_limit = limits.ivm_bytecode_size().get();
                 let bytecode_size = u64::try_from(smart_contract.size_bytes()).unwrap_or(u64::MAX);
@@ -1806,6 +1780,13 @@ impl<'tx> AcceptedTransaction<'tx> {
                         },
                     ));
                 }
+            }
+            Executable::ContractCall(_) => {
+                return Err(AcceptTransactionFail::TransactionLimit(
+                    TransactionLimitError {
+                        reason: "Heartbeat transaction must not include contract calls".into(),
+                    },
+                ));
             }
             Executable::IvmProved(_) => {
                 return Err(AcceptTransactionFail::TransactionLimit(
@@ -2219,12 +2200,17 @@ impl StateBlock<'_> {
         #[cfg(not(feature = "telemetry"))]
         let telemetry_handle: Option<&StateTelemetry> = None;
 
-        if state_transaction.world.accounts.get(&authority).is_some() {
+        if let Ok(account) = state_transaction.world.account(&authority) {
             let has_multisig_state = state_transaction
                 .world
                 .smart_contract_state
                 .get(&crate::smartcontracts::isi::multisig::multisig_account_state_key(&authority))
                 .is_some();
+            let has_multisig_metadata = account
+                .metadata()
+                .get(&crate::smartcontracts::isi::multisig::spec_key())
+                .is_some();
+            let has_multisig_controller = authority.multisig_policy().is_some();
             let has_multisig_role = state_transaction
                 .world
                 .account_roles_iter(&authority)
@@ -2233,9 +2219,16 @@ impl StateBlock<'_> {
                 Executable::Instructions(instructions) => {
                     instructions_allow_multisig_envelope_authority(instructions)
                 }
-                Executable::IvmProved(_) | Executable::Ivm(_) => false,
+                Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => {
+                    false
+                }
             };
-            if (has_multisig_role || has_multisig_state) && !allows_multisig_envelope_authority {
+            if (has_multisig_role
+                || has_multisig_state
+                || has_multisig_metadata
+                || has_multisig_controller)
+                && !allows_multisig_envelope_authority
+            {
                 warn!(
                     authority = %authority,
                     "multisig accounts cannot sign transactions directly"
@@ -2284,45 +2277,68 @@ impl StateBlock<'_> {
             .get(&*CONTRACT_MANIFEST_METADATA_NAME)
             .and_then(|json| json.clone().try_into_any_norito::<ContractManifest>().ok());
 
-        // Extract optional governance deployment metadata for protected-namespaces gating
-        let (ns_meta, cid_meta) = {
-            use core::str::FromStr as _;
-            let md = tx.as_ref().metadata();
-            let ns_key = iroha_data_model::name::Name::from_str("gov_namespace");
-            let cid_key = iroha_data_model::name::Name::from_str("gov_contract_id");
-            let ns = ns_key
-                .ok()
-                .and_then(|k| md.get(&k))
-                .and_then(|j| j.try_into_any_norito::<String>().ok())
-                .map(|raw| raw.trim().to_owned())
-                .filter(|raw| !raw.is_empty());
-            let cid = cid_key
-                .ok()
-                .and_then(|k| md.get(&k))
-                .and_then(|j| j.try_into_any_norito::<String>().ok())
-                .map(|raw| raw.trim().to_owned())
-                .filter(|raw| !raw.is_empty());
-            (ns, cid)
-        };
+        // Extract optional governance deployment metadata for protected-contract gating.
+        let contract_address_meta = tx
+            .as_ref()
+            .metadata()
+            .get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY)
+            .and_then(|json| json.clone().try_into_any_norito::<String>().ok())
+            .and_then(|raw| {
+                raw.parse::<iroha_data_model::smart_contract::ContractAddress>()
+                    .ok()
+            });
 
-        if let Executable::Ivm(bytes) = tx.as_ref().instructions() {
-            let gas_limit = crate::executor::parse_gas_limit(tx.as_ref().metadata())
-                .map_err(TransactionRejectionReason::Validation)?;
-            if gas_limit.is_none() {
-                return Err(TransactionRejectionReason::Validation(
-                    ValidationFail::NotPermitted(
-                        "missing gas_limit in transaction metadata".to_owned(),
-                    ),
-                ));
+        match tx.as_ref().instructions() {
+            Executable::ContractCall(call) => {
+                let gas_limit = crate::executor::parse_gas_limit(tx.as_ref().metadata())
+                    .map_err(TransactionRejectionReason::Validation)?;
+                if gas_limit.is_none() {
+                    return Err(TransactionRejectionReason::Validation(
+                        ValidationFail::NotPermitted(
+                            "missing gas_limit in transaction metadata".to_owned(),
+                        ),
+                    ));
+                }
+                let record =
+                    code::fetch_bound_contract_record(state_transaction, &call.contract_address)
+                        .ok_or_else(|| {
+                            TransactionRejectionReason::Validation(ValidationFail::NotPermitted(
+                                format!(
+                                    "contract instance `{}` not found in WSV",
+                                    call.contract_address
+                                ),
+                            ))
+                        })?;
+                let contract_address = Some(call.contract_address.clone());
+                Self::validate_ivm(
+                    authority.clone(),
+                    state_transaction,
+                    IvmBytecode::from_compiled(record.code_bytes),
+                    None,
+                    contract_address,
+                    ivm_cache,
+                )?;
             }
-            Self::validate_ivm(
-                authority.clone(),
-                state_transaction,
-                bytes.clone(),
-                manifest_metadata.clone(),
-                ns_meta.clone().zip(cid_meta.clone()),
-                ivm_cache,
-            )?;
+            Executable::Ivm(bytes) => {
+                let gas_limit = crate::executor::parse_gas_limit(tx.as_ref().metadata())
+                    .map_err(TransactionRejectionReason::Validation)?;
+                if gas_limit.is_none() {
+                    return Err(TransactionRejectionReason::Validation(
+                        ValidationFail::NotPermitted(
+                            "missing gas_limit in transaction metadata".to_owned(),
+                        ),
+                    ));
+                }
+                Self::validate_ivm(
+                    authority.clone(),
+                    state_transaction,
+                    bytes.clone(),
+                    manifest_metadata.clone(),
+                    contract_address_meta.clone(),
+                    ivm_cache,
+                )?;
+            }
+            _ => {}
         }
 
         debug!(tx=%tx.as_ref().hash(), "Validating transaction");
@@ -2379,7 +2395,7 @@ impl StateBlock<'_> {
         state_transaction: &mut StateTransaction<'_, '_>,
         contract: IvmBytecode,
         manifest_metadata: Option<ContractManifest>,
-        deploy_target: Option<(String, String)>,
+        deploy_target: Option<iroha_data_model::smart_contract::ContractAddress>,
         ivm_cache: &mut IvmCache,
     ) -> Result<(), TransactionRejectionReason> {
         use ivm::ivm_mode as mode;
@@ -2654,7 +2670,7 @@ impl StateBlock<'_> {
         }
 
         // Protected namespaces admission (governance gating)
-        if let Some((ns, cid)) = deploy_target {
+        if let Some(contract_address) = deploy_target {
             // Read protected namespaces from on-chain custom parameter `gov_protected_namespaces`
             let mut protected: Vec<String> = Vec::new();
             if let Ok(name) = core::str::FromStr::from_str("gov_protected_namespaces") {
@@ -2666,8 +2682,8 @@ impl StateBlock<'_> {
                     protected = v;
                 }
             }
-            if protected.iter().any(|p| p == &ns) {
-                // Require an enacted proposal matching (ns, cid, code_hash, abi_hash)
+            if !protected.is_empty() {
+                // Require an enacted proposal matching the governed contract address and hashes.
                 let want_code = hex::encode(<[u8; 32]>::from(code_hash));
                 let want_abi = hex::encode(<[u8; 32]>::from(abi_hash));
                 let mut ok = false;
@@ -2675,8 +2691,7 @@ impl StateBlock<'_> {
                     let Some(payload) = rec.as_deploy_contract() else {
                         continue;
                     };
-                    if payload.namespace == ns
-                        && payload.contract_id == cid
+                    if payload.contract_address == contract_address
                         && payload.code_hash_hex.to_hex() == want_code
                         && payload.abi_hash_hex.to_hex() == want_abi
                         && matches!(rec.status, crate::state::GovernanceProposalStatus::Enacted)
@@ -2692,7 +2707,7 @@ impl StateBlock<'_> {
                         .record_protected_namespace_enforcement("rejected");
                     return Err(TransactionRejectionReason::Validation(
                         ValidationFail::NotPermitted(
-                            "deployment into protected namespace requires enacted governance proposal"
+                            "deployment into governed contract address requires enacted governance proposal"
                                 .to_owned(),
                         ),
                     ));
@@ -2915,272 +2930,137 @@ fn enforce_manifest_protected_namespaces(
     }
 
     let metadata = tx.metadata();
-    let metadata_namespace = metadata
-        .get(&*GOV_NAMESPACE_METADATA_KEY)
+    let metadata_governance_contract_address = metadata
+        .get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY)
         .map(|value| {
             let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                reject_lane_policy(alias, "`gov_namespace` metadata must be a string value")
+                reject_lane_policy(
+                    alias,
+                    "`gov_contract_address` metadata must be a string value",
+                )
             })?;
             let trimmed = raw.trim();
             if trimmed.is_empty() {
                 return Err(reject_lane_policy(
                     alias,
-                    "`gov_namespace` metadata must not be blank",
+                    "`gov_contract_address` metadata must not be blank",
                 ));
             }
-            Name::from_str(trimmed).map_err(|err| {
+            trimmed.parse::<iroha_data_model::smart_contract::ContractAddress>().map_err(|err| {
                 reject_lane_policy(
                     alias,
-                    format!("`gov_namespace` metadata `{trimmed}` is not a valid Name: {err}"),
+                    format!(
+                        "`gov_contract_address` metadata `{trimmed}` is not a valid ContractAddress: {err}"
+                    ),
                 )
             })
         })
         .transpose()?;
 
-    let metadata_contract_id = metadata
-        .get(&*GOV_CONTRACT_ID_METADATA_KEY)
+    let metadata_contract_address_hint = metadata
+        .get(&*CONTRACT_ADDRESS_METADATA_KEY)
         .map(|value| {
             let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                reject_lane_policy(alias, "`gov_contract_id` metadata must be a string value")
+                reject_lane_policy(alias, "`contract_address` metadata must be a string value")
             })?;
             let trimmed = raw.trim();
             if trimmed.is_empty() {
                 return Err(reject_lane_policy(
                     alias,
-                    "`gov_contract_id` metadata must not be blank",
+                    "`contract_address` metadata must not be blank",
                 ));
             }
-            Ok(trimmed.to_string())
-        })
-        .transpose()?;
-
-    let metadata_contract_namespace = metadata
-        .get(&*CONTRACT_NAMESPACE_METADATA_KEY)
-        .map(|value| {
-            let raw = value.try_into_any_norito::<String>().map_err(|_| {
+            trimmed.parse::<iroha_data_model::smart_contract::ContractAddress>().map_err(|err| {
                 reject_lane_policy(
                     alias,
-                    "`contract_namespace` metadata must be a string value",
-                )
-            })?;
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                return Err(reject_lane_policy(
-                    alias,
-                    "`contract_namespace` metadata must not be blank",
-                ));
-            }
-            Name::from_str(trimmed).map_err(|err| {
-                reject_lane_policy(
-                    alias,
-                    format!("`contract_namespace` metadata `{trimmed}` is not a valid Name: {err}"),
+                    format!(
+                        "`contract_address` metadata `{trimmed}` is not a valid ContractAddress: {err}"
+                    ),
                 )
             })
         })
         .transpose()?;
 
-    let metadata_contract_id_hint = metadata
-        .get(&*CONTRACT_ID_METADATA_KEY)
-        .map(|value| {
-            let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                reject_lane_policy(alias, "`contract_id` metadata must be a string value")
-            })?;
-            let trimmed = raw.trim();
-            if trimmed.is_empty() {
-                return Err(reject_lane_policy(
-                    alias,
-                    "`contract_id` metadata must not be blank",
-                ));
-            }
-            Ok(trimmed.to_string())
-        })
-        .transpose()?;
-
-    let mut namespaces_from_instructions = BTreeSet::new();
-    let mut contract_bindings = BTreeSet::new();
+    let mut contract_targets = BTreeSet::new();
     let mut register_code_seen = false;
-    if let Executable::Instructions(instructions) = tx.instructions() {
-        for instruction in instructions {
-            if let Some(activate) = instruction
-                .as_any()
-                .downcast_ref::<ActivateContractInstance>()
-            {
-                let ns = Name::from_str(activate.namespace.trim()).map_err(|err| {
-                    reject_lane_policy(
-                        alias,
-                        format!(
-                            "instruction namespace `{}` is not valid: {err}",
-                            activate.namespace
-                        ),
-                    )
-                })?;
-                namespaces_from_instructions.insert(ns.clone());
-                let contract_id = activate.contract_id.trim();
-                if contract_id.is_empty() {
-                    return Err(reject_lane_policy(
-                        alias,
-                        "contract_id in ActivateContractInstance must not be blank",
-                    ));
-                }
-                contract_bindings.insert((ns, contract_id.to_string()));
-            } else if let Some(deactivate) = instruction
-                .as_any()
-                .downcast_ref::<DeactivateContractInstance>()
-            {
-                let ns = Name::from_str(deactivate.namespace.trim()).map_err(|err| {
-                    reject_lane_policy(
-                        alias,
-                        format!(
-                            "instruction namespace `{}` is not valid: {err}",
-                            deactivate.namespace
-                        ),
-                    )
-                })?;
-                namespaces_from_instructions.insert(ns.clone());
-                let contract_id = deactivate.contract_id.trim();
-                if contract_id.is_empty() {
-                    return Err(reject_lane_policy(
-                        alias,
-                        "contract_id in DeactivateContractInstance must not be blank",
-                    ));
-                }
-                contract_bindings.insert((ns, contract_id.to_string()));
-            } else {
-                let modifies_contract_code = {
-                    let any = instruction.as_any();
-                    any.is::<RegisterSmartContractCode>()
-                        || any.is::<RegisterSmartContractBytes>()
-                        || any.is::<RemoveSmartContractBytes>()
-                };
-                if modifies_contract_code {
-                    register_code_seen = true;
+    match tx.instructions() {
+        Executable::Instructions(instructions) => {
+            for instruction in instructions {
+                if let Some(activate) = instruction
+                    .as_any()
+                    .downcast_ref::<ActivateContractInstance>()
+                {
+                    contract_targets.insert(activate.contract_address().clone());
+                } else if let Some(deactivate) = instruction
+                    .as_any()
+                    .downcast_ref::<DeactivateContractInstance>()
+                {
+                    contract_targets.insert(deactivate.contract_address().clone());
+                } else {
+                    let modifies_contract_code = {
+                        let any = instruction.as_any();
+                        any.is::<RegisterSmartContractCode>()
+                            || any.is::<RegisterSmartContractBytes>()
+                            || any.is::<RemoveSmartContractBytes>()
+                    };
+                    if modifies_contract_code {
+                        register_code_seen = true;
+                    }
                 }
             }
         }
+        Executable::ContractCall(call) => {
+            contract_targets.insert(call.contract_address.clone());
+        }
+        Executable::Ivm(_) | Executable::IvmProved(_) => {}
     }
 
-    if let Some(ns) = metadata_namespace.clone() {
-        if let Some(cid) = metadata_contract_id
-            .clone()
-            .or_else(|| metadata_contract_id_hint.clone())
-        {
-            namespaces_from_instructions.insert(ns.clone());
-            contract_bindings.insert((ns, cid));
-        }
-    } else if let Some(ns) = metadata_contract_namespace.clone() {
-        if let Some(cid) = metadata_contract_id_hint.clone() {
-            namespaces_from_instructions.insert(ns.clone());
-            contract_bindings.insert((ns, cid));
-        }
+    if let Some(contract_address) = metadata_governance_contract_address.clone() {
+        contract_targets.insert(contract_address);
     }
 
     let ivm_with_contract_metadata = matches!(tx.instructions(), Executable::Ivm(_))
-        && (metadata_namespace.is_some()
-            || metadata_contract_namespace.is_some()
-            || metadata_contract_id_hint.is_some());
+        && (metadata_governance_contract_address.is_some()
+            || metadata_contract_address_hint.is_some());
 
     let contract_instr_seen =
-        register_code_seen || !contract_bindings.is_empty() || ivm_with_contract_metadata;
+        register_code_seen || !contract_targets.is_empty() || ivm_with_contract_metadata;
 
-    if contract_instr_seen && metadata_namespace.is_none() {
+    if contract_instr_seen
+        && metadata_governance_contract_address.is_none()
+        && !matches!(tx.instructions(), Executable::ContractCall(_))
+    {
         return Err(reject_lane_policy(
             alias,
-            "transactions with contract namespace operations must set `gov_namespace` metadata when lane governance protects namespaces",
+            "transactions with contract operations must set `gov_contract_address` metadata when lane governance protects namespaces",
         ));
     }
 
-    if (contract_instr_seen || metadata_namespace.is_some()) && metadata_contract_id.is_none() {
-        return Err(reject_lane_policy(
-            alias,
-            "metadata key `gov_contract_id` is required when `gov_namespace` is provided",
-        ));
-    }
-
-    if let (Some(ns_hint), Some(ns_meta)) = (
-        metadata_contract_namespace.as_ref(),
-        metadata_namespace.as_ref(),
+    if let (Some(hint), Some(meta)) = (
+        metadata_contract_address_hint.as_ref(),
+        metadata_governance_contract_address.as_ref(),
     ) {
-        if ns_hint != ns_meta {
+        if hint != meta {
             return Err(reject_lane_policy(
                 alias,
-                "`contract_namespace` metadata must match `gov_namespace` for protected operations",
+                "`contract_address` metadata must match `gov_contract_address` for protected operations",
             ));
         }
     }
 
-    if let (Some(cid_hint), Some(cid_meta)) = (
-        metadata_contract_id_hint.as_ref(),
-        metadata_contract_id.as_ref(),
-    ) {
-        if cid_hint != cid_meta {
-            return Err(reject_lane_policy(
-                alias,
-                "`contract_id` metadata must match `gov_contract_id` for protected operations",
-            ));
-        }
-    }
-
-    if let Some(meta_cid) = metadata_contract_id.as_ref()
-        && let Some(target_ns) = metadata_namespace
-            .clone()
-            .or_else(|| namespaces_from_instructions.iter().next().cloned())
-    {
-        let cross_namespace = world
-            .contract_instances()
+    if let Some(meta_contract_address) = metadata_governance_contract_address.as_ref()
+        && !contract_targets.is_empty()
+        && contract_targets
             .iter()
-            .filter(|((_ns, cid), _)| cid == meta_cid)
-            .filter_map(|((ns, _), _)| Name::from_str(ns).ok())
-            .any(|existing_ns| existing_ns != target_ns);
-        if cross_namespace {
-            return Err(reject_lane_policy(
-                alias,
-                format!(
-                    "contract `{meta_cid}` is already bound to a different namespace; cross-namespace rebinding is not allowed"
-                ),
-            ));
-        }
-    }
-
-    let mut namespaces_to_check = namespaces_from_instructions.clone();
-    if let Some(ns) = metadata_namespace.clone() {
-        namespaces_to_check.insert(ns);
-    }
-    if let Some(ns) = metadata_contract_namespace.clone() {
-        namespaces_to_check.insert(ns);
-    }
-
-    for namespace in &namespaces_to_check {
-        if !rules.protected_namespaces.contains(namespace) {
-            return Err(reject_lane_policy(
-                alias,
-                format!("namespace `{namespace}` is not declared in lane governance protected set"),
-            ));
-        }
-    }
-
-    if let Some(ns) = metadata_namespace
-        && !namespaces_from_instructions.is_empty()
-        && namespaces_from_instructions
-            .iter()
-            .any(|other| other != &ns)
+            .any(|contract_address| contract_address != meta_contract_address)
     {
         return Err(reject_lane_policy(
             alias,
-            "`gov_namespace` metadata does not match namespaces referenced by contract instructions",
+            "`gov_contract_address` metadata does not match contract addresses referenced by contract instructions",
         ));
     }
 
-    if let Some(meta_contract_id) = metadata_contract_id
-        && !contract_bindings.is_empty()
-        && contract_bindings
-            .iter()
-            .any(|(_, cid)| cid != &meta_contract_id)
-    {
-        return Err(reject_lane_policy(
-            alias,
-            "`gov_contract_id` metadata does not match contract ids referenced by contract instructions",
-        ));
-    }
+    let _ = world;
 
     Ok(())
 }
@@ -3364,7 +3244,7 @@ fn enforce_lane_policies(
         Executable::Instructions(instructions) => {
             instructions_allow_multisig_envelope_authority(instructions)
         }
-        Executable::IvmProved(_) | Executable::Ivm(_) => false,
+        Executable::ContractCall(_) | Executable::IvmProved(_) | Executable::Ivm(_) => false,
     };
 
     let mut runtime_upgrade_present = false;
@@ -4324,7 +4204,7 @@ pub mod tests {
 
     fn world_with_authority(domain: &str) -> (World, AccountId, KeyPair) {
         let (authority_id, key_pair) = gen_account_in(domain);
-        let domain_id: DomainId = domain.parse().expect("domain id");
+        let domain_id = DomainId::try_new(domain, "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority_id);
         let account = new_account_in_domain(&authority_id, &domain_id).build(&authority_id);
         (World::with([domain], [account], []), authority_id, key_pair)
@@ -4337,7 +4217,7 @@ pub mod tests {
         manifest_active: bool,
     ) -> (World, AccountId) {
         let (authority, _) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let domain = Domain::new(domain_id.clone()).build(&authority);
         let account = new_account_in_domain(&authority, &domain_id)
             .with_uaid(Some(uaid))
@@ -4668,7 +4548,7 @@ pub mod tests {
         use iroha_data_model::domain::DomainId;
 
         let chain: ChainId = "multisig-direct".parse().unwrap();
-        let domain_id: DomainId = "multisig".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("multisig", "universal").unwrap();
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
         let signer1_id = AccountId::new(signer1.public_key().clone());
@@ -4736,7 +4616,7 @@ pub mod tests {
         use iroha_data_model::domain::DomainId;
 
         let chain: ChainId = "multisig-role-only".parse().unwrap();
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let (authority_id, keypair) = gen_account_in("wonderland");
 
         let domain = Domain::new(domain_id.clone()).build(&authority_id);
@@ -4799,8 +4679,8 @@ pub mod tests {
         use iroha_executor_data_model::isi::multisig::MultisigPropose;
 
         let chain: ChainId = "multisig-propose-role-allowed".parse().unwrap();
-        let home_domain: DomainId = "hbl".parse().unwrap();
-        let target_domain: DomainId = "centralbank".parse().unwrap();
+        let home_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
+        let target_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
@@ -4836,7 +4716,7 @@ pub mod tests {
             [],
         );
 
-        let role_id: RoleId = "MULTISIG_SIGNATORY/hbl/test-envelope"
+        let role_id: RoleId = "MULTISIG_SIGNATORY/banka/test-envelope"
             .parse()
             .expect("static multisig role must parse");
         let role = Role {
@@ -4885,8 +4765,8 @@ pub mod tests {
         use iroha_executor_data_model::isi::multisig::MultisigPropose;
 
         let chain: ChainId = "multisig-propose-lane-validator-bypass".parse().unwrap();
-        let home_domain: DomainId = "hbl".parse().unwrap();
-        let target_domain: DomainId = "centralbank".parse().unwrap();
+        let home_domain: DomainId = DomainId::try_new("banka", "universal").unwrap();
+        let target_domain: DomainId = DomainId::try_new("centralbank", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
@@ -4931,7 +4811,7 @@ pub mod tests {
             [],
         );
 
-        let role_id: RoleId = "MULTISIG_SIGNATORY/hbl/lane-bypass"
+        let role_id: RoleId = "MULTISIG_SIGNATORY/banka/lane-bypass"
             .parse()
             .expect("static multisig role must parse");
         let role = Role {
@@ -5375,14 +5255,14 @@ pub mod tests {
             "repo-1".parse().expect("repo id");
         let cash_leg = iroha_data_model::repo::RepoCashLeg {
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: 1u32.into(),
         };
         let collateral_leg = iroha_data_model::repo::RepoCollateralLeg::new(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
             1u32.into(),
@@ -5454,7 +5334,7 @@ pub mod tests {
             settlement_id.clone(),
             iroha_data_model::isi::settlement::SettlementLeg::new(
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "bond".parse().unwrap(),
                 ),
                 1u32.into(),
@@ -5463,7 +5343,7 @@ pub mod tests {
             ),
             iroha_data_model::isi::settlement::SettlementLeg::new(
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
                 1u32.into(),
@@ -5479,7 +5359,7 @@ pub mod tests {
             settlement_id,
             iroha_data_model::isi::settlement::SettlementLeg::new(
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "eur".parse().unwrap(),
                 ),
                 1u32.into(),
@@ -5488,7 +5368,7 @@ pub mod tests {
             ),
             iroha_data_model::isi::settlement::SettlementLeg::new(
                 iroha_data_model::asset::AssetDefinitionId::new(
-                    "wonderland".parse().unwrap(),
+                    DomainId::try_new("wonderland", "universal").unwrap(),
                     "usd".parse().unwrap(),
                 ),
                 1u32.into(),
@@ -6826,6 +6706,80 @@ pub mod tests {
     }
 
     #[test]
+    fn ivm_proved_missing_gas_limit_rejected_at_admission() {
+        use std::time::Duration;
+
+        use iroha_data_model::transaction::{Executable, IvmProved, TransactionBuilder};
+
+        let chain: ChainId = "chain".parse().unwrap();
+        let (authority_id, kp) = gen_account_in("wonderland");
+        let prog = minimal_ivm_program_with_max_cycles(1, 1_000);
+        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
+            .with_executable(Executable::IvmProved(IvmProved {
+                bytecode: IvmBytecode::from_compiled(prog),
+                overlay: Vec::<InstructionBox>::new().into(),
+                events_commitment: Hash::new(b"events"),
+                gas_policy_commitment: Hash::new(b"gas"),
+            }))
+            .sign(kp.private_key());
+
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let limits = TransactionParameters::default();
+        let err =
+            AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
+                .expect_err("missing gas_limit should be rejected");
+
+        match err {
+            AcceptTransactionFail::TransactionLimit(limit) => {
+                assert!(
+                    limit.reason.contains("missing gas_limit"),
+                    "unexpected reason: {}",
+                    limit.reason
+                );
+            }
+            other => panic!("Expected TransactionLimit failure, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn contract_call_missing_gas_limit_rejected_at_admission() {
+        use std::time::Duration;
+
+        use iroha_data_model::transaction::{
+            Executable, TransactionBuilder, executable::ContractInvocation,
+        };
+
+        let chain: ChainId = "chain".parse().unwrap();
+        let (authority_id, kp) = gen_account_in("wonderland");
+        let tx = TransactionBuilder::new(chain.clone(), authority_id.clone())
+            .with_executable(Executable::ContractCall(ContractInvocation {
+                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                    .parse()
+                    .expect("contract address"),
+                entrypoint: "call".to_owned(),
+                payload: None,
+            }))
+            .sign(kp.private_key());
+
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        let limits = TransactionParameters::default();
+        let err =
+            AcceptedTransaction::validate(&tx, &chain, Duration::from_secs(0), limits, &crypto_cfg)
+                .expect_err("missing gas_limit should be rejected");
+
+        match err {
+            AcceptTransactionFail::TransactionLimit(limit) => {
+                assert!(
+                    limit.reason.contains("missing gas_limit"),
+                    "unexpected reason: {}",
+                    limit.reason
+                );
+            }
+            other => panic!("Expected TransactionLimit failure, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn transaction_size_limit_enforced() {
         use std::time::Duration;
 
@@ -7986,9 +7940,15 @@ pub mod tests {
             .protected_namespaces
             .insert(Name::from_str("apps").expect("namespace"));
 
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
         let instruction = iroha_data_model::isi::smart_contract_code::ActivateContractInstance {
-            namespace: "apps".to_string(),
-            contract_id: "calc".to_string(),
+            contract_address,
             code_hash: Hash::prehashed([0_u8; 32]),
         };
         let tx = TransactionBuilder::new(chain, authority)
@@ -8002,8 +7962,8 @@ pub mod tests {
         match err {
             TransactionRejectionReason::Validation(ValidationFail::NotPermitted(msg)) => {
                 assert!(
-                    msg.contains("gov_namespace"),
-                    "expected gov_namespace rejection, got {msg}"
+                    msg.contains("gov_contract_address"),
+                    "expected gov_contract_address rejection, got {msg}"
                 );
             }
             other => panic!("expected NotPermitted rejection, got {other:?}"),
@@ -8184,7 +8144,8 @@ pub mod tests {
     /// Asset definition name used by the sandbox.
     pub const ASSET_STR: &str = "rose";
     /// Pre-parsed domain identifier for the sandbox domain.
-    pub static DOMAIN: LazyLock<DomainId> = LazyLock::new(|| DOMAIN_STR.parse().unwrap());
+    pub static DOMAIN: LazyLock<DomainId> =
+        LazyLock::new(|| DomainId::try_new(DOMAIN_STR, "universal").unwrap());
     /// Pre-parsed asset definition identifier for the sandbox asset.
     pub static ASSET: LazyLock<AssetDefinitionId> = LazyLock::new(|| {
         AssetDefinitionId::new(
@@ -8428,8 +8389,12 @@ pub mod tests {
             || format!("{}@{}", account.signatory(), DOMAIN_STR),
             |alias| format!("{alias}@{DOMAIN_STR}"),
         );
-        if asset_id.definition().domain() == &*DOMAIN {
-            format!("{}##{}", asset_id.definition().name(), account_str)
+        if asset_id.definition().try_domain() == Some(&*DOMAIN) {
+            let name = asset_id
+                .definition()
+                .try_name()
+                .expect("matching domain projection must include a name");
+            format!("{name}##{account_str}")
         } else {
             format!("{}#{}", asset_id.definition(), account_str)
         }

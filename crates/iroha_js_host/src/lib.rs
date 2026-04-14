@@ -82,6 +82,7 @@ use iroha_data_model::{
             FinalizeReferendum, PersistCouncilForEpoch, ProposeDeployContract, RegisterCitizen,
             VotingMode,
         },
+        ministry::SubmitAgendaProposal,
         rwa::{
             ForceTransferRwa, FreezeRwa, HoldRwa, MergeRwas, RedeemRwa, RegisterRwa, ReleaseRwa,
             RwaInstructionBox, SetRwaControls, TransferRwa, UnfreezeRwa,
@@ -101,6 +102,7 @@ use iroha_data_model::{
         KaigiRelayRegistration, NewKaigi,
     },
     metadata::Metadata,
+    ministry::AgendaProposalV1,
     name::Name,
     nexus::{
         AxtDescriptorBuilder, AxtTouchFragment, DataSpaceId, LaneId, LaneRelayEnvelope,
@@ -6177,14 +6179,20 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
             }
 
             if let Some(json::Value::Object(mut fields)) = map.remove("ProposeDeployContract") {
-                let namespace = parse_string_value(
-                    required_value(&mut fields, "namespace", "ProposeDeployContract")?,
-                    "ProposeDeployContract.namespace",
-                )?;
-                let contract_id = parse_string_value(
-                    required_value(&mut fields, "contract_id", "ProposeDeployContract")?,
-                    "ProposeDeployContract.contract_id",
-                )?;
+                let contract_address: iroha_data_model::smart_contract::ContractAddress =
+                    parse_string_value(
+                        required_value(&mut fields, "contract_address", "ProposeDeployContract")?,
+                        "ProposeDeployContract.contract_address",
+                    )?
+                    .parse()
+                    .map_err(|err| {
+                        napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "invalid ProposeDeployContract.contract_address literal: {err}"
+                            ),
+                        )
+                    })?;
                 let code_hash_hex = parse_string_value(
                     required_value(&mut fields, "code_hash_hex", "ProposeDeployContract")?,
                     "ProposeDeployContract.code_hash_hex",
@@ -6208,8 +6216,7 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                     Some(value) => Some(json::from_value(value).map_err(norito_to_napi)?),
                 };
                 let instruction = ProposeDeployContract {
-                    namespace,
-                    contract_id,
+                    contract_address,
                     code_hash_hex,
                     abi_hash_hex,
                     abi_version,
@@ -6338,6 +6345,17 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
                 return Ok(Box::new(persist).into_instruction_box());
             }
 
+            if let Some(json::Value::Object(mut fields)) = map.remove("SubmitAgendaProposal") {
+                let proposal: AgendaProposalV1 = json::from_value(required_value(
+                    &mut fields,
+                    "proposal",
+                    "SubmitAgendaProposal",
+                )?)
+                .map_err(norito_to_napi)?;
+                let instruction = SubmitAgendaProposal { proposal };
+                return Ok(Box::new(instruction).into_instruction_box());
+            }
+
             if let Some(json::Value::Object(mut fields)) = map.remove("RegisterSmartContractCode") {
                 let manifest_value =
                     required_value(&mut fields, "manifest", "RegisterSmartContractCode")?;
@@ -6373,21 +6391,30 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
             }
 
             if let Some(json::Value::Object(mut fields)) = map.remove("ActivateContractInstance") {
-                let namespace = parse_string_value(
-                    required_value(&mut fields, "namespace", "ActivateContractInstance")?,
-                    "ActivateContractInstance.namespace",
-                )?;
-                let contract_id = parse_string_value(
-                    required_value(&mut fields, "contract_id", "ActivateContractInstance")?,
-                    "ActivateContractInstance.contract_id",
-                )?;
+                let contract_address: iroha_data_model::smart_contract::ContractAddress =
+                    parse_string_value(
+                        required_value(
+                            &mut fields,
+                            "contract_address",
+                            "ActivateContractInstance",
+                        )?,
+                        "ActivateContractInstance.contract_address",
+                    )?
+                    .parse()
+                    .map_err(|err| {
+                        napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "invalid ActivateContractInstance.contract_address literal: {err}"
+                            ),
+                        )
+                    })?;
                 let code_hash_value =
                     required_value(&mut fields, "code_hash", "ActivateContractInstance")?;
                 let code_hash =
                     parse_hash_value(code_hash_value, "ActivateContractInstance.code_hash")?;
                 let instruction = ActivateContractInstance {
-                    namespace,
-                    contract_id,
+                    contract_address,
                     code_hash,
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
@@ -6395,21 +6422,30 @@ fn value_to_instruction(value: json::Value) -> napi::Result<InstructionBox> {
 
             if let Some(json::Value::Object(mut fields)) = map.remove("DeactivateContractInstance")
             {
-                let namespace = parse_string_value(
-                    required_value(&mut fields, "namespace", "DeactivateContractInstance")?,
-                    "DeactivateContractInstance.namespace",
-                )?;
-                let contract_id = parse_string_value(
-                    required_value(&mut fields, "contract_id", "DeactivateContractInstance")?,
-                    "DeactivateContractInstance.contract_id",
-                )?;
+                let contract_address: iroha_data_model::smart_contract::ContractAddress =
+                    parse_string_value(
+                        required_value(
+                            &mut fields,
+                            "contract_address",
+                            "DeactivateContractInstance",
+                        )?,
+                        "DeactivateContractInstance.contract_address",
+                    )?
+                    .parse()
+                    .map_err(|err| {
+                        napi::Error::new(
+                            napi::Status::InvalidArg,
+                            format!(
+                                "invalid DeactivateContractInstance.contract_address literal: {err}"
+                            ),
+                        )
+                    })?;
                 let reason = parse_optional_string_value(
                     fields.remove("reason"),
                     "DeactivateContractInstance.reason",
                 )?;
                 let instruction = DeactivateContractInstance {
-                    namespace,
-                    contract_id,
+                    contract_address,
                     reason,
                 };
                 return Ok(Box::new(instruction).into_instruction_box());
@@ -7098,18 +7134,28 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
         return Ok(json::Value::Object(outer));
     }
 
+    if let Some(submit) = instruction_ref
+        .as_any()
+        .downcast_ref::<SubmitAgendaProposal>()
+    {
+        let mut outer = json::Map::new();
+        outer.insert(
+            "SubmitAgendaProposal".to_owned(),
+            norito_json!({
+                "proposal": submit.proposal,
+            }),
+        );
+        return Ok(json::Value::Object(outer));
+    }
+
     if let Some(propose) = instruction_ref
         .as_any()
         .downcast_ref::<ProposeDeployContract>()
     {
         let mut inner = json::Map::new();
         inner.insert(
-            "namespace".to_owned(),
-            json::Value::String(propose.namespace.clone()),
-        );
-        inner.insert(
-            "contract_id".to_owned(),
-            json::Value::String(propose.contract_id.clone()),
+            "contract_address".to_owned(),
+            json::Value::String(propose.contract_address.to_string()),
         );
         inner.insert(
             "code_hash_hex".to_owned(),
@@ -7398,12 +7444,8 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
     {
         let mut inner = json::Map::new();
         inner.insert(
-            "namespace".to_owned(),
-            json::Value::String(activate.namespace.clone()),
-        );
-        inner.insert(
-            "contract_id".to_owned(),
-            json::Value::String(activate.contract_id.clone()),
+            "contract_address".to_owned(),
+            json::Value::String(activate.contract_address.to_string()),
         );
         inner.insert(
             "code_hash".to_owned(),
@@ -7423,12 +7465,8 @@ fn instruction_to_json_value(instruction: &InstructionBox) -> napi::Result<json:
     {
         let mut inner = json::Map::new();
         inner.insert(
-            "namespace".to_owned(),
-            json::Value::String(deactivate.namespace.clone()),
-        );
-        inner.insert(
-            "contract_id".to_owned(),
-            json::Value::String(deactivate.contract_id.clone()),
+            "contract_address".to_owned(),
+            json::Value::String(deactivate.contract_address.to_string()),
         );
         if let Some(reason) = &deactivate.reason {
             inner.insert("reason".to_owned(), json::Value::String(reason.clone()));
@@ -7918,10 +7956,10 @@ fn parse_kaigi_id_literal(value: &str, context: &str) -> napi::Result<KaigiId> {
     let Some((domain, call_name)) = trimmed.split_once(':') else {
         return Err(napi::Error::new(
             napi::Status::InvalidArg,
-            format!("{context} must be in `domain:callName` format"),
+            format!("{context} must be in `domain.dataspace:callName` format"),
         ));
     };
-    let domain_id = DomainId::from_str(domain).map_err(|err| {
+    let domain_id = DomainId::parse_fully_qualified(domain).map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
             format!("invalid {context} domain id: {err}"),
@@ -8146,7 +8184,7 @@ pub fn build_register_domain_transaction(
         napi::Error::new(napi::Status::InvalidArg, format!("invalid chain id: {err}"))
     })?;
     let authority = parse_account_id(&authority, "authority account id")?;
-    let domain_id: DomainId = domain_id.parse().map_err(|err| {
+    let domain_id = DomainId::parse_fully_qualified(&domain_id).map_err(|err| {
         napi::Error::new(
             napi::Status::InvalidArg,
             format!("invalid domain id: {err}"),
@@ -8555,6 +8593,10 @@ mod tests {
             KaigiRelayHop, KaigiRelayManifest, KaigiRelayRegistration, KaigiRoomPolicy, NewKaigi,
         },
         metadata::Metadata,
+        ministry::{
+            AgendaEvidenceAttachment, AgendaEvidenceKind, AgendaProposalAction,
+            AgendaProposalSubmitter, AgendaProposalSummary, AgendaProposalTarget, AgendaProposalV1,
+        },
         name::Name,
         nexus::LaneId,
         nft::NftId,
@@ -8654,15 +8696,52 @@ mod tests {
 
     fn sample_rwa_id(domain: &str, byte: u8) -> RwaId {
         RwaId::generated(
-            domain.parse().expect("valid domain id"),
+            DomainId::try_new(domain, "universal").expect("valid domain id"),
             Hash::prehashed(sample_hash(byte)),
         )
     }
 
     fn sample_kaigi_id(domain: &str, call_name: &str) -> KaigiId {
-        let domain_id: DomainId = domain.parse().expect("valid domain id");
+        let domain_id = DomainId::try_new(domain, "universal").expect("valid domain id");
         let call = Name::from_str(call_name).expect("valid kaigi name");
         KaigiId::new(domain_id, call)
+    }
+
+    fn sample_agenda_proposal() -> AgendaProposalV1 {
+        AgendaProposalV1 {
+            version: 1,
+            proposal_id: "AC-2026-001".to_owned(),
+            submitted_at_unix_ms: 1_770_000_000_000,
+            language: "en".to_owned(),
+            action: AgendaProposalAction::AddToDenylist,
+            summary: AgendaProposalSummary {
+                title: "Blacklist proposal for bafy-test".to_owned(),
+                motivation: "Evidence review requested for the published CID.".to_owned(),
+                expected_impact:
+                    "Participating gateways would restrict delivery while the case is reviewed."
+                        .to_owned(),
+            },
+            tags: vec!["spam".to_owned()],
+            targets: vec![AgendaProposalTarget {
+                label: "bafy-test".to_owned(),
+                hash_family: "sorafs-root-cid".to_owned(),
+                hash_hex: "11".repeat(32),
+                reason: "spam moderation report".to_owned(),
+            }],
+            evidence: vec![AgendaEvidenceAttachment {
+                kind: AgendaEvidenceKind::Url,
+                uri: "https://example.invalid/case/1".to_owned(),
+                digest_blake3_hex: Some("22".repeat(32)),
+                description: Some("Captured gateway evidence".to_owned()),
+            }],
+            submitter: AgendaProposalSubmitter {
+                name: "Explorer Moderator".to_owned(),
+                contact: "moderation@example.invalid".to_owned(),
+                organization: Some("Sora Ops".to_owned()),
+                pgp_fingerprint: None,
+            },
+            duplicates: vec!["AC-2025-014".to_owned()],
+        }
     }
 
     fn sample_taikai_cache_options() -> JsTaikaiCacheConfig {
@@ -9008,8 +9087,10 @@ mod tests {
     #[test]
     fn mint_asset_instruction_json_roundtrip() {
         let account_id = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_definition, account_id.clone());
 
         let mint_box: MintBox =
@@ -9048,8 +9129,10 @@ mod tests {
     #[test]
     fn burn_asset_instruction_json_roundtrip() {
         let account_id = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_definition, account_id.clone());
 
         let burn_box: BurnBox =
@@ -9853,8 +9936,10 @@ mod tests {
     fn transfer_asset_instruction_json_roundtrip() {
         let source_account = sample_account("wonderland");
         let destination = sample_account("wonderland");
-        let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_definition, source_account.clone());
 
         let transfer_box: TransferBox = Transfer::asset_numeric(
@@ -9897,7 +9982,7 @@ mod tests {
             redeem_enabled: false,
         };
         let new_rwa = NewRwa::new(
-            "commodities".parse().expect("valid domain id"),
+            DomainId::try_new("commodities", "universal").expect("valid domain id"),
             Numeric::from_str("10.5").expect("valid numeric"),
             iroha_primitives::numeric::NumericSpec::fractional(1),
             "vault-cert-001".to_owned(),
@@ -10057,7 +10142,8 @@ mod tests {
     fn transfer_domain_instruction_json_roundtrip() {
         let source_account = sample_account("wonderland");
         let destination = sample_account("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("valid domain id");
 
         let transfer_box: TransferBox = Transfer::domain(
             source_account.clone(),
@@ -10487,8 +10573,9 @@ mod tests {
     #[test]
     fn governance_propose_deploy_contract_instruction_json_roundtrip() {
         let instruction: InstructionBox = Box::new(ProposeDeployContract {
-            namespace: "apps".to_owned(),
-            contract_id: "ledger".to_owned(),
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address"),
             code_hash_hex: "aa".repeat(32),
             abi_hash_hex: "bb".repeat(32),
             abi_version: "1".to_owned(),
@@ -10884,6 +10971,37 @@ mod tests {
     }
 
     #[test]
+    fn governance_submit_agenda_proposal_instruction_json_roundtrip() {
+        let instruction: InstructionBox = Box::new(SubmitAgendaProposal {
+            proposal: sample_agenda_proposal(),
+        })
+        .into_instruction_box();
+
+        let json_value = instruction_to_json_value(&instruction)
+            .expect("serialize SubmitAgendaProposal instruction");
+        assert!(
+            json_value
+                .as_object()
+                .and_then(|map| map.get("SubmitAgendaProposal"))
+                .is_some()
+        );
+
+        let reconstructed =
+            value_to_instruction(json_value.clone()).expect("deserialize SubmitAgendaProposal");
+        assert_eq!(reconstructed, instruction);
+
+        let proposal_id = json_value
+            .as_object()
+            .unwrap()
+            .get("SubmitAgendaProposal")
+            .and_then(|value| value.get("proposal"))
+            .and_then(|value| value.get("proposal_id"))
+            .and_then(|value| value.as_str())
+            .expect("proposal id present");
+        assert_eq!(proposal_id, "AC-2026-001");
+    }
+
+    #[test]
     fn smart_contract_code_instruction_json_roundtrip() {
         let signing_key = KeyPair::from_seed(vec![0x33; 32], Algorithm::Ed25519);
         let manifest = ContractManifest {
@@ -11011,9 +11129,16 @@ mod tests {
 
     #[test]
     fn activate_contract_instance_instruction_json_roundtrip() {
+        let authority = AccountId::new(KeyPair::random().public_key().clone());
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            0,
+            &authority,
+            1,
+            iroha_data_model::nexus::DataSpaceId::new(0),
+        )
+        .expect("contract address");
         let instruction: InstructionBox = Box::new(ActivateContractInstance {
-            namespace: "apps".to_owned(),
-            contract_id: "ledger".to_owned(),
+            contract_address,
             code_hash: Hash::prehashed(sample_hash(0x44)),
         })
         .into_instruction_box();
@@ -11123,8 +11248,10 @@ mod tests {
         let chain_id: ChainId = "test-chain".parse().expect("valid chain id");
         let authority = AccountId::new(keypair.public_key().clone());
 
-        let asset_definition: AssetDefinitionId =
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset_definition: AssetDefinitionId = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_definition, authority.clone());
 
         let instruction_box: InstructionBox = Mint::asset_numeric(

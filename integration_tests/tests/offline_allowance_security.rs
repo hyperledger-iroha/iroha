@@ -103,8 +103,10 @@ fn signed_certificate_for(
 async fn register_offline_allowance_rejects_non_controller_authority() -> Result<()> {
     init_instruction_registry();
     let now_ms = now_millis();
-    let definition_id: AssetDefinitionId =
-        AssetDefinitionId::new("wonderland".parse()?, "offsecunauth".parse()?);
+    let definition_id: AssetDefinitionId = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "offsecunauth".parse()?,
+    );
     let certificate = signed_certificate_for(definition_id.clone(), now_ms, ALICE_ID.clone());
 
     let builder = NetworkBuilder::new()
@@ -143,8 +145,10 @@ async fn register_offline_allowance_rejects_non_controller_authority() -> Result
 async fn register_offline_allowance_rejects_missing_escrow_binding() -> Result<()> {
     init_instruction_registry();
     let now_ms = now_millis();
-    let definition_id: AssetDefinitionId =
-        AssetDefinitionId::new("wonderland".parse()?, "offsecescrow".parse()?);
+    let definition_id: AssetDefinitionId = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "offsecescrow".parse()?,
+    );
     let certificate = signed_certificate_for(definition_id.clone(), now_ms, ALICE_ID.clone());
 
     let builder = NetworkBuilder::new()
@@ -180,8 +184,10 @@ async fn register_offline_allowance_rejects_missing_escrow_binding() -> Result<(
 #[tokio::test]
 async fn register_topup_expire_then_reclaim_restores_controller_balance() -> Result<()> {
     init_instruction_registry();
-    let definition_id: AssetDefinitionId =
-        AssetDefinitionId::new("wonderland".parse()?, "offsecreclaime2e".parse()?);
+    let definition_id: AssetDefinitionId = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "offsecreclaime2e".parse()?,
+    );
     let initial_balance = Numeric::new(100, 0);
     let allowance_amount = Numeric::new(50, 0);
     let controller_asset_id = AssetId::new(definition_id.clone(), ALICE_ID.clone());

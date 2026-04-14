@@ -104,9 +104,7 @@ fn pagination_asset_definition_ids() -> Vec<AssetDefinitionId> {
         .map(|c| c.to_string())
         .map(|name| {
             AssetDefinitionId::new(
-                "wonderland"
-                    .parse::<DomainId>()
-                    .expect("wonderland domain is valid"),
+                DomainId::try_new("wonderland", "universal").expect("wonderland domain is valid"),
                 name.parse::<Name>().expect("single-letter name is valid"),
             )
         })

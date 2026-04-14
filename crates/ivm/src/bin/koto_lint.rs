@@ -21,6 +21,7 @@ use ivm::{
             fuzz as fuzz_analysis, source as source_analysis,
         },
         i18n::{self, Message as I18nMessage},
+        lexer::{Token, TokenKind, lex},
         lint::lint_program,
         parser, semantic,
     },
@@ -80,25 +81,49 @@ fn run(args: &[OsString], stdout: &mut impl Write, stderr: &mut impl Write) -> i
     for raw_path in parsed.inputs {
         let path = Path::new(&raw_path);
         match detect_input_kind(path) {
-            InputKind::Source => match analyze_source(path, &parsed.options, language) {
-                Ok(result) => {
-                    if parsed.options.output_format == OutputFormat::Text {
-                        emit_source_text(path, &result, language, stdout);
-                    } else {
-                        json_reports.push(serialize_source_result(path, &result));
-                    }
-                    if result.has_warning() && exit_code == EXIT_OK {
-                        exit_code = EXIT_WARNINGS;
+            InputKind::Source => {
+                if parsed.options.fix_removed_helpers {
+                    match rewrite_removed_helper_file(path) {
+                        Ok(changes) => {
+                            if changes > 0 && parsed.options.output_format == OutputFormat::Text {
+                                let _ = writeln!(
+                                    stdout,
+                                    "{}: fix: rewrote {} removed helper call(s)",
+                                    path.display(),
+                                    changes
+                                );
+                            }
+                        }
+                        Err(err_msg) => {
+                            let _ = writeln!(stderr, "{err_msg}");
+                            if parsed.options.output_format == OutputFormat::Json {
+                                json_reports.push(serialize_error(path, "source", &err_msg));
+                            }
+                            exit_code = EXIT_ERROR;
+                            continue;
+                        }
                     }
                 }
-                Err(err_msg) => {
-                    let _ = writeln!(stderr, "{err_msg}");
-                    if parsed.options.output_format == OutputFormat::Json {
-                        json_reports.push(serialize_error(path, "source", &err_msg));
+                match analyze_source(path, &parsed.options, language) {
+                    Ok(result) => {
+                        if parsed.options.output_format == OutputFormat::Text {
+                            emit_source_text(path, &result, language, stdout);
+                        } else {
+                            json_reports.push(serialize_source_result(path, &result));
+                        }
+                        if result.has_warning() && exit_code == EXIT_OK {
+                            exit_code = EXIT_WARNINGS;
+                        }
                     }
-                    exit_code = EXIT_ERROR;
+                    Err(err_msg) => {
+                        let _ = writeln!(stderr, "{err_msg}");
+                        if parsed.options.output_format == OutputFormat::Json {
+                            json_reports.push(serialize_error(path, "source", &err_msg));
+                        }
+                        exit_code = EXIT_ERROR;
+                    }
                 }
-            },
+            }
             InputKind::Bytecode => {
                 if parsed.options.run_lint {
                     let _ = writeln!(
@@ -159,6 +184,7 @@ struct Options {
     run_static: bool,
     run_fuzz: bool,
     output_format: OutputFormat,
+    fix_removed_helpers: bool,
 }
 
 struct ParsedArgs {
@@ -238,6 +264,7 @@ fn parse_args(args: &[OsString]) -> Result<ParsedArgs, String> {
         run_static: false,
         run_fuzz: false,
         output_format: OutputFormat::Text,
+        fix_removed_helpers: false,
     };
     let mut inputs = Vec::new();
     let mut show_help = false;
@@ -283,6 +310,10 @@ fn parse_args(args: &[OsString]) -> Result<ParsedArgs, String> {
             opts.output_format = OutputFormat::Text;
             continue;
         }
+        if arg == "--fix" || arg == "--fix-removed-helpers" {
+            opts.fix_removed_helpers = true;
+            continue;
+        }
         if let Some(format) = arg.to_str().and_then(|s| s.strip_prefix("--format=")) {
             match format {
                 "json" => opts.output_format = OutputFormat::Json,
@@ -313,6 +344,304 @@ fn detect_input_kind(path: &Path) -> InputKind {
         Some(ext) if ext.eq_ignore_ascii_case("to") => InputKind::Bytecode,
         _ => InputKind::Source,
     }
+}
+
+fn method_alias_replacement(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "has" => "contains",
+        "get_or_insert_default" => "ensure",
+        "path_map_key" | "path_map_key_norito" => "path",
+        "json_get_int" => "get_int",
+        "json_get_numeric" => "get_numeric",
+        "json_get_json" => "get_json",
+        "json_get_name" => "get_name",
+        "json_get_account_id" => "get_account_id",
+        "json_get_asset_definition_id" => "get_asset_definition_id",
+        "json_get_nft_id" => "get_nft_id",
+        "json_get_blob_hex" => "get_blob_hex",
+        _ => return None,
+    })
+}
+
+fn free_helper_method_name(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "contains" | "has" => "contains",
+        "get_or" => "get_or",
+        "get_or_insert_default" | "ensure" => "ensure",
+        "path" | "path_map_key" | "path_map_key_norito" => "path",
+        "get_int" | "json_get_int" => "get_int",
+        "get_numeric" | "json_get_numeric" => "get_numeric",
+        "get_json" | "json_get_json" => "get_json",
+        "get_name" | "json_get_name" => "get_name",
+        "get_account_id" | "json_get_account_id" => "get_account_id",
+        "get_asset_definition_id" | "json_get_asset_definition_id" => "get_asset_definition_id",
+        "get_nft_id" | "json_get_nft_id" => "get_nft_id",
+        "get_blob_hex" | "json_get_blob_hex" => "get_blob_hex",
+        _ => return None,
+    })
+}
+
+fn call_head_start(tokens: &[Token], idx: usize) -> Option<(usize, String)> {
+    if !matches!(tokens.get(idx)?.kind, TokenKind::Ident(_)) {
+        return None;
+    }
+    if matches!(
+        tokens.get(idx.wrapping_sub(1)).map(|token| &token.kind),
+        Some(TokenKind::Dot) | Some(TokenKind::Colon)
+    ) {
+        return None;
+    }
+
+    let TokenKind::Ident(ref head) = tokens[idx].kind else {
+        return None;
+    };
+    if let Some(method) = free_helper_method_name(head) {
+        return Some((idx, method.to_string()));
+    }
+
+    let Some(Token {
+        kind: TokenKind::Colon,
+        ..
+    }) = tokens.get(idx + 1)
+    else {
+        return None;
+    };
+    let Some(Token {
+        kind: TokenKind::Colon,
+        ..
+    }) = tokens.get(idx + 2)
+    else {
+        return None;
+    };
+    let TokenKind::Ident(ref scope) = tokens.get(idx)?.kind else {
+        return None;
+    };
+    let TokenKind::Ident(ref helper) = tokens.get(idx + 3)?.kind else {
+        return None;
+    };
+    if scope == "json" {
+        return free_helper_method_name(helper).map(|method| (idx, method.to_string()));
+    }
+    if scope != "std" {
+        return None;
+    }
+    let Some(Token {
+        kind: TokenKind::Colon,
+        ..
+    }) = tokens.get(idx + 4)
+    else {
+        return None;
+    };
+    let Some(Token {
+        kind: TokenKind::Colon,
+        ..
+    }) = tokens.get(idx + 5)
+    else {
+        return None;
+    };
+    let TokenKind::Ident(ref module) = tokens.get(idx + 3)?.kind else {
+        return None;
+    };
+    let TokenKind::Ident(ref helper) = tokens.get(idx + 6)?.kind else {
+        return None;
+    };
+    if module == "map" {
+        free_helper_method_name(helper).map(|method| (idx, method.to_string()))
+    } else {
+        None
+    }
+}
+
+fn line_start_bytes(src: &str) -> Vec<usize> {
+    let mut starts = vec![0];
+    for (idx, ch) in src.char_indices() {
+        if ch == '\n' {
+            starts.push(idx + ch.len_utf8());
+        }
+    }
+    starts
+}
+
+fn byte_index_for_line_column(
+    src: &str,
+    line_starts: &[usize],
+    line: usize,
+    column: usize,
+) -> usize {
+    let Some(&line_start) = line_starts.get(line.saturating_sub(1)) else {
+        return src.len();
+    };
+    if column <= 1 {
+        return line_start;
+    }
+    src[line_start..]
+        .char_indices()
+        .nth(column - 1)
+        .map(|(idx, _)| line_start + idx)
+        .unwrap_or(src.len())
+}
+
+fn token_start_byte(src: &str, line_starts: &[usize], token: &Token) -> usize {
+    byte_index_for_line_column(src, line_starts, token.line, token.column)
+}
+
+fn ident_end_byte(src: &str, line_starts: &[usize], token: &Token, ident: &str) -> usize {
+    byte_index_for_line_column(
+        src,
+        line_starts,
+        token.line,
+        token.column + ident.chars().count(),
+    )
+}
+
+fn trim_end_byte(src: &str, start: usize, mut end: usize) -> usize {
+    while end > start {
+        let prev = src[..end].chars().next_back().expect("char before end");
+        if !prev.is_whitespace() {
+            break;
+        }
+        end -= prev.len_utf8();
+    }
+    end
+}
+
+fn find_matching_call_end(tokens: &[Token], start: usize) -> Option<usize> {
+    let mut paren_depth = 0usize;
+    let mut brace_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    for (idx, token) in tokens.iter().enumerate().skip(start) {
+        match token.kind {
+            TokenKind::LParen => paren_depth += 1,
+            TokenKind::RParen => {
+                paren_depth = paren_depth.checked_sub(1)?;
+                if paren_depth == 0 && brace_depth == 0 && bracket_depth == 0 {
+                    return Some(idx);
+                }
+            }
+            TokenKind::LBrace => brace_depth += 1,
+            TokenKind::RBrace => brace_depth = brace_depth.saturating_sub(1),
+            TokenKind::LBracket => bracket_depth += 1,
+            TokenKind::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+    None
+}
+
+fn collect_top_level_arg_splits(tokens: &[Token], open_idx: usize, close_idx: usize) -> Vec<usize> {
+    let mut commas = Vec::new();
+    let mut paren_depth = 1usize;
+    let mut brace_depth = 0usize;
+    let mut bracket_depth = 0usize;
+    for (idx, token) in tokens.iter().enumerate().take(close_idx).skip(open_idx + 1) {
+        match token.kind {
+            TokenKind::LParen => paren_depth += 1,
+            TokenKind::RParen => paren_depth = paren_depth.saturating_sub(1),
+            TokenKind::LBrace => brace_depth += 1,
+            TokenKind::RBrace => brace_depth = brace_depth.saturating_sub(1),
+            TokenKind::LBracket => bracket_depth += 1,
+            TokenKind::RBracket => bracket_depth = bracket_depth.saturating_sub(1),
+            TokenKind::Comma if paren_depth == 1 && brace_depth == 0 && bracket_depth == 0 => {
+                commas.push(idx);
+            }
+            _ => {}
+        }
+    }
+    commas
+}
+
+fn rewrite_removed_helpers(src: &str) -> Result<(String, usize), String> {
+    let tokens = lex(src)?;
+    let line_starts = line_start_bytes(src);
+    let mut replacements: Vec<(usize, usize, String)> = Vec::new();
+
+    let mut idx = 0usize;
+    while idx + 1 < tokens.len() {
+        if matches!(tokens[idx].kind, TokenKind::Dot)
+            && let TokenKind::Ident(ref alias) = tokens[idx + 1].kind
+            && tokens
+                .get(idx + 2)
+                .is_some_and(|token| matches!(token.kind, TokenKind::LParen))
+            && let Some(replacement) = method_alias_replacement(alias)
+        {
+            let start = token_start_byte(src, &line_starts, &tokens[idx + 1]);
+            let end = ident_end_byte(src, &line_starts, &tokens[idx + 1], alias);
+            replacements.push((start, end, replacement.to_string()));
+        }
+
+        if let Some((call_start_idx, method_name)) = call_head_start(&tokens, idx)
+            && let Some(open_idx) =
+                tokens
+                    .iter()
+                    .enumerate()
+                    .skip(call_start_idx)
+                    .find_map(|(token_idx, token)| {
+                        matches!(token.kind, TokenKind::LParen).then_some(token_idx)
+                    })
+            && let Some(close_idx) = find_matching_call_end(&tokens, open_idx)
+        {
+            let commas = collect_top_level_arg_splits(&tokens, open_idx, close_idx);
+            if let Some(first_comma) = commas.first().copied() {
+                let receiver_start = token_start_byte(src, &line_starts, &tokens[open_idx + 1]);
+                let receiver_end = trim_end_byte(
+                    src,
+                    receiver_start,
+                    token_start_byte(src, &line_starts, &tokens[first_comma]),
+                );
+                let receiver = &src[receiver_start..receiver_end];
+
+                let rest_start_token_idx = first_comma + 1;
+                if rest_start_token_idx < close_idx {
+                    let rest_start =
+                        token_start_byte(src, &line_starts, &tokens[rest_start_token_idx]);
+                    let close_start = token_start_byte(src, &line_starts, &tokens[close_idx]);
+                    let rest_end = trim_end_byte(src, rest_start, close_start);
+                    let rest = &src[rest_start..rest_end];
+                    let call_start = token_start_byte(src, &line_starts, &tokens[call_start_idx]);
+                    let call_end = close_start + 1;
+                    replacements.push((
+                        call_start,
+                        call_end,
+                        format!("{receiver}.{method_name}({rest})"),
+                    ));
+                }
+            }
+        }
+        idx += 1;
+    }
+
+    replacements.sort_by_key(|(start, _, _)| *start);
+    replacements.dedup_by_key(|(start, end, _)| (*start, *end));
+    if replacements.is_empty() {
+        return Ok((src.to_string(), 0));
+    }
+
+    let mut rendered = src.to_string();
+    let count = replacements.len();
+    for (start, end, replacement) in replacements.into_iter().rev() {
+        rendered.replace_range(start..end, &replacement);
+    }
+    Ok((rendered, count))
+}
+
+fn rewrite_removed_helper_file(path: &Path) -> Result<usize, String> {
+    let contents = fs::read_to_string(path)
+        .map_err(|err| format!("{}: failed to read: {err}", path.display()))?;
+    let (rewritten, changes) = rewrite_removed_helpers(&contents).map_err(|err| {
+        format!(
+            "{}: failed to rewrite removed helpers: {err}",
+            path.display()
+        )
+    })?;
+    if changes > 0 && rewritten != contents {
+        fs::write(path, rewritten).map_err(|err| {
+            format!(
+                "{}: failed to write rewritten source: {err}",
+                path.display()
+            )
+        })?;
+    }
+    Ok(changes)
 }
 
 fn analyze_source(
@@ -679,7 +1008,7 @@ fn print_usage(language: i18n::Language, out: &mut impl Write) {
     );
     let _ = writeln!(
         out,
-        "Options: [--lint] [--no-lint] [--static] [--fuzz] [--all] [--lint-only] [--json] [--text] [--format=<text|json>]"
+        "Options: [--lint] [--no-lint] [--static] [--fuzz] [--all] [--lint-only] [--json] [--text] [--format=<text|json>] [--fix]"
     );
 }
 
@@ -848,6 +1177,59 @@ mod tests {
                 .and_then(|v| v.as_array())
                 .expect("files array");
             assert!(!files.is_empty(), "expected at least one file report");
+        });
+    }
+
+    #[test]
+    fn rewrite_removed_helpers_updates_methods_and_free_helpers() {
+        let src = r#"
+            fn main(ev: Json, m: Map<int, int>, base: Name) {
+                let _a = ev.json_get_int(name("n"));
+                let _b = m.get_or_insert_default(1, 7);
+                let _c = contains(m, 1);
+                let _d = path_map_key(base, 3);
+                let _e = std::map::contains(m, 2);
+                let _f = json::get_name(ev, name("owner"));
+            }
+        "#;
+        let (rewritten, count) = rewrite_removed_helpers(src).expect("rewrite removed helpers");
+        assert_eq!(count, 6);
+        assert!(rewritten.contains("ev.get_int(name(\"n\"))"));
+        assert!(rewritten.contains("m.ensure(1, 7)"));
+        assert!(rewritten.contains("m.contains(1)"));
+        assert!(rewritten.contains("base.path(3)"));
+        assert!(rewritten.contains("m.contains(2)"));
+        assert!(rewritten.contains("ev.get_name(name(\"owner\"))"));
+        assert!(!rewritten.contains("m.1.ensure(7)"));
+    }
+
+    #[test]
+    fn run_fix_rewrites_removed_helpers_before_linting() {
+        with_lang_en(|| {
+            let path = write_temp_file(
+                "ko",
+                br#"
+                fn main(ev: Json, m: Map<int, int>) {
+                    let _a = ev.json_get_int(name("n"));
+                    let _b = get_or_insert_default(m, 1, 7);
+                }
+            "#,
+            );
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let args = vec![
+                OsString::from("--fix"),
+                OsString::from("--lint-only"),
+                path.clone().into_os_string(),
+            ];
+            let exit = run(&args, &mut out, &mut err);
+            let rewritten = fs::read_to_string(&path).expect("read rewritten file");
+            let _ = fs::remove_file(&path);
+
+            assert_eq!(exit, EXIT_OK);
+            assert!(err.is_empty(), "stderr should stay empty: {err:?}");
+            assert!(rewritten.contains("ev.get_int(name(\"n\"))"));
+            assert!(rewritten.contains("m.ensure(1, 7)"));
         });
     }
 }

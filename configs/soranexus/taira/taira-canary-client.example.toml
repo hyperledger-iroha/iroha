@@ -10,6 +10,6 @@
 chain = "809574f5-fee7-5e69-bfcf-52451e42d50f"
 
 [account]
-domain = "wonderland"
+domain = "wonderland.universal"
 public_key = "REPLACE_WITH_CANARY_PUBLIC_KEY"
 private_key = "REPLACE_WITH_CANARY_PRIVATE_KEY"

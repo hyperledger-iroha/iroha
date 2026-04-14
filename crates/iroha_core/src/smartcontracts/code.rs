@@ -7,6 +7,8 @@
 //! process-global map and ensures every node observes the same registry
 //! contents.
 
+use std::collections::BTreeMap;
+
 use iroha_crypto::Hash;
 use iroha_data_model::{
     account::AccountId,
@@ -14,6 +16,7 @@ use iroha_data_model::{
         ActivateContractInstance, RegisterSmartContractBytes, RegisterSmartContractCode,
     },
     smart_contract::manifest::ContractManifest,
+    smart_contract::{ContractAddress, ContractAlias},
 };
 use mv::storage::StorageReadOnly;
 use thiserror::Error;
@@ -97,7 +100,7 @@ pub fn register_code_bytes(
     Ok(code_hash)
 }
 
-/// Bind `(namespace, contract_id)` to a `code_hash` to activate an instance.
+/// Bind `contract_address` to a `code_hash` to activate an instance.
 ///
 /// The binding is idempotent: calling this helper with the same mapping is a
 /// no-op, while conflicting mappings result in an error from the underlying ISI.
@@ -108,14 +111,12 @@ pub fn register_code_bytes(
 /// execution.
 pub fn activate_instance(
     authority: &AccountId,
-    namespace: impl Into<String>,
-    contract_id: impl Into<String>,
+    contract_address: ContractAddress,
     code_hash: Hash,
     state_transaction: &mut StateTransaction<'_, '_>,
 ) -> Result<(), RegistryError> {
     ActivateContractInstance {
-        namespace: namespace.into(),
-        contract_id: contract_id.into(),
+        contract_address,
         code_hash,
     }
     .execute(authority, state_transaction)?;
@@ -149,8 +150,23 @@ pub struct ContractArtifacts {
     pub manifest: Option<ContractManifest>,
     /// Stored bytecode for `code_hash`, if any.
     pub code_bytes: Option<Vec<u8>>,
-    /// Code hash bound to `(namespace, contract_id)`, if a binding exists.
+    /// Code hash bound to `contract_address`, if a binding exists.
     pub bound_code_hash: Option<Hash>,
+}
+
+/// Fully resolved on-chain contract instance record.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BoundContractRecord {
+    /// Canonical instance address used to resolve the binding.
+    pub contract_address: ContractAddress,
+    /// Optional stable alias currently bound to the instance.
+    pub contract_alias: Option<ContractAlias>,
+    /// Code hash currently bound to the instance.
+    pub code_hash: Hash,
+    /// Stored manifest for the bound code hash.
+    pub manifest: ContractManifest,
+    /// Stored bytecode for the bound code hash.
+    pub code_bytes: Vec<u8>,
 }
 
 /// Fetch manifest, code bytes, and instance binding in a single pass.
@@ -158,15 +174,15 @@ pub struct ContractArtifacts {
 pub fn fetch_artifacts(
     state: &impl StateReadOnly,
     code_hash: &Hash,
-    binding: Option<(&str, &str)>,
+    binding: Option<&ContractAddress>,
 ) -> ContractArtifacts {
     let manifest = fetch_manifest(state, code_hash);
     let code_bytes = fetch_code_bytes(state, code_hash);
-    let bound_code_hash = binding.and_then(|(ns, cid)| {
+    let bound_code_hash = binding.and_then(|contract_address| {
         state
             .world()
             .contract_instances()
-            .get(&(ns.to_owned(), cid.to_owned()))
+            .get(contract_address)
             .copied()
     });
 
@@ -177,23 +193,80 @@ pub fn fetch_artifacts(
     }
 }
 
-/// Return the code hash bound to `(namespace, contract_id)`, if any.
+/// Return the code hash bound to `contract_address`, if any.
 pub fn fetch_instance_binding(
     state: &impl StateReadOnly,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &ContractAddress,
 ) -> Option<Hash> {
     state
         .world()
         .contract_instances()
-        .get(&(namespace.to_owned(), contract_id.to_owned()))
+        .get(contract_address)
         .copied()
+}
+
+/// Resolve the fully bound contract instance record for `contract_address`.
+#[must_use]
+pub fn fetch_bound_contract_record(
+    state: &impl StateReadOnly,
+    contract_address: &ContractAddress,
+) -> Option<BoundContractRecord> {
+    let code_hash = fetch_instance_binding(state, contract_address)?;
+    let manifest = fetch_manifest(state, &code_hash)?;
+    let code_bytes = fetch_code_bytes(state, &code_hash)?;
+    let contract_alias = state
+        .world()
+        .contract_alias_bindings()
+        .get(contract_address)
+        .map(|binding| binding.alias.clone());
+
+    Some(BoundContractRecord {
+        contract_address: contract_address.clone(),
+        contract_alias,
+        code_hash,
+        manifest,
+        code_bytes,
+    })
+}
+
+/// Resolve the fully bound contract instance record for a deterministic contract subject.
+#[must_use]
+pub fn fetch_bound_contract_record_by_subject(
+    state: &impl StateReadOnly,
+    contract_subject: &AccountId,
+) -> Option<BoundContractRecord> {
+    let contract_address =
+        state
+            .world()
+            .contract_instances()
+            .iter()
+            .find_map(|(candidate, _)| {
+                (candidate.subject_id() == *contract_subject).then(|| candidate.clone())
+            })?;
+    fetch_bound_contract_record(state, &contract_address)
+}
+
+/// Snapshot all deployed contract instance records keyed by deterministic contract subject.
+#[must_use]
+pub fn snapshot_bound_contract_records_by_subject(
+    state: &impl StateReadOnly,
+) -> BTreeMap<AccountId, BoundContractRecord> {
+    state
+        .world()
+        .contract_instances()
+        .iter()
+        .filter_map(|(contract_address, _)| {
+            fetch_bound_contract_record(state, contract_address)
+                .map(|record| (contract_address.subject_id(), record))
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
     use iroha_data_model::{
         isi::{Grant, SetParameter},
+        nexus::DataSpaceId,
         parameter::custom::{CustomParameter, CustomParameterId},
         permission,
         prelude::*,
@@ -228,7 +301,7 @@ mod tests {
         let query = LiveQueryStore::start_test();
         let kp = iroha_crypto::KeyPair::random();
         let (pubkey, _) = kp.clone().into_parts();
-        let dom: DomainId = "wonderland".parse().expect("domain id");
+        let dom: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let auth = AccountId::of(pubkey);
         let domain = Domain::new(dom.clone()).build(&auth);
         let account = Account::new(auth.clone()).build(&auth);
@@ -271,8 +344,14 @@ mod tests {
         }
         .signed(&kp);
         register_manifest(&authority, manifest.clone(), &mut stx).expect("register manifest");
-
-        activate_instance(&authority, "apps", "demo", code_hash, &mut stx)
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            0,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
+        activate_instance(&authority, contract_address.clone(), code_hash, &mut stx)
             .expect("activate instance");
 
         stx.apply();
@@ -290,12 +369,12 @@ mod tests {
         assert_eq!(record.manifest, manifest);
         assert_eq!(record.code_bytes.as_deref(), Some(code.as_slice()));
         // Instance binding fetch
-        let bound = fetch_instance_binding(&view, "apps", "demo").expect("binding exists");
+        let bound = fetch_instance_binding(&view, &contract_address).expect("binding exists");
         assert_eq!(bound, code_hash);
     }
 
     #[test]
-    fn protected_namespace_blocks_cross_namespace_rebinding() {
+    fn protected_contract_activation_succeeds_with_governance_permission() {
         let (state, authority, kp) = test_state();
         let mut block = state.block(default_header(1));
         let mut stx = block.transaction();
@@ -321,7 +400,7 @@ mod tests {
             .execute(&authority, &mut stx)
             .expect("set protected namespaces");
 
-        // Register code + manifest and activate under `apps`.
+        // Register code + manifest and activate under governance protection.
         let code = minimal_ivm_program(1);
         let code_hash =
             register_code_bytes(&authority, code.clone(), &mut stx).expect("register bytecode");
@@ -337,26 +416,21 @@ mod tests {
         }
         .signed(&kp);
         register_manifest(&authority, manifest, &mut stx).expect("register manifest");
-        activate_instance(&authority, "apps", "calc.v1", code_hash, &mut stx)
-            .expect("initial activation");
+        let contract_address = ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &authority,
+            1,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
+        activate_instance(&authority, contract_address.clone(), code_hash, &mut stx)
+            .expect("governed activation");
         stx.apply();
         block.commit().expect("commit block");
 
-        // Attempt to bind the same contract_id in a different namespace; should fail.
-        let mut block2 = state.block(default_header(2));
-        let mut stx2 = block2.transaction();
-        let err = activate_instance(&authority, "ops", "calc.v1", code_hash, &mut stx2)
-            .expect_err("rebinding should fail");
-        match err {
-            RegistryError::Instruction(inner) => {
-                let msg = inner.to_string();
-                assert!(
-                    msg.contains("already bound under protected namespace"),
-                    "unexpected error: {msg}"
-                );
-            }
-            other => panic!("unexpected error: {other:?}"),
-        }
+        let view = state.view();
+        let bound = fetch_instance_binding(&view, &contract_address).expect("binding exists");
+        assert_eq!(bound, code_hash);
     }
 
     #[test]

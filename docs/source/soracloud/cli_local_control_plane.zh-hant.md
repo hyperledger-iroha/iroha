@@ -27,7 +27,7 @@ Soracloud v1 是一個權威的、僅限 IVM 的運行時。
   權威的世界狀態加上嵌入式 Soracloud 執行時間管理器。
 
 ## 運行時範圍- Soracloud v1 僅接受 `SoraContainerRuntimeV1::Ivm`。
-- `NativeProcess` 仍然被拒絕。
+- Hosted HTTP: `execution_plane = HttpService`, `runtime = Inrou`.
 - 有序郵箱執行直接運行承認的 IVM 處理程序。
 - 水化和物化來自承諾的 SoraFS/DA 內容而不是
   比合成本地快照。

@@ -14,7 +14,7 @@ koto_compile examples/hello/hello.ko -o target/examples/hello.to --abi 1 --max-c
 # Inspect header (optional)
 ivm_tool inspect target/examples/hello.to
 
-# Run on the IVM (prints an info event and performs a host syscall)
+# Run on the IVM (starts from the artifact's default entrypoint)
 ivm_run target/examples/hello.to --args '{}'
 
 # Transfer example (if your runtime host supports it)
@@ -27,8 +27,12 @@ Expected output
 - A successful `SET_ACCOUNT_DETAIL` syscall with the current authority as the account, writing a small JSON blob.
 - For transfer: a successful `TRANSFER_ASSET` syscall (depends on host permissions/state).
 
+Raw `ivm_run` and `iroha transaction ivm` execution start from a single compiled
+default entrypoint. In `hello/hello.ko`, that entrypoint is `main`, which logs
+the greeting and then calls `write_detail()`.
+
 Files
-- `hello/hello.ko`: Minimal contract that uses `authority()` and `set_account_detail(...)`.
+- `hello/hello.ko`: Minimal contract whose raw-IVM `main()` entrypoint logs a greeting and calls `write_detail()`.
 - `transfer/transfer.ko`: Example that calls `transfer_asset(...)` using typed pointer constructors.
 - `nft/nft.ko`: Examples that call `nft_mint_asset(...)` and `nft_transfer_asset(...)`.
 - `map/map.ko`: Design example showing deterministic map iteration using `.take(n)`; compile/run may depend on compiler/runtime support.
@@ -52,6 +56,7 @@ Sections:
   code_size:   312 bytes
   data_size:   128 bytes (Norito TLVs)
 Entry points:
+  main
   hajimari
   write_detail
 ```

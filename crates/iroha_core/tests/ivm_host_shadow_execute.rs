@@ -110,7 +110,7 @@ fn data_event_debug(events: Vec<iroha_data_model::events::EventBox>) -> Vec<Stri
 fn ivm_host_shadow_execute_matches_native_execute() {
     let authority = ALICE_ID.clone();
     let asset_def_seed: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
     let asset_def = AssetDefinitionId::parse_address_literal(&asset_def_seed.canonical_address())

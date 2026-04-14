@@ -43,11 +43,11 @@ fn scheduler_layer_metrics_and_utilization_populated() {
     let (carol_id, _) = iroha_test_samples::gen_account_in("wonderland");
 
     // World: two accounts + one asset def
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
         NumericSpec::default(),
@@ -68,7 +68,7 @@ fn scheduler_layer_metrics_and_utilization_populated() {
     // 2) Transfer from Alice to Bob (depends on 1)
     // 3) Set metadata on Carol (independent)
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());

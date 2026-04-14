@@ -1,6 +1,37 @@
 {
   "components": {
     "schemas": {
+      "AccountReadResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "account_id": {
+            "description": "Canonical account identifier rendered as the domainless I105 literal.",
+            "type": "string"
+          },
+          "label": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Stable account label when assigned.",
+            "nullable": true
+          },
+          "opaque_ids": {
+            "description": "Opaque identifiers currently mapped to the account UAID.",
+            "items": {
+              "$ref": "#/components/schemas/JsonValue"
+            },
+            "type": "array"
+          },
+          "uaid": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Universal account identifier bound to this account when registered in Nexus.",
+            "nullable": true
+          }
+        },
+        "required": [
+          "account_id",
+          "opaque_ids"
+        ],
+        "type": "object"
+      },
       "AliasResolveIndexRequest": {
         "additionalProperties": false,
         "properties": {
@@ -1487,7 +1518,10 @@
           {
             "additionalProperties": false,
             "properties": {
-              "contract_id": {
+              "contract_address": {
+                "type": "string"
+              },
+              "contract_alias": {
                 "type": "string"
               },
               "creation_time_ms": {
@@ -1507,9 +1541,6 @@
                 "format": "uint64",
                 "type": "integer"
               },
-              "namespace": {
-                "type": "string"
-              },
               "payload": {
                 "type": "object"
               },
@@ -1525,8 +1556,6 @@
             },
             "required": [
               "signer_account_id",
-              "namespace",
-              "contract_id",
               "entrypoint"
             ],
             "type": "object"
@@ -2240,6 +2269,76 @@
         },
         "type": "array"
       },
+      "PipelineTransactionStatus": {
+        "additionalProperties": false,
+        "properties": {
+          "block_height": {
+            "description": "Block height reported for the status when available.",
+            "format": "uint64",
+            "type": [
+              "integer",
+              "null"
+            ]
+          },
+          "kind": {
+            "description": "Stable pipeline status kind.",
+            "enum": [
+              "Queued",
+              "Approved",
+              "Committed",
+              "Applied",
+              "Rejected",
+              "Expired"
+            ],
+            "type": "string"
+          },
+          "rejection_reason": {
+            "$ref": "#/components/schemas/JsonValue",
+            "description": "Structured rejection reason when `kind` is `Rejected`."
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "type": "object"
+      },
+      "PipelineTransactionStatusResponse": {
+        "additionalProperties": false,
+        "properties": {
+          "hash": {
+            "description": "Canonical signed transaction hash (hex, lowercase).",
+            "type": "string"
+          },
+          "resolved_from": {
+            "description": "Source used by Torii to resolve the status.",
+            "enum": [
+              "cache",
+              "queue",
+              "state"
+            ],
+            "type": "string"
+          },
+          "scope": {
+            "description": "Read scope applied by Torii.",
+            "enum": [
+              "local",
+              "auto",
+              "global"
+            ],
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/PipelineTransactionStatus"
+          }
+        },
+        "required": [
+          "hash",
+          "status",
+          "scope",
+          "resolved_from"
+        ],
+        "type": "object"
+      },
       "PublicLanePendingReward": {
         "additionalProperties": false,
         "properties": {
@@ -2461,6 +2560,10 @@
             "description": "Optional metadata (commission, endpoints, jurisdiction flags, etc.).",
             "type": "object"
           },
+          "peer_id": {
+            "description": "Peer identity bound to the validator for consensus and routed traffic.",
+            "type": "string"
+          },
           "self_stake": {
             "description": "Validator-supplied stake amount.",
             "type": "string"
@@ -2477,13 +2580,14 @@
             "type": "string"
           },
           "validator": {
-            "description": "Validator account literal rendered as canonical I105.",
+            "description": "Validator authority account literal rendered as canonical I105.",
             "type": "string"
           }
         },
         "required": [
           "lane_id",
           "validator",
+          "peer_id",
           "stake_account",
           "total_stake",
           "self_stake",
@@ -4040,9 +4144,56 @@
         ]
       }
     },
+    "/v1/accounts/{account_id}": {
+      "get": {
+        "description": "Fetch the canonical account existence/materialization view for a specific account id or alias. This read is ingress-independent and fans out across the configured Nexus dataspaces, returning the shared canonical account payload when any authoritative dataspace reports it. Defaults to JSON when Accept is omitted or */*; application/x-norito returns the same typed payload encoded as Norito.",
+        "parameters": [
+          {
+            "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
+            "in": "path",
+            "name": "account_id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountReadResponse"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountReadResponse"
+                }
+              }
+            },
+            "description": "Successful response"
+          },
+          "404": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            },
+            "description": "Account not found."
+          }
+        },
+        "summary": "Fetch canonical account detail.",
+        "tags": [
+          "Accounts"
+        ]
+      }
+    },
     "/v1/accounts/{account_id}/assets": {
       "get": {
-        "description": "List assets held by an account (supports pagination plus optional `asset` and `scope` filtering).",
+        "description": "List assets held by an account (supports pagination plus optional `asset` and `scope` filtering). Results are ingress-independent and merged across the caller-visible dataspaces; balances remain separated by their existing `scope` values instead of being summed across dataspaces.",
         "parameters": [
           {
             "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
@@ -4112,7 +4263,7 @@
     },
     "/v1/accounts/{account_id}/assets/query": {
       "post": {
-        "description": "Query assets held by an account.",
+        "description": "Query assets held by an account. Results are ingress-independent and merged across the caller-visible dataspaces; balances remain separated by their existing `scope` values instead of being summed across dataspaces.",
         "parameters": [
           {
             "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
@@ -4196,7 +4347,7 @@
     },
     "/v1/accounts/{account_id}/permissions": {
       "get": {
-        "description": "List permissions granted to an account.",
+        "description": "List permissions granted to an account. Results are merged across the caller-visible dataspaces only; inaccessible private-dataspace state is silently omitted.",
         "parameters": [
           {
             "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
@@ -4228,7 +4379,7 @@
     },
     "/v1/accounts/{account_id}/transactions": {
       "get": {
-        "description": "List transactions authored by an account (supports pagination and optional asset_id filtering).",
+        "description": "List transactions authored by an account (supports pagination and optional asset_id filtering). Results are merged across the caller-visible dataspaces only; private dataspace history the caller cannot read is silently omitted.",
         "parameters": [
           {
             "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
@@ -4289,7 +4440,7 @@
     },
     "/v1/accounts/{account_id}/transactions/query": {
       "post": {
-        "description": "Query transactions for a specific account.",
+        "description": "Query transactions for a specific account. Results are merged across the caller-visible dataspaces only; private dataspace history the caller cannot read is silently omitted.",
         "parameters": [
           {
             "description": "Canonical I105 account identifier or on-chain alias `name@domain.dataspace` / `name@dataspace`.",
@@ -5297,6 +5448,37 @@
         ]
       }
     },
+    "/v1/contracts/call/simulate": {
+      "post": {
+        "description": "Execute a public contract entrypoint locally using canonical contract address or on-chain contract alias targeting and return normalized payload, gas usage, queued instructions, and diagnostics.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Simulate a deployed contract call.",
+        "tags": [
+          "Contracts"
+        ]
+      }
+    },
     "/v1/contracts/code-bytes/{code_hash}": {
       "get": {
         "description": "Fetch contract code bytes (base64) by code hash.",
@@ -5387,100 +5569,6 @@
           }
         },
         "summary": "Deploy a public contract.",
-        "tags": [
-          "Contracts"
-        ]
-      }
-    },
-    "/v1/contracts/instance": {
-      "post": {
-        "description": "Create a contract instance from registered code.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Create a contract instance.",
-        "tags": [
-          "Contracts"
-        ]
-      }
-    },
-    "/v1/contracts/instance/activate": {
-      "post": {
-        "description": "Activate a previously created contract instance.",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/JsonValue"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "Activate a contract instance.",
-        "tags": [
-          "Contracts"
-        ]
-      }
-    },
-    "/v1/contracts/instances/{ns}": {
-      "get": {
-        "description": "Return active contract instances for a dataspace.",
-        "parameters": [
-          {
-            "description": "Contract dataspace identifier.",
-            "in": "path",
-            "name": "ns",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "List contract instances by dataspace.",
         "tags": [
           "Contracts"
         ]
@@ -7031,6 +7119,38 @@
         ]
       }
     },
+    "/v1/gov/contracts/{contract_address}": {
+      "get": {
+        "description": "Fetch the active governance binding for a canonical contract address.",
+        "parameters": [
+          {
+            "description": "Canonical Bech32m contract address.",
+            "in": "path",
+            "name": "contract_address",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Fetch a governed contract binding.",
+        "tags": [
+          "Governance"
+        ]
+      }
+    },
     "/v1/gov/council/audit": {
       "get": {
         "description": "Return governance council derivation audit data.",
@@ -7223,38 +7343,6 @@
           }
         },
         "summary": "Finalize a referendum.",
-        "tags": [
-          "Governance"
-        ]
-      }
-    },
-    "/v1/gov/instances/{ns}": {
-      "get": {
-        "description": "List governance contract instances for a namespace.",
-        "parameters": [
-          {
-            "description": "Namespace identifier.",
-            "in": "path",
-            "name": "ns",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
-                }
-              }
-            },
-            "description": "Successful response"
-          }
-        },
-        "summary": "List contract instances by namespace.",
         "tags": [
           "Governance"
         ]
@@ -8890,6 +8978,182 @@
         ]
       }
     },
+    "/v1/offline/cash/load": {
+      "post": {
+        "description": "Top up an existing device-bound offline cash lineage and return the updated signed envelope.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Load value into offline cash.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/cash/readiness": {
+      "get": {
+        "description": "Returns feature-flag style readiness signals for the device-bound offline cash flow.",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Report offline cash feature readiness.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/cash/redeem": {
+      "post": {
+        "description": "Redeem device-bound offline cash back on-ledger and return the post-redeem signed envelope.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Redeem offline cash on-ledger.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/cash/refresh": {
+      "post": {
+        "description": "Rotate or refresh device-bound offline cash authorization material and return the updated signed envelope.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Refresh offline cash authorization.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/cash/setup": {
+      "post": {
+        "description": "Create the initial device-bound offline cash lineage and return the signed server envelope.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Initialize an offline cash lineage.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
+    "/v1/offline/cash/sync": {
+      "post": {
+        "description": "Submit the current device-side lineage view so the server can reconcile and return the canonical signed envelope.",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JsonValue"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JsonValue"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        },
+        "summary": "Sync offline cash state.",
+        "tags": [
+          "Offline"
+        ]
+      }
+    },
     "/v1/offline/policy": {
       "post": {
         "description": "Replace the active offline policy snapshot used by the app-facing offline controls.",
@@ -9643,7 +9907,7 @@
     },
     "/v1/pipeline/transactions/status": {
       "get": {
-        "description": "Return the latest pipeline status for a signed transaction hash.",
+        "description": "Return the latest typed pipeline status for a signed transaction hash. Defaults to JSON when Accept is omitted or */*; application/x-norito returns the same typed payload encoded as Norito.",
         "parameters": [
           {
             "description": "Transaction hash (hex).",
@@ -9669,7 +9933,12 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/JsonValue"
+                  "$ref": "#/components/schemas/PipelineTransactionStatusResponse"
+                }
+              },
+              "application/x-norito": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineTransactionStatusResponse"
                 }
               }
             },

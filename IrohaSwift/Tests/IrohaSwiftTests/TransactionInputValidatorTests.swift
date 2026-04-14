@@ -35,11 +35,11 @@ final class TransactionInputValidatorTests: XCTestCase {
     func testValidateRejectsAuthorityWithReservedCharacters() {
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",
-                                                   authorityId: "alice#bad@hbl.dataspace",
+                                                   authorityId: "alice#bad@banka.dataspace",
                                                    assetDefinitionId: sampleAid)
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAccountId(field: "authority", value: "alice#bad@hbl.dataspace"))
+                           .malformedAccountId(field: "authority", value: "alice#bad@banka.dataspace"))
         }
     }
 
@@ -48,10 +48,10 @@ final class TransactionInputValidatorTests: XCTestCase {
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",
                                                    authorityId: authority,
-                                                   assetDefinitionId: "cbdc#hbl")
+                                                   assetDefinitionId: "cbdc#banka")
         ) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAssetDefinitionId("cbdc#hbl"))
+                           .malformedAssetDefinitionId("cbdc#banka"))
         }
     }
 
@@ -91,9 +91,9 @@ final class TransactionInputValidatorTests: XCTestCase {
     }
 
     func testSanitizeMetadataTargetRejectsTextualAssetId() {
-        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset("ro$se#wonderland#alice@hbl.dataspace"))) { error in
+        XCTAssertThrowsError(try TransactionInputValidator.sanitizeMetadataTarget(.asset("ro$se#wonderland#alice@banka.dataspace"))) { error in
             XCTAssertEqual(error as? TransactionInputError,
-                           .malformedAssetId("ro$se#wonderland#alice@hbl.dataspace"))
+                           .malformedAssetId("ro$se#wonderland#alice@banka.dataspace"))
         }
     }
 
@@ -148,7 +148,7 @@ final class TransactionInputValidatorTests: XCTestCase {
     func testValidateRejectsI105WithDomainSuffix() throws {
         let publicKey = Data(repeating: 0xAC, count: 32)
         let i105 = try AccountId.makeI105(publicKey: publicKey)
-        let literal = "\(i105)@hbl.dataspace"
+        let literal = "\(i105)@banka.dataspace"
         XCTAssertThrowsError(
             try TransactionInputValidator.validate(chainId: "0000",
                                                    authorityId: literal)

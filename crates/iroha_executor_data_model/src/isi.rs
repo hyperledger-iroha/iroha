@@ -711,7 +711,8 @@ pub mod multisig {
         }
 
         fn sample_instruction_box() -> InstructionBox {
-            let domain: DomainId = "multisig".parse().expect("valid domain");
+            let domain: DomainId =
+                DomainId::try_new("multisig", "universal").expect("valid domain");
             let registrar = KeyPair::from_seed(vec![0; 32], Algorithm::Ed25519);
             let multisig_account = AccountId::of(registrar.public_key().clone());
             let spec = sample_spec();
@@ -734,7 +735,8 @@ pub mod multisig {
 
         #[test]
         fn multisig_register_json_includes_account_field() {
-            let domain: DomainId = "multisig".parse().expect("valid domain");
+            let domain: DomainId =
+                DomainId::try_new("multisig", "universal").expect("valid domain");
             let registrar = KeyPair::from_seed(vec![42; 32], Algorithm::Ed25519);
             let multisig_account = AccountId::of(registrar.public_key().clone());
             let spec = sample_spec();
@@ -767,7 +769,8 @@ pub mod multisig {
 
         #[test]
         fn multisig_register_from_spec_randomizes_controller() {
-            let domain: DomainId = "non-derived".parse().expect("valid domain");
+            let domain: DomainId =
+                DomainId::try_new("non-derived", "universal").expect("valid domain");
             let spec = sample_spec();
             let first = MultisigRegister::from_spec(Some(domain.clone()), spec.clone());
             let second = MultisigRegister::from_spec(Some(domain.clone()), spec.clone());

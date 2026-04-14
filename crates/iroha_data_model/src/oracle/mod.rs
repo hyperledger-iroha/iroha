@@ -2403,7 +2403,7 @@ mod tests {
     }
 
     fn oracle(name: &str, domain: &str) -> OracleId {
-        let _domain_id = DomainId::from_str(domain).expect("domain id");
+        let _domain_id = DomainId::try_new(domain, "universal").expect("domain id");
         let seed = format!("{name}:{domain}");
         let keypair = KeyPair::from_seed(seed.into_bytes(), Algorithm::Ed25519);
         AccountId::new(keypair.public_key().clone())
@@ -2932,7 +2932,7 @@ mod tests {
         let member = committee.members.first().expect("committee member");
         let member_plan = plan_committee_fetches(&committee, member, 10, policy, &request_hash);
         assert!(member_plan.is_allowed());
-        assert_eq!(vec![10, 13, 15], member_plan.attempts);
+        assert_eq!(vec![10, 12, 14], member_plan.attempts);
 
         // Non-member gets a denied plan.
         let dave = oracle("dave", "validators");

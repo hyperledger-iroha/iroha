@@ -15,7 +15,7 @@ public final class AccountLiteralHardCutTests {
   @Test
   public void accountBuildersRejectDomainSuffixedLiterals() throws Exception {
     final String account = sampleI105(0x11);
-    final String legacy = account + "@hbl.dataspace";
+    final String legacy = account + "@banka.dataspace";
 
     expectIllegalArgument(() -> GrantRoleInstruction.builder().setDestinationAccountId(legacy));
     expectIllegalArgument(() -> RevokeRoleInstruction.builder().setDestinationAccountId(legacy));
@@ -41,7 +41,7 @@ public final class AccountLiteralHardCutTests {
   @Test
   public void accountTargetInstructionsRejectDomainSuffixedLiterals() throws Exception {
     final String account = sampleI105(0x22);
-    final String legacy = account + "@hbl.dataspace";
+    final String legacy = account + "@banka.dataspace";
 
     expectIllegalArgument(() -> SetKeyValueInstruction.builder().setAccountId(legacy));
     expectIllegalArgument(() -> RemoveKeyValueInstruction.builder().setAccountId(legacy));
@@ -52,9 +52,9 @@ public final class AccountLiteralHardCutTests {
   public void persistCouncilRejectsDomainSuffixedMembers() throws Exception {
     final String account = sampleI105(0x33);
     expectIllegalArgument(
-        () -> PersistCouncilForEpochInstruction.builder().addMember(account + "@hbl.dataspace"));
+        () -> PersistCouncilForEpochInstruction.builder().addMember(account + "@banka.dataspace"));
     expectIllegalArgument(
-        () -> PersistCouncilForEpochInstruction.builder().addAlternate(account + "@hbl.dataspace"));
+        () -> PersistCouncilForEpochInstruction.builder().addAlternate(account + "@banka.dataspace"));
   }
 
   @Test
@@ -85,7 +85,7 @@ public final class AccountLiteralHardCutTests {
 
     try {
       ConnectCrypto.buildApprovePreimage(
-          sessionId, appPublic, walletPublic, account + "@hbl.dataspace", null, null);
+          sessionId, appPublic, walletPublic, account + "@banka.dataspace", null, null);
       throw new AssertionError("expected ConnectProtocolException");
     } catch (final ConnectProtocolException expected) {
       assert expected.getMessage().contains("canonical I105 encoded")

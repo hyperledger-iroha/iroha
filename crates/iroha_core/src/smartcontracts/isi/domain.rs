@@ -137,29 +137,6 @@ pub mod isi {
         Ok(())
     }
 
-    fn ensure_active_account_alias_lease(
-        state_transaction: &StateTransaction<'_, '_>,
-        label: &AccountAlias,
-    ) -> Result<(), InstructionExecutionError> {
-        let now_ms = state_transaction.block_unix_timestamp_ms();
-        if crate::sns::active_account_alias_owner(
-            state_transaction.world(),
-            &state_transaction.nexus.dataspace_catalog,
-            label,
-            now_ms,
-        )
-        .is_some()
-        {
-            Ok(())
-        } else {
-            Err(InstructionExecutionError::InvariantViolation(
-                "account alias requires an active SNS lease"
-                    .to_owned()
-                    .into(),
-            ))
-        }
-    }
-
     fn refresh_account_alias_lease_if_requested(
         state_transaction: &mut StateTransaction<'_, '_>,
         label: &AccountAlias,
@@ -273,16 +250,15 @@ pub mod isi {
     fn account_created_event_domain(
         state_transaction: &StateTransaction<'_, '_>,
         account_id: &AccountId,
-    ) -> DomainId {
+    ) -> Option<DomainId> {
         state_transaction
             .world
-            .alias_domains_for_account(account_id)
+            .bound_account_aliases(account_id)
             .into_iter()
-            .next()
-            .unwrap_or_else(|| {
-                crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS
-                    .parse()
-                    .expect("reserved universal dataspace alias must parse as DomainId")
+            .find_map(|alias| {
+                alias
+                    .domain_id(&state_transaction.nexus.dataspace_catalog)
+                    .expect("bound account alias dataspace must exist in catalog")
             })
     }
 
@@ -799,7 +775,13 @@ pub mod isi {
                             .into(),
                     ));
                 }
-                ensure_active_account_alias_lease(state_transaction, label)?;
+                crate::sns::ensure_account_alias_lease(
+                    &mut state_transaction.world,
+                    authority,
+                    label,
+                    &state_transaction.nexus.dataspace_catalog,
+                )
+                .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
                 purge_stale_account_label_state(state_transaction, label);
                 if state_transaction.world.account_aliases.get(label).is_some()
                     || state_transaction
@@ -910,15 +892,15 @@ pub mod isi {
                 ));
             }
 
-            // Account lifecycle events still require a domain wrapper in the current event model.
-            // Prefer a concrete alias domain when one exists and otherwise use the stable
-            // universal dataspace alias as synthetic context for domainless accounts.
-            let created_domain = account_created_event_domain(state_transaction, &account_id);
-            state_transaction
-                .world
-                .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
-                    AccountCreated::new(account, created_domain),
-                ))));
+            if let Some(created_domain) =
+                account_created_event_domain(state_transaction, &account_id)
+            {
+                state_transaction
+                    .world
+                    .emit_events(Some(DomainEvent::Account(AccountEvent::Created(
+                        AccountCreated::new(account, created_domain),
+                    ))));
+            }
 
             Ok(())
         }
@@ -2307,32 +2289,30 @@ pub mod isi {
                     err.to_string().into(),
                 ))
             })?;
-            let Some(contract_dataspace) = state_transaction
+            if state_transaction
                 .nexus
                 .dataspace_catalog
                 .by_id(contract_dataspace_id)
-            else {
+                .is_none()
+            {
                 return Err(InstructionExecutionError::InvariantViolation(
                     "contract address dataspace is unknown".to_owned().into(),
                 )
                 .into());
-            };
-            if state_transaction
-                .world
-                .contract_instances()
-                .get(&(
-                    contract_dataspace.alias.clone(),
-                    contract_address.to_string(),
-                ))
-                .is_none()
-            {
-                return Err(InstructionExecutionError::InvariantViolation(
-                    format!("contract {contract_address} is not deployed").into(),
-                )
-                .into());
             }
-
             if let Some(alias) = alias {
+                if state_transaction
+                    .world
+                    .contract_instances()
+                    .get(&contract_address)
+                    .is_none()
+                {
+                    return Err(InstructionExecutionError::InvariantViolation(
+                        format!("contract {contract_address} is not deployed").into(),
+                    )
+                    .into());
+                }
+
                 let (_, _, alias_dataspace_id) = alias
                     .resolve_components(&state_transaction.nexus.dataspace_catalog)
                     .map_err(|err| {
@@ -2590,7 +2570,13 @@ pub mod isi {
                 .into());
             }
             refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
-            ensure_active_account_alias_lease(state_transaction, &alias)?;
+            crate::sns::ensure_account_alias_lease(
+                &mut state_transaction.world,
+                authority,
+                &alias,
+                &state_transaction.nexus.dataspace_catalog,
+            )
+            .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
             purge_stale_account_label_state(state_transaction, &alias);
@@ -2690,7 +2676,13 @@ pub mod isi {
                 .into());
             }
             refresh_account_alias_lease_if_requested(state_transaction, &alias, lease_expiry_ms)?;
-            ensure_active_account_alias_lease(state_transaction, &alias)?;
+            crate::sns::ensure_account_alias_lease(
+                &mut state_transaction.world,
+                authority,
+                &alias,
+                &state_transaction.nexus.dataspace_catalog,
+            )
+            .map_err(|e| InstructionExecutionError::InvariantViolation(e.to_string().into()))?;
             ensure_contract_alias_namespace_available(state_transaction, &alias)?;
 
             purge_stale_account_label_state(state_transaction, &alias);
@@ -2934,7 +2926,24 @@ pub mod query {
     };
 
     use super::*;
-    use crate::{smartcontracts::ValidQuery, state::StateReadOnly};
+    use crate::{
+        smartcontracts::{ValidQuery, ValidSingularQuery},
+        state::StateReadOnly,
+    };
+
+    impl ValidSingularQuery for FindDomainById {
+        #[metrics(+"find_domain_by_id")]
+        fn execute(
+            &self,
+            state_ro: &impl StateReadOnly,
+        ) -> std::result::Result<Domain, QueryExecutionFail> {
+            state_ro
+                .world()
+                .domain(self.domain_id())
+                .cloned()
+                .map_err(QueryExecutionFail::from)
+        }
+    }
 
     impl ValidQuery for FindDomains {
         #[metrics(+"find_domains")]
@@ -2947,6 +2956,24 @@ pub mod query {
                 .world()
                 .domains_iter()
                 .filter(move |&v| filter.applies(v))
+                .cloned())
+        }
+    }
+
+    impl ValidQuery for FindDomainsByAccountId {
+        #[metrics(+"find_domains_by_account_id")]
+        fn execute(
+            self,
+            filter: CompoundPredicate<Domain>,
+            state_ro: &impl StateReadOnly,
+        ) -> std::result::Result<impl Iterator<Item = Domain>, QueryExecutionFail> {
+            let account_id = self.account_id().clone();
+            state_ro.world().account(&account_id)?;
+
+            Ok(state_ro
+                .world()
+                .domains_iter()
+                .filter(move |domain| domain.owned_by() == &account_id && filter.applies(domain))
                 .cloned())
         }
     }
@@ -3002,6 +3029,7 @@ mod tests {
         nexus::space_directory::{SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet},
         prelude::World,
         query::store::LiveQueryStore,
+        smartcontracts::{ValidQuery, ValidSingularQuery},
         state::State,
     };
 
@@ -3032,6 +3060,49 @@ mod tests {
         let _ = domain_id;
         let (account_id, account_value) = account.into_key_value();
         state.world.accounts.insert(account_id, account_value);
+    }
+
+    #[test]
+    fn find_domain_by_id_returns_registered_domain() {
+        let mut state = test_state();
+        let domain_id = DomainId::try_new("banka", "universal").expect("domain id");
+        seed_domain(&mut state, &domain_id, &ALICE_ID);
+
+        let view = state.view();
+        let domain = FindDomainById::new(domain_id.clone())
+            .execute(&view)
+            .unwrap();
+        assert_eq!(domain.id(), &domain_id);
+        assert_eq!(domain.owned_by(), &*ALICE_ID);
+    }
+
+    #[test]
+    fn find_domains_by_account_id_returns_owned_domains_only() {
+        use std::collections::BTreeSet;
+
+        let mut state = test_state();
+        let owner_domain = DomainId::try_new("owner", "universal").expect("domain id");
+        let alice_owned = DomainId::try_new("banka", "universal").expect("domain id");
+        let bob_owned = DomainId::try_new("bankb", "universal").expect("domain id");
+        let bob_id = AccountId::new(KeyPair::random().public_key().clone());
+
+        seed_domain(&mut state, &owner_domain, &ALICE_ID);
+        seed_account(&mut state, &ALICE_ID, &owner_domain);
+        seed_account(&mut state, &bob_id, &owner_domain);
+        seed_domain(&mut state, &alice_owned, &ALICE_ID);
+        seed_domain(&mut state, &bob_owned, &bob_id);
+
+        let view = state.view();
+        let domains: Vec<_> = FindDomainsByAccountId::new(ALICE_ID.clone())
+            .execute(CompoundPredicate::PASS, &view)
+            .unwrap()
+            .map(|domain| domain.id().clone())
+            .collect();
+
+        assert_eq!(
+            domains.into_iter().collect::<BTreeSet<_>>(),
+            BTreeSet::from([owner_domain, alice_owned])
+        );
     }
 
     fn alias_domain(domain: &DomainId) -> AccountAliasDomain {
@@ -3075,7 +3146,7 @@ mod tests {
         tx.world.add_account_permission(
             authority,
             Permission::from(CanManageAccountAlias {
-                scope: AccountAliasPermissionScope::Domain(alias_domain(domain)),
+                scope: AccountAliasPermissionScope::Domain(domain.clone()),
             }),
         );
         tx.world.add_account_permission(
@@ -3116,9 +3187,10 @@ mod tests {
     #[test]
     fn account_label_registration_and_cleanup() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
 
         let account_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
         let keypair = KeyPair::random();
@@ -3207,9 +3279,11 @@ mod tests {
             .execute(&authority, &mut tx)
             .expect("register domainless account");
 
-        let expected_domain: DomainId = crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS
-            .parse()
-            .expect("reserved universal dataspace alias should parse as domain");
+        let expected_domain = DomainId::try_new(
+            crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
+            crate::sns::RESERVED_UNIVERSAL_DATASPACE_ALIAS,
+        )
+        .expect("reserved universal dataspace alias should form a domain id");
         let created = tx
             .world
             .internal_event_buf
@@ -3230,9 +3304,10 @@ mod tests {
     #[test]
     fn register_account_with_label_emits_created_event_with_alias_domain() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
         seed_account(&mut state, &authority, &domain_id);
 
         let account_label = alias_in_domain(&domain_id, "primary".parse::<Name>().unwrap());
@@ -3267,7 +3342,7 @@ mod tests {
     #[test]
     fn register_account_with_label_requires_active_sns_lease() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
@@ -3292,7 +3367,7 @@ mod tests {
     #[test]
     fn set_account_label_relabels_existing_single_key_account() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -3349,7 +3424,7 @@ mod tests {
     #[test]
     fn set_primary_account_alias_allows_domainful_alias_without_domain_link() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -3384,7 +3459,7 @@ mod tests {
     #[test]
     fn set_account_label_reclaims_stale_alias_binding_with_missing_owner() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -3435,7 +3510,7 @@ mod tests {
     #[test]
     fn bind_account_alias_requires_active_sns_lease() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
@@ -3468,9 +3543,10 @@ mod tests {
     #[test]
     fn set_account_label_binds_existing_multisig_account_with_rekey_record() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
 
         let member_a = MultisigMember::new(KeyPair::random().public_key().clone(), 1)
             .expect("multisig member");
@@ -3483,6 +3559,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register unlabeled multisig account");
@@ -3527,7 +3604,7 @@ mod tests {
     #[test]
     fn set_account_label_allows_account_registrar_to_repoint_existing_alias() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let domain_owner = (*ALICE_ID).clone();
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
@@ -3618,7 +3695,7 @@ mod tests {
     #[test]
     fn set_account_label_allows_global_account_registrar_to_repoint_existing_alias() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let domain_owner = (*ALICE_ID).clone();
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
@@ -3690,9 +3767,10 @@ mod tests {
     #[test]
     fn bind_account_alias_adds_multiple_aliases_to_existing_multisig_account() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
+        seed_account(&mut state, &authority, &domain_id);
 
         let member_a = MultisigMember::new(KeyPair::random().public_key().clone(), 1)
             .expect("multisig member");
@@ -3706,6 +3784,7 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
+        seed_domainful_alias_manage_permissions(&mut tx, &authority, &domain_id);
         Register::account(Account::new(account_id.clone()))
             .execute(&authority, &mut tx)
             .expect("register unlabeled multisig account");
@@ -3776,7 +3855,7 @@ mod tests {
     #[test]
     fn unregister_account_removes_all_bound_aliases() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
@@ -3824,7 +3903,7 @@ mod tests {
     #[test]
     fn clear_account_alias_binding_removes_non_primary_aliases_only() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         seed_account(&mut state, &authority, &domain_id);
@@ -3900,7 +3979,7 @@ mod tests {
     #[test]
     fn bind_account_alias_reclaims_stale_binding_with_missing_owner() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -3951,7 +4030,7 @@ mod tests {
     #[test]
     fn bind_account_alias_allows_account_registrar_for_domain() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let domain_owner = (*ALICE_ID).clone();
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
@@ -3994,7 +4073,7 @@ mod tests {
     #[test]
     fn bind_account_alias_allows_global_account_registrar() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let domain_owner = (*ALICE_ID).clone();
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
@@ -4037,7 +4116,7 @@ mod tests {
     #[test]
     fn bind_account_alias_rejects_alias_owned_by_different_account_without_registrar_rights() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let domain_owner = (*ALICE_ID).clone();
         let unauthorized = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
@@ -4090,7 +4169,7 @@ mod tests {
     #[test]
     fn bind_account_alias_allows_account_registrar_to_repoint_existing_alias() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let domain_owner = (*ALICE_ID).clone();
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
@@ -4154,7 +4233,7 @@ mod tests {
     #[test]
     fn bind_account_alias_allows_global_account_registrar_to_repoint_existing_alias() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let domain_owner = (*ALICE_ID).clone();
         let registrar = (*BOB_ID).clone();
         seed_domain(&mut state, &domain_id, &domain_owner);
@@ -4218,7 +4297,7 @@ mod tests {
     #[test]
     fn register_account_rejects_phone_like_label() {
         let mut state = test_state();
-        let domain_id: DomainId = "label.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("label", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -4243,12 +4322,15 @@ mod tests {
     fn transfer_domain_rejects_authority_without_ownership() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let users_domain_id: DomainId = "users".parse().expect("users domain id");
-        let transferred_domain_id: DomainId = "foo".parse().expect("foo domain id");
+        let users_domain_id: DomainId =
+            DomainId::try_new("users", "universal").expect("users domain id");
+        let transferred_domain_id: DomainId =
+            DomainId::try_new("foo", "universal").expect("foo domain id");
         let user1 = AccountId::new(KeyPair::random().into_parts().0);
         let user2 = AccountId::new(KeyPair::random().into_parts().0);
 
-        let authority_domain: DomainId = "wonderland".parse().expect("domain id");
+        let authority_domain: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("domain id");
         seed_domain(&mut state, &authority_domain, &authority);
         seed_account(&mut state, &authority, &authority_domain);
         seed_domain(&mut state, &users_domain_id, &user1);
@@ -4280,7 +4362,7 @@ mod tests {
     #[test]
     fn register_account_rejects_opaque_ids_without_uaid() {
         let mut state = test_state();
-        let domain_id: DomainId = "opaque.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("opaque", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -4310,7 +4392,7 @@ mod tests {
     #[test]
     fn register_account_rejects_duplicate_opaque_ids() {
         let mut state = test_state();
-        let domain_id: DomainId = "opaque.dupes".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("opaque", "dupes").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -4340,7 +4422,7 @@ mod tests {
     #[test]
     fn register_account_rejects_opaque_id_collisions() {
         let mut state = test_state();
-        let domain_id: DomainId = "opaque.collide".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("opaque", "collide").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -4393,7 +4475,7 @@ mod tests {
     #[test]
     fn register_account_rejects_disallowed_algorithms() {
         let mut state = test_state();
-        let domain_id: DomainId = "disallowed.curves".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("disallowed", "curves").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
         {
@@ -4428,7 +4510,7 @@ mod tests {
     #[test]
     fn register_account_allows_bls_even_when_not_in_allowed_signing() {
         let mut state = test_state();
-        let domain_id: DomainId = "bls.allowed".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("bls", "allowed").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -4458,7 +4540,7 @@ mod tests {
     #[test]
     fn register_account_rejects_disallowed_curve_ids() {
         let mut state = test_state();
-        let domain_id: DomainId = "restricted.curves".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("restricted", "curves").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -4489,7 +4571,7 @@ mod tests {
     #[test]
     fn register_account_updates_space_directory_bindings() {
         let mut state = test_state();
-        let domain_id: DomainId = "spaces.bindings".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("spaces", "bindings").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -4531,7 +4613,7 @@ mod tests {
     #[test]
     fn register_account_rejects_duplicate_uaid() {
         let mut state = test_state();
-        let domain_id: DomainId = "uaid.duplicates".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("uaid", "duplicates").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -4579,7 +4661,7 @@ mod tests {
     #[test]
     fn unregister_account_removes_space_directory_bindings() {
         let mut state = test_state();
-        let domain_id: DomainId = "spaces.cleanup".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("spaces", "cleanup").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -4619,11 +4701,11 @@ mod tests {
     #[test]
     fn unregister_account_removes_owned_nfts_and_asset_metadata() {
         let mut state = test_state();
-        let domain_id: DomainId = "cleanup.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let other_domain_id: DomainId = "other.world".parse().expect("domain id");
+        let other_domain_id: DomainId = DomainId::try_new("other", "world").expect("domain id");
         seed_domain(&mut state, &other_domain_id, &authority);
 
         let keypair = KeyPair::random();
@@ -4690,14 +4772,14 @@ mod tests {
     #[test]
     fn unregister_account_removes_foreign_nft_permissions_from_accounts_and_roles() {
         let mut state = test_state();
-        let domain_id: DomainId = "cleanup.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let foreign_domain_id: DomainId = "foreign.world".parse().expect("domain id");
+        let foreign_domain_id: DomainId = DomainId::try_new("foreign", "world").expect("domain id");
         seed_domain(&mut state, &foreign_domain_id, &authority);
 
-        let holder_domain: DomainId = "holders.world".parse().expect("domain id");
+        let holder_domain: DomainId = DomainId::try_new("holders", "world").expect("domain id");
         seed_domain(&mut state, &holder_domain, &authority);
 
         let keypair = KeyPair::random();
@@ -4781,8 +4863,8 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_owns_domain() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
-        let external_domain: DomainId = "external.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
+        let external_domain: DomainId = DomainId::try_new("external", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -4813,11 +4895,11 @@ mod tests {
     #[test]
     fn unregister_account_removes_associated_permissions_from_accounts_and_roles() {
         let mut state = test_state();
-        let domain_id: DomainId = "cleanup.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let holder_domain: DomainId = "holders.world".parse().expect("domain id");
+        let holder_domain: DomainId = DomainId::try_new("holders", "world").expect("domain id");
         seed_domain(&mut state, &holder_domain, &authority);
 
         let keypair = KeyPair::random();
@@ -4896,11 +4978,11 @@ mod tests {
     #[test]
     fn unregister_account_removes_citizen_service_permissions_from_accounts_and_roles() {
         let mut state = test_state();
-        let domain_id: DomainId = "cleanup.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let holder_domain: DomainId = "holders.world".parse().expect("domain id");
+        let holder_domain: DomainId = DomainId::try_new("holders", "world").expect("domain id");
         seed_domain(&mut state, &holder_domain, &authority);
 
         let keypair = KeyPair::random();
@@ -4972,14 +5054,14 @@ mod tests {
     #[test]
     fn unregister_account_removes_permissions_for_deleted_account() {
         let mut state = test_state();
-        let domain_id: DomainId = "cleanup.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("cleanup", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
-        let retained_domain: DomainId = "retained.world".parse().expect("domain id");
+        let retained_domain: DomainId = DomainId::try_new("retained", "world").expect("domain id");
         seed_domain(&mut state, &retained_domain, &authority);
 
-        let holder_domain: DomainId = "holders.world".parse().expect("domain id");
+        let holder_domain: DomainId = DomainId::try_new("holders", "world").expect("domain id");
         seed_domain(&mut state, &holder_domain, &authority);
 
         let keypair = KeyPair::random();
@@ -5038,7 +5120,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_owns_asset_definition() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5081,7 +5163,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_is_governance_bond_escrow_account() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5112,7 +5194,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_is_governance_viral_incentive_pool_account() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5143,7 +5225,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_is_oracle_reward_pool() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5174,7 +5256,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_is_nexus_fee_sink_account() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5212,8 +5294,8 @@ mod tests {
     fn unregister_account_rejects_when_nexus_fee_sink_account_is_configured() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let sink_domain: DomainId = "sink.world".parse().expect("domain id");
-        let remove_domain: DomainId = "remove.world".parse().expect("domain id");
+        let sink_domain: DomainId = DomainId::try_new("sink", "world").expect("domain id");
+        let remove_domain: DomainId = DomainId::try_new("remove", "world").expect("domain id");
         seed_domain(&mut state, &sink_domain, &authority);
         seed_domain(&mut state, &remove_domain, &authority);
 
@@ -5246,7 +5328,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_nexus_fee_sink_literal_is_invalid() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5278,8 +5360,8 @@ mod tests {
     fn unregister_account_allows_unrelated_account_when_fee_sink_is_different_account() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let remove_domain: DomainId = "remove.world".parse().expect("domain id");
-        let sink_domain: DomainId = "sink.world".parse().expect("domain id");
+        let remove_domain: DomainId = DomainId::try_new("remove", "world").expect("domain id");
+        let sink_domain: DomainId = DomainId::try_new("sink", "world").expect("domain id");
         seed_domain(&mut state, &remove_domain, &authority);
         seed_domain(&mut state, &sink_domain, &authority);
 
@@ -5313,7 +5395,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_is_nexus_staking_escrow_account() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5350,7 +5432,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_is_nexus_staking_slash_sink_account() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5387,7 +5469,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_is_offline_escrow_account() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5429,7 +5511,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_is_content_publish_allow_account() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5460,7 +5542,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_is_sorafs_telemetry_submitter() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5491,7 +5573,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_is_configured_sorafs_provider_owner() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5526,7 +5608,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_owns_sorafs_provider() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5560,7 +5642,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_has_citizenship_record() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5594,7 +5676,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_has_public_lane_validator_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5640,7 +5722,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_has_public_lane_reward_record_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5688,7 +5770,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_is_reward_claim_asset_owner() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5729,7 +5811,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_has_repo_agreement_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5784,7 +5866,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_has_settlement_ledger_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5848,7 +5930,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_has_oracle_feed_provider_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5882,7 +5964,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_has_oracle_feed_history_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -5939,7 +6021,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_has_offline_allowance_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -6004,7 +6086,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_has_offline_verdict_revocation_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -6047,7 +6129,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_has_governance_proposal_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -6063,8 +6145,9 @@ mod tests {
         let proposal_id = [0xA5; 32];
         let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
             iroha_data_model::governance::types::DeployContractProposal {
-                namespace: "gov".to_string(),
-                contract_id: "proposal-guard".to_string(),
+                contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                    .parse()
+                    .expect("contract address"),
                 code_hash_hex: iroha_data_model::governance::types::ContractCodeHash::new(
                     [0x11; 32],
                 ),
@@ -6102,7 +6185,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_has_content_bundle_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -6167,7 +6250,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_has_runtime_upgrade_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -6221,7 +6304,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_has_viral_escrow_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -6265,7 +6348,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_has_sorafs_pin_manifest_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -6317,7 +6400,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_has_da_pin_intent_owner_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -6369,7 +6452,7 @@ mod tests {
     #[test]
     fn unregister_account_allows_peer_based_lane_relay_emergency_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -6411,7 +6494,7 @@ mod tests {
     #[test]
     fn unregister_account_rejects_when_account_in_governance_parliament_snapshot_state() {
         let mut state = test_state();
-        let domain_id: DomainId = "owner.world".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("owner", "world").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -6427,8 +6510,9 @@ mod tests {
         let proposal_id = [0xC5; 32];
         let kind = iroha_data_model::governance::types::ProposalKind::DeployContract(
             iroha_data_model::governance::types::DeployContractProposal {
-                namespace: "gov".to_string(),
-                contract_id: "snapshot-guard".to_string(),
+                contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                    .parse()
+                    .expect("contract address"),
                 code_hash_hex: iroha_data_model::governance::types::ContractCodeHash::new(
                     [0x51; 32],
                 ),
@@ -6486,7 +6570,7 @@ mod tests {
     #[test]
     fn space_directory_events_drive_bindings() {
         let mut state = test_state();
-        let domain_id: DomainId = "spaces.events".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("spaces", "events").expect("domain id");
         let authority = (*ALICE_ID).clone();
         seed_domain(&mut state, &domain_id, &authority);
 
@@ -6581,7 +6665,7 @@ mod tests {
     fn register_asset_definition_auto_creates_offline_escrow_account() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = "offline".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("offline", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let asset_name: Name = "usd".parse().expect("asset name");
@@ -6633,7 +6717,7 @@ mod tests {
     fn register_asset_definition_without_offline_flag_skips_escrow() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = "offline2".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("offline2", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let asset_name: Name = "eur".parse().expect("asset name");
@@ -6672,7 +6756,8 @@ mod tests {
     fn register_asset_definition_rejects_missing_explicit_name() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = "missing-name".parse().expect("domain id");
+        let domain_id: DomainId =
+            DomainId::try_new("missing-name", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id =
@@ -6694,7 +6779,7 @@ mod tests {
     fn register_asset_definition_rejects_duplicate_alias() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = "alias-test".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("alias-test", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let id1 = AssetDefinitionId::new(domain_id.clone(), "usd1".parse().expect("asset name"));
@@ -6747,7 +6832,8 @@ mod tests {
     fn set_asset_definition_alias_updates_world_indexes() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = "alias-update".parse().expect("domain id");
+        let domain_id: DomainId =
+            DomainId::try_new("alias-update", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id = AssetDefinitionId::new(domain_id, "usd".parse().expect("name"));
@@ -6803,7 +6889,7 @@ mod tests {
     fn set_asset_definition_alias_clear_removes_indexes() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = "alias-clear".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("alias-clear", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id = AssetDefinitionId::new(domain_id, "usd".parse().expect("name"));
@@ -6866,10 +6952,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        tx.world.contract_instances.insert(
-            ("universal".to_owned(), contract_address.to_string()),
-            Hash::new("contract-alias"),
-        );
+        tx.world
+            .contract_instances
+            .insert(contract_address.clone(), Hash::new("contract-alias"));
 
         let alias: ContractAlias = "router::universal".parse().expect("alias");
         SetContractAlias::bind(contract_address.clone(), alias.clone(), Some(11_000))
@@ -6895,6 +6980,47 @@ mod tests {
     }
 
     #[test]
+    fn set_contract_alias_clear_allows_stale_undeployed_binding() {
+        let state = test_state();
+        let authority = (*ALICE_ID).clone();
+        let contract_address =
+            ContractAddress::derive(0, &authority, 0, DataSpaceId::GLOBAL).expect("address");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
+        let mut block = state.block(header);
+        let mut tx = block.transaction();
+
+        tx.world
+            .bind_contract_alias(
+                &contract_address,
+                "router::universal".parse().expect("alias"),
+                None,
+                None,
+                10_000,
+            )
+            .expect("seed stale contract alias");
+
+        SetContractAlias::clear(contract_address.clone())
+            .execute(&authority, &mut tx)
+            .expect("clear should tolerate undeployed stale alias");
+
+        assert!(
+            tx.world
+                .contract_alias_bindings
+                .get(&contract_address)
+                .is_none(),
+            "binding index should be removed"
+        );
+        assert!(
+            tx.world
+                .contract_aliases
+                .get(&"router::universal".parse::<ContractAlias>().expect("alias"))
+                .is_none(),
+            "alias index should be removed"
+        );
+    }
+
+    #[test]
     fn set_contract_alias_rejects_account_alias_collision() {
         let state = test_state();
         let authority = (*ALICE_ID).clone();
@@ -6905,10 +7031,9 @@ mod tests {
         let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 10_000, 0);
         let mut block = state.block(header);
         let mut tx = block.transaction();
-        tx.world.contract_instances.insert(
-            ("universal".to_owned(), contract_address.to_string()),
-            Hash::new("contract-alias"),
-        );
+        tx.world
+            .contract_instances
+            .insert(contract_address.clone(), Hash::new("contract-alias"));
         seed_account_alias_lease(&mut tx, &authority, &label);
 
         let err = SetContractAlias::bind(
@@ -6952,10 +7077,9 @@ mod tests {
             }),
         );
         seed_account_alias_lease(&mut tx, &authority, &label);
-        tx.world.contract_instances.insert(
-            ("universal".to_owned(), contract_address.clone().to_string()),
-            Hash::new("contract-alias"),
-        );
+        tx.world
+            .contract_instances
+            .insert(contract_address.clone(), Hash::new("contract-alias"));
         tx.world
             .bind_contract_alias(
                 &contract_address,
@@ -6984,7 +7108,7 @@ mod tests {
     fn set_asset_definition_alias_grace_window_sweeps_after_expiry() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = "alias-grace".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("alias-grace", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id = AssetDefinitionId::new(domain_id, "usd".parse().expect("name"));
@@ -7051,7 +7175,8 @@ mod tests {
     fn set_asset_definition_alias_rejects_expired_lease_at_bind_time() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = "alias-past-expiry".parse().expect("domain id");
+        let domain_id: DomainId =
+            DomainId::try_new("alias-past-expiry", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let definition_id = AssetDefinitionId::new(domain_id, "usd".parse().expect("name"));
@@ -7091,7 +7216,7 @@ mod tests {
     fn set_asset_definition_offline_enabled_creates_escrow_account() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = "offline3".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("offline3", "universal").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let asset_name: Name = "gbp".parse().expect("asset name");
@@ -7154,8 +7279,9 @@ mod tests {
     fn unregister_asset_definition_rejects_when_definition_has_repo_agreement_state() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = "asset.guard".parse().expect("asset domain id");
-        let counterparty_domain: DomainId = "counter.guard".parse().expect("counterparty domain");
+        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
+        let counterparty_domain: DomainId =
+            DomainId::try_new("counter", "guard").expect("counterparty domain");
         seed_domain(&mut state, &asset_domain, &authority);
         seed_domain(&mut state, &counterparty_domain, &authority);
 
@@ -7221,7 +7347,7 @@ mod tests {
     fn unregister_asset_definition_rejects_when_definition_is_governance_voting_asset() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = "asset.guard".parse().expect("asset domain id");
+        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
 
         let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
@@ -7260,7 +7386,7 @@ mod tests {
     fn unregister_asset_definition_rejects_when_definition_is_governance_viral_reward_asset() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = "asset.guard".parse().expect("asset domain id");
+        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
 
         let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
@@ -7299,7 +7425,7 @@ mod tests {
     fn unregister_asset_definition_rejects_when_definition_is_oracle_reward_asset() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = "asset.guard".parse().expect("asset domain id");
+        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
 
         let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
@@ -7338,7 +7464,7 @@ mod tests {
     fn unregister_asset_definition_rejects_when_definition_is_nexus_fee_asset() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = "asset.guard".parse().expect("asset domain id");
+        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
 
         let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
@@ -7377,7 +7503,7 @@ mod tests {
     fn unregister_asset_definition_rejects_when_definition_is_nexus_staking_asset() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = "asset.guard".parse().expect("asset domain id");
+        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
 
         let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
@@ -7417,7 +7543,7 @@ mod tests {
     {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = "asset.guard".parse().expect("asset domain id");
+        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
 
         let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
@@ -7456,7 +7582,7 @@ mod tests {
     fn unregister_asset_definition_rejects_when_definition_is_settlement_repo_substitution_entry() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = "asset.guard".parse().expect("asset domain id");
+        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
 
         let base_definition_id =
@@ -7507,8 +7633,9 @@ mod tests {
     fn unregister_asset_definition_removes_associated_permissions_from_accounts_and_roles() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = "asset.guard".parse().expect("asset domain id");
-        let holder_domain: DomainId = "holder.guard".parse().expect("holder domain id");
+        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
+        let holder_domain: DomainId =
+            DomainId::try_new("holder", "guard").expect("holder domain id");
         seed_domain(&mut state, &asset_domain, &authority);
         seed_domain(&mut state, &holder_domain, &authority);
 
@@ -7630,7 +7757,7 @@ mod tests {
     fn unregister_asset_definition_removes_offline_escrow_mapping() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = "asset.guard".parse().expect("asset domain id");
+        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
         seed_domain(&mut state, &asset_domain, &authority);
 
         let asset_definition_id = AssetDefinitionId::new(asset_domain, "usd".parse().unwrap());
@@ -7677,8 +7804,9 @@ mod tests {
     fn unregister_asset_definition_rejects_when_definition_has_settlement_ledger_state() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let asset_domain: DomainId = "asset.guard".parse().expect("asset domain id");
-        let counterparty_domain: DomainId = "counter.guard".parse().expect("counterparty domain");
+        let asset_domain: DomainId = DomainId::try_new("asset", "guard").expect("asset domain id");
+        let counterparty_domain: DomainId =
+            DomainId::try_new("counter", "guard").expect("counterparty domain");
         seed_domain(&mut state, &asset_domain, &authority);
         seed_domain(&mut state, &counterparty_domain, &authority);
 
@@ -7755,7 +7883,7 @@ mod tests {
     fn unregister_asset_definition_removes_confidential_state() {
         let mut state = test_state();
         let authority = (*ALICE_ID).clone();
-        let domain_id: DomainId = "zk.guard".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("zk", "guard").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
 
         let asset_definition_id = AssetDefinitionId::new(domain_id, "shield".parse().unwrap());

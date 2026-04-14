@@ -464,6 +464,12 @@ fn stagger_recovery_gap(pipeline_time: Duration) -> Duration {
         .max(Duration::from_secs(1))
 }
 
+fn bootstrap_torii_ready_timeout(sync_timeout: Duration) -> Duration {
+    sync_timeout
+        .min(Duration::from_secs(90))
+        .max(Duration::from_secs(30))
+}
+
 fn should_resubmit_tx(allow_resubmit: bool, now: Instant, next_resubmit_at: Instant) -> bool {
     allow_resubmit && now >= next_resubmit_at
 }
@@ -477,6 +483,15 @@ fn is_submission_accepted_duplicate(err: &eyre::Report) -> bool {
     })
 }
 
+fn is_tx_confirmation_timeout(err: &eyre::Report) -> bool {
+    err.chain().any(|cause| {
+        let text = cause.to_string();
+        text.contains("tx confirmation timed out")
+            || text.contains("haven't got tx confirmation within")
+            || text.contains("transaction queued for too long")
+    })
+}
+
 fn allow_supply_resubmit(faulty_peers: usize, force_soft_fork: bool) -> bool {
     faulty_peers > 0 || force_soft_fork
 }
@@ -485,6 +500,81 @@ fn allow_round_supply_deadline_slip(faulty_peers: usize, force_soft_fork: bool) 
     // Under multi-fault partitions, transaction dissemination can lag one round behind while
     // still converging globally; defer strictness to the final supply assertion.
     force_soft_fork || faulty_peers > 1
+}
+
+async fn wait_for_torii_ready_client(
+    network: &Network,
+    readiness_timeout: Duration,
+) -> Result<iroha::client::Client> {
+    let deadline = Instant::now() + readiness_timeout;
+    let probe_timeout = Duration::from_secs(2).min(readiness_timeout);
+    let mut last_error: Option<String> = None;
+
+    loop {
+        for peer in network.peers() {
+            match timeout(probe_timeout, peer.status()).await {
+                Ok(Ok(_)) => return Ok(peer.client()),
+                Ok(Err(err)) => {
+                    last_error = Some(format!("{}: {err}", peer.mnemonic()));
+                }
+                Err(_) => {
+                    last_error = Some(format!(
+                        "{}: Torii /status probe exceeded {:?}",
+                        peer.mnemonic(),
+                        probe_timeout
+                    ));
+                }
+            }
+        }
+
+        if Instant::now() >= deadline {
+            let detail = last_error.unwrap_or_else(|| "no peer probes recorded".to_string());
+            return Err(eyre!(
+                "no Torii-ready peer became available within {:?}; last probe: {detail}",
+                readiness_timeout
+            ));
+        }
+
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn asset_definition_visible_on_any_peer(
+    network: &Network,
+    asset_definition_id: &AssetDefinitionId,
+) -> bool {
+    for peer in network.peers() {
+        let client = peer.client();
+        match spawn_blocking(move || client.query(FindAssetsDefinitions::new()).execute_all()).await
+        {
+            Ok(Ok(definitions)) => {
+                if definitions
+                    .into_iter()
+                    .any(|definition| definition.id() == asset_definition_id)
+                {
+                    return true;
+                }
+            }
+            Ok(Err(err)) => {
+                iroha_logger::debug!(
+                    ?err,
+                    peer = peer.mnemonic(),
+                    ?asset_definition_id,
+                    "asset definition query failed during bootstrap confirmation"
+                );
+            }
+            Err(err) => {
+                iroha_logger::debug!(
+                    ?err,
+                    peer = peer.mnemonic(),
+                    ?asset_definition_id,
+                    "asset definition query task failed during bootstrap confirmation"
+                );
+            }
+        }
+    }
+
+    false
 }
 
 fn permissioned_prf_seed(chain_id: &ChainId) -> [u8; 32] {
@@ -735,7 +825,7 @@ async fn network_starts_with_relay() -> Result<()> {
     }
 
     let client = network.client();
-    let relay_domain: DomainId = "relay-net".parse()?;
+    let relay_domain: DomainId = DomainId::try_new("relay-net", "universal")?;
     ensure_domain_registration_lease_for_network(&network, &relay_domain)?;
     let register = Register::domain(Domain::new(relay_domain));
     spawn_blocking(move || client.submit(register)).await??;
@@ -961,7 +1051,7 @@ impl UnstableNetwork {
 
         let account_id = ALICE_ID.clone();
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
-            "wonderland".parse().expect("Valid"),
+            DomainId::try_new("wonderland", "universal").expect("Valid"),
             "unstable".parse().expect("Valid"),
         );
 
@@ -984,7 +1074,8 @@ impl UnstableNetwork {
         }
         Self::register_numeric_asset(&network, &asset_definition_id).await?;
         let init_blocks = 2;
-        network.ensure_blocks(init_blocks).await?;
+        let preexisting_faulty_ids =
+            Self::wait_for_initial_sync_budget(&network, init_blocks, self.n_faulty_peers).await?;
 
         let peers = network.peers();
         let initial_non_empty = peers
@@ -999,8 +1090,15 @@ impl UnstableNetwork {
             account_id: &account_id,
         };
         for i in 0..self.n_rounds {
-            self.execute_round(i, &round_ctx, &network, &mut relay, peers.as_slice())
-                .await?;
+            self.execute_round(
+                i,
+                &round_ctx,
+                &network,
+                &mut relay,
+                peers.as_slice(),
+                &preexisting_faulty_ids,
+            )
+            .await?;
         }
 
         let expected_height =
@@ -1036,6 +1134,7 @@ impl UnstableNetwork {
         chain_id: &ChainId,
         height: u64,
         collectors_k: u16,
+        preferred_faulty_ids: &HashSet<PeerId>,
     ) -> Vec<PeerId> {
         if n_faulty_peers == 0 {
             return Vec::new();
@@ -1086,14 +1185,35 @@ impl UnstableNetwork {
                 selected
             }
         };
+        let mut selected = Vec::new();
+        let mut seen = HashSet::new();
+        for peer in rotated
+            .iter()
+            .filter(|peer| preferred_faulty_ids.contains(*peer))
+        {
+            if selected.len() == n_faulty_peers {
+                break;
+            }
+            if seen.insert(peer.clone()) {
+                selected.push(peer.clone());
+            }
+        }
+        if selected.len() == n_faulty_peers {
+            return selected;
+        }
+
         let mut rng =
             ChaCha8Rng::seed_from_u64(0x5553_5442 + u64::try_from(round_index).unwrap_or(0));
-        candidates
-            .iter()
-            .choose_multiple(&mut rng, n_faulty_peers)
-            .into_iter()
-            .cloned()
-            .collect()
+        let remaining = n_faulty_peers.saturating_sub(selected.len());
+        selected.extend(
+            candidates
+                .iter()
+                .filter(|peer| !seen.contains(*peer))
+                .choose_multiple(&mut rng, remaining)
+                .into_iter()
+                .cloned(),
+        );
+        selected
     }
 
     fn build_network(&self) -> Network {
@@ -1142,7 +1262,8 @@ impl UnstableNetwork {
         asset_definition_id: &AssetDefinitionId,
     ) -> Result<()> {
         let status_timeout = scaled_timeout(network.sync_timeout(), network.peers().len());
-        let mut client = network.client();
+        let readiness_timeout = bootstrap_torii_ready_timeout(network.sync_timeout());
+        let mut client = wait_for_torii_ready_client(network, readiness_timeout).await?;
         if client.transaction_status_timeout < status_timeout {
             client.transaction_status_timeout = status_timeout;
         }
@@ -1157,8 +1278,102 @@ impl UnstableNetwork {
             AssetDefinition::numeric(__asset_definition_id.clone())
                 .with_name(__asset_definition_id.name().to_string())
         });
-        spawn_blocking(move || client.submit_blocking(isi)).await??;
-        Ok(())
+        let submit_res = spawn_blocking(move || client.submit_blocking(isi)).await?;
+        match submit_res {
+            Ok(_) => Ok(()),
+            Err(err) if is_tx_confirmation_timeout(&err) => {
+                let deadline = Instant::now() + status_timeout;
+                loop {
+                    if asset_definition_visible_on_any_peer(network, asset_definition_id).await {
+                        iroha_logger::warn!(
+                            ?asset_definition_id,
+                            "asset definition registration confirmed via peer query after tx confirmation timeout"
+                        );
+                        return Ok(());
+                    }
+                    if Instant::now() >= deadline {
+                        return Err(err.wrap_err(format!(
+                            "asset definition {asset_definition_id} stayed absent after tx confirmation timeout"
+                        )));
+                    }
+                    sleep(Duration::from_millis(200)).await;
+                }
+            }
+            Err(err) => Err(err),
+        }
+    }
+
+    async fn wait_for_initial_sync_budget(
+        network: &Network,
+        target_height: u64,
+        fault_budget: usize,
+    ) -> Result<HashSet<PeerId>> {
+        let deadline =
+            Instant::now() + scaled_timeout(network.sync_timeout(), network.peers().len());
+        let running_count = network
+            .peers()
+            .iter()
+            .filter(|peer| peer.is_running())
+            .count();
+        let commit_quorum = commit_quorum_from_len(running_count);
+        let mut last_ready = 0usize;
+        let mut last_lagging = Vec::new();
+
+        loop {
+            let mut ready = 0usize;
+            let mut lagging = Vec::new();
+
+            for peer in network.peers().iter().filter(|peer| peer.is_running()) {
+                let non_empty = match peer.status().await {
+                    Ok(status) => BlockHeight::from(status).non_empty,
+                    Err(_) => peer
+                        .best_effort_block_height()
+                        .map(|height| height.non_empty)
+                        .unwrap_or(0),
+                };
+                if non_empty >= target_height {
+                    ready += 1;
+                } else {
+                    lagging.push((peer.id().clone(), peer.mnemonic().to_owned(), non_empty));
+                }
+            }
+
+            if lagging.is_empty() {
+                return Ok(HashSet::new());
+            }
+
+            if lagging.len() <= fault_budget && ready >= commit_quorum {
+                iroha_logger::warn!(
+                    target_height,
+                    ready,
+                    commit_quorum,
+                    lagging = ?lagging
+                        .iter()
+                        .map(|(_, mnemonic, non_empty)| (mnemonic.clone(), *non_empty))
+                        .collect::<Vec<_>>(),
+                    "initial network sync left lagging peers within configured fault budget; carrying them into round fault selection"
+                );
+                return Ok(lagging.into_iter().map(|(peer_id, _, _)| peer_id).collect());
+            }
+
+            if Instant::now() >= deadline {
+                let lagging_snapshot = last_lagging
+                    .iter()
+                    .map(|(mnemonic, non_empty)| format!("{mnemonic}@{non_empty}"))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                return Err(eyre!(
+                    "initial network sync did not reach height {target_height}; ready peers: {last_ready}/{running_count}, lagging peers: [{lagging_snapshot}]"
+                ));
+            }
+
+            last_ready = ready;
+            last_lagging = lagging
+                .iter()
+                .map(|(_, mnemonic, non_empty)| (mnemonic.clone(), *non_empty))
+                .collect();
+            sleep(Duration::from_millis(200)).await;
+        }
     }
 
     async fn execute_round(
@@ -1168,6 +1383,7 @@ impl UnstableNetwork {
         network: &Network,
         relay: &mut P2pRelay,
         peers: &[NetworkPeer],
+        preferred_faulty_ids: &HashSet<PeerId>,
     ) -> Result<()> {
         iroha_logger::info!(
             round = round_index + 1,
@@ -1200,6 +1416,7 @@ impl UnstableNetwork {
             &chain_id,
             target_height,
             collectors_k,
+            preferred_faulty_ids,
         )
         .into_iter()
         .collect();
@@ -1671,6 +1888,7 @@ mod tests {
             &chain_id,
             height,
             collectors_k,
+            &HashSet::new(),
         );
         assert_eq!(selected_single.len(), 1);
         assert!(expected_tail.contains(&selected_single[0]));
@@ -1689,11 +1907,36 @@ mod tests {
             &chain_id,
             height,
             collectors_k,
+            &HashSet::new(),
         )
         .into_iter()
         .collect();
         assert_eq!(selected_multi.len(), 3);
         assert!(collector_ids.is_disjoint(&selected_multi));
+    }
+
+    #[test]
+    fn preferred_faulty_peers_are_selected_first() {
+        let peer_ids: Vec<_> = (0..5)
+            .map(|_| PeerId::new(KeyPair::random().public_key().clone()))
+            .collect();
+        let chain_id: ChainId = "unstable-network-preferred-faults"
+            .parse()
+            .expect("chain id");
+        let height = 3_u64;
+        let preferred_faulty_ids = HashSet::from([peer_ids[0].clone()]);
+
+        let selected = UnstableNetwork::select_faulty_peer_ids(
+            &peer_ids,
+            1,
+            0,
+            &chain_id,
+            height,
+            collectors_k_for_peers(peer_ids.len()),
+            &preferred_faulty_ids,
+        );
+
+        assert_eq!(selected, vec![peer_ids[0].clone()]);
     }
 
     #[test]
@@ -1809,6 +2052,22 @@ mod tests {
             Duration::from_secs(1)
         );
     }
+
+    #[test]
+    fn bootstrap_torii_ready_timeout_has_floor_and_cap() {
+        assert_eq!(
+            bootstrap_torii_ready_timeout(Duration::from_secs(5)),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            bootstrap_torii_ready_timeout(Duration::from_secs(45)),
+            Duration::from_secs(45)
+        );
+        assert_eq!(
+            bootstrap_torii_ready_timeout(Duration::from_secs(300)),
+            Duration::from_secs(90)
+        );
+    }
 }
 
 #[tokio::test]
@@ -1865,7 +2124,7 @@ async fn unstable_network_9_peers_3_faults() -> Result<()> {
         n_peers: 9,
         n_faulty_peers: 3,
         // Keep this high-fault scenario to two rounds to reduce host-load flakiness in the
-        // shared `tests/mod.rs` matrix while still exercising repeated partition recovery.
+        // grouped `network_functional` harness while still exercising repeated partition recovery.
         n_rounds: 2,
         force_soft_fork: false,
     }

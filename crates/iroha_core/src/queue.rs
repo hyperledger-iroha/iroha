@@ -52,7 +52,6 @@ use iroha_primitives::time::TimeSource;
 #[cfg(feature = "telemetry")]
 use iroha_telemetry::metrics::NexusLaneTeuBuckets;
 use ivm::ProgramMetadata;
-use mv::storage::StorageReadOnly;
 use norito::core::{self as ncore, NoritoSerialize};
 use parking_lot::RwLock;
 pub use router::{
@@ -71,6 +70,7 @@ use crate::telemetry::{DataspaceTeuGaugeUpdate, LaneTeuGaugeUpdate};
 use crate::{
     EventsSender,
     compliance::{LaneComplianceContext, LaneComplianceEngine, LaneComplianceEvaluation},
+    executor::{NexusFeeAdmissionError, check_external_nexus_fee_admission},
     gas,
     governance::manifest::{
         GovernanceGuardError, GovernanceRules, LaneManifestRegistry, LaneManifestRegistryHandle,
@@ -193,17 +193,14 @@ impl Default for QueueLimits {
     }
 }
 
-static GOV_NAMESPACE_METADATA_KEY: LazyLock<Name> =
-    LazyLock::new(|| Name::from_str("gov_namespace").expect("static governance metadata key"));
-static GOV_CONTRACT_ID_METADATA_KEY: LazyLock<Name> =
-    LazyLock::new(|| Name::from_str("gov_contract_id").expect("static governance metadata key"));
+static GOV_CONTRACT_ADDRESS_METADATA_KEY: LazyLock<Name> = LazyLock::new(|| {
+    Name::from_str("gov_contract_address").expect("static governance metadata key")
+});
 static GOV_APPROVERS_METADATA_KEY: LazyLock<Name> = LazyLock::new(|| {
     Name::from_str("gov_manifest_approvers").expect("static governance metadata key")
 });
-static CONTRACT_NAMESPACE_METADATA_KEY: LazyLock<Name> =
-    LazyLock::new(|| Name::from_str("contract_namespace").expect("static contract metadata key"));
-static CONTRACT_ID_METADATA_KEY: LazyLock<Name> =
-    LazyLock::new(|| Name::from_str("contract_id").expect("static contract metadata key"));
+static CONTRACT_ADDRESS_METADATA_KEY: LazyLock<Name> =
+    LazyLock::new(|| Name::from_str("contract_address").expect("static contract metadata key"));
 
 /// Lockfree queue for transactions
 ///
@@ -496,6 +493,16 @@ pub enum Error {
         /// Reason describing why the privacy proof failed.
         reason: String,
     },
+    /// Nexus fee admission rejected the transaction before queueing: {reason}
+    NexusFeeAdmissionRejected {
+        /// Reason describing why the transaction could not cover the Nexus fee bound.
+        reason: String,
+    },
+    /// Nexus fee admission encountered invalid node configuration: {reason}
+    NexusFeeAdmissionConfigInvalid {
+        /// Reason describing which Nexus fee configuration entry is invalid.
+        reason: String,
+    },
 }
 
 /// Failure that can pop up when pushing transaction into the queue
@@ -623,28 +630,29 @@ impl Queue {
             iroha_data_model::transaction::TransactionEntrypoint::External(signed) => {
                 match signed.instructions() {
                     Executable::Instructions(batch) => gas::meter_instructions(batch.as_ref()),
+                    Executable::ContractCall(_) | Executable::Ivm(_) => {
+                        match crate::executor::parse_gas_limit(signed.metadata()) {
+                            Ok(Some(limit)) => limit,
+                            Ok(None) => {
+                                warn!(
+                                    tx = %tx.hash(),
+                                    "missing gas_limit metadata while deriving proposal gas cost"
+                                );
+                                0
+                            }
+                            Err(err) => {
+                                warn!(
+                                    ?err,
+                                    tx = %tx.hash(),
+                                    "invalid gas_limit metadata while deriving proposal gas cost"
+                                );
+                                0
+                            }
+                        }
+                    }
                     Executable::IvmProved(proved) => {
                         gas::meter_instructions(proved.overlay.as_ref())
                     }
-                    Executable::Ivm(_) => match crate::executor::parse_gas_limit(signed.metadata())
-                    {
-                        Ok(Some(limit)) => limit,
-                        Ok(None) => {
-                            warn!(
-                                tx = %tx.hash(),
-                                "missing gas_limit metadata while deriving proposal gas cost"
-                            );
-                            0
-                        }
-                        Err(err) => {
-                            warn!(
-                                ?err,
-                                tx = %tx.hash(),
-                                "invalid gas_limit metadata while deriving proposal gas cost"
-                            );
-                            0
-                        }
-                    },
                 }
             }
             iroha_data_model::transaction::TransactionEntrypoint::PrivateKaigi(private) => {
@@ -886,282 +894,143 @@ impl Queue {
 
         let signed = tx.as_ref().as_ref();
         let metadata = signed.metadata();
-        let metadata_namespace = metadata
-            .get(&*GOV_NAMESPACE_METADATA_KEY)
+        let metadata_governance_contract_address = metadata
+            .get(&*GOV_CONTRACT_ADDRESS_METADATA_KEY)
             .map(|value| {
                 let raw = value.try_into_any_norito::<String>().map_err(|_| {
                     Self::enforcement_error(
                         alias,
-                        "`gov_namespace` metadata must be a string value",
+                        "`gov_contract_address` metadata must be a string value",
                     )
                 })?;
                 let trimmed = raw.trim();
                 if trimmed.is_empty() {
                     return Err(Self::enforcement_error(
                         alias,
-                        "`gov_namespace` metadata must not be blank",
+                        "`gov_contract_address` metadata must not be blank",
                     ));
                 }
-                Name::from_str(trimmed).map_err(|err| {
-                    Self::enforcement_error(
-                        alias,
-                        format!("`gov_namespace` metadata `{trimmed}` is not a valid Name: {err}"),
-                    )
-                })
-            })
-            .transpose()?;
-
-        let metadata_contract_id = metadata
-            .get(&*GOV_CONTRACT_ID_METADATA_KEY)
-            .map(|value| {
-                let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                    Self::enforcement_error(
-                        alias,
-                        "`gov_contract_id` metadata must be a string value",
-                    )
-                })?;
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
-                    return Err(Self::enforcement_error(
-                        alias,
-                        "`gov_contract_id` metadata must not be blank",
-                    ));
-                }
-                Ok(trimmed.to_string())
-            })
-            .transpose()?;
-
-        let metadata_contract_namespace = metadata
-            .get(&*CONTRACT_NAMESPACE_METADATA_KEY)
-            .map(|value| {
-                let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                    Self::enforcement_error(
-                        alias,
-                        "`contract_namespace` metadata must be a string value",
-                    )
-                })?;
-                let trimmed = raw.trim();
-                if trimmed.is_empty() {
-                    return Err(Self::enforcement_error(
-                        alias,
-                        "`contract_namespace` metadata must not be blank",
-                    ));
-                }
-                Name::from_str(trimmed).map_err(|err| {
+                trimmed
+                    .parse::<iroha_data_model::smart_contract::ContractAddress>()
+                    .map_err(|err| {
                     Self::enforcement_error(
                         alias,
                         format!(
-                            "`contract_namespace` metadata `{trimmed}` is not a valid Name: {err}"
+                            "`gov_contract_address` metadata `{trimmed}` is not a valid ContractAddress: {err}"
                         ),
                     )
                 })
             })
             .transpose()?;
 
-        let metadata_contract_id_hint = metadata
-            .get(&*CONTRACT_ID_METADATA_KEY)
+        let metadata_contract_address_hint = metadata
+            .get(&*CONTRACT_ADDRESS_METADATA_KEY)
             .map(|value| {
                 let raw = value.try_into_any_norito::<String>().map_err(|_| {
-                    Self::enforcement_error(alias, "`contract_id` metadata must be a string value")
+                    Self::enforcement_error(
+                        alias,
+                        "`contract_address` metadata must be a string value",
+                    )
                 })?;
                 let trimmed = raw.trim();
                 if trimmed.is_empty() {
                     return Err(Self::enforcement_error(
                         alias,
-                        "`contract_id` metadata must not be blank",
+                        "`contract_address` metadata must not be blank",
                     ));
                 }
-                Ok(trimmed.to_string())
+                trimmed
+                    .parse::<iroha_data_model::smart_contract::ContractAddress>()
+                    .map_err(|err| {
+                        Self::enforcement_error(
+                            alias,
+                            format!(
+                                "`contract_address` metadata `{trimmed}` is not a valid ContractAddress: {err}"
+                            ),
+                        )
+                    })
             })
             .transpose()?;
 
-        let mut namespaces_from_instructions = BTreeSet::new();
-        let mut contract_bindings = BTreeSet::new();
+        let mut contract_targets = BTreeSet::new();
         let mut register_code_seen = false;
-        if let Executable::Instructions(instructions) = signed.instructions() {
-            for instruction in instructions {
-                if let Some(activate) = instruction
-                    .as_any()
-                    .downcast_ref::<ActivateContractInstance>()
-                {
-                    let ns = Name::from_str(activate.namespace.trim()).map_err(|err| {
-                        Self::enforcement_error(
-                            alias,
-                            format!(
-                                "instruction namespace `{}` is not valid: {err}",
-                                activate.namespace
-                            ),
-                        )
-                    })?;
-                    namespaces_from_instructions.insert(ns.clone());
-                    let contract_id = activate.contract_id.trim();
-                    if contract_id.is_empty() {
-                        return Err(Self::enforcement_error(
-                            alias,
-                            "contract_id in ActivateContractInstance must not be blank",
-                        ));
-                    }
-                    contract_bindings.insert((ns, contract_id.to_string()));
-                } else if let Some(deactivate) = instruction
-                    .as_any()
-                    .downcast_ref::<DeactivateContractInstance>()
-                {
-                    let ns = Name::from_str(deactivate.namespace.trim()).map_err(|err| {
-                        Self::enforcement_error(
-                            alias,
-                            format!(
-                                "instruction namespace `{}` is not valid: {err}",
-                                deactivate.namespace
-                            ),
-                        )
-                    })?;
-                    namespaces_from_instructions.insert(ns.clone());
-                    let contract_id = deactivate.contract_id.trim();
-                    if contract_id.is_empty() {
-                        return Err(Self::enforcement_error(
-                            alias,
-                            "contract_id in DeactivateContractInstance must not be blank",
-                        ));
-                    }
-                    contract_bindings.insert((ns, contract_id.to_string()));
-                } else {
-                    let modifies_contract_code = {
-                        let any = instruction.as_any();
-                        any.is::<RegisterSmartContractCode>()
-                            || any.is::<RegisterSmartContractBytes>()
-                            || any.is::<RemoveSmartContractBytes>()
-                    };
-                    if modifies_contract_code {
-                        register_code_seen = true;
+        match signed.instructions() {
+            Executable::Instructions(instructions) => {
+                for instruction in instructions {
+                    if let Some(activate) = instruction
+                        .as_any()
+                        .downcast_ref::<ActivateContractInstance>()
+                    {
+                        contract_targets.insert(activate.contract_address().clone());
+                    } else if let Some(deactivate) = instruction
+                        .as_any()
+                        .downcast_ref::<DeactivateContractInstance>()
+                    {
+                        contract_targets.insert(deactivate.contract_address().clone());
+                    } else {
+                        let modifies_contract_code = {
+                            let any = instruction.as_any();
+                            any.is::<RegisterSmartContractCode>()
+                                || any.is::<RegisterSmartContractBytes>()
+                                || any.is::<RemoveSmartContractBytes>()
+                        };
+                        if modifies_contract_code {
+                            register_code_seen = true;
+                        }
                     }
                 }
             }
+            Executable::ContractCall(call) => {
+                contract_targets.insert(call.contract_address.clone());
+            }
+            Executable::Ivm(_) | Executable::IvmProved(_) => {}
         }
 
-        if let Some(ns) = metadata_namespace.clone() {
-            if let Some(cid) = metadata_contract_id
-                .clone()
-                .or_else(|| metadata_contract_id_hint.clone())
-            {
-                namespaces_from_instructions.insert(ns.clone());
-                contract_bindings.insert((ns, cid));
-            }
-        } else if let Some(ns) = metadata_contract_namespace.clone() {
-            if let Some(cid) = metadata_contract_id_hint.clone() {
-                namespaces_from_instructions.insert(ns.clone());
-                contract_bindings.insert((ns, cid));
-            }
+        if let Some(contract_address) = metadata_governance_contract_address.clone() {
+            contract_targets.insert(contract_address);
         }
 
         let ivm_with_contract_metadata = matches!(signed.instructions(), Executable::Ivm(_))
-            && (metadata_namespace.is_some()
-                || metadata_contract_namespace.is_some()
-                || metadata_contract_id_hint.is_some());
+            && (metadata_governance_contract_address.is_some()
+                || metadata_contract_address_hint.is_some());
 
         let contract_instr_seen =
-            register_code_seen || !contract_bindings.is_empty() || ivm_with_contract_metadata;
+            register_code_seen || !contract_targets.is_empty() || ivm_with_contract_metadata;
 
-        if contract_instr_seen && metadata_namespace.is_none() {
-            return Err(Self::enforcement_error(
-                alias,
-                "transactions with contract namespace operations must set `gov_namespace` metadata when lane governance protects namespaces",
-            ));
-        }
-
-        if (contract_instr_seen || metadata_namespace.is_some()) && metadata_contract_id.is_none() {
-            return Err(Self::enforcement_error(
-                alias,
-                "metadata key `gov_contract_id` is required when `gov_namespace` is provided",
-            ));
-        }
-
-        if let (Some(ns_hint), Some(ns_meta)) = (
-            metadata_contract_namespace.as_ref(),
-            metadata_namespace.as_ref(),
-        ) {
-            if ns_hint != ns_meta {
-                return Err(Self::enforcement_error(
-                    alias,
-                    "`contract_namespace` metadata must match `gov_namespace` for protected operations",
-                ));
-            }
-        }
-
-        if let (Some(cid_hint), Some(cid_meta)) = (
-            metadata_contract_id_hint.as_ref(),
-            metadata_contract_id.as_ref(),
-        ) {
-            if cid_hint != cid_meta {
-                return Err(Self::enforcement_error(
-                    alias,
-                    "`contract_id` metadata must match `gov_contract_id` for protected operations",
-                ));
-            }
-        }
-
-        if let Some(meta_cid) = metadata_contract_id.as_ref()
-            && let Some(target_ns) = metadata_namespace
-                .clone()
-                .or_else(|| namespaces_from_instructions.iter().next().cloned())
-        {
-            let cross_namespace = world
-                .contract_instances()
-                .iter()
-                .filter(|((_ns, cid), _)| cid == meta_cid)
-                .filter_map(|((ns, _), _)| Name::from_str(ns).ok())
-                .any(|existing_ns| existing_ns != target_ns);
-            if cross_namespace {
-                return Err(Self::enforcement_error(
-                    alias,
-                    format!(
-                        "contract `{meta_cid}` is already bound to a different namespace; cross-namespace rebinding is not allowed"
-                    ),
-                ));
-            }
-        }
-
-        let mut namespaces_to_check = namespaces_from_instructions.clone();
-        if let Some(ns) = metadata_namespace.clone() {
-            namespaces_to_check.insert(ns);
-        }
-        if let Some(ns) = metadata_contract_namespace.clone() {
-            namespaces_to_check.insert(ns);
-        }
-
-        for namespace in &namespaces_to_check {
-            if !rules.protected_namespaces.contains(namespace) {
-                return Err(Self::enforcement_error(
-                    alias,
-                    format!(
-                        "namespace `{namespace}` is not declared in lane governance protected set"
-                    ),
-                ));
-            }
-        }
-
-        if let Some(ns) = metadata_namespace
-            && !namespaces_from_instructions.is_empty()
-            && namespaces_from_instructions
-                .iter()
-                .any(|other| other != &ns)
+        if contract_instr_seen
+            && metadata_governance_contract_address.is_none()
+            && !matches!(signed.instructions(), Executable::ContractCall(_))
         {
             return Err(Self::enforcement_error(
                 alias,
-                "`gov_namespace` metadata does not match namespaces referenced by contract instructions",
+                "transactions with contract operations must set `gov_contract_address` metadata when lane governance protects namespaces",
             ));
         }
 
-        if let Some(meta_contract_id) = metadata_contract_id
-            && !contract_bindings.is_empty()
-            && contract_bindings
-                .iter()
-                .any(|(_, cid)| cid != &meta_contract_id)
+        if let (Some(hint), Some(meta)) = (
+            metadata_contract_address_hint.as_ref(),
+            metadata_governance_contract_address.as_ref(),
+        ) && hint != meta
         {
             return Err(Self::enforcement_error(
                 alias,
-                "`gov_contract_id` metadata does not match contract ids referenced by contract instructions",
+                "`contract_address` metadata must match `gov_contract_address` for protected operations",
             ));
         }
+
+        if let Some(meta_contract_address) = metadata_governance_contract_address.as_ref()
+            && !contract_targets.is_empty()
+            && contract_targets
+                .iter()
+                .any(|contract_address| contract_address != meta_contract_address)
+        {
+            return Err(Self::enforcement_error(
+                alias,
+                "`gov_contract_address` metadata does not match contract addresses referenced by contract instructions",
+            ));
+        }
+
+        let _ = world;
 
         Ok(())
     }
@@ -1452,13 +1321,64 @@ impl Queue {
     /// Checks if the transaction is expired at a specific time.
     fn is_expired_at(&self, tx: &AcceptedTransaction<'static>, now: Duration) -> bool {
         let tx_creation_time = tx.creation_time();
-
-        let time_limit = tx.time_to_live().map_or_else(
-            || self.tx_time_to_live,
-            |tx_time_to_live| core::cmp::min(self.tx_time_to_live, tx_time_to_live),
-        );
+        let time_limit = self.effective_tx_time_to_live(tx);
 
         now.saturating_sub(tx_creation_time) > time_limit
+    }
+
+    fn effective_tx_time_to_live(&self, tx: &AcceptedTransaction<'_>) -> Duration {
+        tx.time_to_live().map_or_else(
+            || self.tx_time_to_live,
+            |tx_time_to_live| core::cmp::min(self.tx_time_to_live, tx_time_to_live),
+        )
+    }
+
+    fn nexus_fee_admission_observation_time_ms(&self, tx: &AcceptedTransaction<'_>) -> u64 {
+        let deadline = tx
+            .creation_time()
+            .saturating_add(self.effective_tx_time_to_live(tx));
+        Self::duration_to_millis(deadline)
+    }
+
+    fn map_nexus_fee_admission_error(err: NexusFeeAdmissionError) -> Error {
+        match err {
+            NexusFeeAdmissionError::Rejected(reason) => Error::NexusFeeAdmissionRejected { reason },
+            NexusFeeAdmissionError::ConfigInvalid(reason) => {
+                Error::NexusFeeAdmissionConfigInvalid { reason }
+            }
+        }
+    }
+
+    fn recheck_external_nexus_fee_admission(
+        &self,
+        tx: &AcceptedTransaction<'static>,
+        world: &impl WorldReadOnly,
+        nexus: &Nexus,
+    ) -> Result<(), Error> {
+        let Some(transaction) = tx.external() else {
+            return Ok(());
+        };
+        let observation_time_ms = self.nexus_fee_admission_observation_time_ms(tx);
+        check_external_nexus_fee_admission(world, nexus, transaction, observation_time_ms)
+            .map_err(Self::map_nexus_fee_admission_error)
+    }
+
+    fn queue_rejection_reason(
+        err: &Error,
+    ) -> Option<iroha_data_model::transaction::error::TransactionRejectionReason> {
+        match err {
+            Error::NexusFeeAdmissionRejected { reason } => Some(
+                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::NotPermitted(reason.clone()),
+                ),
+            ),
+            Error::NexusFeeAdmissionConfigInvalid { reason } => Some(
+                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::InternalError(reason.clone()),
+                ),
+            ),
+            _ => None,
+        }
     }
 
     /// Returns all pending transactions.
@@ -1681,6 +1601,7 @@ impl Queue {
             checked,
             routing_decision,
             state_view.world(),
+            &state_view.nexus,
             gossip_payload,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
@@ -1754,6 +1675,7 @@ impl Queue {
         }
 
         let world = state.world_view();
+        let nexus = state.nexus_snapshot();
         #[cfg(feature = "telemetry")]
         let telemetry_handle = state.metrics();
 
@@ -1761,6 +1683,7 @@ impl Queue {
             checked,
             routing_decision,
             &world,
+            &nexus,
             gossip_payload,
             #[cfg(feature = "telemetry")]
             telemetry_handle,
@@ -1774,11 +1697,23 @@ impl Queue {
         checked: CheckedTransaction<'static>,
         routing_decision: RoutingDecision,
         world: &impl WorldReadOnly,
+        nexus: &Nexus,
         gossip_payload: Option<Arc<Vec<u8>>>,
         #[cfg(feature = "telemetry")] telemetry_handle: &StateTelemetry,
     ) -> Result<RoutingDecision, Failure> {
         let lane_id = routing_decision.lane_id;
         let dataspace_id = routing_decision.dataspace_id;
+
+        if checked.as_accepted().external().is_some() {
+            if let Err(err) =
+                self.recheck_external_nexus_fee_admission(checked.as_accepted(), world, nexus)
+            {
+                return Err(Failure {
+                    tx: Box::new(checked.as_accepted().clone()),
+                    err,
+                });
+            }
+        }
 
         #[cfg(feature = "telemetry")]
         let mut manifest_allowed = false;
@@ -1812,7 +1747,9 @@ impl Queue {
                         Executable::Instructions(instructions) => {
                             instructions_allow_multisig_envelope_authority(&instructions)
                         }
-                        Executable::IvmProved(_) | Executable::Ivm(_) => false,
+                        Executable::ContractCall(_)
+                        | Executable::IvmProved(_)
+                        | Executable::Ivm(_) => false,
                     };
                 if !rules.validators.is_empty() && checked.as_ref().authority_opt().is_none() {
                     #[cfg(feature = "telemetry")]
@@ -2563,6 +2500,54 @@ impl Queue {
                 continue;
             }
 
+            if let Err(e) = self.recheck_external_nexus_fee_admission(
+                tx_arc.as_accepted(),
+                state_view.world(),
+                &state_view.nexus,
+            ) {
+                iroha_logger::warn!(
+                    tx = %hash,
+                    ?e,
+                    "dropping transaction during queue pop (nexus fee recheck)"
+                );
+                drop(tx_arc);
+                if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_expiry_hash(&hash);
+                    if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
+                        self.decrease_per_user_tx_count(authority);
+                    }
+                    let routing = if let Some((_, decision)) = self.routing_decisions.remove(&hash)
+                    {
+                        routing_ledger::discard_if_matches(&hash, decision);
+                        decision
+                    } else {
+                        routing_ledger::take(&hash).unwrap_or_default()
+                    };
+                    #[cfg(feature = "telemetry")]
+                    self.record_teu_dequeue(&hash, Some(state_view.telemetry));
+                    self.tx_enqueued_at_ms.remove(&hash);
+                    self.queued_tx_enqueued_at_ms.remove(&hash);
+                    if let Some(reason) = Self::queue_rejection_reason(&e) {
+                        let _ = self.events_sender.send(
+                            TransactionEvent {
+                                hash,
+                                block_height: None,
+                                lane_id: routing.lane_id,
+                                dataspace_id: routing.dataspace_id,
+                                status: TransactionStatus::Rejected(Box::new(reason)),
+                            }
+                            .into(),
+                        );
+                    }
+                }
+                self.tx_encoded_len.remove(&hash);
+                self.tx_gas_cost.remove(&hash);
+                self.tx_enqueued_at_ms.remove(&hash);
+                self.queued_tx_enqueued_at_ms.remove(&hash);
+                self.tx_gossip_payloads.remove(&hash);
+                continue;
+            }
+
             let routing = self
                 .routing_decisions
                 .get(&hash)
@@ -2612,6 +2597,8 @@ impl Queue {
         #[cfg(not(feature = "telemetry"))]
         let backpressure_telemetry: Option<&StateTelemetry> = None;
         let committed_transactions = state.transactions.view();
+        let world = state.world_view();
+        let nexus = state.nexus_snapshot();
         loop {
             let hash = if let Some(hash) = self.tx_hashes.pop() {
                 hash
@@ -2666,6 +2653,52 @@ impl Queue {
                         && let Ok(tx) = Arc::try_unwrap(removed_tx)
                     {
                         expired_transactions.push(tx.into_accepted());
+                    }
+                }
+                self.tx_encoded_len.remove(&hash);
+                self.tx_gas_cost.remove(&hash);
+                self.tx_enqueued_at_ms.remove(&hash);
+                self.queued_tx_enqueued_at_ms.remove(&hash);
+                self.tx_gossip_payloads.remove(&hash);
+                continue;
+            }
+
+            if let Err(e) =
+                self.recheck_external_nexus_fee_admission(tx_arc.as_accepted(), &world, &nexus)
+            {
+                iroha_logger::warn!(
+                    tx = %hash,
+                    ?e,
+                    "dropping transaction during queue pop (nexus fee recheck)"
+                );
+                drop(tx_arc);
+                if let Some((_, removed_tx)) = self.txs.remove(&hash) {
+                    self.untrack_expiry_hash(&hash);
+                    if let Some(authority) = removed_tx.as_ref().as_ref().authority_opt() {
+                        self.decrease_per_user_tx_count(authority);
+                    }
+                    let routing = if let Some((_, decision)) = self.routing_decisions.remove(&hash)
+                    {
+                        routing_ledger::discard_if_matches(&hash, decision);
+                        decision
+                    } else {
+                        routing_ledger::take(&hash).unwrap_or_default()
+                    };
+                    #[cfg(feature = "telemetry")]
+                    self.record_teu_dequeue(&hash, Some(telemetry_handle));
+                    self.tx_enqueued_at_ms.remove(&hash);
+                    self.queued_tx_enqueued_at_ms.remove(&hash);
+                    if let Some(reason) = Self::queue_rejection_reason(&e) {
+                        let _ = self.events_sender.send(
+                            TransactionEvent {
+                                hash,
+                                block_height: None,
+                                lane_id: routing.lane_id,
+                                dataspace_id: routing.dataspace_id,
+                                status: TransactionStatus::Rejected(Box::new(reason)),
+                            }
+                            .into(),
+                        );
                     }
                 }
                 self.tx_encoded_len.remove(&hash);
@@ -3369,6 +3402,12 @@ impl Queue {
                         let instructions: Vec<_> = batch.iter().map(Clone::clone).collect();
                         gas::meter_instructions(&instructions)
                     }
+                    Executable::ContractCall(_) => {
+                        match crate::executor::parse_gas_limit(signed.metadata()) {
+                            Ok(Some(limit)) => limit,
+                            _ => 0,
+                        }
+                    }
                     Executable::IvmProved(proved) => {
                         gas::meter_instructions(proved.overlay.as_ref())
                     }
@@ -3935,12 +3974,14 @@ pub mod tests {
         runtime::RuntimeUpgradeManifest,
     };
     use iroha_executor_data_model::isi::multisig::{MultisigPropose, MultisigSpec};
+    use iroha_executor_data_model::permission::nexus::CanUseFeeSponsor;
     use iroha_logger::Level;
     use iroha_primitives::json::Json;
     use iroha_schema::Ident;
     #[cfg(feature = "telemetry")]
     use iroha_telemetry::metrics::Metrics;
     use iroha_test_samples::{ALICE_KEYPAIR, gen_account_in};
+    use mv::storage::StorageReadOnly;
     use nonzero_ext::nonzero;
     use rand::Rng as _;
 
@@ -3958,6 +3999,7 @@ pub mod tests {
             SpaceDirectoryManifestRecord, SpaceDirectoryManifestSet, UaidDataspaceBindings,
         },
         query::store::LiveQueryStore,
+        smartcontracts::Execute,
         state::{State, World},
     };
 
@@ -4297,7 +4339,8 @@ pub mod tests {
         let validator_id = AccountId::new(validator_key.public_key().clone());
         let multisig_key = KeyPair::random();
         let multisig_id = AccountId::new(multisig_key.public_key().clone());
-        let domain_id: DomainId = "wonderland".parse().expect("static domain");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("static domain");
 
         let mut multisig_metadata = Metadata::default();
         multisig_metadata.insert(
@@ -4667,15 +4710,26 @@ pub mod tests {
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         queue.install_lane_manifests(&manifests);
 
-        // Metadata referencing an unknown namespace must be rejected.
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator,
+            0,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
+        let other_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator,
+            1,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
+
+        // Metadata with a governed contract address is accepted for protected contract ops.
         let mut metadata = Metadata::default();
         metadata.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("system"),
-        );
-        metadata.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("calc.v1"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4684,15 +4738,14 @@ pub mod tests {
             vec![sample_unregister_instruction()],
             metadata,
         );
-        let err = queue
+        queue
             .push(tx, state.view())
-            .expect_err("namespace outside manifest must reject");
-        assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
+            .expect("governed contract metadata should be accepted");
         #[cfg(feature = "telemetry")]
         assert_eq!(
             metrics
                 .governance_protected_namespace_total
-                .with_label_values(&["rejected"])
+                .with_label_values(&["allowed"])
                 .get(),
             1
         );
@@ -4702,15 +4755,11 @@ pub mod tests {
                 .governance_manifest_admission_total
                 .with_label_values(&["protected_namespace_rejected"])
                 .get(),
-            1
+            0
         );
 
-        // Namespace within the manifest but missing contract id must be rejected.
-        let mut metadata_missing_cid = Metadata::default();
-        metadata_missing_cid.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("apps"),
-        );
+        // Missing governance contract address metadata must be rejected.
+        let metadata_missing_cid = Metadata::default();
         let tx = accepted_tx_with(
             validator.clone(),
             &keypair,
@@ -4728,7 +4777,7 @@ pub mod tests {
                 .governance_protected_namespace_total
                 .with_label_values(&["rejected"])
                 .get(),
-            2
+            1
         );
         #[cfg(feature = "telemetry")]
         assert_eq!(
@@ -4736,18 +4785,18 @@ pub mod tests {
                 .governance_manifest_admission_total
                 .with_label_values(&["protected_namespace_rejected"])
                 .get(),
-            2
+            1
         );
 
-        // Correct namespace metadata with contract id should be accepted.
+        // Mismatched contract-address hints must be rejected.
         let mut valid_metadata = Metadata::default();
         valid_metadata.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("apps"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
         );
         valid_metadata.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("calc.v1"),
+            (*super::CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(other_contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4756,9 +4805,10 @@ pub mod tests {
             vec![sample_unregister_instruction()],
             valid_metadata,
         );
-        queue
+        let err = queue
             .push(tx, state.view())
-            .expect("protected namespace metadata satisfied");
+            .expect_err("mismatched contract-address metadata must reject");
+        assert!(matches!(err.err, Error::GovernanceNotPermitted { .. }));
         #[cfg(feature = "telemetry")]
         assert_eq!(
             metrics
@@ -4822,10 +4872,23 @@ pub mod tests {
         let manifests = Arc::new(LaneManifestRegistry::from_statuses(statuses));
         queue.install_lane_manifests(&manifests);
 
+        let contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator,
+            0,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
+        let other_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator,
+            1,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
         let code_hash = iroha_crypto::Hash::new(b"demo");
         let activate = InstructionBox::from(ActivateContractInstance {
-            namespace: "apps".to_string(),
-            contract_id: "calc.v1".to_string(),
+            contract_address: contract_address.clone(),
             code_hash,
         });
 
@@ -4850,15 +4913,11 @@ pub mod tests {
             1
         );
 
-        // Metadata namespace present but contract_id mismatched should reject.
+        // Metadata contract address present but mismatched should reject.
         let mut metadata_mismatch = Metadata::default();
         metadata_mismatch.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("apps"),
-        );
-        metadata_mismatch.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("other"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(other_contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4883,12 +4942,8 @@ pub mod tests {
         // Matching metadata should allow the transaction.
         let mut metadata_ok = Metadata::default();
         metadata_ok.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("apps"),
-        );
-        metadata_ok.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("calc.v1"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4930,12 +4985,8 @@ pub mod tests {
 
         let mut metadata_bytes = Metadata::default();
         metadata_bytes.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("apps"),
-        );
-        metadata_bytes.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("calc.v1"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(contract_address.to_string()),
         );
         let tx = accepted_tx_with(
             validator.clone(),
@@ -4954,15 +5005,21 @@ pub mod tests {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
         let mut world = world_with_test_domains();
-        world.contract_instances.insert(
-            ("apps".to_string(), "calc.v1".to_string()),
-            Hash::new(b"demo"),
-        );
+        let (validator, keypair) = gen_account_in("wonderland");
+        let existing_contract_address = iroha_data_model::smart_contract::ContractAddress::derive(
+            iroha_data_model::account::address::chain_discriminant(),
+            &validator,
+            7,
+            DataSpaceId::GLOBAL,
+        )
+        .expect("contract address");
+        world
+            .contract_instances
+            .insert(existing_contract_address.clone(), Hash::new(b"demo"));
         let state = Arc::new(State::new(world, kura.clone(), query_handle.clone()));
         let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
 
         let queue = Arc::new(Queue::test(config_factory(), &time_source));
-        let (validator, keypair) = gen_account_in("wonderland");
 
         let mut protected = BTreeSet::new();
         protected.insert(Name::from_str("apps").expect("static namespace"));
@@ -4990,20 +5047,23 @@ pub mod tests {
         queue.install_lane_manifests(&manifests);
 
         let code_hash = iroha_crypto::Hash::new(b"demo");
+        let instruction_contract_address =
+            iroha_data_model::smart_contract::ContractAddress::derive(
+                iroha_data_model::account::address::chain_discriminant(),
+                &validator,
+                8,
+                DataSpaceId::GLOBAL,
+            )
+            .expect("contract address");
         let activate = InstructionBox::from(ActivateContractInstance {
-            namespace: "ops".to_string(),
-            contract_id: "calc.v1".to_string(),
+            contract_address: instruction_contract_address,
             code_hash,
         });
 
         let mut metadata = Metadata::default();
         metadata.insert(
-            (*super::GOV_NAMESPACE_METADATA_KEY).clone(),
-            Json::new("ops"),
-        );
-        metadata.insert(
-            (*super::GOV_CONTRACT_ID_METADATA_KEY).clone(),
-            Json::new("calc.v1"),
+            (*super::GOV_CONTRACT_ADDRESS_METADATA_KEY).clone(),
+            Json::new(existing_contract_address.to_string()),
         );
 
         let tx = accepted_tx_with(
@@ -5281,6 +5341,9 @@ pub mod tests {
             iroha_data_model::transaction::Executable::Instructions(batch) => {
                 crate::gas::meter_instructions(batch.as_ref())
             }
+            iroha_data_model::transaction::Executable::ContractCall(_) => {
+                panic!("expected ISI transaction for gas test")
+            }
             iroha_data_model::transaction::Executable::Ivm(_) => {
                 panic!("expected ISI transaction for gas test")
             }
@@ -5521,6 +5584,349 @@ pub mod tests {
                 "route rejection reason should include lane lookup failure"
             );
         }
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_missing_nexus_fee_asset_before_enqueue() {
+        let fixture = nexus_fee_fixture(None, None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect_err("missing fee asset must be rejected before enqueue");
+
+        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
+        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
+            assert!(
+                reason.contains("missing"),
+                "expected missing asset reason, got {reason}"
+            );
+        }
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_insufficient_nexus_fee_balance_before_enqueue() {
+        let fixture = nexus_fee_fixture(Some(Numeric::zero()), None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect_err("insufficient fee balance must be rejected before enqueue");
+
+        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
+        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
+            assert!(
+                reason.contains("insufficient"),
+                "expected insufficient balance reason, got {reason}"
+            );
+        }
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_accepts_funded_nexus_fee_payer() {
+        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+
+        queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect("funded payer should be admitted");
+
+        assert_eq!(queue.queued_len(), 1);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_unauthorized_fee_sponsor() {
+        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "fee_sponsor".parse().expect("fee sponsor key"),
+            Json::new(fixture.sponsor_id.to_string()),
+        );
+        let tx = accepted_tx_with(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            vec![sample_unregister_instruction()],
+            metadata,
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect_err("unauthorized sponsor must be rejected");
+
+        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
+        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
+            assert!(
+                reason.contains("not authorized"),
+                "expected sponsor authorization reason, got {reason}"
+            );
+        }
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_accepts_authorized_fee_sponsor_after_committed_grant() {
+        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), Some(Numeric::from(10_u32)));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = fixture.state.block(header);
+        let mut stx = block.transaction();
+        Grant::account_permission(
+            CanUseFeeSponsor {
+                sponsor: fixture.sponsor_id.clone(),
+            },
+            fixture.authority_id.clone(),
+        )
+        .execute(&fixture.sponsor_id, &mut stx)
+        .expect("grant fee sponsor permission");
+        stx.apply();
+        block.commit().expect("commit sponsor permission grant");
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let mut metadata = Metadata::default();
+        metadata.insert(
+            "fee_sponsor".parse().expect("fee sponsor key"),
+            Json::new(fixture.sponsor_id.to_string()),
+        );
+        let tx = accepted_tx_with(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            vec![sample_unregister_instruction()],
+            metadata,
+        );
+
+        queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect("authorized sponsor should be admitted");
+
+        assert_eq!(queue.queued_len(), 1);
+    }
+
+    #[test]
+    fn read_only_fee_sponsor_check_accepts_granted_permission() {
+        let fixture = nexus_fee_fixture(None, Some(Numeric::from(10_u32)));
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = fixture.state.block(header);
+        let mut stx = block.transaction();
+        Grant::account_permission(
+            CanUseFeeSponsor {
+                sponsor: fixture.sponsor_id.clone(),
+            },
+            fixture.authority_id.clone(),
+        )
+        .execute(&fixture.sponsor_id, &mut stx)
+        .expect("grant fee sponsor permission");
+
+        assert!(
+            crate::executor::can_use_fee_sponsor_read_only(
+                &stx.world,
+                &fixture.authority_id,
+                &fixture.sponsor_id,
+            ),
+            "read-only sponsor check should honor granted permission"
+        );
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_raw_ivm_when_gas_limit_exceeds_fee_balance() {
+        let mut fixture = nexus_fee_fixture(Some(Numeric::from(50_u32)), None);
+        {
+            let nexus = fixture.state.nexus.get_mut();
+            nexus.fees.base_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::from(1_u32);
+        }
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_ivm_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            5_000,
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect_err("raw IVM fee bound should use gas_limit");
+
+        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
+        if let Error::NexusFeeAdmissionRejected { reason } = &err.err {
+            assert!(
+                reason.contains("insufficient"),
+                "expected insufficient balance reason, got {reason}"
+            );
+        }
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn push_with_lane_with_state_rejects_fee_alias_that_expires_before_tx_deadline() {
+        let mut fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let fee_asset_alias: iroha_data_model::asset::AssetDefinitionAlias =
+            "xor#wonderland.universal".parse().expect("asset alias");
+        {
+            let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+            let mut block = fixture.state.block(header);
+            let mut stx = block.transaction();
+            stx.world_mut_for_testing()
+                .bind_asset_definition_alias(
+                    &fixture.fee_asset_definition_id,
+                    fee_asset_alias.clone(),
+                    Some(500),
+                    Some(600),
+                    0,
+                )
+                .expect("bind short-lived fee asset alias");
+            stx.apply();
+            block.commit().expect("commit fee asset alias binding");
+        }
+        {
+            let nexus = fixture.state.nexus.get_mut();
+            nexus.fees.fee_asset_id = fee_asset_alias.to_string();
+        }
+
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(
+            Config {
+                transaction_time_to_live: Duration::from_millis(1_000),
+                ..config_factory()
+            },
+            &time_source,
+        );
+        let tx = accepted_tx_with_ttl(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+            Duration::from_millis(1_000),
+        );
+
+        let err = queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect_err("fee alias should be rejected when it expires before the tx deadline");
+
+        assert!(matches!(
+            err.err,
+            Error::NexusFeeAdmissionConfigInvalid { .. }
+        ));
+        if let Error::NexusFeeAdmissionConfigInvalid { reason } = &err.err {
+            assert!(
+                reason.contains("invalid nexus fee asset id"),
+                "expected invalid fee asset config reason, got {reason}"
+            );
+        }
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn push_with_gossip_payload_with_state_and_routing_rejects_fee_insolvent_transaction() {
+        let fixture = nexus_fee_fixture(None, None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let queue = Queue::test(config_factory(), &time_source);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+
+        let err = queue
+            .push_with_gossip_payload_with_state_and_routing(
+                tx,
+                &fixture.state,
+                RoutingDecision::new(LaneId::SINGLE, DataSpaceId::GLOBAL),
+                Some(Arc::new(vec![1_u8])),
+            )
+            .expect_err("fee-insolvent gossip should be rejected before enqueue");
+
+        assert!(matches!(err.err, Error::NexusFeeAdmissionRejected { .. }));
+        assert_eq!(queue.queued_len(), 0);
+    }
+
+    #[test]
+    fn get_transactions_for_block_with_state_drops_transaction_that_loses_fee_balance() {
+        let fixture = nexus_fee_fixture(Some(Numeric::from(10_u32)), None);
+        let (_time_handle, time_source) = TimeSource::new_mock(Duration::default());
+        let mut queue = Queue::test(config_factory(), &time_source);
+        let (event_sender, mut event_receiver) = tokio::sync::broadcast::channel(8);
+        queue.events_sender = event_sender;
+        let queue = Arc::new(queue);
+        let tx = accepted_tx_by(
+            fixture.authority_id.clone(),
+            &fixture.authority_keypair,
+            &time_source,
+        );
+        let tx_hash = tx.as_ref().hash();
+
+        queue
+            .push_with_lane_with_state(tx, &fixture.state)
+            .expect("funded payer should be admitted before the balance race");
+
+        let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = fixture.state.block(header);
+        let mut stx = block.transaction();
+        let removed = stx.world.remove_asset_and_metadata(&AssetId::of(
+            fixture.fee_asset_definition_id.clone(),
+            fixture.authority_id.clone(),
+        ));
+        assert!(removed.is_some(), "fee asset should exist before removal");
+        stx.apply();
+        block.commit().expect("commit fee asset removal");
+
+        let mut guards = Vec::new();
+        queue.get_transactions_for_block_with_state(&fixture.state, nonzero!(1_usize), &mut guards);
+
+        assert!(
+            guards.is_empty(),
+            "balance-race tx must not reach proposal assembly"
+        );
+        assert_eq!(queue.queued_len(), 0);
+        let mut saw_rejected = false;
+        while let Ok(event) = event_receiver.try_recv() {
+            let EventBox::Pipeline(PipelineEventBox::Transaction(event)) = event else {
+                continue;
+            };
+            if event.hash != tx_hash {
+                continue;
+            }
+            let TransactionStatus::Rejected(reason) = &event.status else {
+                continue;
+            };
+            assert!(matches!(
+                reason.as_ref(),
+                iroha_data_model::transaction::error::TransactionRejectionReason::Validation(
+                    iroha_data_model::ValidationFail::NotPermitted(message)
+                ) if message.contains("fee asset")
+                    && message.contains(&fixture.fee_asset_definition_id.to_string())
+                    && message.contains(&fixture.authority_id.to_string())
+            ));
+            saw_rejected = true;
+            break;
+        }
+        assert!(
+            saw_rejected,
+            "expected rejected pipeline event for dropped tx"
+        );
     }
 
     #[test]
@@ -5860,7 +6266,9 @@ pub mod tests {
 
     fn sample_unregister_instruction() -> InstructionBox {
         let domain_name = format!("dummy{}", rand::random::<u64>());
-        InstructionBox::from(Unregister::domain(domain_name.parse().unwrap()))
+        InstructionBox::from(Unregister::domain(
+            DomainId::try_new(&domain_name, "universal").unwrap(),
+        ))
     }
 
     const RUNTIME_UPGRADE_ALLOWED_ID: &str = "upgrade-q1";
@@ -5920,6 +6328,39 @@ pub mod tests {
         )
     }
 
+    fn accepted_tx_with_ttl(
+        account_id: AccountId,
+        key_pair: &KeyPair,
+        time_source: &TimeSource,
+        ttl: Duration,
+    ) -> AcceptedTransaction<'static> {
+        let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
+        let mut builder =
+            TransactionBuilder::new_with_time_source(chain_id.clone(), account_id, time_source)
+                .with_instructions(vec![sample_unregister_instruction()]);
+        builder.set_ttl(ttl);
+        let tx = builder.sign(key_pair.private_key());
+        let default_limits = TransactionParameters::default();
+        let tx_limits = TransactionParameters::with_max_signatures(
+            nonzero!(16_u64),
+            nonzero!(4096_u64),
+            nonzero!(1024_u64),
+            default_limits.max_tx_bytes(),
+            default_limits.max_decompressed_bytes(),
+            default_limits.max_metadata_depth(),
+        );
+        let crypto_cfg = iroha_config::parameters::actual::Crypto::default();
+        AcceptedTransaction::accept_with_time_source(
+            tx,
+            &chain_id,
+            Duration::from_millis(10),
+            tx_limits,
+            &crypto_cfg,
+            time_source,
+        )
+        .expect("Failed to accept Transaction with TTL.")
+    }
+
     fn accepted_tx_with_attachments(
         account_id: AccountId,
         key_pair: &KeyPair,
@@ -5958,7 +6399,6 @@ pub mod tests {
         .expect("Failed to accept Transaction.")
     }
 
-    #[cfg(feature = "telemetry")]
     fn accepted_ivm_tx_by(
         account_id: AccountId,
         key_pair: &KeyPair,
@@ -6000,7 +6440,6 @@ pub mod tests {
         .expect("Failed to accept IVM transaction.")
     }
 
-    #[cfg(feature = "telemetry")]
     fn minimal_ivm_program_with_max_cycles(abi_version: u8, max_cycles: u64) -> Vec<u8> {
         const IVM_MAGIC: [u8; 4] = *b"IVM\0";
         const HEADER_SUFFIX: [u8; 4] = [1, 0, 0, 4];
@@ -6016,11 +6455,82 @@ pub mod tests {
 
     /// Build a minimal world with a single domain and account for tests.
     pub fn world_with_test_domains() -> World {
-        let domain_id: DomainId = "wonderland".parse().expect("Valid");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
         let (account_id, _account_keypair) = gen_account_in("wonderland");
         let domain = Domain::new(domain_id.clone()).build(&account_id);
         let account = Account::new(account_id.clone()).build(&account_id);
         World::with([domain], [account], [])
+    }
+
+    struct NexusFeeFixture {
+        state: State,
+        authority_id: AccountId,
+        authority_keypair: KeyPair,
+        sponsor_id: AccountId,
+        fee_asset_definition_id: AssetDefinitionId,
+    }
+
+    fn nexus_fee_fixture(
+        authority_balance: Option<Numeric>,
+        sponsor_balance: Option<Numeric>,
+    ) -> NexusFeeFixture {
+        let (authority_id, authority_keypair) = gen_account_in("wonderland");
+        let (sponsor_id, _sponsor_keypair) = gen_account_in("wonderland");
+        let (sink_id, _sink_keypair) = gen_account_in("wonderland");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
+        let domain = Domain::new(domain_id.clone()).build(&authority_id);
+        let authority_account = Account::new(authority_id.clone()).build(&authority_id);
+        let sponsor_account = Account::new(sponsor_id.clone()).build(&sponsor_id);
+        let sink_account = Account::new(sink_id.clone()).build(&sink_id);
+        let fee_asset_id = AssetDefinitionId::new(domain_id.clone(), "xor".parse().expect("xor"));
+        let asset_definition = {
+            let __asset_definition_id = fee_asset_id.clone();
+            AssetDefinition::numeric(__asset_definition_id.clone())
+                .with_name(__asset_definition_id.name().to_string())
+        }
+        .build(&authority_id);
+        let mut assets = Vec::new();
+        if let Some(balance) = authority_balance {
+            assets.push(Asset::new(
+                AssetId::of(fee_asset_id.clone(), authority_id.clone()),
+                balance,
+            ));
+        }
+        if let Some(balance) = sponsor_balance {
+            assets.push(Asset::new(
+                AssetId::of(fee_asset_id.clone(), sponsor_id.clone()),
+                balance,
+            ));
+        }
+        let world = World::with_assets(
+            [domain],
+            [authority_account, sponsor_account, sink_account],
+            [asset_definition],
+            assets,
+            [],
+        );
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let mut state = State::new(world, kura, query_handle);
+        {
+            let nexus = state.nexus.get_mut();
+            nexus.enabled = true;
+            nexus.fees.base_fee = Numeric::from(1_u32);
+            nexus.fees.per_byte_fee = Numeric::zero();
+            nexus.fees.per_instruction_fee = Numeric::zero();
+            nexus.fees.per_gas_unit_fee = Numeric::zero();
+            nexus.fees.sponsorship_enabled = true;
+            nexus.fees.sponsor_max_fee = Numeric::zero();
+            nexus.fees.fee_asset_id = fee_asset_id.to_string();
+            nexus.fees.fee_sink_account_id = sink_id.to_string();
+        }
+        NexusFeeFixture {
+            state,
+            authority_id,
+            authority_keypair,
+            sponsor_id,
+            fee_asset_definition_id: fee_asset_id,
+        }
     }
 
     #[test]
@@ -6290,7 +6800,7 @@ pub mod tests {
         bind_manifest: bool,
     ) -> (World, AccountId, KeyPair) {
         let (account_id, key_pair) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("Valid");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
         let domain = Domain::new(domain_id.clone()).build(&account_id);
         let account = Account::new(account_id.clone())
             .with_uaid(Some(uaid))
@@ -6920,7 +7430,7 @@ pub mod tests {
         let (account_id, key_pair) = gen_account_in("wonderland");
         let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
         let domain_name = format!("tagged{}", rand::random::<u64>());
-        let unregister = Unregister::domain(domain_name.parse().unwrap());
+        let unregister = Unregister::domain(DomainId::try_new(&domain_name, "universal").unwrap());
         let tx =
             TransactionBuilder::new_with_time_source(chain_id.clone(), account_id, &time_source)
                 .with_instructions([unregister])
@@ -8137,7 +8647,7 @@ pub mod tests {
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
         let (bob_id, bob_keypair) = gen_account_in("wonderland");
         let world = {
-            let domain_id: DomainId = "wonderland".parse().expect("Valid");
+            let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
             let domain = Domain::new(domain_id.clone()).build(&alice_id);
             let alice_account = Account::new(alice_id.clone()).build(&alice_id);
             let bob_account = Account::new(bob_id.clone()).build(&bob_id);

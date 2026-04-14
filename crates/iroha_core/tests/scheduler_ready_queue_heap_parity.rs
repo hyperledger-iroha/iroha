@@ -19,11 +19,11 @@ fn run_with_ready_heap(
     // Build world: two accounts, one asset def, balances seeded
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         ),
         NumericSpec::default(),
@@ -88,7 +88,7 @@ fn scheduler_ready_queue_heap_vs_wave_sort_parity() {
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());

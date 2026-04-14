@@ -170,6 +170,7 @@ pub(super) enum FrontierSlotEvent {
 pub(super) struct FrontierSlotActions {
     pub(super) fetch_block_body: bool,
     pub(super) enter_deep_catchup: Option<&'static str>,
+    pub(super) request_commit_pipeline_for: Option<HashOf<BlockHeader>>,
     pub(super) request_view_change: Option<(u64, u64, ViewChangeCause)>,
     pub(super) retire_slot: bool,
 }
@@ -398,6 +399,7 @@ impl FrontierSlot {
                 body_present,
                 requester,
             } => {
+                let previous_body_missing = self.body_missing();
                 let higher_view = view > self.candidate.view;
                 let same_candidate = self.matches_candidate(block_hash, view);
                 if higher_view {
@@ -439,6 +441,9 @@ impl FrontierSlot {
                     self.repair_state.quorum_timeout_rebroadcasted = false;
                     self.timers.observed_at = now;
                     self.record_progress(now);
+                    if body_present {
+                        actions.request_commit_pipeline_for = Some(block_hash);
+                    }
                 } else if same_candidate {
                     self.owner_kind = SlotOwnerKind::BlockCreatedLed;
                     self.candidate.block_created_seen = true;
@@ -455,6 +460,9 @@ impl FrontierSlot {
                         self.candidate.validation_state = FrontierValidationState::Pending;
                         self.phase = FrontierSlotPhase::ValidateBody;
                         self.record_progress(now);
+                        if previous_body_missing {
+                            actions.request_commit_pipeline_for = Some(block_hash);
+                        }
                     } else {
                         self.phase = FrontierSlotPhase::AwaitBody;
                         self.note_lag_if_needed(now);
@@ -476,6 +484,7 @@ impl FrontierSlot {
                 view,
                 sender,
             } => {
+                let previous_body_missing = self.body_missing();
                 if !self.matches_candidate(block_hash, view) {
                     self.sync_compat_fields();
                     return actions;
@@ -496,6 +505,9 @@ impl FrontierSlot {
                 }
                 self.phase = FrontierSlotPhase::ValidateBody;
                 self.record_progress(now);
+                if previous_body_missing {
+                    actions.request_commit_pipeline_for = Some(block_hash);
+                }
             }
             FrontierSlotEvent::OnVoteObserved {
                 block_hash,
@@ -504,14 +516,23 @@ impl FrontierSlot {
             } => {
                 if self.matches_candidate(block_hash, view) {
                     self.owner_kind = SlotOwnerKind::ExactSlotRepair;
+                    let fresh_vote_observation = !self.quorum_progress.votes_observed
+                        || !matches!(self.phase, FrontierSlotPhase::AwaitCommitQc)
+                        || voter
+                            .as_ref()
+                            .is_some_and(|voter| self.candidate.voters.insert(voter.clone()));
                     if let Some(voter) = voter {
-                        self.candidate.voters.insert(voter);
+                        let _ = self.candidate.voters.insert(voter);
                     }
                     self.candidate.vote_state = FrontierVoteState::VotesObserved;
                     self.quorum_progress.votes_observed = true;
                     self.quorum_progress.last_vote_at = Some(now);
                     self.phase = FrontierSlotPhase::AwaitCommitQc;
-                    self.record_progress(now);
+                    if fresh_vote_observation {
+                        self.record_progress(now);
+                    } else {
+                        self.timers.last_updated_at = now;
+                    }
                 } else if view >= self.candidate.view {
                     let owner_changed =
                         self.candidate.block_hash != block_hash || self.candidate.view != view;
@@ -541,11 +562,17 @@ impl FrontierSlot {
                     return actions;
                 }
                 self.owner_kind = SlotOwnerKind::ExactSlotRepair;
+                let fresh_commit_qc_observation = !self.quorum_progress.commit_qc_observed
+                    || !matches!(self.phase, FrontierSlotPhase::AwaitCommitQc);
                 self.candidate.vote_state = FrontierVoteState::CommitQcObserved;
                 self.quorum_progress.commit_qc_observed = true;
                 self.quorum_progress.last_commit_qc_at = Some(now);
                 self.phase = FrontierSlotPhase::AwaitCommitQc;
-                self.record_progress(now);
+                if fresh_commit_qc_observation {
+                    self.record_progress(now);
+                } else {
+                    self.timers.last_updated_at = now;
+                }
             }
             FrontierSlotEvent::OnAuthoritativeSupersede {
                 block_hash,
@@ -688,7 +715,23 @@ impl FrontierSlot {
                 } else if matches!(self.mode, FrontierSlotMode::PassiveCatchup) {
                     self.repair_state.last_reason = Some("frontier_stall_reset");
                 } else if matches!(self.mode, FrontierSlotMode::DeepCatchup) {
-                    actions.enter_deep_catchup = self.repair_state.deep_catchup_reason;
+                    if self.repair_state.quorum_timeout_rebroadcasted {
+                        self.owner_kind = SlotOwnerKind::ExactSlotRepair;
+                        self.active_view = self
+                            .current_view_for_timeout(requested_view)
+                            .saturating_add(1);
+                        self.timers.last_view_advance_at = Some(now);
+                        self.timers.last_updated_at = now;
+                        self.repair_state.quorum_timeout_rebroadcasted = false;
+                        actions.request_view_change = Some((
+                            self.height,
+                            self.current_view_for_timeout(requested_view),
+                            cause,
+                        ));
+                    } else {
+                        self.repair_state.quorum_timeout_rebroadcasted = true;
+                        actions.enter_deep_catchup = self.repair_state.deep_catchup_reason;
+                    }
                 } else {
                     if self.repair_state.quorum_timeout_rebroadcasted {
                         self.owner_kind = SlotOwnerKind::ExactSlotRepair;

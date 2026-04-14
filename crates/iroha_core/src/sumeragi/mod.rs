@@ -9826,15 +9826,35 @@ impl InboundBlockMessage {
         let elapsed_ms = u64::try_from(enqueued_at.elapsed().as_millis()).unwrap_or(u64::MAX);
         Some((queue, elapsed_ms))
     }
+
+    #[cfg(test)]
+    pub(crate) fn message(&self) -> &BlockMessage {
+        &self.message
+    }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct FrontierBlockSyncHint {
     contiguous_frontier_pressure_active: AtomicBool,
     frontier_lane_active: AtomicBool,
+    initialized: AtomicBool,
+}
+
+impl Default for FrontierBlockSyncHint {
+    fn default() -> Self {
+        Self {
+            contiguous_frontier_pressure_active: AtomicBool::new(false),
+            frontier_lane_active: AtomicBool::new(false),
+            initialized: AtomicBool::new(true),
+        }
+    }
 }
 
 impl FrontierBlockSyncHint {
+    fn set_initialized(&self, initialized: bool) {
+        self.initialized.store(initialized, Ordering::Relaxed);
+    }
+
     fn set_contiguous_frontier_pressure_active(&self, active: bool) {
         self.contiguous_frontier_pressure_active
             .store(active, Ordering::Relaxed);
@@ -9845,8 +9865,10 @@ impl FrontierBlockSyncHint {
     }
 
     fn should_pause_latest_gossip(&self) -> bool {
-        self.contiguous_frontier_pressure_active
-            .load(Ordering::Relaxed)
+        !self.initialized.load(Ordering::Relaxed)
+            || self
+                .contiguous_frontier_pressure_active
+                .load(Ordering::Relaxed)
             || self.frontier_lane_active.load(Ordering::Relaxed)
     }
 }
@@ -10970,6 +10992,32 @@ pub(crate) fn test_sumeragi_handle_with_payload_cap(
     (handle, block_payload_rx)
 }
 
+#[cfg(test)]
+mod frontier_block_sync_hint_tests {
+    use super::FrontierBlockSyncHint;
+
+    #[test]
+    fn latest_gossip_pauses_until_initialized() {
+        let hint = FrontierBlockSyncHint::default();
+        assert!(
+            !hint.should_pause_latest_gossip(),
+            "default hint should not pause gossip for direct unit-test handles",
+        );
+
+        hint.set_initialized(false);
+        assert!(
+            hint.should_pause_latest_gossip(),
+            "startup should pause proactive block-sync gossip until the actor finishes initialization",
+        );
+
+        hint.set_initialized(true);
+        assert!(
+            !hint.should_pause_latest_gossip(),
+            "clearing the startup gate should restore normal latest-gossip behavior",
+        );
+    }
+}
+
 /// Adapter exposing a static roster derived from WSV peers.
 #[derive(Clone)]
 pub struct WsvEpochRosterAdapter {
@@ -11104,6 +11152,7 @@ impl SumeragiStartArgs {
         )
         .with_wake(wake_tx.clone());
         let frontier_block_sync_hint = handle.frontier_block_sync_hint();
+        frontier_block_sync_hint.set_initialized(false);
 
         let rbc_status_handle = rbc_status::register_handle();
         rbc_status::set_active(&rbc_status_handle);

@@ -27,7 +27,7 @@ Soracloud v1 は、権限のある IVM 専用ランタイムです。
   権威ある世界国家と、埋め込まれたSoracloudランタイムマネージャー。
 
 ## ランタイムスコープ- Soracloud v1 は `SoraContainerRuntimeV1::Ivm` のみを受け入れます。
-- `NativeProcess` は拒否されたままです。
+- Hosted HTTP: `execution_plane = HttpService`, `runtime = Inrou`.
 - 順序付けされたメールボックスの実行は、許可された IVM ハンドラーを直接実行します。
 - 水分補給と具体化は、むしろコミットされた SoraFS/DA コンテンツから来ます
   合成ローカル スナップショットよりも。

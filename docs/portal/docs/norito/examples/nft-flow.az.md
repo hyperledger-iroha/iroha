@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 09ff44a2df8cbcb9f57017239070a16f5287cbfc59a8289ce54933e84f90a5e8
 source_last_modified: "2026-03-26T13:01:47.374572+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ NFT-nin həyat dövrünün sonundan sona qədər gedir: sahibinə zərbetmə, me
 
 - NFT tərifinin (məsələn, `n0#wonderland`) fraqmentdə istifadə edilən sahib/qəbuledici hesabları ilə yanaşı mövcud olduğundan əmin olun (Alice üçün `<i105-account-id>`, Bob üçün `<i105-account-id>`).
 - NFT-ni hazırlamaq üçün `nft_issue_and_transfer` giriş nöqtəsini çağırın, onu Alicedən Boba köçürün və buraxılışı təsvir edən metadata bayrağı əlavə edin.
-- Köçürməni yoxlamaq üçün `iroha_cli ledger nft list --account <id>` və ya SDK ekvivalentləri ilə NFT jurnalının vəziyyətini yoxlayın, sonra yandırma təlimatı işlədikdən sonra aktivin silindiyini təsdiqləyin.
+- Köçürməni yoxlamaq üçün `iroha ledger nft list all --verbose` və ya SDK ekvivalentləri ilə NFT jurnalının vəziyyətini yoxlayın, sonra yandırma təlimatı işlədikdən sonra aktivin silindiyini təsdiqləyin.
 
 ## Əlaqədar SDK təlimatları
 

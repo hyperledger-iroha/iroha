@@ -75,7 +75,8 @@ fn bench_block_header() -> BlockHeader {
 fn build_bench_state() -> BenchState {
     let (authority, _) = gen_account_in("wonderland");
     let (recipient, _) = gen_account_in("wonderland");
-    let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
+    let domain_id: DomainId =
+        DomainId::try_new("wonderland", "universal").expect("valid domain id");
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let authority_account = Account::new(authority.clone()).build(&authority);
     let recipient_account = Account::new(recipient.clone()).build(&recipient);
@@ -130,7 +131,7 @@ fn setup_role_assigned(state: &mut BenchState) {
 
 fn setup_asset_definition(state: &mut BenchState) {
     let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     state.apply_instrs([Register::asset_definition(AssetDefinition::numeric(ad)).into()]);
@@ -139,7 +140,7 @@ fn setup_asset_definition(state: &mut BenchState) {
 fn setup_asset_and_balance(state: &mut BenchState) {
     setup_asset_definition(state);
     let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let asset_id = AssetId::of(ad, state.ctx.authority.clone());
@@ -202,7 +203,10 @@ fn bench_isi(
 /// Register the individual ISI microbenchmarks for this group.
 fn run_benchmarks(c: &mut Criterion) {
     bench_isi(c, "RegisterDomain", setup_none, |_ctx| {
-        Register::domain(Domain::new("bench".parse().unwrap())).into()
+        Register::domain(Domain::new(
+            DomainId::try_new("bench", "universal").unwrap(),
+        ))
+        .into()
     });
     bench_isi(c, "RegisterAccount", setup_none, |_ctx| {
         let (acc, _) = gen_account_in("wonderland");
@@ -210,7 +214,7 @@ fn run_benchmarks(c: &mut Criterion) {
     });
     bench_isi(c, "RegisterAssetDef", setup_none, |_ctx| {
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         Register::asset_definition(AssetDefinition::numeric(ad)).into()
@@ -242,7 +246,7 @@ fn run_benchmarks(c: &mut Criterion) {
     );
     bench_isi(c, "MintAsset", setup_asset_definition, |ctx| {
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let id = AssetId::of(ad, ctx.authority.clone());
@@ -250,7 +254,7 @@ fn run_benchmarks(c: &mut Criterion) {
     });
     bench_isi(c, "TransferAsset", setup_asset_and_balance, |ctx| {
         let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let id = AssetId::of(ad, ctx.authority.clone());

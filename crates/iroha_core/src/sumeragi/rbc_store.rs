@@ -39,6 +39,51 @@ pub(super) fn load_session_from_dir(
     ChunkStore::load_session_from_dir(dir, key, expected_chain_hash, expected_manifest)
 }
 
+/// Metadata extracted from a persisted RBC session snapshot.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PersistedSessionMetadata {
+    /// Block hash associated with the RBC session.
+    pub block_hash: HashOf<BlockHeader>,
+    /// Block height associated with the RBC session.
+    pub height: u64,
+    /// Consensus view associated with the RBC session.
+    pub view: u64,
+    /// Total chunk count advertised by the persisted session.
+    pub total_chunks: u32,
+    /// Number of chunk payloads still retained in the persisted file.
+    pub persisted_chunk_count: u32,
+    /// Whether the persisted session had already observed DELIVER.
+    pub delivered: bool,
+    /// Whether the persisted session was marked invalid.
+    pub invalid: bool,
+}
+
+/// Load validated metadata for a single persisted session directly from `dir`.
+///
+/// Returns `Ok(None)` when the session file is absent or fails the same chain/manifest guards
+/// used by restart recovery.
+pub fn load_session_metadata_from_dir(
+    dir: &Path,
+    key: &SessionKey,
+    expected_chain_hash: &Hash,
+    expected_manifest: &SoftwareManifest,
+) -> io::Result<Option<PersistedSessionMetadata>> {
+    let _suppressor = panic_hook::ScopedSuppressor::new();
+    Ok(
+        load_session_from_dir(dir, key, expected_chain_hash, expected_manifest)?.map(|persisted| {
+            PersistedSessionMetadata {
+                block_hash: persisted.block_hash,
+                height: persisted.height,
+                view: persisted.view,
+                total_chunks: persisted.total_chunks,
+                persisted_chunk_count: u32::try_from(persisted.chunks.len()).unwrap_or(u32::MAX),
+                delivered: persisted.delivered,
+                invalid: persisted.invalid,
+            }
+        }),
+    )
+}
+
 impl SoftwareManifest {
     /// Capture the build manifest for the currently running binary.
     pub fn current() -> Self {
@@ -1690,6 +1735,79 @@ mod tests {
         let rebuilt = RbcSession::from_persisted_unchecked(&persisted).expect("rebuild session");
         assert_eq!(rebuilt.total_chunks(), 2);
         assert_eq!(rebuilt.received_chunks(), 0);
+    }
+
+    #[test]
+    fn load_session_metadata_from_dir_reports_chunk_counts() {
+        let dir = tempdir().unwrap();
+        let key = session_key(13);
+        let store = ChunkStore::new(
+            dir.path().to_path_buf(),
+            Duration::from_secs(120),
+            2,
+            48,
+            4,
+            1 << 20,
+        )
+        .expect("chunk store init");
+
+        let mut session = RbcSession::test_new(2, None, None, 0);
+        session.test_note_chunk(0, vec![1u8; 8], 0);
+        session.test_note_chunk(1, vec![2u8; 8], 0);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+
+        store
+            .persist_session(key, &session, &chain_hash, &manifest, &[])
+            .expect("persist session");
+
+        let metadata = load_session_metadata_from_dir(dir.path(), &key, &chain_hash, &manifest)
+            .expect("inspect persisted session")
+            .expect("metadata should exist");
+        assert_eq!(metadata.block_hash, key.0);
+        assert_eq!(metadata.height, key.1);
+        assert_eq!(metadata.view, key.2);
+        assert_eq!(metadata.total_chunks, 2);
+        assert_eq!(metadata.persisted_chunk_count, 2);
+        assert!(!metadata.delivered);
+        assert!(!metadata.invalid);
+    }
+
+    #[test]
+    fn load_session_metadata_from_dir_keeps_delivered_metadata_without_chunk_bytes() {
+        let dir = tempdir().unwrap();
+        let key = session_key(14);
+        let store = ChunkStore::new(
+            dir.path().to_path_buf(),
+            Duration::from_secs(120),
+            2,
+            48,
+            4,
+            1 << 20,
+        )
+        .expect("chunk store init");
+
+        let mut session = RbcSession::test_new(2, None, None, 0);
+        session.test_note_chunk(0, vec![5u8; 8], 0);
+        session.test_note_chunk(1, vec![6u8; 8], 0);
+        session.test_set_sent_ready(true);
+        session.record_deliver(0, vec![0xAA; 64]);
+        let chain_hash = test_chain_hash();
+        let manifest = test_manifest();
+        let mut persisted = session.to_persisted(key, chain_hash, &manifest, &[]);
+        persisted.chunks.clear();
+
+        store
+            .write_session(&persisted)
+            .expect("write persisted session");
+
+        let metadata = load_session_metadata_from_dir(dir.path(), &key, &chain_hash, &manifest)
+            .expect("inspect persisted session")
+            .expect("metadata should exist");
+        assert_eq!(metadata.total_chunks, 2);
+        assert_eq!(metadata.persisted_chunk_count, 0);
+        assert!(metadata.delivered);
+        assert!(!metadata.invalid);
     }
 
     #[test]

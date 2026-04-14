@@ -788,6 +788,9 @@ mod tests {
                 peer_geo: iroha_config::parameters::actual::ToriiPeerGeo::default(),
                 soranet_privacy_ingest: iroha_config::parameters::actual::SoranetPrivacyIngest::default(),
                 debug_match_filters: false,
+                webhooks_enabled: iroha_config::parameters::defaults::torii::WEBHOOKS_ENABLED,
+                zk_attachments_enabled:
+                    iroha_config::parameters::defaults::torii::ZK_ATTACHMENTS_ENABLED,
                 operator_auth: iroha_config::parameters::actual::ToriiOperatorAuth::default(),
                 operator_signatures: iroha_config::parameters::actual::ToriiOperatorSignatures::default(),
                 preauth_max_connections: None,

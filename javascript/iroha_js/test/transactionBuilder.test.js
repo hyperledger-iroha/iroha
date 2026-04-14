@@ -17,8 +17,6 @@ import {
   buildRegisterKaigiRelayTransaction,
   buildRegisterSmartContractCodeTransaction,
   buildRegisterSmartContractBytesTransaction,
-  buildDeactivateContractInstanceTransaction,
-  buildActivateContractInstanceTransaction,
   buildRemoveSmartContractBytesTransaction,
   buildProposeDeployContractTransaction,
   buildCastZkBallotTransaction,
@@ -795,8 +793,7 @@ test("buildProposeDeployContractTransaction wraps proposal", () => {
         chainId: "test-chain",
         authority: AUTHORITY_ID_INPUT,
         proposal: {
-          namespace: "apps",
-          contractId: "ledger",
+          contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
           codeHash: "aa".repeat(32),
           abiHash: "bb".repeat(32),
           window: { lower: 1, upper: 2 },
@@ -806,7 +803,10 @@ test("buildProposeDeployContractTransaction wraps proposal", () => {
   );
   assert.equal(captures.length, 1);
   const propose = captures[0].instructions[0].ProposeDeployContract;
-  assert.equal(propose.namespace, "apps");
+  assert.equal(
+    propose.contract_address,
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  );
 });
 
 test("buildCastZkBallotTransaction encodes ballot", () => {
@@ -1047,80 +1047,6 @@ test("buildRegisterSmartContractBytesTransaction encodes code payload", () => {
   );
   const parsed = JSON.parse(captures[0].instructions[0]);
   assert.equal(parsed.RegisterSmartContractBytes.code, codeBytes.toString("base64"));
-});
-
-test("buildDeactivateContractInstanceTransaction wraps instruction with reason", () => {
-  const captures = [];
-  const fakeResult = {
-    signed_transaction: Buffer.from([0x02]),
-    hash: Buffer.alloc(32, 0xdd),
-  };
-  withNativeBinding(
-    {
-      buildTransaction: (...args) => {
-        captures.push(args[2]);
-        return fakeResult;
-      },
-    },
-    () => {
-      buildDeactivateContractInstanceTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        namespace: "apps",
-        contractId: "ledger",
-        reason: "audit",
-        privateKey: PRIVATE_KEY,
-      });
-    },
-  );
-  const parsed = JSON.parse(captures[0][0]);
-  assert.equal(parsed.DeactivateContractInstance.reason, "audit");
-});
-
-test("buildActivateContractInstanceTransaction normalizes identifiers", () => {
-  const captures = [];
-  const fakeResult = {
-    signed_transaction: Buffer.from([0x03]),
-    hash: Buffer.alloc(32, 0xdd),
-  };
-  withNativeBinding(
-    {
-      buildTransaction: (
-        chainId,
-        authority,
-        instructions,
-        metadataPayload,
-        creationTimeMs,
-        ttlMs,
-        nonce,
-        secret,
-      ) => {
-        captures.push({
-          chainId,
-          authority,
-          instructions,
-          metadataPayload,
-          creationTimeMs,
-          ttlMs,
-          nonce,
-          secret,
-        });
-        return fakeResult;
-      },
-    },
-    () => {
-      buildActivateContractInstanceTransaction({
-        chainId: "test-chain",
-        authority: AUTHORITY_ID_INPUT,
-        namespace: "apps",
-        contractId: "governance",
-        codeHash: Buffer.alloc(32, 0xee),
-        privateKey: PRIVATE_KEY,
-      });
-    },
-  );
-  const parsed = JSON.parse(captures[0].instructions[0]);
-  assert.equal(parsed.ActivateContractInstance.contract_id, "governance");
 });
 
 test("buildRemoveSmartContractBytesTransaction wraps removal payload", () => {

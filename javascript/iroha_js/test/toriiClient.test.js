@@ -7823,8 +7823,7 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
         manifest_quorum: { total_checks: 2, satisfied: 1, rejected: 1 },
         recent_manifest_activations: [
           {
-            namespace: "finance",
-            contract_id: "alpha",
+            contract_address: "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
             code_hash_hex: "deadbeef",
             abi_hash_hex: null,
             height: 10,
@@ -7910,8 +7909,7 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
         manifest_quorum: { total_checks: 3, satisfied: 2, rejected: 1 },
         recent_manifest_activations: [
           {
-            namespace: "finance",
-            contract_id: "alpha",
+            contract_address: "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
             code_hash_hex: "deadbeef",
             abi_hash_hex: "b16b00b5",
             height: 11,
@@ -8061,7 +8059,10 @@ test("getStatusSnapshot normalizes payload and tracks metrics", async () => {
   assert.equal(first.status.lane_governance_sealed_total, 2);
   assert.deepEqual(first.status.lane_governance_sealed_aliases, ["archive", "payments"]);
   const activation = first.status.governance?.recent_manifest_activations[0];
-  assert.equal(activation?.namespace, "finance");
+  assert.equal(
+    activation?.contract_address,
+    "xorc1qyqqqqqqqqqqqq9a5v7f58jgm40m0w7esnqg2pxj68d3f8a2l9ja3s",
+  );
   assert.equal(activation?.abi_hash_hex, null);
 
   const second = await client.getStatusSnapshot();
@@ -8416,6 +8417,920 @@ test("getNodeCapabilities rejects unsupported option fields", async () => {
   );
 });
 
+test("getSccpCapabilities normalizes discovery response", async () => {
+  const fetchImpl = async (url) => {
+    assert.equal(url, `${BASE_URL}/v1/sccp/capabilities`);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        local_domain: 0,
+        local_chain: "sora",
+        proof_family: "stark-fri-v1",
+        burn_bundle_path: "/v1/sccp/proofs/burn/{message_id}",
+        governance_bundle_path: "/v1/sccp/proofs/governance/{message_id}",
+        message_bundle_path: "/v1/sccp/proofs/message/{message_id}",
+        message_proof_path: "/v1/sccp/artifacts/message/{message_id}",
+        message_job_path: "/v1/sccp/jobs/message/{message_id}",
+        recent_messages_path: "/v1/sccp/messages/recent",
+        proof_manifest_path: "/v1/sccp/manifests",
+        legacy_burn_registry_backend: "bridge/sccp/burn-v1",
+        legacy_governance_registry_backend: "bridge/sccp/governance-v1",
+        proof_submit_path: "/v1/bridge/proofs/submit",
+        message_submit_path: "/v1/bridge/messages",
+        message_payload_kinds: ["asset_register", "route_activate", "transfer"],
+        codecs: [
+          {
+            id: 4,
+            key: "ton_raw",
+            description: "TON raw addresses in workchain:account_hex form.",
+          },
+        ],
+        counterparties: [
+          {
+            domain: 4,
+            chain: "ton",
+            verifier_backend: { version: 1, key: "ton-contract-v1" },
+            message_backend: "sccp/stark-fri-v1/ton",
+            registry_backend: "bridge/sccp/stark-fri-v1/ton",
+            counterparty_account_codec: 4,
+            counterparty_account_codec_key: "ton_raw",
+            destination_rollout: {
+              version: 1,
+              verifier_plan: "TonContractNativeRecursive",
+              immutable_verifier_ready: false,
+              anchors_ready: false,
+              verifier_identity: null,
+              verifier_code_hash: null,
+              anchor_id: null,
+              blockers: [
+                "immutable TON verifier contract is not deployed for this SCCP lane",
+                "Sora Parliament anchor set is not approved for this SCCP lane",
+                "native recursive verifier contract submission is not wired into the SCCP relayer path",
+              ],
+            },
+            production_ready: false,
+            disabled_reason:
+              "disabled until the immutable TON recursive SCCP verifier and Sora Parliament anchors are live for this lane",
+          },
+        ],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getSccpCapabilities();
+  assert.deepEqual(result, {
+    localDomain: 0,
+    localChain: "sora",
+    proofFamily: "stark-fri-v1",
+    burnBundlePath: "/v1/sccp/proofs/burn/{message_id}",
+    governanceBundlePath: "/v1/sccp/proofs/governance/{message_id}",
+    messageBundlePath: "/v1/sccp/proofs/message/{message_id}",
+    messageProofPath: "/v1/sccp/artifacts/message/{message_id}",
+    messageJobPath: "/v1/sccp/jobs/message/{message_id}",
+    recentMessagesPath: "/v1/sccp/messages/recent",
+    proofManifestPath: "/v1/sccp/manifests",
+    legacyBurnRegistryBackend: "bridge/sccp/burn-v1",
+    legacyGovernanceRegistryBackend: "bridge/sccp/governance-v1",
+    proofSubmitPath: "/v1/bridge/proofs/submit",
+    messageSubmitPath: "/v1/bridge/messages",
+    messagePayloadKinds: ["asset_register", "route_activate", "transfer"],
+    codecs: [
+      {
+        id: 4,
+        key: "ton_raw",
+        description: "TON raw addresses in workchain:account_hex form.",
+      },
+    ],
+    counterparties: [
+      {
+        domain: 4,
+        chain: "ton",
+        verifierBackendKey: "ton-contract-v1",
+        messageBackend: "sccp/stark-fri-v1/ton",
+        registryBackend: "bridge/sccp/stark-fri-v1/ton",
+        counterpartyAccountCodec: 4,
+        counterpartyAccountCodecKey: "ton_raw",
+        destinationRollout: {
+          version: 1,
+          verifierPlan: "TonContractNativeRecursive",
+          immutableVerifierReady: false,
+          anchorsReady: false,
+          verifierIdentity: null,
+          verifierCodeHash: null,
+          anchorId: null,
+          blockers: [
+            "immutable TON verifier contract is not deployed for this SCCP lane",
+            "Sora Parliament anchor set is not approved for this SCCP lane",
+            "native recursive verifier contract submission is not wired into the SCCP relayer path",
+          ],
+        },
+        productionReady: false,
+        disabledReason:
+          "disabled until the immutable TON recursive SCCP verifier and Sora Parliament anchors are live for this lane",
+      },
+    ],
+  });
+});
+
+test("getSccpProofManifests normalizes typed manifest response", async () => {
+  const fetchImpl = async (url) => {
+    assert.equal(url, `${BASE_URL}/v1/sccp/manifests`);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        local_domain: 0,
+        local_chain: "sora",
+        proof_family: "stark-fri-v1",
+        manifests: [
+          {
+            version: 1,
+            local_domain: 0,
+            local_chain: "sora",
+            counterparty_domain: 1,
+            chain: "eth",
+            security_model: "RecursiveZk",
+            anchor_governance: "SoraParliament",
+            destination_binding: {
+              version: 1,
+              key: "sccp:eth:governed-recursive-zk:v1",
+              binding_hash: "ab".repeat(32),
+            },
+            proof_family: "stark-fri-v1",
+            verifier_backend: { version: 1, key: "evm-secp256k1-keccak-v1" },
+            message_backend: "sccp/stark-fri-v1/eth",
+            registry_backend: "bridge/sccp/stark-fri-v1/eth",
+            counterparty_account_codec: 2,
+            counterparty_account_codec_key: "evm_hex",
+            finality_model: "EthereumBeaconExecution",
+            verifier_target: "EvmContract",
+            manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:eth",
+            required_public_inputs: [
+              "message_id",
+              "payload_hash",
+              "target_domain",
+              "commitment_root",
+              "finality_height",
+              "finality_block_hash",
+            ],
+            message_payload_kinds: ["asset_register", "route_activate", "transfer"],
+            destination_rollout: {
+              version: 1,
+              verifier_plan: "EvmGroth16Bn254Adapter",
+              immutable_verifier_ready: false,
+              anchors_ready: false,
+              verifier_identity: null,
+              verifier_code_hash: null,
+              anchor_id: null,
+              blockers: [
+                "immutable EVM verifier contract is not deployed for this SCCP lane",
+                "Sora Parliament anchor set is not approved for this SCCP lane",
+                "Groth16/bn254 adapter proof submission is not wired into the SCCP relayer path",
+              ],
+            },
+            production_ready: false,
+            disabled_reason:
+              "disabled until the immutable EVM Groth16/bn254 SCCP verifier and Sora Parliament anchors are live for this lane",
+            submission_template: {
+              version: 1,
+              encoding: "abi_tuple_v1",
+              submission_kind: "contract_call",
+              verifier_entrypoint:
+                "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
+              required_arguments: [
+                {
+                  key: "proof_bytes",
+                  description: "Transparent SCCP proof bytes emitted by the prover backend.",
+                },
+                {
+                  key: "public_inputs",
+                  description: "Fixed-width ABI words for the SCCP public inputs in manifest order.",
+                },
+                {
+                  key: "statement_hash",
+                  description:
+                    "Canonical SCCP statement hash exposed as a bytes32 verifier input.",
+                },
+              ],
+            },
+          },
+        ],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getSccpProofManifests();
+  assert.deepEqual(result, {
+    localDomain: 0,
+    localChain: "sora",
+    proofFamily: "stark-fri-v1",
+    manifests: [
+      {
+        version: 1,
+        localDomain: 0,
+        localChain: "sora",
+        counterpartyDomain: 1,
+        chain: "eth",
+        proofFamily: "stark-fri-v1",
+        securityModel: "RecursiveZk",
+        anchorGovernance: "SoraParliament",
+        destinationBinding: {
+          version: 1,
+          key: "sccp:eth:governed-recursive-zk:v1",
+          bindingHash: "ab".repeat(32),
+        },
+        verifierBackendKey: "evm-secp256k1-keccak-v1",
+        messageBackend: "sccp/stark-fri-v1/eth",
+        registryBackend: "bridge/sccp/stark-fri-v1/eth",
+        counterpartyAccountCodec: 2,
+        counterpartyAccountCodecKey: "evm_hex",
+        finalityModel: "EthereumBeaconExecution",
+        verifierTarget: "EvmContract",
+        manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:eth",
+        requiredPublicInputs: [
+          "message_id",
+          "payload_hash",
+          "target_domain",
+          "commitment_root",
+          "finality_height",
+          "finality_block_hash",
+        ],
+        messagePayloadKinds: ["asset_register", "route_activate", "transfer"],
+        destinationRollout: {
+          version: 1,
+          verifierPlan: "EvmGroth16Bn254Adapter",
+          immutableVerifierReady: false,
+          anchorsReady: false,
+          verifierIdentity: null,
+          verifierCodeHash: null,
+          anchorId: null,
+          blockers: [
+            "immutable EVM verifier contract is not deployed for this SCCP lane",
+            "Sora Parliament anchor set is not approved for this SCCP lane",
+            "Groth16/bn254 adapter proof submission is not wired into the SCCP relayer path",
+          ],
+        },
+        productionReady: false,
+        disabledReason:
+          "disabled until the immutable EVM Groth16/bn254 SCCP verifier and Sora Parliament anchors are live for this lane",
+        submissionTemplate: {
+          version: 1,
+          encoding: "abi_tuple_v1",
+          submissionKind: "contract_call",
+          verifierEntrypoint:
+            "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
+          requiredArguments: [
+            {
+              key: "proof_bytes",
+              description: "Transparent SCCP proof bytes emitted by the prover backend.",
+            },
+            {
+              key: "public_inputs",
+              description: "Fixed-width ABI words for the SCCP public inputs in manifest order.",
+            },
+            {
+              key: "statement_hash",
+              description:
+                "Canonical SCCP statement hash exposed as a bytes32 verifier input.",
+            },
+          ],
+        },
+      },
+    ],
+  });
+});
+
+test("getSccpProofManifests rejects unsupported verifier target", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        local_domain: 0,
+        local_chain: "sora",
+        proof_family: "stark-fri-v1",
+        manifests: [
+          {
+            version: 1,
+            local_domain: 0,
+            local_chain: "sora",
+            counterparty_domain: 4,
+            chain: "ton",
+            security_model: "RecursiveZk",
+            anchor_governance: "SoraParliament",
+            destination_binding: {
+              version: 1,
+              key: "sccp:ton:governed-recursive-zk:v1",
+              binding_hash: "ac".repeat(32),
+            },
+            proof_family: "stark-fri-v1",
+            verifier_backend: { version: 1, key: "ton-contract-v1" },
+            message_backend: "sccp/stark-fri-v1/ton",
+            registry_backend: "bridge/sccp/stark-fri-v1/ton",
+            counterparty_account_codec: 4,
+            counterparty_account_codec_key: "ton_raw",
+            finality_model: "TonMasterchain",
+            verifier_target: "UnknownVerifier",
+            manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+            required_public_inputs: ["message_id"],
+            message_payload_kinds: ["transfer"],
+            destination_rollout: {
+              version: 1,
+              verifier_plan: "TonContractNativeRecursive",
+              immutable_verifier_ready: false,
+              anchors_ready: false,
+              verifier_identity: null,
+              verifier_code_hash: null,
+              anchor_id: null,
+              blockers: [
+                "immutable TON verifier contract is not deployed for this SCCP lane",
+                "Sora Parliament anchor set is not approved for this SCCP lane",
+                "native recursive verifier contract submission is not wired into the SCCP relayer path",
+              ],
+            },
+            production_ready: false,
+            disabled_reason:
+              "disabled until the immutable TON recursive SCCP verifier and Sora Parliament anchors are live for this lane",
+            submission_template: {
+              version: 1,
+              encoding: "ton_cell_v1",
+              submission_kind: "internal_message",
+              verifier_entrypoint: "op::submit_sccp_message_proof",
+              required_arguments: [
+                {
+                  key: "proof_cell",
+                  description: "Transparent SCCP proof cell emitted by the TON prover backend.",
+                },
+              ],
+            },
+          },
+        ],
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.getSccpProofManifests(),
+    /verifier_target must be a supported SCCP verifier target/,
+  );
+});
+
+test("getSccpMessageProofArtifact normalizes typed artifact response", async () => {
+  const messageId = "11".repeat(32);
+  const payloadHash = "22".repeat(32);
+  const commitmentRoot = "33".repeat(32);
+  const finalityBlockHash = "44".repeat(32);
+  const fetchImpl = async (url) => {
+    assert.equal(url, `${BASE_URL}/v1/sccp/artifacts/message/${messageId}`);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        version: 1,
+        local_domain: 0,
+        counterparty_domain: 4,
+        security_model: "RecursiveZk",
+        anchor_governance: "SoraParliament",
+        destination_binding: {
+          version: 1,
+          key: "sccp:ton:governed-recursive-zk:v1",
+          binding_hash: "56".repeat(32),
+        },
+        proof_family: "stark-fri-v1",
+        verifier_backend: { version: 1, key: "ton-contract-v1" },
+        message_backend: "sccp/stark-fri-v1/ton",
+        registry_backend: "bridge/sccp/stark-fri-v1/ton",
+        manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+        finality_model: "TonMasterchain",
+        verifier_target: "TonContract",
+        public_inputs: {
+          version: 1,
+          message_id: messageId,
+          payload_hash: payloadHash,
+          target_domain: 4,
+          commitment_root: commitmentRoot,
+          finality_height: "19",
+          finality_block_hash: finalityBlockHash,
+        },
+        proof_bytes: "aa55",
+        proof_envelope_summary: {
+          version: 1,
+          backend: "stark",
+          circuit_id: "sccp-message-transparent-v1",
+          vk_hash: "66".repeat(32),
+          public_inputs_schema_hash: "77".repeat(32),
+          public_inputs_schema_len_bytes: 3,
+          public_input_column_count: 1,
+          public_input_word_count: 1,
+          open_proof_len_bytes: 5,
+          backend_proof_len_bytes: 3,
+          aux_len_bytes: 2,
+        },
+        submission_package: {
+          version: 1,
+          proof_family: "stark-fri-v1",
+          verifier_backend: { version: 1, key: "ton-contract-v1" },
+          envelope_encoding: "ton_message_body_v1",
+          submission_kind: "internal_message",
+          verifier_entrypoint: "op::submit_sccp_message_proof",
+          platform_payload: {
+            platform: "ton_internal_message",
+            payload: {
+              proof_cell: "aa55",
+              public_inputs_cell: "cc77",
+              bundle_cell: "dd88",
+            },
+          },
+          arguments: [
+            { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
+            { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
+            { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
+          ],
+          envelope_bytes: "ee99",
+        },
+        bundle: {
+          version: 1,
+          commitment_root: commitmentRoot,
+          commitment: {
+            version: 1,
+            kind: "Transfer",
+            target_domain: 4,
+            message_id: messageId,
+            payload_hash: payloadHash,
+            parliament_certificate_hash: null,
+          },
+          merkle_proof: {
+            steps: [{ sibling_hash: "55".repeat(32), sibling_is_left: false }],
+          },
+          payload: {
+            Transfer: {
+              version: 1,
+              source_domain: 0,
+              dest_domain: 4,
+              nonce: "21",
+              amount: "77",
+            },
+          },
+          finality_proof: "bb66",
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getSccpMessageProofArtifact(`0x${messageId}`);
+  assert.deepEqual(result, {
+    version: 1,
+    localDomain: 0,
+    counterpartyDomain: 4,
+    proofFamily: "stark-fri-v1",
+    securityModel: "RecursiveZk",
+    anchorGovernance: "SoraParliament",
+    destinationBinding: {
+      version: 1,
+      key: "sccp:ton:governed-recursive-zk:v1",
+      bindingHash: "56".repeat(32),
+    },
+    verifierBackendKey: "ton-contract-v1",
+    messageBackend: "sccp/stark-fri-v1/ton",
+    registryBackend: "bridge/sccp/stark-fri-v1/ton",
+    manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+    finalityModel: "TonMasterchain",
+    verifierTarget: "TonContract",
+    publicInputs: {
+      version: 1,
+      messageId,
+      payloadHash,
+      targetDomain: 4,
+      commitmentRoot,
+      finalityHeight: 19,
+      finalityBlockHash,
+    },
+    proofBytes: "aa55",
+    proofEnvelopeSummary: {
+      version: 1,
+      backend: "stark",
+      circuitId: "sccp-message-transparent-v1",
+      vkHash: "66".repeat(32),
+      publicInputsSchemaHash: "77".repeat(32),
+      publicInputsSchemaLenBytes: 3,
+      publicInputColumnCount: 1,
+      publicInputWordCount: 1,
+      openProofLenBytes: 5,
+      backendProofLenBytes: 3,
+      auxLenBytes: 2,
+    },
+    submissionPackage: {
+      version: 1,
+      proofFamily: "stark-fri-v1",
+      verifierBackendKey: "ton-contract-v1",
+      envelopeEncoding: "ton_message_body_v1",
+      submissionKind: "internal_message",
+      verifierEntrypoint: "op::submit_sccp_message_proof",
+      platformPayload: {
+        kind: "ton_internal_message",
+        value: {
+          proofCell: "aa55",
+          publicInputsCell: "cc77",
+          bundleCell: "dd88",
+        },
+      },
+      arguments: [
+        { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
+        { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
+        { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
+      ],
+      envelopeBytes: "ee99",
+    },
+    bundle: {
+      version: 1,
+      commitmentRoot,
+      commitment: {
+        version: 1,
+        kind: "Transfer",
+        targetDomain: 4,
+        messageId,
+        payloadHash,
+        parliamentCertificateHash: null,
+      },
+      merkleProof: {
+        steps: [{ siblingHash: "55".repeat(32), siblingIsLeft: false }],
+      },
+      payload: {
+        kind: "Transfer",
+        value: {
+          version: 1,
+          source_domain: 0,
+          dest_domain: 4,
+          nonce: "21",
+          amount: "77",
+        },
+      },
+      finalityProof: "bb66",
+    },
+  });
+});
+
+test("getSccpMessageProofArtifact rejects bundle/public input mismatch", async () => {
+  const fetchImpl = async () =>
+    createResponse({
+      status: 200,
+      jsonData: {
+        version: 1,
+        local_domain: 0,
+        counterparty_domain: 1,
+        security_model: "RecursiveZk",
+        anchor_governance: "SoraParliament",
+        destination_binding: {
+          version: 1,
+          key: "sccp:eth:governed-recursive-zk:v1",
+          binding_hash: "57".repeat(32),
+        },
+        proof_family: "stark-fri-v1",
+        verifier_backend: { version: 1, key: "evm-secp256k1-keccak-v1" },
+        message_backend: "sccp/stark-fri-v1/eth",
+        registry_backend: "bridge/sccp/stark-fri-v1/eth",
+        manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:eth",
+        finality_model: "EthereumBeaconExecution",
+        verifier_target: "EvmContract",
+        public_inputs: {
+          version: 1,
+          message_id: "11".repeat(32),
+          payload_hash: "22".repeat(32),
+          target_domain: 1,
+          commitment_root: "33".repeat(32),
+          finality_height: "7",
+          finality_block_hash: "44".repeat(32),
+        },
+        proof_bytes: "aa55",
+        submission_package: {
+          version: 1,
+          proof_family: "stark-fri-v1",
+          verifier_backend: { version: 1, key: "evm-secp256k1-keccak-v1" },
+          envelope_encoding: "abi_tuple_v1",
+          submission_kind: "contract_call",
+          verifier_entrypoint:
+            "submitSccpMessageProof(bytes proof_bytes, bytes32[6] public_inputs, bytes32 statement_hash)",
+          platform_payload: {
+            platform: "evm_contract_call",
+            payload: {
+              proof_bytes: "aa55",
+              public_inputs: {
+                message_id: "11".repeat(32),
+                payload_hash: "22".repeat(32),
+                target_domain_word: "00".repeat(31) + "01",
+                commitment_root: "33".repeat(32),
+                finality_height_word: "00".repeat(31) + "07",
+                finality_block_hash: "44".repeat(32),
+              },
+              public_inputs_hash: "88".repeat(32),
+              statement_hash: "55".repeat(32),
+              attestation: {
+                version: 1,
+                message_id: "11".repeat(32),
+                source_domain: 0,
+                commitment_root: "33".repeat(32),
+                native_proof_hash: "99".repeat(32),
+                signatures: [
+                  {
+                    signer_address: "12".repeat(20),
+                    signature_bytes: "34".repeat(65),
+                  },
+                ],
+              },
+            },
+          },
+          arguments: [
+            { key: "proof_bytes", encoding: "raw_bytes", bytes: "aa55" },
+            { key: "public_inputs", encoding: "abi_bytes32x6", bytes: "66".repeat(32 * 6) },
+            { key: "statement_hash", encoding: "abi_bytes32", bytes: "55".repeat(32) },
+          ],
+          envelope_bytes: "77",
+        },
+        bundle: {
+          version: 1,
+          commitment_root: "33".repeat(32),
+          commitment: {
+            version: 1,
+            kind: "Transfer",
+            target_domain: 1,
+            message_id: "99".repeat(32),
+            payload_hash: "22".repeat(32),
+            parliament_certificate_hash: null,
+          },
+          merkle_proof: { steps: [] },
+          payload: { Transfer: { version: 1 } },
+          finality_proof: "bb66",
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  await assert.rejects(
+    () => client.getSccpMessageProofArtifact("11".repeat(32)),
+    /bundle\.commitment\.message_id must match public_inputs\.message_id/,
+  );
+});
+
+test("getSccpMessageProofJob normalizes typed job response", async () => {
+  const messageId = "11".repeat(32);
+  const payloadHash = "22".repeat(32);
+  const commitmentRoot = "33".repeat(32);
+  const finalityBlockHash = "44".repeat(32);
+  const fetchImpl = async (url) => {
+    assert.equal(url, `${BASE_URL}/v1/sccp/jobs/message/${messageId}`);
+    return createResponse({
+      status: 200,
+      jsonData: {
+        version: 1,
+        chain_family: "Ton",
+        chain: "ton",
+        local_domain: 0,
+        counterparty_domain: 4,
+        security_model: "RecursiveZk",
+        anchor_governance: "SoraParliament",
+        destination_binding: {
+          version: 1,
+          key: "sccp:ton:governed-recursive-zk:v1",
+          binding_hash: "58".repeat(32),
+        },
+        proof_family: "stark-fri-v1",
+        verifier_backend: { version: 1, key: "ton-contract-v1" },
+        message_backend: "sccp/stark-fri-v1/ton",
+        registry_backend: "bridge/sccp/stark-fri-v1/ton",
+        manifest_seed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+        finality_model: "TonMasterchain",
+        verifier_target: "TonContract",
+        submission_template: {
+          version: 1,
+          encoding: "ton_cell_v1",
+          submission_kind: "internal_message",
+          verifier_entrypoint: "op::submit_sccp_message_proof",
+          required_arguments: [
+            {
+              key: "proof_cell",
+              description: "Transparent SCCP proof cell emitted by the TON prover backend.",
+            },
+            {
+              key: "public_inputs_cell",
+              description: "Cell-encoded SCCP public inputs in manifest order.",
+            },
+            {
+              key: "bundle_cell",
+              description:
+                "Cell-encoded Nexus SCCP message bundle for the TON bridge contract.",
+            },
+          ],
+        },
+        submission_package: {
+          version: 1,
+          proof_family: "stark-fri-v1",
+          verifier_backend: { version: 1, key: "ton-contract-v1" },
+          envelope_encoding: "ton_message_body_v1",
+          submission_kind: "internal_message",
+          verifier_entrypoint: "op::submit_sccp_message_proof",
+          platform_payload: {
+            platform: "ton_internal_message",
+            payload: {
+              proof_cell: "aa55",
+              public_inputs_cell: "cc77",
+              bundle_cell: "dd88",
+            },
+          },
+          arguments: [
+            { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
+            { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
+            { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
+          ],
+          envelope_bytes: "ee99",
+        },
+        proof_envelope_summary: {
+          version: 1,
+          backend: "stark",
+          circuit_id: "sccp-message-transparent-v1",
+          vk_hash: "88".repeat(32),
+          public_inputs_schema_hash: "99".repeat(32),
+          public_inputs_schema_len_bytes: 7,
+          public_input_column_count: 6,
+          public_input_word_count: 6,
+          open_proof_len_bytes: 42,
+          backend_proof_len_bytes: 21,
+          aux_len_bytes: 0,
+        },
+        public_inputs: {
+          version: 1,
+          message_id: messageId,
+          payload_hash: payloadHash,
+          target_domain: 4,
+          commitment_root: commitmentRoot,
+          finality_height: "19",
+          finality_block_hash: finalityBlockHash,
+        },
+        payload_kind: "transfer",
+        payload_projection: {
+          Transfer: {
+            version: 1,
+            source_domain: 0,
+            dest_domain: 4,
+            nonce: "21",
+            asset_home_domain: 0,
+            asset_id: { TextUtf8: { value: "xor#universal" } },
+            amount: "77",
+            sender: { TextUtf8: { value: "nexus:soraswap" } },
+            recipient: {
+              TonRaw: {
+                workchain: 0,
+                account: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+              },
+            },
+            route_id: { TextUtf8: { value: "nexus:ton:xor" } },
+          },
+        },
+        bundle: {
+          version: 1,
+          commitment_root: commitmentRoot,
+          commitment: {
+            version: 1,
+            kind: "Transfer",
+            target_domain: 4,
+            message_id: messageId,
+            payload_hash: payloadHash,
+            parliament_certificate_hash: null,
+          },
+          merkle_proof: { steps: [] },
+          payload: { Transfer: { version: 1, amount: "77" } },
+          finality_proof: "bb66",
+        },
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const result = await client.getSccpMessageProofJob(`0x${messageId}`);
+  assert.deepEqual(result, {
+    version: 1,
+    chainFamily: "Ton",
+    chain: "ton",
+    localDomain: 0,
+    counterpartyDomain: 4,
+    proofFamily: "stark-fri-v1",
+    securityModel: "RecursiveZk",
+    anchorGovernance: "SoraParliament",
+    destinationBinding: {
+      version: 1,
+      key: "sccp:ton:governed-recursive-zk:v1",
+      bindingHash: "58".repeat(32),
+    },
+    verifierBackendKey: "ton-contract-v1",
+    messageBackend: "sccp/stark-fri-v1/ton",
+    registryBackend: "bridge/sccp/stark-fri-v1/ton",
+    manifestSeed: "iroha:sccp:bridge-proof:message:stark-fri:v1:ton",
+    finalityModel: "TonMasterchain",
+    verifierTarget: "TonContract",
+    submissionTemplate: {
+      version: 1,
+      encoding: "ton_cell_v1",
+      submissionKind: "internal_message",
+      verifierEntrypoint: "op::submit_sccp_message_proof",
+      requiredArguments: [
+        {
+          key: "proof_cell",
+          description: "Transparent SCCP proof cell emitted by the TON prover backend.",
+        },
+        {
+          key: "public_inputs_cell",
+          description: "Cell-encoded SCCP public inputs in manifest order.",
+        },
+        {
+          key: "bundle_cell",
+          description: "Cell-encoded Nexus SCCP message bundle for the TON bridge contract.",
+        },
+      ],
+    },
+    submissionPackage: {
+      version: 1,
+      proofFamily: "stark-fri-v1",
+      verifierBackendKey: "ton-contract-v1",
+      envelopeEncoding: "ton_message_body_v1",
+      submissionKind: "internal_message",
+      verifierEntrypoint: "op::submit_sccp_message_proof",
+      platformPayload: {
+        kind: "ton_internal_message",
+        value: {
+          proofCell: "aa55",
+          publicInputsCell: "cc77",
+          bundleCell: "dd88",
+        },
+      },
+      arguments: [
+        { key: "proof_cell", encoding: "raw_bytes", bytes: "aa55" },
+        { key: "public_inputs_cell", encoding: "raw_bytes", bytes: "cc77" },
+        { key: "bundle_cell", encoding: "raw_bytes", bytes: "dd88" },
+      ],
+      envelopeBytes: "ee99",
+    },
+    proofEnvelopeSummary: {
+      version: 1,
+      backend: "stark",
+      circuitId: "sccp-message-transparent-v1",
+      vkHash: "88".repeat(32),
+      publicInputsSchemaHash: "99".repeat(32),
+      publicInputsSchemaLenBytes: 7,
+      publicInputColumnCount: 6,
+      publicInputWordCount: 6,
+      openProofLenBytes: 42,
+      backendProofLenBytes: 21,
+      auxLenBytes: 0,
+    },
+    publicInputs: {
+      version: 1,
+      messageId,
+      payloadHash,
+      targetDomain: 4,
+      commitmentRoot,
+      finalityHeight: 19,
+      finalityBlockHash,
+    },
+    payloadKind: "transfer",
+    payloadProjection: {
+      kind: "Transfer",
+      value: {
+        version: 1,
+        source_domain: 0,
+        dest_domain: 4,
+        nonce: 21,
+        asset_home_domain: 0,
+        asset_id: { kind: "TextUtf8", value: "xor#universal" },
+        amount: 77,
+        sender: { kind: "TextUtf8", value: "nexus:soraswap" },
+        recipient: {
+          kind: "TonRaw",
+          workchain: 0,
+          account: "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        },
+        route_id: { kind: "TextUtf8", value: "nexus:ton:xor" },
+      },
+    },
+    bundle: {
+      version: 1,
+      commitmentRoot,
+      commitment: {
+        version: 1,
+        kind: "Transfer",
+        targetDomain: 4,
+        messageId,
+        payloadHash,
+        parliamentCertificateHash: null,
+      },
+      merkleProof: { steps: [] },
+      payload: {
+        kind: "Transfer",
+        value: { version: 1, amount: "77" },
+      },
+      finalityProof: "bb66",
+    },
+  });
+});
+
 test("getRuntimeAbiActive normalizes ABI version", async () => {
   const fetchImpl = async () =>
     createResponse({
@@ -8762,7 +9677,10 @@ test("getGovernanceProposalTyped parses DeployContract variant", async () => {
   assert.ok(result.proposal);
   assert.equal(result.proposal?.status, "Approved");
   assert.equal(result.proposal?.kind.variant, "DeployContract");
-  assert.equal(result.proposal?.kind.deploy_contract?.contract_id, "router");
+  assert.equal(
+    result.proposal?.kind.deploy_contract?.contract_address,
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  );
 
   const notFoundClient = new ToriiClient(BASE_URL, {
     fetchImpl: async () => createResponse({ status: 404 }),
@@ -9110,6 +10028,107 @@ test("typed governance finalize/enact helpers always return drafts", async () =>
   assert.equal(captures[1].url, `${BASE_URL}/v1/gov/enact`);
 });
 
+test("draftMinistryAgendaProposal normalizes the draft response payload", async () => {
+  let capturedBody;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url, init) => {
+      capturedBody = JSON.parse(String(init.body));
+      assert.equal(url, `${BASE_URL}/v1/ministry/agenda/proposals/draft`);
+      return createResponse({
+        status: 200,
+        jsonData: {
+          ok: true,
+          agenda_proposal_id: "AC-2026-001",
+          authority: "i105-test-account",
+          tx_instructions: [
+            { wire_id: "SubmitAgendaProposal", payload_hex: "aa55" },
+          ],
+          signable_transaction_b64: "AQID",
+        },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+  const proposal = {
+    proposal_id: "AC-2026-001",
+    action: "add-to-denylist",
+  };
+  const draft = await client.draftMinistryAgendaProposal({
+    proposal,
+    authority: " i105-test-account ",
+  });
+
+  assert.deepEqual(capturedBody, {
+    proposal,
+    authority: "i105-test-account",
+  });
+  assert.deepEqual(draft, {
+    ok: true,
+    agenda_proposal_id: "AC-2026-001",
+    authority: "i105-test-account",
+    tx_instructions: [
+      { wire_id: "SubmitAgendaProposal", payload_hex: "aa55" },
+    ],
+    signable_transaction_b64: "AQID",
+  });
+});
+
+test("getMinistryAgendaProposal returns missing and persisted records", async () => {
+  let call = 0;
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async (url) => {
+      call += 1;
+      assert.equal(url, `${BASE_URL}/v1/ministry/agenda/proposals/AC-2026-001`);
+      if (call === 1) {
+        return createResponse({
+          status: 200,
+          jsonData: {
+            found: false,
+            record: null,
+          },
+          headers: { "content-type": "application/json" },
+        });
+      }
+      return createResponse({
+        status: 200,
+        jsonData: {
+          found: true,
+          record: {
+            proposal: {
+              proposal_id: "AC-2026-001",
+              action: "add-to-denylist",
+            },
+            authority: "i105-test-account",
+            submitted_tx_hash_hex: "ab".repeat(32),
+            submitted_height: 44,
+          },
+        },
+        headers: { "content-type": "application/json" },
+      });
+    },
+  });
+
+  const missing = await client.getMinistryAgendaProposal(" AC-2026-001 ");
+  const found = await client.getMinistryAgendaProposal("AC-2026-001");
+
+  assert.deepEqual(missing, {
+    found: false,
+    record: null,
+  });
+  assert.deepEqual(found, {
+    found: true,
+    record: {
+      proposal: {
+        proposal_id: "AC-2026-001",
+        action: "add-to-denylist",
+      },
+      authority: "i105-test-account",
+      submitted_tx_hash_hex: "ab".repeat(32),
+      submitted_height: 44,
+    },
+  });
+});
+
 test("governanceProposeDeployContract normalizes payloads", async () => {
   let capturedBody;
   const client = new ToriiClient(BASE_URL, {
@@ -9123,8 +10142,7 @@ test("governanceProposeDeployContract normalizes payloads", async () => {
     },
   });
   const result = await client.governanceProposeDeployContract({
-    namespace: " apps ",
-    contractId: "calc.v1",
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     codeHash: `0x${"1a".repeat(32)}`,
     abiHash: Buffer.alloc(32, 0xbb),
     abiVersion: "1",
@@ -9132,8 +10150,10 @@ test("governanceProposeDeployContract normalizes payloads", async () => {
     mode: "plain",
     limits: { maxTx: 5 },
   });
-  assert.equal(capturedBody.namespace, "apps");
-  assert.equal(capturedBody.contract_id, "calc.v1");
+  assert.equal(
+    capturedBody.contract_address,
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  );
   assert.equal(capturedBody.code_hash, "1a".repeat(32));
   assert.equal(capturedBody.abi_hash, "bb".repeat(32));
   assert.equal(capturedBody.mode, "Plain");
@@ -9156,8 +10176,7 @@ test("governanceProposeDeployContract accepts byte-array hashes", async () => {
   });
 
   await client.governanceProposeDeployContract({
-    namespace: "apps",
-    contractId: "calc.v1",
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     codeHash: Array.from(Buffer.alloc(32, 0x1a)),
     abiHash: Array.from(Buffer.alloc(32, 0xbb)),
   });
@@ -9179,8 +10198,7 @@ test("governanceProposeDeployContract rejects non-byte hash arrays", async () =>
   await assert.rejects(
     () =>
       client.governanceProposeDeployContract({
-        namespace: "apps",
-        contractId: "calc.v1",
+        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
         codeHash: [256],
         abiHash: Array.from(Buffer.alloc(32, 0xbb)),
       }),
@@ -9360,8 +10378,7 @@ test("governanceProposeDeployContract rejects invalid signal options", async () 
     () =>
       client.governanceProposeDeployContract(
         {
-          namespace: "apps",
-          contractId: "calc.v1",
+          contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
           codeHash: "hash:DEMO",
           abiHash: Buffer.alloc(32, 0xaa),
           abiVersion: "1",
@@ -12839,112 +13856,33 @@ test("iterateAssetHoldersQuery paginates query responses", async () => {
   assert.equal(callCount, 2);
 });
 
-test("iterateContractInstances paginates registry results", async () => {
-  const responses = [
-    {
-      namespace: "apps",
-      total: 3,
-      offset: 0,
-      limit: 2,
-      instances: [
-        { contract_id: "calc.v1", code_hash_hex: fakeHashHex(0xaa) },
-        { contract_id: "mint.v1", code_hash_hex: fakeHashHex(0xbb) },
-      ],
-    },
-    {
-      namespace: "apps",
-      total: 3,
-      offset: 2,
-      limit: 2,
-      instances: [{ contract_id: "vault.v1", code_hash_hex: fakeHashHex(0xcc) }],
-    },
-  ];
-  let callCount = 0;
+test("getGovernanceContract reads one governed binding", async () => {
+  let calledUrl;
   const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/contracts/instances/apps");
-    assert.equal(parsed.searchParams.get("contains"), "calc");
-    assert.equal(parsed.searchParams.get("limit"), "2");
-    assert.equal(parsed.searchParams.get("offset"), String(callCount * 2));
-    const payload = responses[callCount] ?? {
-      namespace: "apps",
-      total: 3,
-      offset: parsed.searchParams.get("offset") ?? "0",
-      limit: 2,
-      instances: [],
-    };
-    callCount += 1;
+    calledUrl = url;
     return createResponse({
       status: 200,
-      jsonData: payload,
+      jsonData: {
+        found: true,
+        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        dataspace: "universal",
+        code_hash_hex: fakeHashHex(0xaa),
+      },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const ids = [];
-  for await (const instance of client.iterateContractInstances("apps", {
-    contains: "calc",
-    pageSize: 2,
-  })) {
-    ids.push(instance.contract_id);
-  }
-  assert.deepEqual(ids, ["calc.v1", "mint.v1", "vault.v1"]);
-  assert.equal(callCount, 2);
-});
-
-test("iterateGovernanceInstances honours maxItems", async () => {
-  const responses = [
-    {
-      namespace: "apps",
-      total: 4,
-      offset: 0,
-      limit: 2,
-      instances: [
-        { contract_id: "calc.v1", code_hash_hex: fakeHashHex(0xaa) },
-        { contract_id: "mint.v1", code_hash_hex: fakeHashHex(0xbb) },
-      ],
-    },
-    {
-      namespace: "apps",
-      total: 4,
-      offset: 2,
-      limit: 2,
-      instances: [
-        { contract_id: "vault.v1", code_hash_hex: fakeHashHex(0xcc) },
-        { contract_id: "audit.v1", code_hash_hex: fakeHashHex(0xdd) },
-      ],
-    },
-  ];
-  let callCount = 0;
-  const fetchImpl = async (url) => {
-    const parsed = new URL(url);
-    assert.equal(parsed.pathname, "/v1/gov/instances/apps");
-    assert.equal(parsed.searchParams.get("hash_prefix"), "abcd");
-    const payload = responses[callCount] ?? {
-      namespace: "apps",
-      total: 4,
-      offset: parsed.searchParams.get("offset") ?? "0",
-      limit: 2,
-      instances: [],
-    };
-    callCount += 1;
-    return createResponse({
-      status: 200,
-      jsonData: payload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const ids = [];
-  for await (const instance of client.iterateGovernanceInstances("apps", {
-    hashPrefix: "abcd",
-    pageSize: 2,
-    maxItems: 3,
-  })) {
-    ids.push(instance.contract_id);
-  }
-  assert.deepEqual(ids, ["calc.v1", "mint.v1", "vault.v1"]);
-  assert.equal(callCount, 2);
+  const result = await client.getGovernanceContract(
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  );
+  assert.ok(
+    calledUrl?.includes(
+      "/v1/gov/contracts/tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    ),
+  );
+  assert.equal(result.found, true);
+  assert.equal(result.dataspace, "universal");
+  assert.equal(result.code_hash_hex, fakeHashHex(0xaa));
 });
 
 test("iterateTriggers paginates list endpoint", async () => {
@@ -15041,6 +15979,13 @@ test("deployContract submits base64 payload and returns response", async () => {
   let captured;
   const responsePayload = {
     ok: true,
+    contract_alias: "router::universal",
+    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+    previous_contract_address: null,
+    upgraded: false,
+    dataspace: "universal",
+    deploy_nonce: 7,
+    tx_hash_hex: "a".repeat(64),
     code_hash_hex: "b".repeat(64),
     abi_hash_hex: "c".repeat(64),
   };
@@ -15056,21 +16001,18 @@ test("deployContract submits base64 payload and returns response", async () => {
   const result = await client.deployContract({
     authority: FIXTURE_ALICE_ID,
     privateKey: "ed25519:deadbeef",
+    contractAlias: "router::universal",
     codeB64: Buffer.from("payload"),
-    manifest: { features_bitmap: 1 },
+    leaseExpiryMs: 1234,
   });
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/deploy`);
   const body = JSON.parse(captured.init.body);
-  assert.equal(body.code_b64, Buffer.from("payload").toString("base64"));
-  assert.deepEqual(body.manifest, {
-    code_hash: null,
-    abi_hash: null,
-    compiler_fingerprint: null,
-    features_bitmap: 1,
-    access_set_hints: null,
-    entrypoints: null,
-    kotoba: null,
-    provenance: null,
+  assert.deepEqual(body, {
+    authority: FIXTURE_ALICE_ID,
+    private_key: "ed25519:deadbeef",
+    contract_alias: "router::universal",
+    code_b64: Buffer.from("payload").toString("base64"),
+    lease_expiry_ms: 1234,
   });
   assert.deepEqual(result, responsePayload);
 });
@@ -15086,6 +16028,7 @@ test("deployContract rejects invalid base64 payloads", async () => {
       client.deployContract({
         authority: FIXTURE_ALICE_ID,
         privateKey: "ed25519:deadbeef",
+        contractAlias: "router::universal",
         codeB64: "YmFzZTY0*",
       }),
     (error) =>
@@ -15106,92 +16049,54 @@ test("deployContract rejects empty code bytes", async () => {
       client.deployContract({
         authority: FIXTURE_ALICE_ID,
         privateKey: "ed25519:deadbeef",
+        contractAlias: "router::universal",
         codeB64: Buffer.alloc(0),
       }),
     /deployContract\.codeB64/,
   );
 });
 
-test("deployContractInstance posts combined payload", async () => {
-  let captured;
-  const responsePayload = {
-    ok: true,
-    namespace: "apps",
-    contract_id: "calc",
-    code_hash_hex: "d".repeat(64),
-    abi_hash_hex: "e".repeat(64),
-  };
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: responsePayload,
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.deployContractInstance({
-    authority: FIXTURE_ALICE_ID,
-    privateKey: "ed25519:deadbeef",
-    namespace: "apps",
-    contractId: "calc",
-    codeB64: "YmFzZTY0",
-    manifest: { access_set_hints: { read_keys: [`account:${FIXTURE_ALICE_ID}`] } },
-  });
-  assert.equal(captured.url, `${BASE_URL}/v1/contracts/instance`);
-  const body = JSON.parse(captured.init.body);
-  assert.deepEqual(body, {
-    authority: FIXTURE_ALICE_ID,
-    private_key: "ed25519:deadbeef",
-    namespace: "apps",
-    contract_id: "calc",
-    code_b64: "YmFzZTY0",
-    manifest: {
-      code_hash: null,
-      abi_hash: null,
-      compiler_fingerprint: null,
-      features_bitmap: null,
-      access_set_hints: { read_keys: [`account:${FIXTURE_ALICE_ID}`], write_keys: [] },
-      entrypoints: null,
-      kotoba: null,
-      provenance: null,
+test("deployContract rejects manifest and dataspace shortcuts", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () => {
+      throw new Error("should not fetch");
     },
   });
-  assert.deepEqual(result, responsePayload);
-});
-
-test("activateContractInstance normalizes code hash", async () => {
-  let captured;
-  const fetchImpl = async (url, init) => {
-    captured = { url, init };
-    return createResponse({
-      status: 200,
-      jsonData: { ok: true },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.activateContractInstance({
-    authority: FIXTURE_ALICE_ID,
-    privateKey: "ed25519:deadbeef",
-    namespace: "apps",
-    contractId: "calc",
-    codeHash: "0x" + "f".repeat(64),
-  });
-  const body = JSON.parse(captured.init.body);
-  assert.equal(body.code_hash, "f".repeat(64));
-  assert.deepEqual(result, { ok: true });
+  await assert.rejects(
+    () =>
+      client.deployContract({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        contractAlias: "router::universal",
+        codeB64: Buffer.from("payload"),
+        dataspace: "universal",
+      }),
+    /deployContract\.dataspace is not accepted by \/v1\/contracts\/deploy/,
+  );
+  await assert.rejects(
+    () =>
+      client.deployContract({
+        authority: FIXTURE_ALICE_ID,
+        privateKey: "ed25519:deadbeef",
+        contractAlias: "router::universal",
+        codeB64: Buffer.from("payload"),
+        manifest: { features_bitmap: 1 },
+      }),
+    /deployContract\.manifest is not accepted by \/v1\/contracts\/deploy/,
+  );
 });
 
 test("callContract posts payload metadata and normalizes response", async () => {
   let captured;
   const responsePayload = {
     ok: true,
-    namespace: "apps",
-    contract_id: "calc",
+    submitted: true,
+    dataspace: "universal",
+    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     code_hash_hex: "1".repeat(64),
     abi_hash_hex: "2".repeat(64),
     tx_hash_hex: "3".repeat(64),
+    creation_time_ms: 42,
     entrypoint: "increment",
   };
   const fetchImpl = async (url, init) => {
@@ -15207,8 +16112,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
   const result = await client.callContract({
     authority: FIXTURE_ALICE_ID,
     privateKey: "ed25519:deadbeef",
-    namespace: "apps",
-    contractId: "calc",
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "increment",
     payload,
     gasAssetId: FIXTURE_ASSET_ID_D,
@@ -15219,8 +16123,7 @@ test("callContract posts payload metadata and normalizes response", async () => 
   assert.deepEqual(body, {
     authority: FIXTURE_ALICE_ID,
     private_key: "ed25519:deadbeef",
-    namespace: "apps",
-    contract_id: "calc",
+    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "increment",
     payload,
     gas_asset_id: FIXTURE_ASSET_ID_D,
@@ -15228,12 +16131,17 @@ test("callContract posts payload metadata and normalizes response", async () => 
   });
   assert.deepEqual(result, {
     ok: true,
-    namespace: "apps",
-    contract_id: "calc",
+    submitted: true,
+    dataspace: "universal",
+    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     code_hash_hex: "1".repeat(64),
     abi_hash_hex: "2".repeat(64),
     tx_hash_hex: "3".repeat(64),
+    creation_time_ms: 42,
     entrypoint: "increment",
+    transaction_scaffold_b64: null,
+    signed_transaction_b64: null,
+    signing_message_b64: null,
   });
 });
 
@@ -15248,8 +16156,7 @@ test("callContract rejects missing gasLimit", async () => {
       client.callContract({
         authority: FIXTURE_ALICE_ID,
         privateKey: "ed25519:deadbeef",
-        namespace: "apps",
-        contractId: "calc",
+        contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
       }),
     /contractCall\.gasLimit/,
   );
@@ -15267,8 +16174,7 @@ test("callContract rejects non-object options", async () => {
         {
           authority: FIXTURE_ALICE_ID,
           privateKey: "ed25519:deadbeef",
-          namespace: "apps",
-          contractId: "calc",
+          contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
           entrypoint: "ping",
         },
         "invalid",
@@ -15289,8 +16195,7 @@ test("callContract rejects unsupported option fields", async () => {
         {
           authority: FIXTURE_ALICE_ID,
           privateKey: "ed25519:deadbeef",
-          namespace: "apps",
-          contractId: "calc",
+          contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
           entrypoint: "ping",
         },
         { signal: new AbortController().signal, retry: true },
@@ -15320,10 +16225,9 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.proposeMultisigContractCall({
-    multisigAccountAlias: "cbdc@hbl",
+    multisigAccountAlias: "cbdc@banka",
     signerAccountId: FIXTURE_ALICE_ID,
-    namespace: "apps",
-    contractId: "mint",
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "execute",
     payload: { amount: "10" },
     gasAssetId: FIXTURE_ASSET_ID_D,
@@ -15333,10 +16237,9 @@ test("proposeMultisigContractCall posts alias selector and normalizes response",
   assert.equal(captured.url, `${BASE_URL}/v1/contracts/call/multisig/propose`);
   const body = JSON.parse(captured.init.body);
   assert.deepEqual(body, {
-    multisig_account_alias: "cbdc@hbl",
+    multisig_account_alias: "cbdc@banka",
     signer_account_id: FIXTURE_ALICE_ID,
-    namespace: "apps",
-    contract_id: "mint",
+    contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     entrypoint: "execute",
     payload: { amount: "10" },
     gas_asset_id: FIXTURE_ASSET_ID_D,
@@ -15409,11 +16312,11 @@ test("getMultisigSpec posts selector and returns raw spec payload", async () => 
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getMultisigSpec({
-    multisig_account_alias: "cbdc@ubl",
+    multisig_account_alias: "cbdc@bankb",
   });
   assert.equal(captured.url, `${BASE_URL}/v1/multisig/spec`);
   assert.deepEqual(JSON.parse(captured.init.body), {
-    multisig_account_alias: "cbdc@ubl",
+    multisig_account_alias: "cbdc@bankb",
   });
   assert.deepEqual(result, responsePayload);
 });
@@ -15441,7 +16344,7 @@ test("listMultisigProposals decodes proposal entries", async () => {
       }),
   });
   const result = await client.listMultisigProposals({
-    multisigAccountAlias: "cbdc@hbl",
+    multisigAccountAlias: "cbdc@banka",
   });
   assert.deepEqual(result, responsePayload);
 });
@@ -15467,12 +16370,12 @@ test("getMultisigProposal resolves by instructions hash", async () => {
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
   const result = await client.getMultisigProposal({
-    multisigAccountAlias: "cbdc@hbl",
+    multisigAccountAlias: "cbdc@banka",
     instructionsHash: "e".repeat(64),
   });
   assert.equal(captured.url, `${BASE_URL}/v1/multisig/proposals/get`);
   assert.deepEqual(JSON.parse(captured.init.body), {
-    multisig_account_alias: "cbdc@hbl",
+    multisig_account_alias: "cbdc@banka",
     instructions_hash: "e".repeat(64),
   });
   assert.deepEqual(result, responsePayload);
@@ -15488,7 +16391,7 @@ test("getMultisigSpec rejects selectors that set both account id and alias", asy
     () =>
       client.getMultisigSpec({
         multisigAccountId: FIXTURE_ALICE_ID,
-        multisigAccountAlias: "cbdc@hbl",
+        multisigAccountAlias: "cbdc@banka",
       }),
     /requires exactly one of multisig_account_id or multisig_account_alias/,
   );
@@ -15511,16 +16414,16 @@ test("getMultisigSpec accepts domain-scoped aliases and rejects unsupported alia
   });
 
   await client.getMultisigSpec({
-    multisigAccountAlias: "cbdc@hbl.universal",
+    multisigAccountAlias: "cbdc@banka.universal",
   });
   assert.deepEqual(JSON.parse(captured.init.body), {
-    multisig_account_alias: "cbdc@hbl.universal",
+    multisig_account_alias: "cbdc@banka.universal",
   });
 
   await assert.rejects(
     () =>
       client.getMultisigSpec({
-        multisigAccountAlias: "cbdc@hbl.universal.extra",
+        multisigAccountAlias: "cbdc@banka.universal.extra",
       }),
     /must use name@dataspace or name@domain.dataspace form/,
   );
@@ -15591,146 +16494,40 @@ test("getContractCodeBytes returns record", async () => {
   assert.deepEqual(result, { code_b64: "Y29kZQ==" });
 });
 
-test("listContractInstances encodes query params", async () => {
-  const fetchImpl = async (url) => {
-    assert.ok(url.includes("/v1/contracts/instances/apps"));
-    assert.ok(url.includes("contains=calc"));
-    assert.ok(url.includes("limit=5"));
-    assert.ok(url.includes("hash_prefix=aa"));
-    return createResponse({
-      status: 200,
-      jsonData: {
-        namespace: "apps",
-        total: 1,
-        offset: 0,
-        limit: 5,
-        instances: [{ contract_id: "calc", code_hash_hex: "1".repeat(64) }],
-      },
-      headers: { "content-type": "application/json" },
-    });
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listContractInstances("apps", {
-    contains: "calc",
-    hashPrefix: "aa",
-    limit: 5,
-  });
-  assert.deepEqual(result, {
-    namespace: "apps",
-    total: 1,
-    offset: 0,
-    limit: 5,
-    instances: [{ contract_id: "calc", code_hash_hex: "1".repeat(64) }],
-  });
-});
-
-test("listGovernanceInstances mirrors query and response handling", async () => {
+test("getGovernanceContract mirrors response handling", async () => {
   let calledUrl;
   const fetchImpl = async (url) => {
     calledUrl = url;
     return createResponse({
       status: 200,
       jsonData: {
-        namespace: "apps",
-        total: "2",
-        offset: "1",
-        limit: "10",
-        instances: [
-          { contract_id: "calc.v1", code_hash_hex: "1".repeat(64) },
-          { contract_id: "calc.v2", code_hash_hex: "2".repeat(64) },
-        ],
+        found: true,
+        contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+        dataspace: "universal",
+        code_hash_hex: "1".repeat(64),
       },
       headers: { "content-type": "application/json" },
     });
   };
   const client = new ToriiClient(BASE_URL, { fetchImpl });
-  const result = await client.listGovernanceInstances("apps", {
-    contains: "calc",
-    hashPrefix: "12",
-    offset: 1,
-    limit: 10,
-    order: "HASH_DESC",
-  });
-  assert.ok(calledUrl?.includes("/v1/gov/instances/apps"));
-  assert.ok(calledUrl?.includes("contains=calc"));
-  assert.ok(calledUrl?.includes("hash_prefix=12"));
-  assert.ok(calledUrl?.includes("offset=1"));
-  assert.ok(calledUrl?.includes("limit=10"));
-  assert.ok(calledUrl?.includes("order=hash_desc"));
-  assert.equal(result.namespace, "apps");
-  assert.equal(result.total, 2);
-  assert.equal(result.offset, 1);
-  assert.equal(result.limit, 10);
-  assert.equal(result.instances.length, 2);
-  assert.equal(result.instances[0].contract_id, "calc.v1");
+  const result = await client.getGovernanceContract(
+    "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+  );
+  assert.ok(calledUrl?.includes("/v1/gov/contracts/"));
+  assert.equal(result.contract_address, "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7");
+  assert.equal(result.dataspace, "universal");
+  assert.equal(result.code_hash_hex, "1".repeat(64));
 });
 
-test("listContractInstances rejects non-object options", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () => {
-      throw new Error("should not fetch");
-    },
-  });
-  await assert.rejects(
-    () => client.listContractInstances("apps", null),
-    /contractInstances options must be an object/,
-  );
-  await assert.rejects(
-    () => client.listContractInstances("apps", 7),
-    /contractInstances options must be an object/,
-  );
-});
-
-test("listGovernanceInstances rejects invalid order values", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { namespace: "apps", total: 0, offset: 0, limit: 10, instances: [] },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listGovernanceInstances("apps", { order: "recent_first" }),
-    /contractInstances\.order must be one of/,
-  );
-});
-
-test("listGovernanceInstances rejects non-hex hashPrefix values", async () => {
-  const client = new ToriiClient(BASE_URL, {
-    fetchImpl: async () =>
-      createResponse({
-        status: 200,
-        jsonData: { namespace: "apps", total: 0, offset: 0, limit: 10, instances: [] },
-        headers: { "content-type": "application/json" },
-      }),
-  });
-  await assert.rejects(
-    () => client.listGovernanceInstances("apps", { hashPrefix: "zzzz" }),
-    /contractInstances\.hashPrefix must be a non-empty hexadecimal string/,
-  );
-});
-
-test("listGovernanceInstances rejects unsupported option keys", async () => {
+test("getGovernanceContract rejects unsupported option keys", async () => {
   const client = new ToriiClient(BASE_URL, {
     fetchImpl: async () => {
       throw new Error("fetch should not be invoked for invalid options");
     },
   });
   await assert.rejects(
-    () => client.listGovernanceInstances("apps", { contains: "calc", cursor: "abc" }),
-    /contractInstances options contains unsupported fields: cursor/,
-  );
-});
-
-test("listContractInstances rejects invalid signal values", async () => {
-  const fetchImpl = async () => {
-    throw new Error("should not fetch");
-  };
-  const client = new ToriiClient(BASE_URL, { fetchImpl });
-  await assert.rejects(
-    () => client.listContractInstances("apps", { signal: {} }),
-    /contractInstances options\.signal must be an AbortSignal/,
+    () => client.getGovernanceContract("tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7", { cursor: "abc" }),
+    /getGovernanceContract options contains unsupported fields: cursor/,
   );
 });
 
@@ -17360,7 +18157,7 @@ test("getExplorerAccountQr normalizes payloads", async () => {
 });
 
 test("getExplorerAccountQr accepts account aliases on account-id paths", async () => {
-  const alias = "operator@hbl.universal";
+  const alias = "operator@banka.universal";
   const fetchImpl = async (url, init = {}) => {
     const requestUrl = new URL(url);
     assert.equal(init.method, "GET");

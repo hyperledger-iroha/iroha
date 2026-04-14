@@ -194,6 +194,8 @@ impl<T: Write> RunArgs<T> for LocalnetWizardArgs {
                 assets.push(AssetSpec {
                     id,
                     name,
+                    alias: None,
+                    owned_by: ALICE_ID.clone(),
                     mint_to: ALICE_ID.clone(),
                     quantity: qty,
                 });

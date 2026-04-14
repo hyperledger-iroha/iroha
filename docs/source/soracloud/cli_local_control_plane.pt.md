@@ -27,7 +27,7 @@ Soracloud v1 é um tempo de execução oficial somente IVM.
   estado mundial oficial, além do gerenciador de tempo de execução Soracloud incorporado.
 
 ## Escopo do tempo de execução- Soracloud v1 aceita apenas `SoraContainerRuntimeV1::Ivm`.
-- `NativeProcess` permanece rejeitado.
+- Hosted HTTP: `execution_plane = HttpService`, `runtime = Inrou`.
 - A execução ordenada da caixa de correio executa manipuladores IVM admitidos diretamente.
 - A hidratação e a materialização vêm do conteúdo SoraFS/DA comprometido, e não
   do que instantâneos locais sintéticos.

@@ -1,5 +1,3 @@
-use std::str::FromStr;
-
 use iroha_crypto::{Algorithm, Hash};
 use iroha_data_model::{
     DataSpaceId,
@@ -388,9 +386,10 @@ fn build_transfer_witness_bundle(
             .ok_or_else(|| Error::InvalidAxtBinding {
                 details: format!("{label} receiver balance overflow"),
             })?;
-    let domain = DomainId::from_str("lane").map_err(|err| Error::InvalidAxtBinding {
-        details: format!("invalid FASTPQ lane domain: {err}"),
-    })?;
+    let domain =
+        DomainId::try_new("lane", "universal").map_err(|err| Error::InvalidAxtBinding {
+            details: format!("invalid FASTPQ lane domain: {err}"),
+        })?;
     let sender = deterministic_account(
         &format!("{label}:source:{}", &binding.source_tx_commitment[..16]),
         source_tx_commitment,

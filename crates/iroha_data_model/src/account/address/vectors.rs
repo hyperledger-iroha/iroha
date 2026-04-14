@@ -1,7 +1,7 @@
 //! Deterministic address test vector generator for ADDR-2.
 
 use core::fmt;
-use std::{convert::TryInto, str::FromStr};
+use std::convert::TryInto;
 
 use hex;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
@@ -17,39 +17,10 @@ use super::{
 use crate::{
     account::{AccountAddress, AccountAddressError, AccountId, MultisigMember, MultisigPolicy},
     domain::DomainId,
-    name::Name,
 };
 
 /// Default I105 prefix used for deterministic vectors.
 pub const DEFAULT_VECTOR_NETWORK_PREFIX: u16 = 0x1234;
-
-const I105_BASE_U8: u8 = 105;
-const I105_CHECKSUM_LEN: usize = 6;
-
-fn i105_to_digits(payload: &str) -> Result<Vec<u8>, AccountAddressError> {
-    let discriminant = super::i105_discriminant_from_sentinel(payload)
-        .ok_or(AccountAddressError::MissingI105Sentinel)?;
-    let payload = payload
-        .strip_prefix(&super::i105_sentinel_for_discriminant(discriminant))
-        .or_else(|| {
-            super::ascii_str_to_fullwidth(&super::i105_sentinel_for_discriminant(discriminant))
-                .and_then(|fullwidth| payload.strip_prefix(&fullwidth))
-        })
-        .ok_or(AccountAddressError::MissingI105Sentinel)?;
-    super::i105_payload_digits(payload)
-}
-
-fn digits_to_i105_literal(digits: &[u8]) -> String {
-    let mut out = String::with_capacity(digits.len() * 2);
-    for digit in digits {
-        out.push_str(i105_digit_symbol(*digit));
-    }
-    out
-}
-
-fn i105_digit_symbol(digit: u8) -> &'static str {
-    super::i105_digit_symbol(digit, false).expect("digit must be in range")
-}
 
 const VECTOR_SINGLE_DOMAINS: [(&str, u8); 12] = [
     ("default", 0x00),
@@ -579,7 +550,7 @@ impl ErrorHarness {
         vec![
             self.i105_invalid_char(),
             self.i105_checksum_mismatch(),
-            Self::i105_too_short(),
+            self.i105_too_short(),
             self.i105_unexpected_discriminant(),
             Self::canonical_invalid_hex(),
             Self::unsupported_alias_literal(),
@@ -588,8 +559,10 @@ impl ErrorHarness {
     }
 
     fn i105_invalid_char(&self) -> ErrorVector {
-        let mut invalid_char = self.i105.clone();
-        invalid_char.replace_range(0..=0, "!");
+        let mut chars = self.i105.chars().collect::<Vec<_>>();
+        let last = chars.len().saturating_sub(1);
+        chars[last] = '!';
+        let invalid_char = chars.into_iter().collect::<String>();
         let err =
             AccountAddress::from_i105(&invalid_char).expect_err("invalid character must fail");
 
@@ -605,13 +578,10 @@ impl ErrorHarness {
     }
 
     fn i105_checksum_mismatch(&self) -> ErrorVector {
-        let mut digits = i105_to_digits(&self.i105).expect("valid i105 digits");
-        let tamper_index = digits
-            .len()
-            .saturating_sub(I105_CHECKSUM_LEN)
-            .saturating_sub(1);
-        digits[tamper_index] = (digits[tamper_index] + 1) % I105_BASE_U8;
-        let tampered = digits_to_i105_literal(&digits);
+        let mut chars = self.i105.chars().collect::<Vec<_>>();
+        let last = chars.len().saturating_sub(1);
+        chars[last] = if chars[last] == '1' { '2' } else { '1' };
+        let tampered = chars.into_iter().collect::<String>();
         let err = AccountAddress::from_i105(&tampered).expect_err("checksum mismatch must fail");
 
         ErrorVector {
@@ -625,8 +595,8 @@ impl ErrorHarness {
         }
     }
 
-    fn i105_too_short() -> ErrorVector {
-        let too_short = String::new();
+    fn i105_too_short(&self) -> ErrorVector {
+        let too_short = super::i105_sentinel_for_discriminant(self.network_prefix);
         let err = AccountAddress::from_i105(&too_short).expect_err("too short i105 form must fail");
 
         ErrorVector {
@@ -683,7 +653,7 @@ impl ErrorHarness {
     }
 
     fn unsupported_alias_literal() -> ErrorVector {
-        let alias_literal = "alice@hbl.dataspace";
+        let alias_literal = "alice@banka.dataspace";
         let err = AccountAddress::parse_encoded(alias_literal, None)
             .expect_err("alias literal must fail");
 
@@ -834,9 +804,8 @@ fn decode_multisig_payload(payload: &[u8]) -> MultisigControllerPayload<'_> {
 }
 
 fn domain_id(label: &str) -> DomainId {
-    DomainId::new(
-        Name::from_str(label).unwrap_or_else(|_| panic!("invalid domain label `{label}`")),
-    )
+    DomainId::try_new(label, "universal")
+        .unwrap_or_else(|_| panic!("invalid domain id `{label}.universal`"))
 }
 
 fn ed25519_pk_with(byte: u8) -> PublicKey {

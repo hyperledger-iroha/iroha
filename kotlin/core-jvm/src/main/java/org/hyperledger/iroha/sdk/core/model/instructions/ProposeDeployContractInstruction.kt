@@ -5,12 +5,12 @@ private const val ACTION = "ProposeDeployContract"
 /**
  * Typed representation of a `ProposeDeployContract` instruction.
  *
- * Captures the governance namespace, contract identifiers, deterministic code/ABI hashes, and
- * optional enactment window + voting mode overrides.
+ * Captures exactly one target selector (`contract_address` or `contract_alias`), deterministic
+ * code/ABI hashes, and optional enactment window + voting mode overrides.
  */
 class ProposeDeployContractInstruction(
-    @JvmField val namespace: String,
-    @JvmField val contractId: String,
+    @JvmField val contractAddress: String? = null,
+    @JvmField val contractAlias: String? = null,
     codeHashHex: String,
     abiHashHex: String,
     @JvmField val abiVersion: String,
@@ -22,8 +22,9 @@ class ProposeDeployContractInstruction(
     @JvmField val abiHashHex: String = GovernanceInstructionUtils.requireHex(abiHashHex, "abiHashHex", 32)
 
     init {
-        require(namespace.isNotBlank()) { "namespace must not be blank" }
-        require(contractId.isNotBlank()) { "contractId must not be blank" }
+        require((!contractAddress.isNullOrBlank()) xor (!contractAlias.isNullOrBlank())) {
+            "Exactly one of contractAddress or contractAlias must be provided"
+        }
         require(abiVersion.isNotBlank()) { "abiVersion must not be blank" }
     }
 
@@ -34,8 +35,11 @@ class ProposeDeployContractInstruction(
     private fun canonicalArguments(): Map<String, String> {
         val args = linkedMapOf<String, String>()
         args["action"] = ACTION
-        args["namespace"] = namespace
-        args["contract_id"] = contractId
+        if (!contractAddress.isNullOrBlank()) {
+            args["contract_address"] = contractAddress
+        } else {
+            args["contract_alias"] = contractAlias!!
+        }
         args["code_hash_hex"] = codeHashHex
         args["abi_hash_hex"] = abiHashHex
         args["abi_version"] = abiVersion
@@ -51,8 +55,8 @@ class ProposeDeployContractInstruction(
     override fun equals(other: Any?): Boolean {
         if (this === other) return true
         if (other !is ProposeDeployContractInstruction) return false
-        return namespace == other.namespace
-            && contractId == other.contractId
+        return contractAddress == other.contractAddress
+            && contractAlias == other.contractAlias
             && codeHashHex == other.codeHashHex
             && abiHashHex == other.abiHashHex
             && abiVersion == other.abiVersion
@@ -61,8 +65,8 @@ class ProposeDeployContractInstruction(
     }
 
     override fun hashCode(): Int {
-        var result = namespace.hashCode()
-        result = 31 * result + contractId.hashCode()
+        var result = contractAddress?.hashCode() ?: 0
+        result = 31 * result + (contractAlias?.hashCode() ?: 0)
         result = 31 * result + codeHashHex.hashCode()
         result = 31 * result + abiHashHex.hashCode()
         result = 31 * result + abiVersion.hashCode()
@@ -74,8 +78,11 @@ class ProposeDeployContractInstruction(
     companion object {
         @JvmStatic
         fun fromArguments(arguments: Map<String, String>): ProposeDeployContractInstruction {
-            val namespace = requireArg(arguments, "namespace")
-            val contractId = requireArg(arguments, "contract_id")
+            val contractAddress = arguments["contract_address"]?.takeIf { it.isNotBlank() }
+            val contractAlias = arguments["contract_alias"]?.takeIf { it.isNotBlank() }
+            require((contractAddress != null) xor (contractAlias != null)) {
+                "Instruction arguments must include exactly one of contract_address or contract_alias"
+            }
             val codeHashHex = requireArg(arguments, "code_hash_hex")
             val abiHashHex = requireArg(arguments, "abi_hash_hex")
             val abiVersion = requireArg(arguments, "abi_version")
@@ -90,8 +97,8 @@ class ProposeDeployContractInstruction(
             }
 
             return ProposeDeployContractInstruction(
-                namespace = namespace,
-                contractId = contractId,
+                contractAddress = contractAddress,
+                contractAlias = contractAlias,
                 codeHashHex = codeHashHex,
                 abiHashHex = abiHashHex,
                 abiVersion = abiVersion,

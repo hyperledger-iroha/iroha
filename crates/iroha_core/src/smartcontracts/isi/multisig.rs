@@ -2470,7 +2470,7 @@ fn reconstruct_multisig_account_state(
             },
         )?
     } else {
-        None
+        infer_multisig_home_domain(state_transaction, &resolved_account)?
     };
 
     if let Some(raw) = account.metadata().get(&spec_key()) {
@@ -2525,6 +2525,64 @@ fn reconstruct_multisig_account_state(
             transaction_ttl_ms,
         },
     )))
+}
+
+fn infer_multisig_home_domain(
+    state_transaction: &StateTransaction<'_, '_>,
+    account_id: &AccountId,
+) -> Result<Option<iroha_data_model::domain::DomainId>, ValidationFail> {
+    let alias_domain = infer_multisig_home_domain_from_aliases(state_transaction, account_id)?;
+    Ok(alias_domain
+        .or_else(|| infer_multisig_home_domain_from_roles(state_transaction, account_id)))
+}
+
+fn infer_multisig_home_domain_from_aliases(
+    state_transaction: &StateTransaction<'_, '_>,
+    account_id: &AccountId,
+) -> Result<Option<iroha_data_model::domain::DomainId>, ValidationFail> {
+    let hierarchy = state_transaction
+        .world
+        .account_scope_hierarchy(account_id)
+        .map_err(|err| {
+            ValidationFail::QueryFailed(QueryExecutionFail::Conversion(format!(
+                "multisig alias hierarchy malformed for `{account_id}`: {err}"
+            )))
+        })?;
+    let domains = hierarchy.into_values().flatten().collect();
+    Ok(unique_home_domain_candidate(domains))
+}
+
+fn infer_multisig_home_domain_from_roles(
+    state_transaction: &StateTransaction<'_, '_>,
+    account_id: &AccountId,
+) -> Option<iroha_data_model::domain::DomainId> {
+    let mut domains = BTreeSet::new();
+    for role_id in state_transaction.world.account_roles_iter(account_id) {
+        let mut segments = role_id.name().as_ref().split(DELIMITER);
+        let (Some(prefix), Some(domain), Some(_suffix), None) = (
+            segments.next(),
+            segments.next(),
+            segments.next(),
+            segments.next(),
+        ) else {
+            continue;
+        };
+        if prefix != MULTISIG_SIGNATORY || domain == DOMAINLESS_NAMESPACE {
+            continue;
+        }
+        let Ok(domain_id) = iroha_data_model::DomainId::parse_fully_qualified(domain) else {
+            continue;
+        };
+        domains.insert(domain_id);
+    }
+    unique_home_domain_candidate(domains)
+}
+
+fn unique_home_domain_candidate(
+    mut domains: BTreeSet<iroha_data_model::domain::DomainId>,
+) -> Option<iroha_data_model::domain::DomainId> {
+    let domain = domains.pop_first()?;
+    domains.is_empty().then_some(domain)
 }
 
 fn load_multisig_account_state(
@@ -2742,8 +2800,9 @@ mod tests {
             rekey::{AccountAlias, AccountAliasDomain},
         },
         block::BlockHeader,
+        domain::DomainId,
         isi::{AddSignatory, RemoveSignatory, SetAccountQuorum},
-        nexus::DataSpaceId,
+        nexus::{DataSpaceCatalog, DataSpaceId, DataSpaceMetadata},
         prelude::{Domain, InstructionBox, Register},
     };
     use iroha_executor_data_model::isi::multisig::{
@@ -2832,12 +2891,29 @@ mod tests {
         domain_id: &iroha_data_model::domain::DomainId,
         label: &str,
     ) -> AccountAlias {
+        bind_account_label_in_dataspace(
+            state_transaction,
+            authority,
+            account_id,
+            domain_id,
+            DataSpaceId::GLOBAL,
+            label,
+        )
+    }
+
+    fn bind_account_label_in_dataspace(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        account_id: &AccountId,
+        domain_id: &iroha_data_model::domain::DomainId,
+        dataspace: DataSpaceId,
+        label: &str,
+    ) -> AccountAlias {
         let _ = authority;
-        let _ = domain_id;
         let label = AccountAlias::new(
             label.parse().expect("account label name"),
             Some(AccountAliasDomain::new(domain_id.name().clone())),
-            DataSpaceId::GLOBAL,
+            dataspace,
         );
         state_transaction
             .world
@@ -2904,6 +2980,43 @@ mod tests {
         );
     }
 
+    fn seed_domain_name_lease_tx(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        owner: &AccountId,
+        domain_id: &iroha_data_model::domain::DomainId,
+    ) {
+        let selector = crate::sns::selector_for_domain(domain_id).expect("selector");
+        let address =
+            iroha_data_model::account::AccountAddress::from_account_id(owner).expect("address");
+        let record = iroha_data_model::sns::NameRecordV1::new(
+            selector.clone(),
+            owner.clone(),
+            vec![iroha_data_model::sns::NameControllerV1::account(&address)],
+            0,
+            0,
+            u64::MAX,
+            u64::MAX,
+            u64::MAX,
+            Metadata::default(),
+        );
+        state_transaction.world.smart_contract_state.insert(
+            crate::sns::record_storage_key(&selector),
+            norito::codec::Encode::encode(&record),
+        );
+    }
+
+    fn register_domain_with_name_lease(
+        state_transaction: &mut StateTransaction<'_, '_>,
+        authority: &AccountId,
+        domain_id: &iroha_data_model::domain::DomainId,
+        label: &str,
+    ) {
+        seed_domain_name_lease_tx(state_transaction, authority, domain_id);
+        Register::domain(Domain::new(domain_id.clone()))
+            .execute(authority, state_transaction)
+            .expect(label);
+    }
+
     #[test]
     fn initial_executor_runs_multisig_flow() {
         let kura = Kura::blank_kura_for_testing();
@@ -2917,16 +3030,20 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "acme".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("acme", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            "domain registration",
+        );
 
         register_account_in_domain(
             &mut state_transaction,
@@ -3023,13 +3140,17 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "acme".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("acme", "universal").unwrap();
 
         let owner = KeyPair::random();
         let owner_id = new_account_id(&owner);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3077,13 +3198,17 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "acme".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("acme", "universal").unwrap();
 
         let owner = KeyPair::random();
         let owner_id = new_account_id(&owner);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3130,13 +3255,17 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "acme".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("acme", "universal").unwrap();
 
         let owner = KeyPair::random();
         let owner_id = new_account_id(&owner);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3219,13 +3348,17 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "acme".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("acme", "universal").unwrap();
 
         let owner = KeyPair::random();
         let owner_id = new_account_id(&owner);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3275,13 +3408,17 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "acme".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("acme", "universal").unwrap();
 
         let owner = KeyPair::random();
         let owner_id = new_account_id(&owner);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3334,13 +3471,17 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3452,13 +3593,17 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3583,13 +3728,17 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3658,13 +3807,17 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3771,13 +3924,17 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3902,13 +4059,17 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -3986,7 +4147,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
@@ -4118,7 +4280,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "default".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("default", "universal").unwrap();
 
         let old_key = KeyPair::random();
         let old_account = new_account_id(&old_key);
@@ -4172,7 +4335,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "default".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("default", "universal").unwrap();
 
         let old_key = KeyPair::random();
         let old_account = new_account_id(&old_key);
@@ -4255,7 +4419,8 @@ mod tests {
 
     #[test]
     fn multisig_register_preserves_explicit_home_domain() {
-        let source_domain: iroha_data_model::domain::DomainId = "default".parse().unwrap();
+        let source_domain: iroha_data_model::domain::DomainId =
+            DomainId::try_new("default", "universal").unwrap();
         let signer = new_account_id(&KeyPair::random());
         let spec = MultisigSpec {
             signatories: BTreeMap::from([(signer.clone(), 1)]),
@@ -4276,6 +4441,60 @@ mod tests {
             .expect("signatory exists");
         assert_eq!(register.home_domain.as_ref(), Some(&source_domain));
         assert_eq!(signer_in_spec.controller(), signer.controller());
+    }
+
+    #[test]
+    fn multisig_home_domain_inference_resolves_qualified_alias_domains() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new(World::new(), kura, query_handle);
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+
+        let retail_dataspace = DataSpaceId::new(17);
+        let dataspace_catalog = DataSpaceCatalog::new(vec![
+            DataSpaceMetadata {
+                id: DataSpaceId::GLOBAL,
+                alias: "universal".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+            DataSpaceMetadata {
+                id: retail_dataspace,
+                alias: "retail".to_string(),
+                description: None,
+                fault_tolerance: 1,
+            },
+        ])
+        .expect("dataspace catalog");
+        state_transaction.nexus.dataspace_catalog = dataspace_catalog.clone();
+        state_transaction.world.dataspace_catalog = dataspace_catalog;
+
+        let account_id = new_account_id(&KeyPair::random());
+        Register::account(iroha_data_model::account::NewAccount::new(
+            account_id.clone(),
+        ))
+        .execute(&account_id, &mut state_transaction)
+        .expect("register subject account");
+
+        let retail_domain: iroha_data_model::domain::DomainId =
+            DomainId::try_new("ops", "retail").expect("retail domain");
+        bind_account_label_in_dataspace(
+            &mut state_transaction,
+            &account_id,
+            &account_id,
+            &retail_domain,
+            retail_dataspace,
+            "desk",
+        );
+
+        assert_eq!(
+            infer_multisig_home_domain_from_aliases(&state_transaction, &account_id)
+                .expect("infer home domain"),
+            Some(retail_domain),
+            "alias inference should preserve the dataspace-qualified home domain",
+        );
     }
 
     #[test]
@@ -4373,7 +4592,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("wonderland", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
@@ -4448,16 +4668,20 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "ttl".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("ttl", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            "domain registration",
+        );
 
         register_account_in_domain(
             &mut state_transaction,
@@ -4526,16 +4750,20 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "signatory".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("signatory", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &signer1_id,
@@ -4574,7 +4802,8 @@ mod tests {
     fn multisig_propose_repairs_missing_state_from_controller() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
-        let domain_id: iroha_data_model::domain::DomainId = "repairable".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("repairable", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
@@ -4609,9 +4838,12 @@ mod tests {
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &signer1_id,
@@ -4711,16 +4943,20 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "signatory-index".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("signatory-index", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &signer1_id,
@@ -4772,7 +5008,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "signatory-rekey".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("signatory-rekey", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
@@ -4781,9 +5018,12 @@ mod tests {
         let signer2_id = new_account_id(&signer2);
         let signer3_id = new_account_id(&signer3);
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            "domain registration",
+        );
         for (account_id, label) in [
             (&signer1_id, "register signer1"),
             (&signer2_id, "register signer2"),
@@ -4846,6 +5086,171 @@ mod tests {
     }
 
     #[test]
+    fn multisig_approval_preserves_contract_call_trigger_metadata_for_non_default_entrypoints() {
+        use iroha_data_model::{
+            HasMetadata,
+            events::execute_trigger::ExecuteTriggerEventFilter,
+            isi::ExecuteTrigger,
+            metadata::Metadata,
+            name::Name,
+            prelude::Json,
+            transaction::{Executable, IvmBytecode},
+            trigger::{
+                Trigger,
+                action::{Action, Repeats},
+            },
+        };
+        use ivm::KotodamaCompiler;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let state = State::new_with_chain(
+            World::new(),
+            kura,
+            query_handle,
+            ChainId::from("multisig-trigger-contract-entrypoint"),
+        );
+
+        let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
+        let mut block = state.block(block_header);
+        let mut state_transaction = block.transaction();
+
+        let signer1 = KeyPair::random();
+        let signer2 = KeyPair::random();
+        let signer1_id = new_account_id(&signer1);
+        let signer2_id = new_account_id(&signer2);
+        let owner_id = new_account_id(&KeyPair::random());
+
+        Register::account(iroha_data_model::account::NewAccount::new(owner_id.clone()))
+            .execute(&owner_id, &mut state_transaction)
+            .expect("register owner");
+        Register::account(iroha_data_model::account::NewAccount::new(
+            signer1_id.clone(),
+        ))
+        .execute(&owner_id, &mut state_transaction)
+        .expect("register signer1");
+        Register::account(iroha_data_model::account::NewAccount::new(
+            signer2_id.clone(),
+        ))
+        .execute(&owner_id, &mut state_transaction)
+        .expect("register signer2");
+
+        let spec = MultisigSpec {
+            signatories: BTreeMap::from([(signer1_id.clone(), 1), (signer2_id.clone(), 1)]),
+            quorum: NonZeroU16::new(2).unwrap(),
+            transaction_ttl_ms: NonZeroU64::new(DEFAULT_MULTISIG_TTL_MS).unwrap(),
+        };
+        let multisig_id = new_account_id(&KeyPair::random());
+        execute_register(
+            &mut state_transaction,
+            &owner_id,
+            MultisigRegister::with_account(
+                multisig_id.clone(),
+                None::<iroha_data_model::domain::DomainId>,
+                spec.clone(),
+            ),
+        )
+        .expect("register multisig account");
+        let multisig_id = state_transaction
+            .world
+            .accounts_iter()
+            .find(|account| account.id().multisig_policy().is_some())
+            .map(|account| account.id().clone())
+            .expect("registered multisig account");
+
+        let program = KotodamaCompiler::new()
+            .compile_source(
+                r#"
+seiyaku TriggerDispatch {
+  #[access(read="*", write="*")]
+  kotoage fn main() permission(Admin) {
+    set_account_detail(authority(), name("entrypoint"), json("1"));
+  }
+
+  #[access(read="*", write="*")]
+  kotoage fn alternate() permission(Admin) {
+    set_account_detail(authority(), name("entrypoint"), json("2"));
+  }
+}
+"#,
+            )
+            .expect("compile trigger dispatch contract");
+        let bytecode = IvmBytecode::from_compiled(program);
+
+        let trigger_id: iroha_data_model::trigger::TriggerId = "contract_dispatch".parse().unwrap();
+        let mut trigger_metadata = Metadata::default();
+        trigger_metadata.insert(
+            Name::from_str("contract_entrypoint").expect("static metadata key"),
+            Json::new("alternate"),
+        );
+        let trigger = Trigger::new(
+            trigger_id.clone(),
+            Action::new(
+                Executable::Ivm(bytecode),
+                Repeats::Exactly(1),
+                multisig_id.clone(),
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id.clone()),
+            )
+            .with_metadata(trigger_metadata),
+        );
+
+        let instructions = vec![
+            InstructionBox::from(Register::trigger(trigger)),
+            InstructionBox::from(ExecuteTrigger::new(trigger_id.clone())),
+        ];
+        let instructions_hash = HashOf::new(&instructions);
+        execute_propose(
+            &mut state_transaction,
+            &signer1_id,
+            &MultisigPropose::new(multisig_id.clone(), instructions, None),
+        )
+        .expect("signatory propose");
+
+        let proposal = proposal_value(&state_transaction, &multisig_id, &instructions_hash)
+            .expect("proposal exists after propose");
+        let register = proposal
+            .instructions
+            .first()
+            .expect("proposal should register trigger")
+            .as_any()
+            .downcast_ref::<iroha_data_model::isi::RegisterBox>()
+            .expect("first instruction must be register");
+        let iroha_data_model::isi::RegisterBox::Trigger(register_trigger) = register else {
+            panic!("first instruction must be register trigger");
+        };
+        let stored_entrypoint = register_trigger
+            .object()
+            .action()
+            .metadata()
+            .get("contract_entrypoint")
+            .expect("stored trigger metadata should keep contract_entrypoint")
+            .clone()
+            .try_into_any_norito::<String>()
+            .expect("entrypoint metadata should decode as string");
+        assert_eq!(stored_entrypoint, "alternate");
+
+        execute_approve(
+            &mut state_transaction,
+            &signer2_id,
+            &MultisigApprove::new(multisig_id.clone(), instructions_hash),
+        )
+        .expect("signatory approve should execute alternate entrypoint");
+
+        let entrypoint_key: Name = "entrypoint".parse().expect("entrypoint metadata key");
+        let executed_value = state_transaction
+            .world
+            .account(&multisig_id)
+            .expect("multisig account should exist")
+            .metadata()
+            .get(&entrypoint_key)
+            .expect("alternate entrypoint should write account metadata")
+            .clone()
+            .try_into_any_norito::<norito::json::Value>()
+            .expect("entrypoint account metadata should decode");
+        assert_eq!(executed_value, norito::json!(2));
+    }
+
+    #[test]
     fn multisig_signatory_can_approve_without_roles() {
         let kura = Kura::blank_kura_for_testing();
         let query_handle = LiveQueryStore::start_test();
@@ -4858,16 +5263,20 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "signatory-approve".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("signatory-approve", "universal").unwrap();
 
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
         let signer1_id = new_account_id(&signer1);
         let signer2_id = new_account_id(&signer2);
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&signer1_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &signer1_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &signer1_id,
@@ -4917,7 +5326,8 @@ mod tests {
             ChainId::from("multisig-expired-duplicate-replace"),
         );
 
-        let domain_id: iroha_data_model::domain::DomainId = "retryable".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("retryable", "universal").unwrap();
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
         let signer1_id = new_account_id(&signer1);
@@ -4933,9 +5343,12 @@ mod tests {
             let mut block = state.block(block_header);
             let mut state_transaction = block.transaction();
 
-            Register::domain(Domain::new(domain_id.clone()))
-                .execute(&signer1_id, &mut state_transaction)
-                .expect("domain registration");
+            register_domain_with_name_lease(
+                &mut state_transaction,
+                &signer1_id,
+                &domain_id,
+                "domain registration",
+            );
             register_account_in_domain(
                 &mut state_transaction,
                 &signer1_id,
@@ -4966,7 +5379,7 @@ mod tests {
             )
             .expect("initial propose");
 
-            drop(state_transaction);
+            state_transaction.apply();
             block.commit().expect("commit first block");
             multisig_id
         };
@@ -5007,8 +5420,10 @@ mod tests {
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
 
-        let multisig_domain: iroha_data_model::domain::DomainId = "multisig-home".parse().unwrap();
-        let signer_domain: iroha_data_model::domain::DomainId = "signatory-remote".parse().unwrap();
+        let multisig_domain: iroha_data_model::domain::DomainId =
+            DomainId::try_new("multisig-home", "universal").unwrap();
+        let signer_domain: iroha_data_model::domain::DomainId =
+            DomainId::try_new("signatory-remote", "universal").unwrap();
 
         let owner = KeyPair::random();
         let signer1 = KeyPair::random();
@@ -5018,12 +5433,18 @@ mod tests {
         let signer1_remote = new_account_id(&signer1);
         let signer2_remote = new_account_id(&signer2);
 
-        Register::domain(Domain::new(multisig_domain.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("register multisig domain");
-        Register::domain(Domain::new(signer_domain.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("register signer domain");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &multisig_domain,
+            "register multisig domain",
+        );
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &signer_domain,
+            "register signer domain",
+        );
 
         register_account_in_domain(
             &mut state_transaction,
@@ -5125,8 +5546,10 @@ mod tests {
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
 
-        let home_domain: iroha_data_model::domain::DomainId = "subject-home".parse().unwrap();
-        let alt_domain: iroha_data_model::domain::DomainId = "subject-alt".parse().unwrap();
+        let home_domain: iroha_data_model::domain::DomainId =
+            DomainId::try_new("subject-home", "universal").unwrap();
+        let alt_domain: iroha_data_model::domain::DomainId =
+            DomainId::try_new("subject-alt", "universal").unwrap();
 
         let owner = KeyPair::random();
         let shared_subject = KeyPair::random();
@@ -5138,12 +5561,18 @@ mod tests {
         let signer_b_id = new_account_id(&signer_b);
         let signer_c_id = new_account_id(&signer_c);
 
-        Register::domain(Domain::new(home_domain.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("register home domain");
-        Register::domain(Domain::new(alt_domain.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("register alt domain");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &home_domain,
+            "register home domain",
+        );
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &alt_domain,
+            "register alt domain",
+        );
 
         for account in [
             owner_id.clone(),
@@ -5245,9 +5674,7 @@ mod tests {
         assert!(
             matches!(
                 proposal_value(&state_transaction, &multisig_account, &instructions_hash),
-                Err(ValidationFail::QueryFailed(QueryExecutionFail::Find(
-                    FindError::MetadataKey(_)
-                )))
+                Err(ValidationFail::QueryFailed(QueryExecutionFail::NotFound))
             ),
             "proposal should be pruned after quorum is reached by distinct subjects"
         );
@@ -5264,7 +5691,8 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "signatory-single".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("signatory-single", "universal").unwrap();
 
         let (owner, leaf_a, leaf_b) = (KeyPair::random(), KeyPair::random(), KeyPair::random());
 
@@ -5272,9 +5700,12 @@ mod tests {
         let first_leaf_account_id = new_account_id(&leaf_a);
         let second_leaf_account_id = new_account_id(&leaf_b);
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         for (account_id, label) in [
             (owner_id.clone(), "register owner"),
             (first_leaf_account_id.clone(), "register leaf a"),
@@ -5344,13 +5775,17 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "missing".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("missing", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -5362,14 +5797,15 @@ mod tests {
         let err = multisig_spec(&state_transaction, &owner_id)
             .expect_err("missing multisig spec should error");
         match err {
-            ValidationFail::QueryFailed(QueryExecutionFail::Find(FindError::MetadataKey(_))) => {}
+            ValidationFail::QueryFailed(QueryExecutionFail::NotFound) => {}
             other => panic!("unexpected error for missing multisig spec: {other:?}"),
         }
     }
 
     #[test]
     fn multisig_role_for_large_policy_uses_hash_suffix() {
-        let domain_id: iroha_data_model::domain::DomainId = "weights".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("weights", "universal").unwrap();
         let member_count = (u8::MAX as usize) + 1;
         let mut members = Vec::with_capacity(member_count);
         for _ in 0..member_count {
@@ -5409,13 +5845,17 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "cancel".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("cancel", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -5531,13 +5971,17 @@ mod tests {
         let block_header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
-        let domain_id: iroha_data_model::domain::DomainId = "weights".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("weights", "universal").unwrap();
 
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -5630,7 +6074,8 @@ mod tests {
 
     #[test]
     fn replace_account_controller_single_to_multisig_materializes_members_and_preserves_alias() {
-        let domain_id: iroha_data_model::domain::DomainId = "replace".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("replace", "universal").unwrap();
         let owner_key = KeyPair::random();
         let owner_id = new_account_id(&owner_key);
         let kura = Kura::blank_kura_for_testing();
@@ -5647,9 +6092,12 @@ mod tests {
         let mut block = state.block(block_header);
         let mut state_transaction = block.transaction();
 
-        Register::domain(Domain::new(domain_id.clone()))
-            .execute(&owner_id, &mut state_transaction)
-            .expect("domain registration");
+        register_domain_with_name_lease(
+            &mut state_transaction,
+            &owner_id,
+            &domain_id,
+            "domain registration",
+        );
         register_account_in_domain(
             &mut state_transaction,
             &owner_id,
@@ -5712,7 +6160,8 @@ mod tests {
 
     #[test]
     fn replace_account_controller_multisig_to_single_clears_memberships() {
-        let domain_id: iroha_data_model::domain::DomainId = "single".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("single", "universal").unwrap();
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
         let signer1_id = new_account_id(&signer1);
@@ -5802,7 +6251,8 @@ mod tests {
 
     #[test]
     fn replace_account_controller_multisig_to_multisig_repoints_memberships() {
-        let domain_id: iroha_data_model::domain::DomainId = "repoint".parse().unwrap();
+        let domain_id: iroha_data_model::domain::DomainId =
+            DomainId::try_new("repoint", "universal").unwrap();
         let signer1 = KeyPair::random();
         let signer2 = KeyPair::random();
         let signer3 = KeyPair::random();

@@ -35,8 +35,6 @@ import {
   buildRegisterKaigiRelayInstruction,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
-  buildDeactivateContractInstanceInstruction,
-  buildActivateContractInstanceInstruction,
   buildRemoveSmartContractBytesInstruction,
   buildProposeDeployContractInstruction,
   buildCastZkBallotInstruction,
@@ -44,6 +42,7 @@ import {
   buildEnactReferendumInstruction,
   buildFinalizeReferendumInstruction,
   buildPersistCouncilForEpochInstruction,
+  buildSubmitAgendaProposalInstruction,
   buildClaimTwitterFollowRewardInstruction,
   buildSendToTwitterInstruction,
   buildCancelTwitterEscrowInstruction,
@@ -1169,41 +1168,6 @@ test("buildRegisterSmartContractBytesInstruction rejects empty code bytes", () =
   );
 });
 
-test("buildDeactivateContractInstanceInstruction normalizes reason text", () => {
-  const instruction = buildDeactivateContractInstanceInstruction({
-    namespace: "apps",
-    contractId: "ledger",
-    reason: " rotate ",
-  });
-  const expected = {
-    DeactivateContractInstance: {
-      namespace: "apps",
-      contract_id: "ledger",
-      reason: " rotate ",
-    },
-  };
-  assert.deepEqual(instruction, expected);
-  assert.deepEqual(encodeAndDecode(instruction), expected);
-});
-
-test("buildActivateContractInstanceInstruction normalizes identifiers", () => {
-  const instruction = buildActivateContractInstanceInstruction({
-    namespace: "apps",
-    contractId: "governance",
-    codeHash: Buffer.alloc(32, 0x44),
-  });
-  const expected = {
-    ActivateContractInstance: {
-      namespace: "apps",
-      contract_id: "governance",
-      code_hash: normalizedHashHex(Buffer.alloc(32, 0x44)),
-    },
-  };
-  assert.deepEqual(instruction, expected);
-  const decoded = encodeAndDecode(instruction);
-  assert.deepEqual(decoded, expected);
-});
-
 test("buildRemoveSmartContractBytesInstruction accepts reason or null", () => {
   const instruction = buildRemoveSmartContractBytesInstruction({
     codeHash: Buffer.alloc(32, 0x11),
@@ -1226,8 +1190,7 @@ test("buildRemoveSmartContractBytesInstruction accepts reason or null", () => {
 
 test("buildProposeDeployContractInstruction normalizes hashes and window", () => {
   const instruction = buildProposeDeployContractInstruction({
-    namespace: "apps",
-    contractId: "ledger",
+    contractAddress: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
     codeHash: "AA".repeat(32),
     abiHash: Buffer.alloc(32, 0xbb),
     abiVersion: "1",
@@ -1236,8 +1199,7 @@ test("buildProposeDeployContractInstruction normalizes hashes and window", () =>
   });
   const expected = {
     ProposeDeployContract: {
-      namespace: "apps",
-      contract_id: "ledger",
+      contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
       code_hash_hex: "aa".repeat(32),
       abi_hash_hex: Buffer.alloc(32, 0xbb).toString("hex"),
       abi_version: "1",
@@ -1474,6 +1436,50 @@ test("buildPersistCouncilForEpochInstruction validates members and derivation", 
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
   assert.deepEqual(decoded, expected);
+});
+
+test("buildSubmitAgendaProposalInstruction wraps the supplied proposal payload", () => {
+  const proposal = {
+    version: 1,
+    proposal_id: "AC-2026-001",
+    submitted_at_unix_ms: 1770000000000,
+    language: "en",
+    action: "add-to-denylist",
+    summary: {
+      title: "Blacklist proposal for bafy-test",
+      motivation: "Evidence review requested for the published CID.",
+      expected_impact: "Participating gateways would restrict delivery during review.",
+    },
+    tags: ["spam"],
+    targets: [
+      {
+        label: "bafy-test",
+        hash_family: "sorafs-root-cid",
+        hash_hex: "11".repeat(32),
+        reason: "spam moderation report",
+      },
+    ],
+    evidence: [
+      {
+        kind: "url",
+        uri: "https://example.invalid/case/1",
+        digest_blake3_hex: "22".repeat(32),
+        description: "Captured gateway evidence",
+      },
+    ],
+    submitter: {
+      name: "Explorer Moderator",
+      contact: "moderation@example.invalid",
+    },
+    duplicates: [],
+  };
+  const instruction = buildSubmitAgendaProposalInstruction({ proposal });
+  assert.deepEqual(instruction, {
+    SubmitAgendaProposal: {
+      proposal,
+    },
+  });
+  assert.deepEqual(encodeAndDecode(instruction), instruction);
 });
 
 test("buildClaimTwitterFollowRewardInstruction wraps keyed hash", () => {

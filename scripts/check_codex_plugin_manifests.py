@@ -17,6 +17,8 @@ MARKETPLACE_MANIFEST = Path(".agents") / "plugins" / "marketplace.json"
 TAIRA_SKILL_ROOT = Path("skills") / "sora-taira-testnet"
 TAIRA_SKILL_MANIFEST = TAIRA_SKILL_ROOT / "SKILL.md"
 TAIRA_SKILL_AGENT_MANIFEST = TAIRA_SKILL_ROOT / "agents" / "openai.yaml"
+TAIRA_MCP_PLACEHOLDER_URL = "https://<taira-node-hostname>/v1/mcp"
+TAIRA_SKILL_PLACEHOLDER_URL = "https://<taira-node>/v1/mcp"
 
 
 def _load_json(path: Path) -> dict[str, Any]:
@@ -183,9 +185,17 @@ def validate_mcp_manifest(repo_root: Path) -> list[str]:
 
     if taira.get("type") != "http":
         errors.append("iroha-taira MCP server must use HTTP transport")
-    if taira.get("url") != "https://taira.sora.org/v1/mcp":
-        errors.append("iroha-taira MCP server must target https://taira.sora.org/v1/mcp")
-    _require_string(taira, "note", "iroha-taira MCP server", errors)
+    if taira.get("url") != TAIRA_MCP_PLACEHOLDER_URL:
+        errors.append(
+            "iroha-taira MCP server must target the direct-node placeholder "
+            f"{TAIRA_MCP_PLACEHOLDER_URL}"
+        )
+    note = _require_string(taira, "note", "iroha-taira MCP server", errors)
+    if note is not None and "convenience-only" not in note:
+        errors.append(
+            "iroha-taira MCP server note must explain that https://taira.sora.org/v1/mcp "
+            "is convenience-only"
+        )
     return errors
 
 
@@ -263,15 +273,19 @@ def validate_taira_skill(repo_root: Path) -> list[str]:
     description = frontmatter.get("description", "")
     if not description:
         errors.append("standalone Taira skill must include a non-empty description")
-    elif "https://taira.sora.org/v1/mcp" not in description:
-        errors.append("standalone Taira skill description must mention the Taira MCP URL")
+    elif TAIRA_SKILL_PLACEHOLDER_URL not in description:
+        errors.append(
+            "standalone Taira skill description must mention the direct-node MCP placeholder "
+            f"{TAIRA_SKILL_PLACEHOLDER_URL}"
+        )
 
     skill_text = skill_path.read_text(encoding="utf-8")
     for required in (
-        "https://taira.sora.org/v1/mcp",
+        TAIRA_SKILL_PLACEHOLDER_URL,
         "iroha.transactions.submit_and_wait",
         "authority",
         "private_key",
+        "convenience endpoint",
     ):
         if required not in skill_text:
             errors.append(f"standalone Taira skill body must mention `{required}`")

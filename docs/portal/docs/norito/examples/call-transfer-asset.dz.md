@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/call-transfer-asset.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 08166f6dc9d357906ee63e91de13b75aafb97af681c526c74eea0d5baee0580f
-source_last_modified: "2026-01-22T16:26:46.499692+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 4d7cdc798ae9f1b69608c2b287a76a06a3d8d51116185ff6a5326e755b7b05bd
+source_last_modified: "2026-04-08T09:19:38.794575+00:00"
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 

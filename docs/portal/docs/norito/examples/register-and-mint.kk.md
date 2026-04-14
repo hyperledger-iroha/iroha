@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4e686495c642a08740504c4bb5f88e623c89a896787388b61e4451f550f87af6
 source_last_modified: "2026-03-26T13:01:47.376183+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 - Әрбір SDK жылдам бастауында орнату кезеңін көрсететін тағайындалған тіркелгінің (мысалы, `<i105-account-id>` Алиса) бар екеніне көз жеткізіңіз.
 - ROSE актив анықтамасын жасау үшін `register_and_mint` кіру нүктесін шақырыңыз және бір транзакцияда Алисаға 250 бірлік беріңіз.
-- Жалбыздың сәтті болғанын растау үшін `client.request(FindAccountAssets)` немесе `iroha_cli ledger asset list --account <i105-account-id>` арқылы теңгерімдерді тексеріңіз.
+- Жалбыздың сәтті болғанын растау үшін `client.request(FindAccountAssets)` немесе `iroha ledger asset list all --verbose` арқылы теңгерімдерді тексеріңіз.
 
 ## Қатысты SDK нұсқаулықтары
 

@@ -80,7 +80,8 @@ fn derive_ballot_nullifier(
 fn verify_then_vendor_submit_ballot_applies() {
     // Minimal node state
     let authority: AccountId = ALICE_ID.clone();
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
     let world = iroha_core::state::World::with([domain], [account], Vec::<AssetDefinition>::new());

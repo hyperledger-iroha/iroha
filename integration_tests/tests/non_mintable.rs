@@ -22,7 +22,7 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
     // Case 1: mintable once can be minted once, but not twice.
     {
         let asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().expect("Valid"),
+            DomainId::try_new("wonderland", "universal").expect("Valid"),
             "xor_once".parse().expect("Valid"),
         );
         let create_asset = Register::asset_definition(
@@ -61,7 +61,7 @@ fn non_mintable_asset_minting_rules() -> Result<()> {
     // Case 2: if registered with non-zero value, it cannot be minted again.
     {
         let asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().expect("Valid"),
+            DomainId::try_new("wonderland", "universal").expect("Valid"),
             "xor_seeded".parse().expect("Valid"),
         );
         let create_asset = Register::asset_definition(

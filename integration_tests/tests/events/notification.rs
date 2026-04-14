@@ -18,7 +18,10 @@ use tokio::{
 };
 
 async fn trigger_completion_success_should_produce_event_scenario(network: &Network) -> Result<()> {
-    let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+    let asset_definition_id = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "rose".parse()?,
+    );
     let account_id = ALICE_ID.clone();
     let asset_id = AssetId::new(asset_definition_id, account_id);
     let trigger_id = "mint_rose_event".parse::<TriggerId>()?;
@@ -146,7 +149,7 @@ async fn trigger_completion_failure_reports_error_scenario(network: &Network) ->
     let account_id = ALICE_ID.clone();
     let trigger_id = "fail_box_event".parse::<TriggerId>()?;
 
-    let fail_isi = Unregister::domain("dummy".parse().unwrap());
+    let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
     let register_trigger = Register::trigger(Trigger::new(
         trigger_id.clone(),
         Action::new(

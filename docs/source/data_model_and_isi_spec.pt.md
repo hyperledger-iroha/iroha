@@ -198,13 +198,13 @@ Envelope comum: `InstructionExecutionError` com variantes para erros de avaliaç
 - Atualização de parâmetros:
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` atualiza e emite `ConfigurationEvent::Changed`.CLI / Torii ID de definição de ativo + exemplos de alias:
 - Registre-se com ID Base58 canônico + nome explícito + alias longo:
-  -`iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
+  -`iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
 - Registre-se com ID Base58 canônico + nome explícito + alias curto:
   -`iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - Mint por alias + componentes da conta:
-  -`iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
+  -`iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
 - Resolva o alias para o id canônico Base58:
-  -`POST /v1/assets/aliases/resolve` com JSON `{ "alias": "pkr#ubl.sbp" }`
+  -`POST /v1/assets/aliases/resolve` com JSON `{ "alias": "pkr#bankb.sbp" }`
 
 Nota de migração:
 - Os IDs de definição de ativos textuais `name#domain` permanecem intencionalmente sem suporte na primeira versão; use IDs Base58 canônicos ou resolva um alias pontilhado.

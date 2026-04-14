@@ -25,7 +25,8 @@ use iroha_primitives::numeric::Numeric;
 use nonzero_ext::nonzero;
 
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
-    let domain_id = DomainId::from_str(domain).expect("default asset definition domain");
+    let domain_id =
+        DomainId::parse_fully_qualified(domain).expect("default asset definition domain");
     let asset_name = Name::from_str(name).expect("default asset definition name");
     AssetDefinitionId::new(domain_id, asset_name)
 }
@@ -101,9 +102,13 @@ pub mod crypto {
 
 /// Common configuration defaults shared across components.
 pub mod common {
-    /// Default domain label used when configuration omits the AccountAddress selector override.
+    /// Default dataspace-qualified domain used when configuration omits the AccountAddress
+    /// selector override.
     pub fn default_account_domain_label() -> String {
-        iroha_data_model::account::address::DEFAULT_DOMAIN_NAME.to_owned()
+        format!(
+            "{}.universal",
+            iroha_data_model::account::address::DEFAULT_DOMAIN_NAME
+        )
     }
 
     /// Default chain discriminant / I105 network prefix (Sora Nexus global).
@@ -183,22 +188,14 @@ pub mod soracloud_runtime {
     pub const MODEL_ARTIFACT_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(1_024_u64 * 1024 * 1024);
     /// Default model-weight cache budget in bytes.
     pub const MODEL_WEIGHT_CACHE_BUDGET_BYTES: NonZeroU64 = nonzero!(4_096_u64 * 1024 * 1024);
-    /// Default concurrent deterministic native processes allowed on one node.
-    pub const NATIVE_PROCESS_MAX_CONCURRENT_PROCESSES: NonZeroUsize = nonzero!(8_usize);
-    /// Default CPU budget in millicores for one deterministic native process.
-    pub const NATIVE_PROCESS_CPU_MILLIS: NonZeroU32 = nonzero!(2_000_u32);
-    /// Default memory budget in bytes for one deterministic native process.
-    pub const NATIVE_PROCESS_MEMORY_BYTES: NonZeroU64 = nonzero!(512_u64 * 1024 * 1024);
-    /// Default ephemeral storage budget in bytes for one deterministic native process.
-    pub const NATIVE_PROCESS_EPHEMERAL_STORAGE_BYTES: NonZeroU64 = nonzero!(512_u64 * 1024 * 1024);
-    /// Default open-file ceiling for one deterministic native process.
-    pub const NATIVE_PROCESS_MAX_OPEN_FILES: NonZeroU32 = nonzero!(256_u32);
-    /// Default task/thread ceiling for one deterministic native process.
-    pub const NATIVE_PROCESS_MAX_TASKS: std::num::NonZeroU16 = nonzero!(64_u16);
-    /// Default startup grace window in milliseconds for deterministic native processes.
-    pub const NATIVE_PROCESS_START_GRACE_MS: u64 = 5_000;
-    /// Default shutdown grace window in milliseconds for deterministic native processes.
-    pub const NATIVE_PROCESS_STOP_GRACE_MS: u64 = 5_000;
+    /// Default concurrent Inrou microVMs allowed on one node.
+    pub const INROU_MAX_CONCURRENT_VMS: NonZeroUsize = nonzero!(8_usize);
+    /// Default hosted-runtime posture for Inrou nodes.
+    pub const INROU_PROXY_ONLY: bool = false;
+    /// Default startup grace window in milliseconds for Inrou microVMs.
+    pub const INROU_START_GRACE_MS: u64 = 30_000;
+    /// Default shutdown grace window in milliseconds for Inrou microVMs.
+    pub const INROU_STOP_GRACE_MS: u64 = 10_000;
     /// Default outbound egress posture for the embedded runtime manager.
     pub const EGRESS_DEFAULT_ALLOW: bool = false;
     /// Default outbound request-rate cap per service/minute. `None` means quota is unset.
@@ -576,7 +573,7 @@ pub mod oracle {
     use super::*;
 
     fn deterministic_account(seed: &[u8], domain: &str) -> AccountId {
-        let _domain_id = DomainId::from_str(domain).expect("default oracle domain");
+        let _domain_id = DomainId::parse_fully_qualified(domain).expect("default oracle domain");
         let keypair = KeyPair::from_seed(seed.to_vec(), Algorithm::Ed25519);
         AccountId::new(keypair.public_key().clone())
     }
@@ -593,22 +590,22 @@ pub mod oracle {
 
     /// Asset credited to providers when observations are accepted.
     pub fn reward_asset() -> AssetDefinitionId {
-        super::canonical_asset_definition_id("sora", "xor")
+        super::canonical_asset_definition_id("sora.universal", "xor")
     }
 
     /// Account debited to fund oracle provider rewards.
     pub fn reward_pool() -> AccountId {
-        deterministic_account(b"oracle-reward-pool", "sora")
+        deterministic_account(b"oracle-reward-pool", "sora.universal")
     }
 
     /// Asset debited when slashing oracle providers.
     pub fn slash_asset() -> AssetDefinitionId {
-        super::canonical_asset_definition_id("sora", "xor")
+        super::canonical_asset_definition_id("sora.universal", "xor")
     }
 
     /// Account credited when penalties are collected.
     pub fn slash_receiver() -> AccountId {
-        deterministic_account(b"oracle-slash-receiver", "sora")
+        deterministic_account(b"oracle-slash-receiver", "sora.universal")
     }
 
     /// Penalty applied to outlier observations.
@@ -628,7 +625,7 @@ pub mod oracle {
 
     /// Bond asset required when opening a dispute.
     pub fn dispute_bond_asset() -> AssetDefinitionId {
-        super::canonical_asset_definition_id("sora", "xor")
+        super::canonical_asset_definition_id("sora.universal", "xor")
     }
 
     /// Bond amount required to open a dispute.
@@ -1251,6 +1248,12 @@ pub mod sorafs {
         pub const ENFORCE_ADMISSION: bool = true;
         /// Enforce advertised capabilities (e.g., chunk-range fetch) before serving data.
         pub const ENFORCE_CAPABILITIES: bool = false;
+        /// Enable per-CID untrusted host routing.
+        pub const UNTRUSTED_HOSTING_ENABLED: bool = false;
+        /// Redirect browser path-gateway requests to the canonical CID host.
+        pub const PATH_GATEWAY_REDIRECT: bool = true;
+        /// Limit canonical redirects to browser HTML navigations.
+        pub const REDIRECT_HTML_ONLY: bool = true;
 
         /// Rate-limiting defaults applied to gateway clients.
         pub mod rate_limit {
@@ -1300,6 +1303,26 @@ pub mod sorafs {
         #[allow(clippy::unnecessary_wraps)]
         pub fn anonymity_policy() -> Option<String> {
             Some(DEFAULT_ANONYMITY_POLICY.to_string())
+        }
+
+        /// Untrusted-hosting defaults for per-CID browser origins.
+        pub mod untrusted_hosting {
+            /// Canonical live CID-host suffix.
+            pub const LIVE_CID_HOST_SUFFIX: &str = "sorafs.sora.org";
+            /// Canonical Taira CID-host suffix.
+            pub const TAIRA_CID_HOST_SUFFIX: &str = "sorafs.taira.sora.org";
+
+            /// Return the default live CID-host suffix.
+            #[must_use]
+            pub fn live_cid_host_suffix() -> String {
+                LIVE_CID_HOST_SUFFIX.to_string()
+            }
+
+            /// Return the default Taira CID-host suffix.
+            #[must_use]
+            pub fn taira_cid_host_suffix() -> String {
+                TAIRA_CID_HOST_SUFFIX.to_string()
+            }
         }
 
         /// ACME automation defaults.
@@ -1676,6 +1699,10 @@ pub mod torii {
     pub const PREAUTH_BURST_PER_IP: Option<u32> = Some(10);
     /// Time to ban IPs that exceed pre-auth rate limits.
     pub const PREAUTH_BAN_DURATION: Duration = Duration::from_mins(1);
+    /// Enable app-facing webhook routes and workers. Disabled by default.
+    pub const WEBHOOKS_ENABLED: bool = false;
+    /// Enable app-facing ZK attachment routes and workers. Disabled by default.
+    pub const ZK_ATTACHMENTS_ENABLED: bool = false;
     /// Default TTL for app API ZK attachments (seconds)
     pub const ATTACHMENTS_TTL_SECS: u64 = 7 * 24 * 60 * 60; // 7 days
     /// Default maximum size per ZK attachment (bytes)
@@ -2211,7 +2238,7 @@ pub mod nexus {
 
         /// Asset definition used for staking bonds.
         pub fn stake_asset_id() -> String {
-            super::super::canonical_asset_definition_literal("nexus", "xor")
+            super::super::canonical_asset_definition_literal("nexus.universal", "xor")
         }
 
         /// Escrow account that custodies bonded stake.
@@ -2256,7 +2283,7 @@ pub mod nexus {
 
         /// Fee asset definition identifier (string form).
         pub fn fee_asset_id() -> String {
-            super::super::canonical_asset_definition_literal("universal", "xor")
+            super::super::canonical_asset_definition_literal("universal.universal", "xor")
         }
     }
 
@@ -3063,13 +3090,13 @@ pub mod governance {
 
     /// Default asset definition used for governance voting and bonds.
     pub fn voting_asset_id() -> String {
-        super::canonical_asset_definition_literal("sora", "xor")
+        super::canonical_asset_definition_literal("sora.universal", "xor")
     }
 
     fn account_id_from_public_key(public_key: &str) -> AccountId {
-        let domain: DomainId = super::common::default_account_domain_label()
-            .parse()
-            .expect("default governance account domain");
+        let domain =
+            DomainId::parse_fully_qualified(&super::common::default_account_domain_label())
+                .expect("default governance account domain");
         let public_key = public_key.parse().expect("default governance public key");
         let _ = domain;
         AccountId::new(public_key)
@@ -3179,7 +3206,7 @@ pub mod governance {
     pub const PARLIAMENT_MIN_STAKE: u128 = 1;
     /// Default stake asset definition used for council eligibility.
     pub fn parliament_eligibility_asset_id() -> String {
-        super::canonical_asset_definition_literal("stake", "SORA")
+        super::canonical_asset_definition_literal("stake.universal", "SORA")
     }
     /// Default alternates drawn per parliament term (None = committee size).
     pub const PARLIAMENT_ALTERNATE_SIZE: Option<usize> = None;

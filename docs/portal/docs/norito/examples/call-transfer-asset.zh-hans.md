@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: dcd8de175a7c5172158a03e1a25b254c90a11e62c173f95b8d9e4a387df6ba09
 source_last_modified: "2026-03-26T13:01:47.372931+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 
 - 用其将转移的资产为合约机构（例如合约账户的 `<i105-account-id>`）提供资金，并授予该机构 `CanTransfer` 角色或同等权限。
 - 调用 `call_transfer_asset` 入口点，将 5 个单位从合约账户转移给 Bob (`<i105-account-id>`)，镜像链上自动化包装主机调用的方式。
-- 通过 `FindAccountAssets` 或 `iroha_cli ledger asset list --account <i105-account-id>` 验证余额并检查事件以确认元数据防护记录了传输上下文。
+- 通过 `FindAccountAssets` 或 `iroha ledger asset list all --verbose` 验证余额并检查事件以确认元数据防护记录了传输上下文。
 
 ## 相关SDK指南
 

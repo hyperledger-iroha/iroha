@@ -102,6 +102,9 @@ fn merge_with_overrides(
     if is_cli_source(matches, "max_inflight") {
         base.max_inflight = overrides.max_inflight;
     }
+    if is_cli_source(matches, "submitters") {
+        base.submitters = overrides.submitters;
+    }
     if is_cli_source(matches, "workload_profile") {
         base.workload_profile = overrides.workload_profile;
     }
@@ -116,6 +119,15 @@ fn merge_with_overrides(
     }
     if is_cli_source(matches, "fault_interval_max") {
         base.fault_interval_max = overrides.fault_interval_max;
+    }
+    if is_cli_source(matches, "crash_restart") {
+        base.faults.crash_restart = overrides.faults.crash_restart;
+    }
+    if is_cli_source(matches, "wipe_storage") {
+        base.faults.wipe_storage = overrides.faults.wipe_storage;
+    }
+    if is_cli_source(matches, "spam_invalid_transactions") {
+        base.faults.spam_invalid_transactions = overrides.faults.spam_invalid_transactions;
     }
     if is_cli_source(matches, "network_latency") {
         base.faults.network_latency = overrides.faults.network_latency;
@@ -194,6 +206,7 @@ mod tests {
         persisted.seed = Some(13);
         persisted.tps = defaults.tps + 1.0;
         persisted.max_inflight = defaults.max_inflight + 10;
+        persisted.submitters = defaults.submitters + 2;
         persisted.log_filter = "debug".to_string();
         persisted.fault_interval_min = Duration::from_secs(1);
         persisted.fault_interval_max = Duration::from_secs(2);
@@ -219,6 +232,7 @@ mod tests {
         assert_eq!(merged.seed, persisted.seed);
         assert!((merged.tps - persisted.tps).abs() <= f64::EPSILON);
         assert_eq!(merged.max_inflight, persisted.max_inflight);
+        assert_eq!(merged.submitters, persisted.submitters);
         assert_eq!(merged.log_filter, persisted.log_filter);
         assert_eq!(merged.fault_interval_min, persisted.fault_interval_min);
         assert_eq!(merged.fault_interval_max, persisted.fault_interval_max);
@@ -229,6 +243,7 @@ mod tests {
         let defaults = config::IzanamiArgs::defaults();
         let mut persisted = defaults.clone();
         persisted.max_inflight = defaults.max_inflight * 2;
+        persisted.submitters = defaults.submitters * 3;
         persisted.pipeline_time = Some(Duration::from_secs(11));
         persisted.target_blocks = Some(42);
         persisted.progress_interval = Duration::from_secs(5);
@@ -245,6 +260,7 @@ mod tests {
         let merged = merge_with_overrides(persisted.clone(), &cli_args, &matches);
 
         assert_eq!(merged.max_inflight, defaults.max_inflight);
+        assert_eq!(merged.submitters, persisted.submitters);
         assert_eq!(merged.peers, persisted.peers);
         assert_eq!(merged.pipeline_time, persisted.pipeline_time);
         assert_eq!(merged.target_blocks, persisted.target_blocks);
@@ -300,6 +316,9 @@ mod tests {
         let mut persisted = defaults.clone();
         persisted.tui = false;
         persisted.faults = config::FaultArgs {
+            crash_restart: false,
+            wipe_storage: false,
+            spam_invalid_transactions: false,
             network_latency: false,
             network_partition: false,
             cpu_stress: false,
@@ -309,15 +328,38 @@ mod tests {
         let (cli_args, matches) = parse_cli_arguments(vec![
             "izanami".to_string(),
             "--tui".to_string(),
+            "--fault-enable-crash-restart".to_string(),
+            "--fault-enable-wipe-storage".to_string(),
             "--fault-enable-network-latency".to_string(),
+            "--fault-enable-spam-invalid-transactions".to_string(),
             "--fault-enable-cpu-stress".to_string(),
         ]);
 
         let merged = merge_with_overrides(persisted, &cli_args, &matches);
 
+        assert!(merged.faults.crash_restart);
+        assert!(merged.faults.wipe_storage);
+        assert!(merged.faults.spam_invalid_transactions);
         assert!(merged.faults.network_latency);
         assert!(merged.faults.cpu_stress);
         assert!(!merged.faults.network_partition);
         assert!(!merged.faults.disk_saturation);
+    }
+
+    #[test]
+    fn cli_overrides_submitter_count() {
+        let defaults = config::IzanamiArgs::defaults();
+        let mut persisted = defaults.clone();
+        persisted.submitters = 7;
+
+        let (cli_args, matches) = parse_cli_arguments(vec![
+            "izanami".to_string(),
+            "--submitters".to_string(),
+            "3".to_string(),
+        ]);
+
+        let merged = merge_with_overrides(persisted, &cli_args, &matches);
+
+        assert_eq!(merged.submitters, 3);
     }
 }

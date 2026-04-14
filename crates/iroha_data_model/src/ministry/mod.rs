@@ -47,7 +47,7 @@ pub struct TransparencyReleaseV1 {
 pub const AGENDA_PROPOSAL_VERSION_V1: u16 = 1;
 
 /// Citizen agenda proposal submitted to the Ministry of Information.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AgendaProposalV1 {
     /// Schema version; must equal [`AGENDA_PROPOSAL_VERSION_V1`].
@@ -198,8 +198,22 @@ impl AgendaProposalV1 {
     }
 }
 
+/// Persisted Ministry agenda submission record keyed by `proposal_id`.
+#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
+pub struct AgendaProposalRecordV1 {
+    /// Canonical proposal payload submitted to the Ministry.
+    pub proposal: AgendaProposalV1,
+    /// On-chain account authority that signed and submitted the transaction.
+    pub authority: crate::account::AccountId,
+    /// Hex-encoded canonical signed-transaction hash.
+    pub submitted_tx_hash_hex: String,
+    /// Block height at which the submission was recorded.
+    pub submitted_height: u64,
+}
+
 /// Agenda proposal action.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "action", content = "value", rename_all = "kebab-case")]
 pub enum AgendaProposalAction {
@@ -212,7 +226,7 @@ pub enum AgendaProposalAction {
 }
 
 /// Human-readable summary metadata for the proposal.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AgendaProposalSummary {
     /// Short title for the proposal.
@@ -224,7 +238,7 @@ pub struct AgendaProposalSummary {
 }
 
 /// Target entry referenced by the proposal (e.g., perceptual hash digest).
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AgendaProposalTarget {
     /// Display label describing the entry (e.g., file set).
@@ -249,7 +263,7 @@ impl AgendaProposalTarget {
 }
 
 /// Evidence attachment supporting the proposal.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AgendaEvidenceAttachment {
     /// Evidence kind (URL, `SoraFS` CID, Torii case, etc.).
@@ -278,7 +292,7 @@ impl AgendaEvidenceAttachment {
 }
 
 /// Evidence categories supported by the validator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 #[norito(tag = "evidence", content = "value", rename_all = "kebab-case")]
 pub enum AgendaEvidenceKind {
@@ -293,7 +307,7 @@ pub enum AgendaEvidenceKind {
 }
 
 /// Submitter metadata recorded with the proposal.
-#[derive(Debug, Clone, PartialEq, Eq, Encode, Decode, IntoSchema)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Encode, Decode, IntoSchema)]
 #[cfg_attr(feature = "json", derive(DeriveJsonSerialize, DeriveJsonDeserialize))]
 pub struct AgendaProposalSubmitter {
     /// Individual or organization name.

@@ -1,16 +1,17 @@
 //! Types representing executable parts of a transaction.
 
-use std::{iter::IntoIterator, vec::Vec};
+use std::{fmt, iter::IntoIterator, sync::LazyLock, vec::Vec};
 
 use ::base64::{Engine as _, engine::general_purpose::STANDARD};
 use iroha_data_model_derive::model;
+use iroha_primitives::json::Json;
 use iroha_schema::IntoSchema;
 use norito::codec::{Decode, Encode};
 
 pub use self::model::*;
 #[cfg(test)]
 use crate::isi::Instruction;
-use crate::isi::InstructionBox;
+use crate::{isi::InstructionBox, metadata::Metadata, name::Name, smart_contract::ContractAddress};
 
 #[model]
 mod model {
@@ -29,6 +30,8 @@ mod model {
         #[cfg_attr(not(feature = "fast_dsl"), debug("{_0:?}"))]
         #[cfg_attr(feature = "fast_dsl", debug("Instructions(..)"))]
         Instructions(ConstVec<InstructionBox>),
+        /// Invoke a deployed contract instance by reference.
+        ContractCall(ContractInvocation),
         /// IVM smart contract bytecode (.to)
         Ivm(IvmBytecode),
         /// IVM smart contract bytecode accompanied by a precomputed instruction overlay.
@@ -74,6 +77,29 @@ mod model {
         /// Commitment to gas policy compliance (without revealing exact gas usage).
         pub gas_policy_commitment: Hash,
     }
+
+    /// By-reference invocation of a deployed contract instance.
+    #[derive(
+        derive_more::Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+    )]
+    #[cfg_attr(
+        feature = "json",
+        derive(
+            crate::DeriveFastJson,
+            crate::DeriveJsonSerialize,
+            crate::DeriveJsonDeserialize
+        )
+    )]
+    #[cfg_attr(feature = "json", norito(no_fast_from_json))]
+    pub struct ContractInvocation {
+        /// Canonical deployed contract address.
+        pub contract_address: ContractAddress,
+        /// Public or view entrypoint selector.
+        pub entrypoint: String,
+        /// Optional Norito JSON payload forwarded to the contract.
+        #[norito(default)]
+        pub payload: Option<Json>,
+    }
 }
 
 // Collect any iterator of instructions into an executable, avoiding
@@ -104,6 +130,82 @@ impl From<IvmBytecode> for Executable {
     }
 }
 
+impl From<ContractInvocation> for Executable {
+    fn from(source: ContractInvocation) -> Self {
+        Self::ContractCall(source)
+    }
+}
+
+static TRANSACTION_GAS_LIMIT_METADATA_KEY: LazyLock<Name> =
+    LazyLock::new(|| "gas_limit".parse().expect("static gas_limit key"));
+
+/// Errors raised while decoding transaction `gas_limit` metadata.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TransactionGasLimitError {
+    /// The metadata key is missing.
+    Missing,
+    /// The metadata value is present but cannot be decoded as `u64`.
+    Invalid(String),
+    /// The metadata value is present but zero.
+    Zero,
+}
+
+impl fmt::Display for TransactionGasLimitError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Missing => f.write_str("missing gas_limit in transaction metadata"),
+            Self::Invalid(err) => write!(f, "invalid gas_limit metadata: {err}"),
+            Self::Zero => f.write_str("gas_limit must be positive"),
+        }
+    }
+}
+
+impl std::error::Error for TransactionGasLimitError {}
+
+/// Returns the canonical transaction metadata key used for `gas_limit`.
+pub fn transaction_gas_limit_metadata_key() -> &'static Name {
+    &TRANSACTION_GAS_LIMIT_METADATA_KEY
+}
+
+/// Parse the optional transaction `gas_limit` metadata entry.
+///
+/// Returns `Ok(None)` when the metadata key is absent.
+///
+/// # Errors
+///
+/// Returns [`TransactionGasLimitError::Invalid`] when the metadata value cannot be decoded as
+/// `u64`, and [`TransactionGasLimitError::Zero`] when the decoded value is zero.
+pub fn parse_transaction_gas_limit(
+    metadata: &Metadata,
+) -> Result<Option<u64>, TransactionGasLimitError> {
+    let Some(raw) = metadata.get(transaction_gas_limit_metadata_key()) else {
+        return Ok(None);
+    };
+    let value = raw
+        .clone()
+        .try_into_any_norito::<u64>()
+        .map_err(|err| TransactionGasLimitError::Invalid(err.to_string()))?;
+    if value == 0 {
+        return Err(TransactionGasLimitError::Zero);
+    }
+    Ok(Some(value))
+}
+
+/// Parse the required transaction `gas_limit` metadata entry.
+///
+/// # Errors
+///
+/// Returns [`TransactionGasLimitError::Missing`] when the metadata key is absent, plus the same
+/// decode and positivity errors returned by [`parse_transaction_gas_limit`].
+pub fn require_transaction_gas_limit(metadata: &Metadata) -> Result<u64, TransactionGasLimitError> {
+    parse_transaction_gas_limit(metadata)?.ok_or(TransactionGasLimitError::Missing)
+}
+
+/// Insert or replace the transaction `gas_limit` metadata entry.
+pub fn insert_transaction_gas_limit(metadata: &mut Metadata, gas_limit: u64) {
+    metadata.insert(transaction_gas_limit_metadata_key().clone(), gas_limit);
+}
+
 impl AsRef<[u8]> for IvmBytecode {
     fn as_ref(&self) -> &[u8] {
         self.0.as_ref()
@@ -120,6 +222,13 @@ impl IvmBytecode {
     /// Size of the smart contract in bytes
     pub fn size_bytes(&self) -> usize {
         self.0.len()
+    }
+}
+
+impl Executable {
+    /// Returns `true` if the executable kind requires transaction `gas_limit` metadata.
+    pub fn requires_transaction_gas_limit(&self) -> bool {
+        !matches!(self, Self::Instructions(_))
     }
 }
 
@@ -233,7 +342,7 @@ impl Executable {
     pub fn instruction_count(&self) -> u64 {
         match self {
             Executable::Instructions(instructions) => instructions.len() as u64,
-            Executable::Ivm(_) => 0,
+            Executable::ContractCall(_) | Executable::Ivm(_) => 0,
             Executable::IvmProved(proved) => proved.overlay.len() as u64,
         }
     }
@@ -242,7 +351,7 @@ impl Executable {
     pub fn ivm_size_bytes(&self) -> usize {
         match self {
             Executable::Ivm(b) => b.size_bytes(),
-            Executable::Instructions(_) => 0,
+            Executable::ContractCall(_) | Executable::Instructions(_) => 0,
             Executable::IvmProved(proved) => proved.bytecode.size_bytes(),
         }
     }
@@ -264,6 +373,9 @@ impl norito::json::JsonDeserialize for Executable {
                         parser,
                     )?;
                 Executable::Instructions(instrs)
+            }
+            "ContractCall" => {
+                Executable::ContractCall(ContractInvocation::json_deserialize(parser)?)
             }
             "Ivm" => Executable::Ivm(IvmBytecode::json_deserialize(parser)?),
             "IvmProved" => {
@@ -343,6 +455,11 @@ impl norito::json::FastJsonWrite for Executable {
                 out.push(':');
                 norito::json::JsonSerialize::json_serialize(instrs, out);
             }
+            Executable::ContractCall(invocation) => {
+                norito::json::write_json_string("ContractCall", out);
+                out.push(':');
+                norito::json::JsonSerialize::json_serialize(invocation, out);
+            }
             Executable::Ivm(bytecode) => {
                 norito::json::write_json_string("Ivm", out);
                 out.push(':');
@@ -411,6 +528,56 @@ mod tests {
     }
 
     #[test]
+    fn executable_kind_reports_gas_limit_requirement() {
+        assert!(
+            !Executable::from_iter(Vec::<InstructionBox>::new()).requires_transaction_gas_limit()
+        );
+        assert!(
+            Executable::Ivm(IvmBytecode::from_compiled(vec![1])).requires_transaction_gas_limit()
+        );
+        assert!(
+            Executable::ContractCall(ContractInvocation {
+                contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                    .parse()
+                    .expect("contract address"),
+                entrypoint: "ping".to_owned(),
+                payload: None,
+            })
+            .requires_transaction_gas_limit()
+        );
+    }
+
+    #[test]
+    fn transaction_gas_limit_roundtrip_helpers_work() {
+        let mut metadata = Metadata::default();
+        assert_eq!(
+            parse_transaction_gas_limit(&metadata).expect("missing gas_limit should be allowed"),
+            None
+        );
+        insert_transaction_gas_limit(&mut metadata, 42);
+        assert_eq!(
+            parse_transaction_gas_limit(&metadata).expect("gas_limit should parse"),
+            Some(42)
+        );
+        assert_eq!(
+            require_transaction_gas_limit(&metadata).expect("gas_limit should be required"),
+            42
+        );
+    }
+
+    #[test]
+    fn transaction_gas_limit_reports_invalid_and_zero_values() {
+        let mut metadata = Metadata::default();
+        metadata.insert(transaction_gas_limit_metadata_key().clone(), "oops");
+        let err = parse_transaction_gas_limit(&metadata).expect_err("invalid gas_limit must fail");
+        assert!(matches!(err, TransactionGasLimitError::Invalid(_)));
+
+        insert_transaction_gas_limit(&mut metadata, 0);
+        let err = require_transaction_gas_limit(&metadata).expect_err("zero gas_limit must fail");
+        assert_eq!(err, TransactionGasLimitError::Zero);
+    }
+
+    #[test]
 
     fn executable_from_iter_should_preserve_order() {
         let executable = Executable::from_iter(vec![
@@ -459,6 +626,22 @@ mod tests {
         let json = norito::json::to_json(&ivm_executable).expect("serialize ivm");
         let deserialized: Executable = norito::json::from_str(&json).expect("deserialize ivm");
         assert_eq!(ivm_executable, deserialized);
+
+        let contract_call_executable = Executable::ContractCall(ContractInvocation {
+            contract_address: "tairac1qyqqqqqqqqqqqqputuv64zhf0a0a4hhlqdj2lhnwuzq4xjqddcyq8"
+                .parse()
+                .expect("contract address"),
+            entrypoint: "contribute".to_owned(),
+            payload: Some(Json::new(norito::json!({
+                "sale": "genesis_sale",
+                "payment_amount": 1
+            }))),
+        });
+        let json =
+            norito::json::to_json(&contract_call_executable).expect("serialize contract call");
+        let deserialized: Executable =
+            norito::json::from_str(&json).expect("deserialize contract call");
+        assert_eq!(contract_call_executable, deserialized);
 
         let proved_executable = Executable::IvmProved(IvmProved {
             bytecode: IvmBytecode::from_compiled(vec![7, 7, 7]),

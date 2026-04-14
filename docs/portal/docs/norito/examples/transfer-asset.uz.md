@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 479d552d0f641875518c62059be1084af6ddf99213662a753c73ea57512b8e5f
 source_last_modified: "2026-04-02T18:24:28.189405+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ SDK tezkor ishga tushirish va buxgalteriya hisobi bo'yicha ko'rsatmalarni aks et
 
 - Elisni maqsadli aktiv bilan oldindan moliyalashtiring (masalan, “roʻyxatdan oʻtish va zarb qilish” snippeti yoki SDK tezkor boshlash oqimlari orqali).
 - `AssetTransferRole` ruxsatini qondirib, Elisdan Bobga 10 birlikni ko'chirish uchun `do_transfer` kirish nuqtasini bajaring.
-- Balanslarni so'rang (`FindAccountAssets`, `iroha_cli ledger asset list`) yoki o'tkazish natijalarini kuzatish uchun quvur hodisalariga obuna bo'ling.
+- Balanslarni so'rang (`FindAccountAssets`, `iroha ledger asset list all --verbose`) yoki o'tkazish natijalarini kuzatish uchun quvur hodisalariga obuna bo'ling.
 
 ## Tegishli SDK qo'llanmalari
 

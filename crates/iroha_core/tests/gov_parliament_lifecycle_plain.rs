@@ -70,9 +70,21 @@ fn manifest_provenance(
     .expect("manifest should contain provenance")
 }
 
+fn proposal_contract_address(
+    authority: &iroha_data_model::account::AccountId,
+) -> iroha_data_model::smart_contract::ContractAddress {
+    iroha_data_model::smart_contract::ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        authority,
+        0,
+        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+    )
+    .expect("proposal contract address")
+}
+
 #[test]
 fn sora_parliament_plain_lifecycle_with_20_citizens() {
-    let domain_id: DomainId = "sora".parse().expect("domain");
+    let domain_id: DomainId = DomainId::try_new("sora", "universal").expect("domain");
     let (proposer_id, proposer_kp) = gen_account_in("sora");
     let (escrow_id, _escrow_kp) = gen_account_in("sora");
     let citizens: Vec<_> = (0..CITIZEN_COUNT)
@@ -84,7 +96,7 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
 
     let domain = Domain::new(domain_id.clone()).build(&proposer_id);
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "sora".parse().unwrap(),
+        DomainId::try_new("sora", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&proposer_id);
@@ -148,14 +160,14 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     let abi_hash_hex = canonical_abi_hex();
     let manifest_provenance = manifest_provenance(&code_hash_hex, &abi_hash_hex, &proposer_kp);
 
-    let proposal_contract_id = "parliament.lifecycle.contract".to_string();
+    let proposal_contract_address = proposal_contract_address(&proposer_id);
 
     let header_1 = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
     let mut block_1 = state.block(header_1);
     let mut stx_1 = block_1.transaction();
 
     let propose_perm: Permission = CanProposeContractDeployment {
-        contract_id: proposal_contract_id.clone(),
+        contract_address: proposal_contract_address.clone(),
     }
     .into();
     Grant::account_permission(propose_perm, proposer_id.clone())
@@ -206,8 +218,7 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
     .expect("persist council");
 
     ProposeDeployContract {
-        namespace: "sora".to_string(),
-        contract_id: proposal_contract_id.clone(),
+        contract_address: proposal_contract_address.clone(),
         code_hash_hex: code_hash_hex.clone(),
         abi_hash_hex: abi_hash_hex.clone(),
         abi_version: "1".to_string(),
@@ -389,7 +400,7 @@ fn sora_parliament_plain_lifecycle_with_20_citizens() {
             .view()
             .world()
             .contract_instances()
-            .get(&("sora".to_string(), proposal_contract_id))
+            .get(&proposal_contract_address)
             .is_some_and(|bound| *bound == code_hash),
         "contract instance should be bound to enacted hash"
     );

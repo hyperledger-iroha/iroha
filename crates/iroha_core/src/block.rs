@@ -933,7 +933,8 @@ mod prefetch_tests {
     #[test]
     fn parse_account_key_variants() {
         let alice = (*ALICE_ID).clone();
-        let wonderland: DomainId = "wonderland".parse().expect("wonderland domain");
+        let wonderland: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("wonderland domain");
         let mut world = World::new();
         let selector =
             AccountDomainSelector::from_domain(&wonderland).expect("selector from domain");
@@ -968,7 +969,8 @@ mod prefetch_tests {
     #[test]
     fn parse_account_literal_rejects_i105_with_domain_suffix() {
         let alice = (*ALICE_ID).clone();
-        let wonderland: DomainId = "wonderland".parse().expect("wonderland domain");
+        let wonderland: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("wonderland domain");
         let domain = Domain::new(wonderland.clone()).build(&alice);
         let account = Account::new(alice.clone()).build(&alice);
         let world = World::with([domain], [account], []);
@@ -985,7 +987,8 @@ mod prefetch_tests {
     #[test]
     fn parse_account_literal_accepts_encoded_without_selector_registry() {
         let alice = (*ALICE_ID).clone();
-        let wonderland: DomainId = "wonderland".parse().expect("wonderland domain");
+        let wonderland: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("wonderland domain");
         let domain = Domain::new(wonderland.clone()).build(&alice);
         let account = Account::new(alice.clone()).build(&alice);
         let mut world = World::with([domain], [account], []);
@@ -1003,7 +1006,7 @@ mod prefetch_tests {
     #[test]
     fn parse_account_literal_accepts_canonical_i105_without_domain_materialization() {
         let account = (*ALICE_ID).clone();
-        let alpha: DomainId = "alpha".parse().expect("alpha domain");
+        let alpha: DomainId = DomainId::try_new("alpha", "universal").expect("alpha domain");
         let world = World::with(
             [Domain::new(alpha).build(&account)],
             [Account::new(account.clone()).build(&account)],
@@ -1023,7 +1026,7 @@ mod prefetch_tests {
 
     #[test]
     fn parse_account_literal_resolves_on_chain_alias_literals() {
-        let domain_id: DomainId = "ivm".parse().expect("domain");
+        let domain_id: DomainId = DomainId::try_new("ivm", "universal").expect("domain");
         let account_id = (*ALICE_ID).clone();
         let alias = AccountAlias::new(
             Name::from_str("gas").expect("alias name"),
@@ -1094,7 +1097,8 @@ mod prefetch_tests {
     #[test]
     fn parse_lane_settlement_buffer_config_resolves_account() {
         let alice = (*ALICE_ID).clone();
-        let wonderland: DomainId = "wonderland".parse().expect("wonderland domain");
+        let wonderland: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("wonderland domain");
         let mut world = World::new();
         let selector =
             AccountDomainSelector::from_domain(&wonderland).expect("selector from domain");
@@ -1104,7 +1108,7 @@ mod prefetch_tests {
         lane.metadata
             .insert("settlement.buffer_account".to_owned(), alice.to_string());
         let expected_asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "xor".parse().expect("asset name"),
         );
         lane.metadata.insert(
@@ -2667,6 +2671,8 @@ pub(crate) mod valid {
         SoracloudOrderedMailboxExecutionResult {
             state_mutations: Vec::new(),
             outbound_mailbox_messages: Vec::new(),
+            response_bytes: Vec::new(),
+            content_type: None,
             runtime_state: Some(runtime_state),
             runtime_receipt: iroha_data_model::soracloud::SoraRuntimeReceiptV1 {
                 schema_version: iroha_data_model::soracloud::SORA_RUNTIME_RECEIPT_VERSION_V1,
@@ -2815,6 +2821,8 @@ pub(crate) mod valid {
             let SoracloudOrderedMailboxExecutionResult {
                 state_mutations,
                 outbound_mailbox_messages,
+                response_bytes: _response_bytes,
+                content_type: _content_type,
                 runtime_state,
                 runtime_receipt,
             } = result;
@@ -7185,6 +7193,7 @@ pub(crate) mod valid {
                             crate::pipeline::overlay::build_overlay_for_transaction_quarantine(
                                 tx,
                                 accounts_snapshot.as_ref(),
+                                state_block,
                                 q_cycle_cap,
                                 q_time_cap,
                                 upper_cycle_cap,
@@ -8656,6 +8665,7 @@ pub(crate) mod valid {
                                 Some(routing_decisions[idx].dataspace_id);
                             let authority = tx.authority().clone();
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
+                            state_tx.current_tx_hash = Some(tx.hash());
                             if missing_authority_requires_rejection(
                                 &state_tx,
                                 tx,
@@ -8940,6 +8950,7 @@ pub(crate) mod valid {
                             state_tx.world.current_dataspace_id =
                                 Some(routing_decisions[idx].dataspace_id);
                             state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
+                            state_tx.current_tx_hash = Some(tx.hash());
                             let missing_authority = missing_authority_requires_rejection(
                                 &state_tx,
                                 tx,
@@ -9094,6 +9105,7 @@ pub(crate) mod valid {
                         state_tx.world.current_dataspace_id =
                             Some(routing_decisions[idx].dataspace_id);
                         state_tx.tx_call_hash = Some(iroha_crypto::Hash::from(hash));
+                        state_tx.current_tx_hash = Some(tx.hash());
                         let missing_authority = missing_authority_requires_rejection(
                             &state_tx,
                             tx,
@@ -9946,6 +9958,8 @@ pub(crate) mod valid {
                 Ok(SoracloudOrderedMailboxExecutionResult {
                     state_mutations: self.state_mutations.clone(),
                     outbound_mailbox_messages: Vec::new(),
+                    response_bytes: Vec::new(),
+                    content_type: None,
                     runtime_state: Some(SoraServiceRuntimeStateV1 {
                         schema_version:
                             iroha_data_model::soracloud::SORA_SERVICE_RUNTIME_STATE_VERSION_V1,
@@ -10029,6 +10043,7 @@ pub(crate) mod valid {
                     entrypoint: "main".to_string(),
                     args: Vec::new(),
                     env: std::collections::BTreeMap::new(),
+                    inrou: None,
                     required_config_names: Vec::new(),
                     required_secret_names: Vec::new(),
                     config_exports: Vec::new(),
@@ -10057,6 +10072,8 @@ pub(crate) mod valid {
                     schema_version: iroha_data_model::soracloud::SORA_SERVICE_MANIFEST_VERSION_V1,
                     service_name: service_name.clone(),
                     service_version: service_version.clone(),
+                    execution_plane:
+                        iroha_data_model::soracloud::SoraServiceExecutionPlaneV1::DeterministicService,
                     container: SoraContainerManifestRefV1 {
                         manifest_hash: Hash::new(b"container-manifest:portal"),
                         expected_schema_version:
@@ -10070,7 +10087,9 @@ pub(crate) mod valid {
                         health_window_secs: NonZeroU32::new(30).expect("nonzero health window"),
                         automatic_rollback_failures: NonZeroU32::new(1).expect("nonzero rollback"),
                     },
+                    economics: iroha_data_model::soracloud::SoraHttpServiceEconomicsV1::default(),
                     state_bindings,
+                    lease_volumes: Vec::new(),
                     handlers: vec![SoraServiceHandlerV1 {
                         handler_name: "update".parse().expect("valid handler name"),
                         class: SoraServiceHandlerClassV1::Update,
@@ -10113,6 +10132,8 @@ pub(crate) mod valid {
                         secret_generation: 0,
                         service_configs: BTreeMap::new(),
                         service_secrets: BTreeMap::new(),
+                        service_lease: None,
+                        lease_volume_states: Vec::new(),
                     },
                 );
             world.soracloud_service_runtime_mut_for_testing().insert(
@@ -11206,7 +11227,8 @@ pub(crate) mod valid {
         fn validate_and_record_transactions_skip_stateless_matches_full() {
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
             let (alice_id, alice_keypair) = gen_account_in("wonderland");
-            let domain_id: DomainId = "wonderland".parse().expect("valid domain");
+            let domain_id: DomainId =
+                DomainId::try_new("wonderland", "universal").expect("valid domain");
             let account = Account::new(alice_id.clone()).build(&alice_id);
             let domain = Domain::new(domain_id).build(&alice_id);
             let world = World::with([domain], [account], []);
@@ -12501,7 +12523,8 @@ pub(crate) mod valid {
             let kura = Arc::new(Kura::blank_kura_for_testing());
             let query = LiveQueryStore::start_test();
             let (authority, signer) = gen_account_in("fraud-cache-test");
-            let domain_id: DomainId = "fraud-cache-test".parse().expect("fraud-cache-test domain");
+            let domain_id: DomainId = DomainId::try_new("fraud-cache-test", "universal")
+                .expect("fraud-cache-test domain");
             let domain = Domain::new(domain_id.clone()).build(&authority);
             let account = Account::new(authority.clone()).build(&authority);
             let world = World::with([domain], [account], iter::empty::<AssetDefinition>());
@@ -12602,7 +12625,7 @@ pub(crate) mod valid {
             let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
             let genesis_account = SAMPLE_GENESIS_ACCOUNT_ID.clone();
             let asset_definition_id = AssetDefinitionId::new(
-                "genesis".parse().expect("valid domain id"),
+                DomainId::try_new("genesis", "universal").expect("valid domain id"),
                 "xor".parse().expect("valid asset name"),
             );
             let asset_name = asset_definition_id.name().to_string();
@@ -15524,11 +15547,12 @@ mod tests {
         let chain_id = ChainId::from("chain");
         let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
         let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("wonderland domain");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("wonderland domain");
         let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
         let ad: AssetDefinition = {
             let __asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "coin".parse().unwrap(),
             );
             AssetDefinition::new(__asset_definition_id.clone(), NumericSpec::default())
@@ -15543,7 +15567,7 @@ mod tests {
         let state = State::new(world, kura, query);
 
         let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
         let a_coin = AssetId::of(rose.clone(), alice_id.clone());
@@ -15590,7 +15614,7 @@ mod tests {
 
         // Predefined world state
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("Valid");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
         let account = Account::new(alice_id.clone()).build(&alice_id);
         let domain = Domain::new(domain_id).build(&alice_id);
         let world = World::with([domain], [account], []);
@@ -15604,7 +15628,7 @@ mod tests {
         };
         // Creating an instruction
         let asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().expect("domain id"),
+            DomainId::try_new("wonderland", "universal").expect("domain id"),
             "xor".parse().expect("asset name"),
         );
         let create_asset_definition = Register::asset_definition(
@@ -15648,7 +15672,7 @@ mod tests {
 
         // Predefined world state
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("Valid");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
         let account = Account::new(alice_id.clone()).build(&alice_id);
         let domain = Domain::new(domain_id).build(&alice_id);
         let world = World::with([domain], [account], []);
@@ -15661,8 +15685,12 @@ mod tests {
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
         // Two independent register instructions (no ordering dependencies)
-        let domain_a = Register::domain(Domain::new("domain-a".parse().unwrap()));
-        let domain_b = Register::domain(Domain::new("domain-b".parse().unwrap()));
+        let domain_a = Register::domain(Domain::new(
+            DomainId::try_new("domain-a", "universal").unwrap(),
+        ));
+        let domain_b = Register::domain(Domain::new(
+            DomainId::try_new("domain-b", "universal").unwrap(),
+        ));
 
         let tx = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
             .with_instructions::<InstructionBox>([domain_a.into()])
@@ -15677,7 +15705,7 @@ mod tests {
         )
         .expect("Valid");
 
-        let fail_domain_id = "missing-domain".parse().expect("valid id");
+        let fail_domain_id = DomainId::try_new("missing-domain", "universal").expect("valid id");
         let fail_instruction = Unregister::domain(fail_domain_id);
         let succeed_instruction = domain_b;
 
@@ -15749,7 +15777,7 @@ mod tests {
 
         // Predefined world state
         let (alice_id, alice_keypair) = gen_account_in("wonderland");
-        let domain_id: DomainId = "wonderland".parse().expect("Valid");
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("Valid");
         let account = Account::new(alice_id.clone()).build(&alice_id);
         let domain = Domain::new(domain_id).build(&alice_id);
         let world = World::with([domain], [account], []);
@@ -15761,16 +15789,16 @@ mod tests {
             let params = state_view.parameters();
             (params.sumeragi().max_clock_drift(), params.transaction())
         };
-        let domain_id = "domain".parse().expect("Valid");
+        let domain_id = DomainId::try_new("domain", "universal").expect("Valid");
         let create_domain = Register::domain(Domain::new(domain_id));
         let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
-            "domain".parse().unwrap(),
+            DomainId::try_new("domain", "universal").unwrap(),
             "coin".parse().unwrap(),
         );
         let create_asset = Register::asset_definition(
             AssetDefinition::numeric(asset_definition_id).with_name("coin".to_owned()),
         );
-        let fail_isi = Unregister::domain("dummy".parse().unwrap());
+        let fail_isi = Unregister::domain(DomainId::try_new("dummy", "universal").unwrap());
         let tx_fail = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
             .with_instructions::<InstructionBox>([create_domain.clone().into(), fail_isi.into()])
             .sign(alice_keypair.private_key());
@@ -15964,7 +15992,8 @@ mod tests {
         let genesis_key_pair = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key_pair.public_key().clone());
         let alice_key_pair = KeyPair::random();
-        let wonderland_domain_id: DomainId = "wonderland".parse().expect("Valid domain id");
+        let wonderland_domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("Valid domain id");
         let alice_account_id = AccountId::new(alice_key_pair.public_key().clone());
 
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
@@ -15982,7 +16011,7 @@ mod tests {
         let state = State::new(world, kura, query_handle);
 
         let asset_definition_id = AssetDefinitionId::new(
-            "wonderland".parse().expect("valid domain id"),
+            DomainId::try_new("wonderland", "universal").expect("valid domain id"),
             "xor".parse().expect("valid asset name"),
         );
         let instruction = Register::asset_definition(
@@ -16018,7 +16047,8 @@ mod tests {
 
         let genesis_key_pair = KeyPair::random();
         let genesis_account_id = AccountId::new(genesis_key_pair.public_key().clone());
-        let wonderland_domain_id: DomainId = "wonderland".parse().expect("valid domain id");
+        let wonderland_domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("valid domain id");
 
         let genesis_domain = Domain::new(GENESIS_DOMAIN_ID.clone()).build(&genesis_account_id);
         let genesis_account = Account::new(genesis_account_id.clone()).build(&genesis_account_id);
@@ -16451,6 +16481,10 @@ fn estimate_transaction_teu(tx: &SignedTransaction) -> u64 {
             let instructions: Vec<_> = batch.iter().cloned().collect();
             crate::gas::meter_instructions(&instructions)
         }
+        Executable::ContractCall(_) => crate::executor::parse_gas_limit(tx.metadata())
+            .ok()
+            .flatten()
+            .unwrap_or(IVM_TEU_FALLBACK),
         Executable::Ivm(bytecode) => match ProgramMetadata::parse(bytecode.as_ref()) {
             Ok(parsed) => {
                 let max_cycles = parsed.metadata.max_cycles;

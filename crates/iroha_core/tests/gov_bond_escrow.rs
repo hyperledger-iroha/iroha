@@ -13,7 +13,7 @@ use iroha_data_model::{
     Registrable,
     asset::{Asset, AssetDefinition},
     block::BlockHeader,
-    domain::Domain,
+    domain::{Domain, DomainId},
     permission::Permission,
     prelude::{AssetDefinitionId, AssetId, Grant},
 };
@@ -26,13 +26,14 @@ use nonzero_ext::nonzero;
 fn plain_ballot_locks_bond_into_escrow() {
     let alice_id = &*ALICE_ID;
     let bob_id = &*BOB_ID;
-    let wonderland: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+    let wonderland: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain");
     // Build a minimal world with XOR-like asset and escrow account.
     let domain = Domain::new(wonderland.clone()).build(alice_id);
     let alice_account = iroha_data_model::account::Account::new(ALICE_ID.clone()).build(alice_id);
     let escrow_account = iroha_data_model::account::Account::new(BOB_ID.clone()).build(bob_id);
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let asset_def = AssetDefinition::numeric(def_id.clone()).build(alice_id);

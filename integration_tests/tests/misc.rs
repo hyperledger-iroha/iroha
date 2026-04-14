@@ -82,11 +82,11 @@ async fn misc_status_endpoints_smoke() -> Result<()> {
     {
         let client = client.clone();
         spawn_blocking(move || {
-            let domain: DomainId = "lookingglass".parse()?;
+            let domain: DomainId = DomainId::try_new("lookingglass", "universal")?;
             let owner = client.account.clone();
             let controller = AccountAddress::from_account_id(&owner)?;
             client.sns().register(&RegisterNameRequestV1 {
-                selector: NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain.name().as_ref())?,
+                selector: NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain.to_string())?,
                 owner: owner.clone(),
                 controllers: vec![NameControllerV1::account(&controller)],
                 term_years: 1,

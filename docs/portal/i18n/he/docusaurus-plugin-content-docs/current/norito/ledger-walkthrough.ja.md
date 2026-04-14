@@ -52,7 +52,7 @@ iroha --config defaults/client.toml domain list all --table
 
 # Accounts בתוך wonderland (החליפו את --limit במספר גבוה יותר אם צריך)
 iroha --config defaults/client.toml account list filter \
-  '{"domain":"wonderland"}' \
+  '{"domain":"wonderland.universal"}' \
   --limit 10 --table
 
 # Asset definitions שכבר קיימים

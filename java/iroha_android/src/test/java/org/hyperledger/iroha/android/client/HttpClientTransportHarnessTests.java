@@ -56,7 +56,7 @@ public final class HttpClientTransportHarnessTests {
               ClientConfig.builder()
                   .setBaseUri(server.baseUri())
                   .setRequestTimeout(Duration.ofSeconds(5))
-                  .putDefaultHeader("Authorization", "Bearer harness")
+                  .putDefaultHeader("X-Test", "harness")
                   .build());
 
       final SignedTransaction transaction = sampleTransaction((byte) 0x01);
@@ -90,7 +90,7 @@ public final class HttpClientTransportHarnessTests {
           : "Submission should target Torii pipeline route";
       assert Arrays.equals(submission.body(), SignedTransactionEncoder.encodeVersioned(transaction))
           : "Serialized payload should match Norito encoding";
-      assert "Bearer harness".equals(submission.header("Authorization").orElse(null))
+      assert "harness".equals(submission.header("X-Test").orElse(null))
           : "Custom headers must be forwarded";
       assert server.statusRequests().size() >= 2 : "Status polling should reach the mock server";
     }
@@ -233,7 +233,7 @@ public final class HttpClientTransportHarnessTests {
               ClientConfig.builder()
                   .setBaseUri(server.baseUri())
                   .addObserver(observer)
-                  .putDefaultHeader("Authorization", "Bearer harness")
+                  .putDefaultHeader("X-Test", "harness")
                   .build());
       final NoritoRpcClient rpcClient = transport.newNoritoRpcClient();
       rpcClient.call("/transaction", new byte[0]);
@@ -241,7 +241,7 @@ public final class HttpClientTransportHarnessTests {
       assert observer.responseCount.get() == 1 : "RPC client should trigger observer response";
       final var submissions = server.submittedTransactions();
       assert !submissions.isEmpty() : "Mock server should record RPC submission";
-      assert "Bearer harness".equals(submissions.get(0).header("Authorization").orElse(null))
+      assert "harness".equals(submissions.get(0).header("X-Test").orElse(null))
           : "Config headers must carry over to Norito RPC client";
     }
   }

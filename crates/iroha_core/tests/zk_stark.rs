@@ -833,7 +833,7 @@ fn stark_open_verify_envelope_binds_domain_tag_to_metadata() {
     };
 
     let backend = "stark/fri/sha256-goldilocks";
-    let circuit_id = "ivm-execution";
+    let circuit_id = "ivm-execution-v1";
 
     let vk_box = sample_stark_vk_box(backend, circuit_id, STARK_HASH_SHA256_V1);
     let vk_hash = iroha_core::zk::hash_vk(&vk_box);
@@ -898,7 +898,7 @@ fn stark_open_verify_envelope_poseidon2_variant_verifies() {
     };
 
     let backend = "stark/fri/poseidon2-goldilocks";
-    let circuit_id = "ivm-execution";
+    let circuit_id = "ivm-execution-v1";
 
     let vk_box = sample_stark_vk_box(backend, circuit_id, STARK_HASH_POSEIDON2_V1);
     let vk_hash = iroha_core::zk::hash_vk(&vk_box);
@@ -999,7 +999,7 @@ fn stark_ivm_proved_execution_admission_accepts_valid_proof() {
     use iroha_primitives::json::Json;
 
     let backend = "stark/fri/sha256-goldilocks";
-    let circuit_id = "ivm-execution";
+    let circuit_id = "ivm-execution-v1";
 
     // Minimal ZK-mode IVM program: metadata + `HALT`.
     let meta = ivm::ProgramMetadata {
@@ -1013,7 +1013,8 @@ fn stark_ivm_proved_execution_admission_accepts_valid_proof() {
 
     let kp = KeyPair::random();
     let authority = AccountId::new(kp.public_key().clone());
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().unwrap();
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").unwrap();
     let domain = Domain::new(domain_id.clone()).build(&authority);
     let account = Account::new(authority.clone()).build(&authority);
 
@@ -1073,7 +1074,7 @@ fn stark_ivm_proved_execution_admission_accepts_valid_proof() {
     )
     .expect("derive proved payload");
 
-    // Compute the ivm-execution public inputs and package them as STARK wrapper columns.
+    // Compute the ivm-execution-v1 public inputs and package them as STARK wrapper columns.
     let mut ivm_cache = iroha_core::smartcontracts::ivm::cache::IvmCache::new();
     let summary = ivm_cache
         .summarize_program(proved.bytecode.as_ref())
@@ -1182,7 +1183,8 @@ fn stark_governance_submit_and_finalize_accept_valid_proofs() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let world = World::with([domain], [account], Vec::new());
@@ -1374,7 +1376,8 @@ fn create_election_rejects_stark_vk_with_wrong_vote_circuit_role() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let mut state = State::new_for_testing(
@@ -1495,7 +1498,8 @@ fn create_election_rejects_stark_tally_vk_with_wrong_vote_circuit_role() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let mut state = State::new_for_testing(
@@ -1621,7 +1625,8 @@ fn governance_accepts_valid_halo2_and_stark_ballots_in_same_state() {
 
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let world = World::with([domain], [account], Vec::new());

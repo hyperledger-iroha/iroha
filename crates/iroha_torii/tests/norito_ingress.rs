@@ -217,6 +217,8 @@ async fn iroha_client_submit_transaction_succeeds_against_torii_public_signed_tr
     let client = Client::new(Config {
         chain: chain.clone(),
         account: account.clone(),
+        account_chain_discriminant: iroha_config::parameters::defaults::common::chain_discriminant(
+        ),
         key_pair: key_pair.clone(),
         basic_auth: None,
         torii_api_url: format!("http://{addr}/").parse().expect("torii url"),

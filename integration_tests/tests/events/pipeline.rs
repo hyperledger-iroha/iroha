@@ -91,7 +91,7 @@ async fn applied_block_must_be_available_in_kura_scenario(network: &Network) -> 
     let client = network.client();
 
     // When: submit a simple transaction to ensure a new non-genesis block is committed
-    let kura_domain: DomainId = "kura-test".parse()?;
+    let kura_domain: DomainId = DomainId::try_new("kura-test", "universal")?;
     ensure_domain_registration_lease_for_network(network, &kura_domain)?;
     let register = Register::domain(Domain::new(kura_domain));
     let tx = client.build_transaction([register], Metadata::default());
@@ -249,7 +249,10 @@ async fn pipeline_event_scenarios() -> Result<()> {
         return Ok(());
     };
 
-    let register = Register::domain(Domain::new("looking-glass".parse()?));
+    let register = Register::domain(Domain::new(DomainId::try_new(
+        "looking-glass",
+        "universal",
+    )?));
     test_with_instruction_and_status(
         stringify!(transaction_with_ok_instruction_should_be_committed),
         &network,
@@ -258,7 +261,7 @@ async fn pipeline_event_scenarios() -> Result<()> {
     )
     .await?;
 
-    let unknown_domain_id = "dummy".parse::<DomainId>()?;
+    let unknown_domain_id = DomainId::try_new("dummy", "universal")?;
     let fail_isi = Unregister::domain(unknown_domain_id.clone());
     test_with_instruction_and_status(
         stringify!(transaction_with_fail_instruction_should_be_rejected),

@@ -106,8 +106,9 @@ Manual command:
 ```bash
 IROHA_THROUGHPUT_ARTIFACT_DIR=./artifacts/localnet-throughput \
   cargo test -p integration_tests --release \
-  --test sumeragi_localnet_smoke permissioned_localnet_throughput_10k_tps \
-  -- --ignored --nocapture
+  --test consensus_and_da \
+  sumeragi_localnet_smoke::permissioned_localnet_throughput_10k_tps \
+  -- --ignored --exact --nocapture
 ```
 
 NPoS run:
@@ -115,8 +116,9 @@ NPoS run:
 ```bash
 IROHA_THROUGHPUT_ARTIFACT_DIR=./artifacts/localnet-throughput \
   cargo test -p integration_tests --release \
-  --test sumeragi_localnet_smoke npos_localnet_throughput_10k_tps \
-  -- --ignored --nocapture
+  --test consensus_and_da \
+  sumeragi_localnet_smoke::npos_localnet_throughput_10k_tps \
+  -- --ignored --exact --nocapture
 ```
 
 ## Artifacts

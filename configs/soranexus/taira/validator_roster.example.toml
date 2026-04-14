@@ -8,8 +8,10 @@
 #     --roster configs/soranexus/taira/validator_roster.local.toml \
 #     --secrets configs/soranexus/taira/validator_secrets.local.toml \
 #     --output-dir dist/taira-validators
+#
+# Every validator must set its own `torii_public_address`. Direct per-node Torii
+# ingress is canonical for Taira; `https://taira.sora.org` is convenience-only.
 
-torii_public_address = "https://taira.sora.org"
 network_address = "0.0.0.0:1337"
 torii_address = "0.0.0.0:18080"
 
@@ -18,21 +20,25 @@ slug = "taira-validator-1"
 public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_1"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_1"
 public_address = "taira-validator-1.sora.org:1337"
+torii_public_address = "https://taira-validator-1.sora.org"
 
 [[validators]]
 slug = "taira-validator-2"
 public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_2"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_2"
 public_address = "taira-validator-2.sora.org:1337"
+torii_public_address = "https://taira-validator-2.sora.org"
 
 [[validators]]
 slug = "taira-validator-3"
 public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_3"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_3"
 public_address = "taira-validator-3.sora.org:1337"
+torii_public_address = "https://taira-validator-3.sora.org"
 
 [[validators]]
 slug = "taira-validator-4"
 public_key = "REPLACE_WITH_BLS_PUBLIC_KEY_4"
 pop_hex = "REPLACE_WITH_BLS_POP_HEX_4"
 public_address = "taira-validator-4.sora.org:1337"
+torii_public_address = "https://taira-validator-4.sora.org"

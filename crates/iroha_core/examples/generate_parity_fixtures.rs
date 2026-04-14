@@ -57,11 +57,11 @@ fn run_block_and_events(
     // Build a fresh world with default sandbox-like setup (62Fk4FPcMuLvW5QjDGNF2a4jAmjM).
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&alice_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         ),
         NumericSpec::default(),
@@ -121,7 +121,7 @@ fn main() {
     let (alice_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let (bob_id, _) = iroha_test_samples::gen_account_in("wonderland");
     let rose: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
     let a_coin = AssetId::of(rose.clone(), alice_id.clone());
@@ -148,7 +148,7 @@ fn main() {
     write_fixture("mint_burn_transfer", &events_json_filtered(&events_par));
 
     // 2) KV + NFT lifecycle
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let nft_id: NftId = "n0$wonderland".parse().unwrap();
     let tx_acc_set = TransactionBuilder::new(chain_id.clone(), alice_id.clone())
         .with_instructions([SetKeyValue::account(
@@ -217,7 +217,7 @@ fn main() {
 
     // 3) Asset definition KV set/remove
     let ad: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
     let tx_set = TransactionBuilder::new(chain_id.clone(), alice_id.clone())

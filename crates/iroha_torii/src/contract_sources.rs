@@ -869,7 +869,16 @@ fn build_contract_view(mut input: ContractViewBuildInput) -> Result<ContractCode
         }
     }
 
-    let verified_source_record = load_verified_source_record(&code_hash)?;
+    let verified_source_record = if let Some(record) = load_verified_source_record(&code_hash)? {
+        Some(record)
+    } else if let Some(declared) = declared_code_hash
+        .as_ref()
+        .filter(|declared| declared.as_str() != code_hash.as_str())
+    {
+        load_verified_source_record(declared)?
+    } else {
+        None
+    };
     let verified_source_ref = verified_source_record
         .as_ref()
         .and_then(verified_source_ref_from_record);
@@ -972,8 +981,8 @@ fn resolve_contract_view_input_for_instruction(
         let code_hash_hex = hash_hex(&activate.code_hash);
         let mut input = resolve_contract_view_input_for_code_hash(state, &code_hash_hex)?;
         input.warnings.push(format!(
-            "Showing the contract currently bound to {}.{}.",
-            activate.namespace, activate.contract_id
+            "Showing the contract currently bound to {}.",
+            activate.contract_address
         ));
         return Ok(input);
     }
@@ -1281,8 +1290,7 @@ mod tests {
         state: &State,
         authority: &AccountId,
         authority_keypair: &KeyPair,
-        namespace: &str,
-        contract_id: &str,
+        contract_address: &dm::ContractAddress,
         code: Vec<u8>,
     ) -> Hash {
         let mut block = state.block(dm::BlockHeader::new(
@@ -1310,7 +1318,7 @@ mod tests {
             register_code_bytes(authority, code, &mut stx).expect("register contract bytes");
         let manifest = verified.manifest.signed(authority_keypair);
         register_manifest(authority, manifest, &mut stx).expect("register manifest");
-        activate_instance(authority, namespace, contract_id, code_hash, &mut stx)
+        activate_instance(authority, contract_address.clone(), code_hash, &mut stx)
             .expect("activate instance");
 
         stx.apply();
@@ -1358,12 +1366,14 @@ mod tests {
         ));
 
         let code = crate::test_utils::minimal_ivm_program(1);
+        let contract_address =
+            dm::ContractAddress::derive(0, &authority, 0, dm::DataSpaceId::GLOBAL)
+                .expect("contract address");
         let code_hash = install_contract_instance(
             state.as_ref(),
             &authority,
             &authority_keypair,
-            "apps",
-            "demo",
+            &contract_address,
             code,
         );
         let code_hash_hex = hash_hex(&code_hash);

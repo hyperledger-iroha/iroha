@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 479d552d0f641875518c62059be1084af6ddf99213662a753c73ea57512b8e5f
 source_last_modified: "2026-04-02T18:24:28.189405+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: examples/transfer/transfer.ko
 
 - 使用目标资产为 Alice 预先提供资金（例如通过“注册和铸造”片段或 SDK 快速启动流程）。
 - 执行 `do_transfer` 入口点，将 10 个单位从 Alice 移动到 Bob，满足 `AssetTransferRole` 权限。
-- 查询余额（`FindAccountAssets`、`iroha_cli ledger asset list`）或订阅管道事件以观察传输结果。
+- 查询余额（`FindAccountAssets`、`iroha ledger asset list all --verbose`）或订阅管道事件以观察传输结果。
 
 ## 相关SDK指南
 

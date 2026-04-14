@@ -27,7 +27,7 @@ These guidelines apply to the entire repository, which is organised as a Cargo w
 - Universal-account model:
   - `AccountId` is the canonical account identity and is always domainless.
   - Domain context for routing, aliasing, and ownership lives outside the canonical account identity in alias bindings and domain-owned entities.
-  - Account aliases are a separate SNS/account-label layer. Both domain-qualified aliases like `merchant@hbl.sbp` and dataspace-root aliases like `merchant@sbp` bind to the same canonical `AccountId`.
+  - Account aliases are a separate SNS/account-label layer. Both domain-qualified aliases like `merchant@banka.sbp` and dataspace-root aliases like `merchant@sbp` bind to the same canonical `AccountId`.
   - In tests and fixtures, seed the universal `AccountId` first, then add alias leases, alias permissions, and any domain-owned state separately. Use `Account::new(...)` for account registration and bind aliases separately only when the behavior under test depends on them.
 
 ## Repository structure
@@ -144,7 +144,9 @@ Note: First release policy
 - DA-enabled consensus now waits longer before view changes (commit quorum timeout = `block_time + 3 * commit_time`) to let RBC/availability QC finish on slower hosts.
 - When the user asks about the live SORA Taira testnet or deployed Torii MCP
   workflows, consult `skills/sora-taira-testnet/SKILL.md` in this repo and
-  prefer the curated `iroha.*` tool surface on `https://taira.sora.org/v1/mcp`.
+  prefer the curated `iroha.*` tool surface on an explicit public-node MCP URL
+  such as `https://<taira-node>/v1/mcp`; `https://taira.sora.org/v1/mcp` is
+  convenience-only.
 - Treat any Taira/runtime signing inputs such as `authority`,
   `private_key`, bearer tokens, or forwarded auth headers as runtime-only
   secrets and never persist them in repo files or committed docs.

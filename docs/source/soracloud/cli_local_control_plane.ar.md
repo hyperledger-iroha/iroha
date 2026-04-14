@@ -27,7 +27,7 @@ translator: machine-google-reviewed
   حالة عالمية موثوقة بالإضافة إلى مدير وقت التشغيل Soracloud المضمن.
 
 ## نطاق وقت التشغيل- Soracloud v1 يقبل `SoraContainerRuntimeV1::Ivm` فقط.
-- يظل `NativeProcess` مرفوضًا.
+- Hosted HTTP: `execution_plane = HttpService`, `runtime = Inrou`.
 - عمليات تنفيذ صندوق البريد المطلوبة تم قبولها بواسطة معالجات IVM مباشرة.
 - يأتي الترطيب والتجسيد من محتوى SoraFS/DA الملتزم بدلاً من ذلك
   من اللقطات المحلية الاصطناعية.

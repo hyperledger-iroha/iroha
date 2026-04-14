@@ -229,7 +229,7 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_proofs_get_tool());
     tools.push(iroha_proofs_query_tool());
     tools.push(iroha_proofs_retention_tool());
-    tools.push(iroha_gov_instances_list_tool());
+    tools.push(iroha_gov_contract_get_tool());
     tools.push(iroha_gov_proposals_deploy_contract_tool());
     tools.push(iroha_gov_proposals_get_tool());
     tools.push(iroha_gov_locks_get_tool());
@@ -255,9 +255,6 @@ pub(crate) fn build_tool_specs(cfg: &iroha_config::parameters::actual::ToriiMcp)
     tools.push(iroha_contracts_code_get_tool());
     tools.push(iroha_contracts_code_bytes_get_tool());
     tools.push(iroha_contracts_deploy_tool());
-    tools.push(iroha_contracts_instance_create_tool());
-    tools.push(iroha_contracts_instance_activate_tool());
-    tools.push(iroha_contracts_instances_list_tool());
     tools.push(iroha_contracts_call_tool());
     tools.push(iroha_contracts_call_and_wait_tool());
     tools.push(iroha_contracts_state_get_tool());
@@ -1032,8 +1029,8 @@ async fn handle_tools_call(
                 Err(err) => mcp_tool_error(err),
             }
         }
-        "iroha.gov.instances.list" => {
-            match dispatch_iroha_gov_instances_list(&app, inbound_headers, &arguments).await {
+        "iroha.gov.contract.get" => {
+            match dispatch_iroha_gov_contract_get(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -1192,27 +1189,6 @@ async fn handle_tools_call(
         }
         "iroha.contracts.deploy" => {
             match dispatch_iroha_contracts_deploy(&app, inbound_headers, &arguments).await {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.contracts.instance.create" => {
-            match dispatch_iroha_contracts_instance_create(&app, inbound_headers, &arguments).await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.contracts.instance.activate" => {
-            match dispatch_iroha_contracts_instance_activate(&app, inbound_headers, &arguments)
-                .await
-            {
-                Ok(result) => mcp_tool_success(result),
-                Err(err) => mcp_tool_error(err),
-            }
-        }
-        "iroha.contracts.instances.list" => {
-            match dispatch_iroha_contracts_instances_list(&app, inbound_headers, &arguments).await {
                 Ok(result) => mcp_tool_success(result),
                 Err(err) => mcp_tool_error(err),
             }
@@ -3976,18 +3952,16 @@ async fn dispatch_iroha_proofs_retention(
     .await
 }
 
-async fn dispatch_iroha_gov_instances_list(
+async fn dispatch_iroha_gov_contract_get(
     app: &SharedAppState,
     inbound_headers: &HeaderMap,
     arguments: &Map,
 ) -> Result<Value, String> {
-    let namespace = extract_contract_namespace_argument(arguments)?;
+    let contract_address = extract_contract_address_argument(arguments)?;
     let mut path_args = Map::new();
-    path_args.insert("ns".into(), Value::String(namespace));
+    path_args.insert("contract_address".into(), Value::String(contract_address));
     let path_value = Value::Object(path_args);
-    let query = collect_query_arguments(arguments, &["path", "headers", "accept"])?;
-    let route = fill_path_template("/v1/gov/instances/{ns}", Some(&path_value))?;
-    let route = append_query(route, query.as_ref())?;
+    let route = fill_path_template("/v1/gov/contracts/{contract_address}", Some(&path_value))?;
     dispatch_route(
         app,
         inbound_headers,
@@ -4572,56 +4546,6 @@ async fn dispatch_iroha_contracts_deploy(
     arguments: &Map,
 ) -> Result<Value, String> {
     dispatch_iroha_contracts_post(app, inbound_headers, arguments, "/v1/contracts/deploy").await
-}
-
-async fn dispatch_iroha_contracts_instance_create(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_iroha_contracts_post(app, inbound_headers, arguments, "/v1/contracts/instance").await
-}
-
-async fn dispatch_iroha_contracts_instance_activate(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    dispatch_iroha_contracts_post(
-        app,
-        inbound_headers,
-        arguments,
-        "/v1/contracts/instance/activate",
-    )
-    .await
-}
-
-async fn dispatch_iroha_contracts_instances_list(
-    app: &SharedAppState,
-    inbound_headers: &HeaderMap,
-    arguments: &Map,
-) -> Result<Value, String> {
-    let namespace = extract_contract_namespace_argument(arguments)?;
-    let mut path_args = Map::new();
-    path_args.insert("ns".into(), Value::String(namespace));
-    let path_value = Value::Object(path_args);
-    let query = collect_query_arguments(arguments, &["path", "headers", "accept"])?;
-    let route = fill_path_template("/v1/contracts/instances/{ns}", Some(&path_value))?;
-    let route = append_query(route, query.as_ref())?;
-    dispatch_route(
-        app,
-        inbound_headers,
-        Method::GET,
-        route.as_str(),
-        arguments.get("headers"),
-        Vec::new(),
-        None,
-        arguments
-            .get("accept")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    )
-    .await
 }
 
 async fn dispatch_iroha_contracts_call(
@@ -6334,7 +6258,7 @@ async fn wait_for_terminal_transaction_status(
 
         if (200..300).contains(&status_code) {
             let kind = extract_pipeline_status_kind(&status_result).ok_or_else(|| {
-                "status polling response is missing `body.content.status.kind`".to_owned()
+                "status polling response is missing `body.status.kind`".to_owned()
             })?;
             last_kind = Some(kind.to_owned());
             if is_terminal_pipeline_status(kind, &terminal_statuses) {
@@ -6641,18 +6565,10 @@ fn decode_transaction_hash_from_receipt_base64(encoded_receipt: &str) -> Option<
 
 fn extract_pipeline_status_kind(status_result: &Value) -> Option<&str> {
     let body = status_result.get("body")?;
-    body.get("content")
-        .and_then(Value::as_object)
-        .and_then(|content| content.get("status"))
+    body.get("status")
         .and_then(Value::as_object)
         .and_then(|status| status.get("kind"))
         .and_then(Value::as_str)
-        .or_else(|| {
-            body.get("status")
-                .and_then(Value::as_object)
-                .and_then(|status| status.get("kind"))
-                .and_then(Value::as_str)
-        })
 }
 
 fn is_terminal_pipeline_status(status: &str, terminal_statuses: &[String]) -> bool {
@@ -7055,21 +6971,23 @@ fn extract_code_hash_argument(arguments: &Map) -> Result<String, String> {
         })
 }
 
-fn extract_contract_namespace_argument(arguments: &Map) -> Result<String, String> {
+fn extract_contract_address_argument(arguments: &Map) -> Result<String, String> {
     if let Some(path) = arguments.get("path") {
         let path = path
             .as_object()
             .ok_or_else(|| "`path` must be an object".to_owned())?;
-        if let Some(namespace) = path.get("ns").and_then(Value::as_str) {
-            return Ok(namespace.to_owned());
+        if let Some(contract_address) = path.get("contract_address").and_then(Value::as_str) {
+            return Ok(contract_address.to_owned());
         }
     }
     arguments
-        .get("ns")
-        .or_else(|| arguments.get("namespace"))
+        .get("contract_address")
         .and_then(Value::as_str)
         .map(str::to_owned)
-        .ok_or_else(|| "`ns` is required (provide `ns`, `namespace`, or `path.ns`)".to_owned())
+        .ok_or_else(|| {
+            "`contract_address` is required (provide `contract_address` or `path.contract_address`)"
+                .to_owned()
+        })
 }
 
 fn extract_instruction_index_argument(arguments: &Map) -> Result<String, String> {
@@ -9686,42 +9604,29 @@ fn iroha_gov_post_tool(name: &str, description: &str, path_template: &str) -> To
     }
 }
 
-fn iroha_gov_instances_list_tool() -> ToolSpec {
+fn iroha_gov_contract_get_tool() -> ToolSpec {
     ToolSpec {
-        name: "iroha.gov.instances.list".to_owned(),
+        name: "iroha.gov.contract.get".to_owned(),
         description:
-            "List governance instances by namespace (`/v1/gov/instances/{ns}`; `ns`/`namespace` shortcuts supported)."
+            "Read the governance binding for one contract address (`/v1/gov/contracts/{contract_address}`; `contract_address` shortcut supported)."
                 .to_owned(),
         method: Method::GET,
-        path_template: "/v1/gov/instances/{ns}".to_owned(),
+        path_template: "/v1/gov/contracts/{contract_address}".to_owned(),
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": true,
             "properties": {
-                "ns": {
+                "contract_address": {
                     "type": "string",
-                    "description": "Convenience shortcut for `path.ns`."
-                },
-                "namespace": {
-                    "type": "string",
-                    "description": "Alias for `ns`."
+                    "description": "Convenience shortcut for `path.contract_address`."
                 },
                 "path": {
                     "type": "object",
                     "additionalProperties": false,
-                    "required": ["ns"],
+                    "required": ["contract_address"],
                     "properties": {
-                        "ns": { "type": "string" }
+                        "contract_address": { "type": "string" }
                     }
-                },
-                "contains": { "type": "string" },
-                "hash_prefix": { "type": "string" },
-                "offset": { "type": "integer" },
-                "limit": { "type": "integer" },
-                "order": { "type": "string" },
-                "query": {
-                    "type": "object",
-                    "additionalProperties": true
                 },
                 "headers": {
                     "type": "object",
@@ -10260,69 +10165,6 @@ fn iroha_contracts_deploy_tool() -> ToolSpec {
         "Deploy contract code (`/v1/contracts/deploy`).",
         "/v1/contracts/deploy",
     )
-}
-
-fn iroha_contracts_instance_create_tool() -> ToolSpec {
-    iroha_contracts_post_tool(
-        "iroha.contracts.instance.create",
-        "Deploy and activate a contract instance (`/v1/contracts/instance`).",
-        "/v1/contracts/instance",
-    )
-}
-
-fn iroha_contracts_instance_activate_tool() -> ToolSpec {
-    iroha_contracts_post_tool(
-        "iroha.contracts.instance.activate",
-        "Activate a contract instance (`/v1/contracts/instance/activate`).",
-        "/v1/contracts/instance/activate",
-    )
-}
-
-fn iroha_contracts_instances_list_tool() -> ToolSpec {
-    ToolSpec {
-        name: "iroha.contracts.instances.list".to_owned(),
-        description:
-            "List contract instances by namespace (`/v1/contracts/instances/{ns}`; `ns`/`namespace` shortcut supported)."
-                .to_owned(),
-        method: Method::GET,
-        path_template: "/v1/contracts/instances/{ns}".to_owned(),
-        input_schema: norito::json!({
-            "type": "object",
-            "additionalProperties": true,
-            "properties": {
-                "ns": {
-                    "type": "string",
-                    "description": "Convenience shortcut for `path.ns`."
-                },
-                "namespace": {
-                    "type": "string",
-                    "description": "Alias for `ns`."
-                },
-                "path": {
-                    "type": "object",
-                    "additionalProperties": false,
-                    "required": ["ns"],
-                    "properties": {
-                        "ns": { "type": "string" }
-                    }
-                },
-                "contains": { "type": "string" },
-                "hash_prefix": { "type": "string" },
-                "offset": { "type": "integer" },
-                "limit": { "type": "integer" },
-                "order": { "type": "string" },
-                "query": {
-                    "type": "object",
-                    "additionalProperties": true
-                },
-                "headers": {
-                    "type": "object",
-                    "additionalProperties": { "type": "string" }
-                },
-                "accept": { "type": "string" }
-            }
-        }),
-    }
 }
 
 fn iroha_contracts_call_tool() -> ToolSpec {
@@ -13236,7 +13078,7 @@ mod tests {
         assert!(
             tools
                 .iter()
-                .any(|tool| tool.name == "iroha.gov.instances.list")
+                .any(|tool| tool.name == "iroha.gov.contract.get")
         );
         assert!(
             tools
@@ -13342,21 +13184,6 @@ mod tests {
             tools
                 .iter()
                 .any(|tool| tool.name == "iroha.contracts.deploy")
-        );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.name == "iroha.contracts.instance.create")
-        );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.name == "iroha.contracts.instance.activate")
-        );
-        assert!(
-            tools
-                .iter()
-                .any(|tool| tool.name == "iroha.contracts.instances.list")
         );
         assert!(tools.iter().any(|tool| tool.name == "iroha.contracts.call"));
         assert!(
@@ -14221,16 +14048,13 @@ mod tests {
     }
 
     #[test]
-    fn extract_pipeline_status_kind_reads_pipeline_envelope() {
+    fn extract_pipeline_status_kind_reads_top_level_status() {
         let status_result = norito::json!({
             "status": 200,
             "body": {
-                "kind": "Transaction",
-                "content": {
-                    "hash": "deadbeef",
-                    "status": {
-                        "kind": "Committed"
-                    }
+                "hash": "deadbeef",
+                "status": {
+                    "kind": "Committed"
                 }
             }
         });
@@ -14270,13 +14094,16 @@ mod tests {
     }
 
     #[test]
-    fn extract_contract_namespace_argument_accepts_namespace_alias_shortcut() {
+    fn extract_contract_address_argument_accepts_top_level_shortcut() {
         let args = norito::json!({
-            "namespace": "payments"
+            "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
         });
-        let ns = extract_contract_namespace_argument(args.as_object().expect("object"))
-            .expect("namespace");
-        assert_eq!(ns, "payments");
+        let contract_address = extract_contract_address_argument(args.as_object().expect("object"))
+            .expect("contract address");
+        assert_eq!(
+            contract_address,
+            "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+        );
     }
 
     #[test]

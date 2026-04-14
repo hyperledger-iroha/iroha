@@ -130,12 +130,10 @@ fn test_domain_register_request(
     domain: &DomainId,
     owner: &AccountId,
 ) -> Result<RegisterNameRequestV1> {
+    let domain_label = domain.to_string();
     Ok(RegisterNameRequestV1 {
-        selector: iroha_data_model::sns::NameSelectorV1::new(
-            DOMAIN_NAME_SUFFIX_ID,
-            domain.name().as_ref(),
-        )
-        .map_err(|err| eyre!("build SNS selector for domain `{domain}`: {err}"))?,
+        selector: iroha_data_model::sns::NameSelectorV1::new(DOMAIN_NAME_SUFFIX_ID, domain_label)
+            .map_err(|err| eyre!("build SNS selector for domain `{domain}`: {err}"))?,
         owner: owner.clone(),
         controllers: vec![test_domain_name_controller(owner)?],
         term_years: 1,
@@ -164,9 +162,10 @@ pub fn ensure_domain_registration_lease(client: &Client, domain: &DomainId) -> R
         return Ok(());
     }
 
+    let domain_label = domain.to_string();
     match client
         .sns()
-        .get_name(iroha::sns::SnsNamespacePath::Domain, domain.name().as_ref())
+        .get_name(iroha::sns::SnsNamespacePath::Domain, &domain_label)
     {
         Ok(record) if record.owner == client.account && record.status == NameStatus::Active => {
             Ok(())
@@ -762,11 +761,32 @@ fn resolve_target_dir(repo: &Path) -> PathBuf {
     repo.join("target").join(IROHA_TEST_TARGET_SUBDIR)
 }
 
+fn profile_hint_from_exe_path(current_exe: &Path) -> Option<String> {
+    let mut dir = current_exe.parent()?;
+    if dir.file_name().is_some_and(|value| value == "deps") {
+        dir = dir.parent()?;
+    }
+    let profile = dir.file_name()?.to_str()?.trim();
+    if profile.is_empty() {
+        None
+    } else {
+        Some(profile.to_owned())
+    }
+}
+
+fn current_exe_profile_hint() -> Option<String> {
+    let current_exe = std::env::current_exe().ok()?;
+    profile_hint_from_exe_path(&current_exe)
+}
+
 fn default_build_profile() -> String {
     if let Ok(profile) = std::env::var(IROHA_TEST_BUILD_PROFILE_ENV) {
         return profile;
     }
-    std::env::var("PROFILE").unwrap_or_else(|_| "release".to_string())
+    if let Ok(profile) = std::env::var("PROFILE") {
+        return profile;
+    }
+    current_exe_profile_hint().unwrap_or_else(|| "release".to_string())
 }
 
 fn first_existing_candidate<'a>(
@@ -778,6 +798,16 @@ fn first_existing_candidate<'a>(
         }
     }
     None
+}
+
+fn colocated_binary_candidate_for(current_exe: &Path, bin: &str) -> Option<PathBuf> {
+    let current_dir = current_exe.parent()?;
+    current_dir.join(bin).canonicalize().ok()
+}
+
+fn current_exe_colocated_binary(bin: &str) -> Option<PathBuf> {
+    let current_exe = std::env::current_exe().ok()?;
+    colocated_binary_candidate_for(&current_exe, bin)
 }
 
 fn build_cache_dir(target_dir: &Path) -> PathBuf {
@@ -1480,6 +1510,19 @@ fn allow_reentrant_build(running_under_cargo: bool) -> bool {
     bool_env_override("IROHA_TEST_ALLOW_REENTRANT_BUILD").unwrap_or(true)
 }
 
+fn cached_binary_if_present(cache: &OnceLock<PathBuf>) -> Option<PathBuf> {
+    let cached = cache.get()?;
+    if cached.exists() {
+        return Some(cached.clone());
+    }
+
+    warn!(
+        binary = %cached.display(),
+        "cached program path is missing; resolving again"
+    );
+    None
+}
+
 impl Program {
     /// Resolve program path.
     ///
@@ -1528,13 +1571,13 @@ impl Program {
         // Fast path via cache (only when no override is present)
         match self {
             Program::Irohad => {
-                if let Some(p) = IROHAD_BIN.get() {
-                    return Ok(p.clone());
+                if let Some(path) = cached_binary_if_present(&IROHAD_BIN) {
+                    return Ok(path);
                 }
             }
             Program::Iroha => {
-                if let Some(p) = IROHA_BIN.get() {
-                    return Ok(p.clone());
+                if let Some(path) = cached_binary_if_present(&IROHA_BIN) {
+                    return Ok(path);
                 }
             }
         }
@@ -1547,6 +1590,19 @@ impl Program {
         let cargo_bin_candidate = std::env::var(&cargo_bin_env)
             .ok()
             .and_then(|p| PathBuf::from(p).canonicalize().ok());
+        let colocated_candidate = current_exe_colocated_binary(&bin);
+
+        if let Some(found) = colocated_candidate.clone() {
+            match self {
+                Program::Irohad => {
+                    let _ = IROHAD_BIN.set(found.clone());
+                }
+                Program::Iroha => {
+                    let _ = IROHA_BIN.set(found.clone());
+                }
+            }
+            return Ok(found);
+        }
 
         // 3) Prepare candidate locations under the current target directory
         let profile = default_build_profile();
@@ -1560,6 +1616,9 @@ impl Program {
             }
         };
         if let Some(path) = cargo_bin_candidate {
+            push_candidate(path);
+        }
+        if let Some(path) = colocated_candidate {
             push_candidate(path);
         }
         push_candidate(primary_binary.clone());
@@ -1787,10 +1846,14 @@ fn network_permit_wait_timeout() -> Option<Duration> {
 }
 
 fn try_acquire_file_permit(limit: usize) -> Option<FilePermit> {
+    let dir = permit_dir();
+    try_acquire_file_permit_in(&dir, limit)
+}
+
+fn try_acquire_file_permit_in(dir: &Path, limit: usize) -> Option<FilePermit> {
     if limit == 0 {
         return None;
     }
-    let dir = permit_dir();
     fs::create_dir_all(&dir).expect("failed to create network permit directory");
     let pid = std::process::id();
     let started = SystemTime::now()
@@ -4467,6 +4530,11 @@ impl NetworkBuilder {
         self
     }
 
+    /// Return the pipeline time that will be injected into genesis, if explicitly configured.
+    pub fn configured_pipeline_time(&self) -> Option<Duration> {
+        self.pipeline_time
+    }
+
     /// Override the block gossip period used by block sync and gossip topics.
     ///
     /// Increasing the period introduces additional message delay between peers,
@@ -4661,6 +4729,28 @@ impl NetworkBuilder {
     /// Build the [`Network`]. Doesn't start it.
     pub fn build(self) -> Network {
         let permit = acquire_network_permit();
+        self.build_with_permit(permit)
+    }
+
+    /// Build the [`Network`] using permit files rooted under `dir`.
+    ///
+    /// This is useful for tests that need an isolated permit namespace while unrelated
+    /// workspace tests are building other networks concurrently.
+    pub fn build_with_permit_dir(self, dir: impl AsRef<Path>) -> Network {
+        let dir = dir.as_ref();
+        let limit = network_parallelism_limit();
+        let file_permit = try_acquire_file_permit_in(dir, limit).unwrap_or_else(|| {
+            panic!(
+                "failed to acquire network permit in isolated dir {} (limit={limit})",
+                dir.display()
+            )
+        });
+        self.build_with_permit(NetworkPermit {
+            _file_permit: file_permit,
+        })
+    }
+
+    fn build_with_permit(self, permit: NetworkPermit) -> Network {
         let NetworkBuilder {
             env,
             n_peers,
@@ -4956,11 +5046,12 @@ impl NetworkBuilder {
             npos_genesis_bootstrap_stake.filter(|_| matches!(consensus_mode, ConsensusMode::Npos));
         if let Some(stake_amount) = npos_bootstrap {
             let stake_amount = resolve_npos_bootstrap_stake(&genesis_isi, stake_amount);
-            let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
-            let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
-            let universal_domain: DomainId = "universal".parse().expect("universal domain");
+            let nexus_domain = DomainId::try_new("nexus", "universal").expect("nexus domain");
+            let ivm_domain = DomainId::try_new("ivm", "universal").expect("ivm domain");
+            let universal_domain =
+                DomainId::try_new("universal", "universal").expect("universal domain");
             let stake_asset_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-                "nexus".parse().unwrap(),
+                DomainId::try_new("nexus", "universal").unwrap(),
                 "xor".parse().unwrap(),
             );
             let fee_asset_id: AssetDefinitionId =
@@ -5010,8 +5101,8 @@ impl NetworkBuilder {
                 Register::asset_definition(fee_definition).into(),
             ];
 
-            for peer in &peer_ids {
-                let validator_id = AccountId::new(peer.public_key().clone());
+            for peer in &peers {
+                let validator_id = peer.account_id();
                 bootstrap_tx.push(Register::account(Account::new(validator_id.clone())).into());
                 bootstrap_tx.push(
                     Mint::asset_numeric(
@@ -5045,13 +5136,13 @@ impl NetworkBuilder {
             genesis_post_topology_isi.push(bootstrap_tx);
 
             let mut validator_tx = Vec::new();
-            for peer in &peer_ids {
-                let validator_id = AccountId::new(peer.public_key().clone());
+            for peer in &peers {
+                let validator_id = peer.account_id();
                 validator_tx.push(
                     RegisterPublicLaneValidator {
                         lane_id: LaneId::SINGLE,
                         validator: validator_id.clone(),
-                        peer_id: peer.clone(),
+                        peer_id: peer.id(),
                         stake_account: validator_id.clone(),
                         initial_stake: Numeric::from(stake_amount),
                         metadata: Metadata::default(),
@@ -5067,6 +5158,54 @@ impl NetworkBuilder {
                 );
             }
             genesis_post_topology_isi.push(validator_tx);
+        }
+
+        if custom_genesis.is_none() {
+            let agent_wallet_asset_definition =
+                AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
+                    .expect("soracloud agent wallet asset definition id");
+            let hf_shared_lease_asset_definition =
+                AssetDefinitionId::parse_address_literal("5PeSrQmLNwwKtruJvDZrbrm9RuMw")
+                    .expect("soracloud HF shared lease asset definition id");
+            let mut soracloud_validator_bootstrap = Vec::new();
+            let mut seeded_accounts = BTreeSet::new();
+            let register_validator_accounts = npos_bootstrap.is_none();
+
+            for peer in &peers {
+                let account_id = peer.account_id();
+                if !seeded_accounts.insert(account_id.clone()) {
+                    continue;
+                }
+                if register_validator_accounts {
+                    soracloud_validator_bootstrap
+                        .push(Register::account(Account::new(account_id.clone())).into());
+                }
+                soracloud_validator_bootstrap.push(
+                    Grant::account_permission(
+                        Permission::new("CanManageSoracloud".into(), Json::new(())),
+                        account_id.clone(),
+                    )
+                    .into(),
+                );
+                soracloud_validator_bootstrap.push(
+                    Mint::asset_numeric(
+                        500_000_u32,
+                        AssetId::new(agent_wallet_asset_definition.clone(), account_id.clone()),
+                    )
+                    .into(),
+                );
+                soracloud_validator_bootstrap.push(
+                    Mint::asset_numeric(
+                        500_000_u32,
+                        AssetId::new(hf_shared_lease_asset_definition.clone(), account_id),
+                    )
+                    .into(),
+                );
+            }
+
+            if !soracloud_validator_bootstrap.is_empty() {
+                genesis_post_topology_isi.push(soracloud_validator_bootstrap);
+            }
         }
 
         replace_da_enabled_parameter(&mut genesis_isi, da_enabled);
@@ -5658,23 +5797,44 @@ impl NetworkPeer {
         let use_sora_profile = config_requires_sora_profile(&config_layers);
 
         let irohad = Program::Irohad.resolve_async().await?;
-        let mut cmd = tokio::process::Command::new(irohad);
-        strip_config_env_overrides(&mut cmd);
-        cmd.stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .kill_on_drop(true)
-            .arg("--config")
-            .arg(config_path)
-            .arg("--terminal-colors=true");
-        cmd.env("KURA_STORE_DIR", storage_dir.as_os_str());
-        if use_sora_profile {
-            cmd.arg("--sora");
-        }
-        if std::env::var_os("IROHA_SKIP_BIND_CHECKS").is_none() {
-            cmd.env("IROHA_SKIP_BIND_CHECKS", "1");
-        }
-        cmd.current_dir(&self.dir);
-        let mut child = cmd.spawn().wrap_err("failed to spawn `irohad`")?;
+        let make_irohad_command = |binary: &Path| {
+            let mut cmd = tokio::process::Command::new(binary);
+            strip_config_env_overrides(&mut cmd);
+            cmd.stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .kill_on_drop(true)
+                .arg("--config")
+                .arg(&config_path)
+                .arg("--terminal-colors=true");
+            cmd.env("KURA_STORE_DIR", storage_dir.as_os_str());
+            if use_sora_profile {
+                cmd.arg("--sora");
+            }
+            if std::env::var_os("IROHA_SKIP_BIND_CHECKS").is_none() {
+                cmd.env("IROHA_SKIP_BIND_CHECKS", "1");
+            }
+            cmd.current_dir(&self.dir);
+            cmd
+        };
+        let mut child = match make_irohad_command(&irohad).spawn() {
+            Ok(child) => child,
+            Err(err) if err.kind() == ErrorKind::NotFound => {
+                warn!(
+                    binary = %irohad.display(),
+                    "cached `irohad` path vanished before spawn; rebuilding and retrying once"
+                );
+                let refreshed = spawn_blocking(|| Program::Irohad.resolve_force_build())
+                    .await
+                    .wrap_err("failed to join blocking task while refreshing `irohad` path")??;
+                make_irohad_command(&refreshed).spawn().wrap_err_with(|| {
+                    eyre!(
+                        "failed to spawn `irohad` after refreshing binary path: {}",
+                        refreshed.display()
+                    )
+                })?
+            }
+            Err(err) => return Err(err).wrap_err("failed to spawn `irohad`"),
+        };
         let pid = child.id();
         let stderr_log_ready = Arc::new(Notify::new());
         let (fatal_tx, fatal_rx) = watch::channel(false);
@@ -6494,6 +6654,10 @@ impl NetworkPeer {
         self.key_pair.public_key()
     }
 
+    pub fn account_id(&self) -> AccountId {
+        AccountId::new(self.streaming_public_key().clone())
+    }
+
     pub fn streaming_key_pair(&self) -> &KeyPair {
         &self.streaming_key_pair
     }
@@ -6526,7 +6690,7 @@ impl NetworkPeer {
         self.network_peer_id()
     }
 
-    /// [`PeerId`] representing the network identity (Ed25519) used for Torii/P2P.
+    /// [`PeerId`] representing the BLS peer identity used in topology and PoP validation.
     pub fn network_peer_id(&self) -> PeerId {
         PeerId::new(self.key_pair.public_key().clone())
     }
@@ -6658,14 +6822,17 @@ impl NetworkPeer {
         let status_timeout = client_status_timeout_env();
         let request_timeout = client_request_timeout_env();
         let ttl = client_ttl_env(status_timeout);
+        let default_account_domain = iroha_data_model::domain::DomainId::try_new(
+            iroha::account_address::default_domain_name().as_ref(),
+            "universal",
+        )
+        .expect("default account domain should be fully qualified")
+        .to_string();
         let config = ConfigReader::new()
             .with_toml_source(TomlSource::inline(
                 Table::new()
                     .write("chain", config::chain_id().to_string())
-                    .write(
-                        ["account", "domain"],
-                        iroha::account_address::default_domain_name().to_string(),
-                    )
+                    .write(["account", "domain"], default_account_domain)
                     .write(
                         ["account", "public_key"],
                         account_id.signatory().to_string(),
@@ -7447,6 +7614,45 @@ mod shutdown_tests {
     }
 
     #[tokio::test]
+    async fn monitor_handles_shutdown_race_after_child_already_exited() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("exit 0");
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        let child = cmd.spawn().expect("spawn short-lived child");
+
+        let (events, _rx) = broadcast::channel(4);
+        let (block_height, _rx) = watch::channel(None);
+        let (_fatal_tx, fatal_rx) = watch::channel(false);
+        let stderr_log_ready = Arc::new(Notify::new());
+        let peer_exit = PeerExit {
+            child,
+            span: tracing::Span::none(),
+            is_running: Arc::new(AtomicBool::new(true)),
+            is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
+            events,
+            block_height,
+            fatal_rx,
+            stderr_log_ready: Arc::clone(&stderr_log_ready),
+            stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        tokio::spawn(async move {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+            stderr_log_ready.notify_waiters();
+        });
+        let (shutdown_tx, shutdown_rx) = oneshot::channel();
+        shutdown_tx
+            .send(())
+            .expect("shutdown signal should be delivered");
+
+        tokio::time::timeout(Duration::from_secs(1), peer_exit.monitor(shutdown_rx))
+            .await
+            .expect("peer monitor should complete")
+            .expect("already-exited child should be treated as graceful during shutdown race");
+    }
+
+    #[tokio::test]
     async fn log_drain_exits_on_shutdown_notify() {
         let dir = tempdir().expect("tempdir");
         let log_path = dir.path().join("stdout.log");
@@ -7728,7 +7934,7 @@ impl PeerExit {
     async fn monitor(mut self, shutdown: oneshot::Receiver<()>) -> Result<()> {
         let status = if *self.fatal_rx.borrow() {
             self.span
-                .in_scope(|| warn!("forcing peer shutdown after fatal signal"));
+                .in_scope(|| debug!("forcing peer shutdown after fatal signal"));
             self.shutdown_or_kill().await?
         } else {
             tokio::select! {
@@ -7736,7 +7942,7 @@ impl PeerExit {
                 _ = shutdown => self.shutdown_or_kill().await?,
                 changed = self.fatal_rx.changed() => {
                     if changed.is_ok() && *self.fatal_rx.borrow() {
-                        self.span.in_scope(|| warn!("forcing peer shutdown after fatal signal"));
+                        self.span.in_scope(|| debug!("forcing peer shutdown after fatal signal"));
                     }
                     self.shutdown_or_kill().await?
                 }
@@ -7761,8 +7967,21 @@ impl PeerExit {
 
     async fn wait_log(&self, notify: &Arc<Notify>, label: &'static str) {
         if (timeout(LOG_FLUSH_TIMEOUT, notify.notified()).await).is_err() {
-            self.span
-                .in_scope(|| warn!(log = label, "timed out waiting for log flush"));
+            let fatal_shutdown = *self.fatal_rx.borrow();
+            let normal_shutdown = self.is_normal_shutdown_started.load(Ordering::Relaxed);
+            if fatal_shutdown || normal_shutdown {
+                self.span.in_scope(|| {
+                    debug!(
+                        log = label,
+                        fatal_shutdown,
+                        normal_shutdown,
+                        "timed out waiting for log flush during shutdown"
+                    )
+                });
+            } else {
+                self.span
+                    .in_scope(|| warn!(log = label, "timed out waiting for log flush"));
+            }
         }
     }
 
@@ -7773,6 +7992,17 @@ impl PeerExit {
 
         self.is_normal_shutdown_started
             .store(true, Ordering::Relaxed);
+
+        if let Some(status) = self
+            .child
+            .try_wait()
+            .wrap_err("failed to poll child exit status before shutdown")?
+        {
+            self.span.in_scope(
+                || info!(%status, "child already exited before shutdown signal could be delivered"),
+            );
+            return Ok(status);
+        }
 
         if self.child.id().is_none() {
             self.span.in_scope(|| {
@@ -9326,13 +9556,30 @@ mod tests {
         let _clear_profile = EnvVarGuard::cleared("PROFILE");
         let _clear_override = EnvVarGuard::cleared(IROHA_TEST_BUILD_PROFILE_ENV);
         let default_profile = default_build_profile();
-        assert_eq!(default_profile, "release");
+        assert_eq!(
+            default_profile,
+            current_exe_profile_hint().unwrap_or_else(|| "release".to_string())
+        );
 
         let _override_guard = EnvVarRestore::set("PROFILE", "release");
         assert_eq!(default_build_profile(), "release");
 
         let _override_guard = EnvVarRestore::set(IROHA_TEST_BUILD_PROFILE_ENV, "debug");
         assert_eq!(default_build_profile(), "debug");
+    }
+
+    #[test]
+    fn profile_hint_from_exe_path_detects_profile_before_deps_dir() {
+        let hint = profile_hint_from_exe_path(Path::new(
+            "/tmp/iroha-target/debug/deps/integration_tests-abcdef",
+        ));
+        assert_eq!(hint.as_deref(), Some("debug"));
+    }
+
+    #[test]
+    fn profile_hint_from_exe_path_detects_non_deps_profile_dir() {
+        let hint = profile_hint_from_exe_path(Path::new("/tmp/iroha-target/ci/iroha3d"));
+        assert_eq!(hint.as_deref(), Some("ci"));
     }
 
     #[cfg(unix)]
@@ -9721,6 +9968,36 @@ exit 0
     }
 
     #[test]
+    fn colocated_binary_candidate_for_resolves_sibling_binary() {
+        let temp = tempdir().expect("temporary workspace");
+        let current_exe = temp.path().join("release/izanami");
+        let sibling = temp.path().join("release/iroha3d");
+        fs::create_dir_all(current_exe.parent().expect("current exe parent"))
+            .expect("create release dir");
+        fs::write(&current_exe, b"izanami").expect("write current exe");
+        fs::write(&sibling, b"iroha3d").expect("write sibling binary");
+
+        let resolved = colocated_binary_candidate_for(&current_exe, "iroha3d")
+            .expect("sibling binary should resolve");
+
+        assert_eq!(resolved, sibling.canonicalize().expect("canonical sibling"));
+    }
+
+    #[test]
+    fn colocated_binary_candidate_for_ignores_missing_sibling_binary() {
+        let temp = tempdir().expect("temporary workspace");
+        let current_exe = temp.path().join("release/izanami");
+        fs::create_dir_all(current_exe.parent().expect("current exe parent"))
+            .expect("create release dir");
+        fs::write(&current_exe, b"izanami").expect("write current exe");
+
+        assert!(
+            colocated_binary_candidate_for(&current_exe, "iroha3d").is_none(),
+            "missing sibling binary should not resolve"
+        );
+    }
+
+    #[test]
     fn reentrant_builds_enabled_under_cargo_by_default() {
         let _guard = lock_env_guard(&PROGRAM_BIN_ENV_GUARD);
         let _override_guard = EnvVarGuard::cleared("IROHA_TEST_ALLOW_REENTRANT_BUILD");
@@ -9879,6 +10156,7 @@ exit 0
                             .map(|set| set.inner().clone())
                     })
                     .collect::<Vec<_>>(),
+                Executable::ContractCall(_) => Vec::new(),
                 Executable::Ivm(_) => Vec::new(),
                 Executable::IvmProved(_) => Vec::new(),
             })
@@ -11046,7 +11324,8 @@ exit 0
     #[test]
     fn post_topology_instructions_are_included_in_genesis() {
         init_instruction_registry();
-        let domain_id: DomainId = "post_topology_test".parse().expect("domain");
+        let domain_id: DomainId =
+            DomainId::try_new("post_topology_test", "universal").expect("domain");
         let network = build_with_isolated_permit(
             NetworkBuilder::new()
                 .with_peers(1)
@@ -11166,14 +11445,11 @@ exit 0
         let fee_asset_definition_id: AssetDefinitionId = defaults::nexus::fees::fee_asset_id()
             .parse()
             .expect("default nexus fee asset id");
-        let first_validator_id = AccountId::new(
-            network
-                .peers()
-                .first()
-                .expect("validator peer")
-                .public_key()
-                .clone(),
-        );
+        let first_validator_id = network
+            .peers()
+            .first()
+            .expect("validator peer")
+            .account_id();
         let mut saw_definition = false;
         let mut saw_alice_mint = false;
         let mut saw_validator_mint = false;
@@ -11218,6 +11494,48 @@ exit 0
         assert!(
             saw_validator_mint,
             "npos bootstrap should fund validators with the default nexus fee asset"
+        );
+    }
+
+    #[test]
+    fn default_builder_grants_soracloud_management_to_validator_runtime_signers() {
+        init_instruction_registry();
+        let network = NetworkBuilder::new()
+            .with_peers(2)
+            .with_auto_populated_trusted_peers()
+            .build();
+        let genesis = network.genesis();
+        let validator_ids = network
+            .peers()
+            .iter()
+            .map(NetworkPeer::account_id)
+            .collect::<BTreeSet<_>>();
+        let mut granted = BTreeSet::new();
+
+        for tx in genesis.0.transactions_vec() {
+            if let Executable::Instructions(instructions) = tx.instructions() {
+                for instruction in instructions {
+                    let Some(grant) = instruction
+                        .as_any()
+                        .downcast_ref::<iroha_data_model::isi::GrantBox>()
+                    else {
+                        continue;
+                    };
+                    let iroha_data_model::isi::GrantBox::Permission(grant) = grant else {
+                        continue;
+                    };
+                    if grant.object.name() == "CanManageSoracloud"
+                        && validator_ids.contains(&grant.destination)
+                    {
+                        granted.insert(grant.destination.clone());
+                    }
+                }
+            }
+        }
+
+        assert_eq!(
+            granted, validator_ids,
+            "default test-network genesis should grant CanManageSoracloud to validator runtime signers"
         );
     }
 
@@ -11368,6 +11686,16 @@ exit 0
     }
 
     #[test]
+    fn configured_pipeline_time_reports_explicit_override() {
+        let duration = Duration::from_secs(9);
+        let builder = NetworkBuilder::new().with_pipeline_time(duration);
+        assert_eq!(builder.configured_pipeline_time(), Some(duration));
+
+        let default_builder = NetworkBuilder::new().with_default_pipeline_time();
+        assert_eq!(default_builder.configured_pipeline_time(), None);
+    }
+
+    #[test]
     fn data_availability_parameter_is_injected() {
         let network = NetworkBuilder::new()
             .with_peers(2)
@@ -11459,6 +11787,11 @@ exit 0
         let peer = NetworkPeerBuilder::new().build(&env);
         assert_eq!(peer.id().public_key().algorithm(), Algorithm::BlsNormal);
         assert_eq!(
+            peer.account_id(),
+            AccountId::new(peer.streaming_public_key().clone()),
+            "runtime account identity should use the streaming key"
+        );
+        assert_eq!(
             peer.streaming_public_key().algorithm(),
             Algorithm::Ed25519,
             "streaming identity should remain Ed25519 even with BLS peers"
@@ -11504,8 +11837,9 @@ exit 0
     fn uses_shared_instruction_registry() {
         init_instruction_registry();
 
-        let instruction =
-            RegisterBox::Domain(Register::domain(Domain::new("test".parse().unwrap())));
+        let instruction = RegisterBox::Domain(Register::domain(Domain::new(
+            DomainId::try_new("test", "universal").unwrap(),
+        )));
         let instruction_box: InstructionBox = instruction.into();
         let bytes = norito::to_bytes(&instruction_box).expect("encode");
         let decoded: InstructionBox = norito::decode_from_bytes(&bytes).expect("decode");
@@ -11564,6 +11898,27 @@ exit 0
         } else {
             remove_env_var(super::PROGRAM_IROHA_ENV);
         }
+    }
+
+    #[test]
+    fn cached_binary_if_present_returns_existing_path() {
+        let cache = OnceLock::new();
+        let current_exe = env::current_exe().expect("current test binary path");
+        cache
+            .set(current_exe.clone())
+            .expect("cache should be empty for test");
+
+        assert_eq!(cached_binary_if_present(&cache), Some(current_exe));
+    }
+
+    #[test]
+    fn cached_binary_if_present_ignores_missing_path() {
+        let cache = OnceLock::new();
+        let missing = repo_root().join("target/test-bin-dummy/missing-irohad");
+        let _ = fs::remove_file(&missing);
+        cache.set(missing).expect("cache should be empty for test");
+
+        assert!(cached_binary_if_present(&cache).is_none());
     }
 
     #[test]

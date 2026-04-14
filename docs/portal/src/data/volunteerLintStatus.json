@@ -1,7 +1,7 @@
 {
   "version": 1,
-  "generatedAtIso": "2026-03-10T15:35:40.873Z",
-  "cliGeneratedAtIso": "2026-03-10T15:35:40.871Z",
+  "generatedAtIso": "2026-04-08T09:58:07.264Z",
+  "cliGeneratedAtIso": "2026-04-08T09:58:07.262Z",
   "summary": {
     "inputs": [
       "/Users/takemiyamakoto/dev/iroha/docs/examples/ministry/volunteer_brief_template.json"
@@ -80,7 +80,7 @@
       }
     ],
     "entries_with_errors": 0,
-    "generated_at_unix_ms": 1773156940871,
+    "generated_at_unix_ms": 1775642287262,
     "inputs": [
       "/Users/takemiyamakoto/dev/iroha/docs/examples/ministry/volunteer_brief_template.json"
     ],

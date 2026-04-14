@@ -47,7 +47,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let to =
         fixture_account("ed0120BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB");
     let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
     let from_bytes = tlv_envelope(PointerType::AccountId, &from);
@@ -126,7 +126,7 @@ fn apply_queued_isis_from_corehost_transfer_asset() {
     let mut tx = block.transaction();
 
     // Setup: register domain 'wonderland', register accounts, asset definition, and mint 1_000 to 'from'
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let new_domain = Domain::new(domain_id.clone());
     let reg_domain = RegisterBox::from(Register::domain(new_domain));
     let reg_from = RegisterBox::from(Register::account(NewAccount::new(from.clone())));
@@ -272,7 +272,7 @@ fn apply_queued_isis_from_corehost_transfer_asset_with_env_encoded_ids() {
     let mut block = state.block(header);
     let mut tx = block.transaction();
 
-    let domain_id: DomainId = domain_raw.parse().expect("domain id");
+    let domain_id = DomainId::try_new(domain_raw, "universal").expect("domain id");
     let new_domain = Domain::new(domain_id.clone());
     let reg_domain = RegisterBox::from(Register::domain(new_domain));
     let reg_from = RegisterBox::from(Register::account(NewAccount::new(from.clone())));
@@ -326,7 +326,8 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
             0x18, 0x9e,
         ])
     });
-    let domain_raw = std::env::var("IVM_DEBUG_DOMAIN").unwrap_or_else(|_| "centralbank".to_owned());
+    let domain_raw =
+        std::env::var("IVM_DEBUG_DOMAIN").unwrap_or_else(|_| "centralbank.universal".to_owned());
     let ratio_raw = std::env::var("IVM_DEBUG_RATIO").unwrap_or_else(|_| "76".to_owned());
 
     let reserve = iroha_data_model::account::AccountId::parse_encoded(&reserve_raw)
@@ -337,7 +338,7 @@ fn apply_queued_isis_from_compiled_json_driven_double_transfer() {
         .into_account_id();
     let aed_asset_def: AssetDefinitionId = aed_asset_raw.parse().expect("valid AED asset");
     let cbdc_asset_def: AssetDefinitionId = cbdc_asset_raw.parse().expect("valid CBDC asset");
-    let domain_id: DomainId = domain_raw.parse().expect("valid domain");
+    let domain_id = DomainId::parse_fully_qualified(&domain_raw).expect("valid domain");
     let ratio: u64 = ratio_raw.parse().expect("valid ratio");
 
     let authority =

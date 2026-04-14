@@ -284,11 +284,10 @@ fn main() -> Result<()> {
             .parse()
             .wrap_err_with(|| eyre!("Failed to parse asset id `{asset_id}`"))?;
         let domain_id: DomainId = if let Some(domain_str) = domain {
-            domain_str
-                .parse()
+            DomainId::parse_fully_qualified(&domain_str)
                 .wrap_err_with(|| eyre!("Failed to parse domain `{domain_str}`"))?
         } else {
-            asset_def_id.domain.clone()
+            asset_def_id.domain().clone()
         };
 
         if known_domains.insert(domain_id.clone()) {

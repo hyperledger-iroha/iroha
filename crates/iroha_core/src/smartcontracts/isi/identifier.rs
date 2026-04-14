@@ -872,7 +872,7 @@ mod tests {
     #[test]
     fn identifier_claim_and_revoke_update_indexes() {
         let mut state = test_state();
-        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let owner = AccountId::new(KeyPair::random().public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-owner"));
         seed_domain(&mut state, &domain_id, &owner);
@@ -987,7 +987,7 @@ mod tests {
     #[test]
     fn claim_identifier_rejects_accounts_without_uaid() {
         let mut state = test_state();
-        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let owner = AccountId::new(KeyPair::random().public_key().clone());
         seed_domain(&mut state, &domain_id, &owner);
         let account = Account {
@@ -1052,7 +1052,7 @@ mod tests {
     #[test]
     fn claim_identifier_rejects_invalid_receipt_signature() {
         let mut state = test_state();
-        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let owner = AccountId::new(KeyPair::random().public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-invalid-signature"));
         seed_domain(&mut state, &domain_id, &owner);
@@ -1108,7 +1108,7 @@ mod tests {
     #[test]
     fn claim_identifier_rejects_zero_receipt_hash() {
         let mut state = test_state();
-        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let owner = AccountId::new(KeyPair::random().public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-zero-receipt-hash"));
         seed_domain(&mut state, &domain_id, &owner);
@@ -1166,7 +1166,7 @@ mod tests {
     #[test]
     fn claim_identifier_rejects_expired_receipts() {
         let mut state = test_state();
-        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let owner = AccountId::new(KeyPair::random().public_key().clone());
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-expired-receipt"));
         seed_domain(&mut state, &domain_id, &owner);
@@ -1221,7 +1221,7 @@ mod tests {
     #[test]
     fn expired_identifier_claim_can_be_reclaimed_by_new_uaid() {
         let mut state = test_state();
-        let domain_id: DomainId = "directory".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("directory", "universal").expect("domain id");
         let owner = AccountId::new(KeyPair::random().public_key().clone());
         let replacement = AccountId::new(KeyPair::random().public_key().clone());
         let owner_uaid = UniversalAccountId::from_hash(Hash::new(b"uaid-owner-expired"));

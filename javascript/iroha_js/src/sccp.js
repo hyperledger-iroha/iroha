@@ -9,6 +9,8 @@ export const SCCP_DOMAIN_TON = 4;
 export const SCCP_DOMAIN_TRON = 5;
 export const SCCP_DOMAIN_SORA_KUSAMA = 6;
 export const SCCP_DOMAIN_SORA_POLKADOT = 7;
+export const SCCP_DOMAIN_SORA2 = 8;
+export const SCCP_STARK_FRI_PROOF_FAMILY_V1 = "stark-fri-v1";
 
 export const SCCP_CORE_REMOTE_DOMAINS = [
   SCCP_DOMAIN_ETH,
@@ -18,6 +20,7 @@ export const SCCP_CORE_REMOTE_DOMAINS = [
   SCCP_DOMAIN_TRON,
   SCCP_DOMAIN_SORA_KUSAMA,
   SCCP_DOMAIN_SORA_POLKADOT,
+  SCCP_DOMAIN_SORA2,
 ];
 
 const SCCP_MSG_PREFIX_BURN_V1 = "sccp:burn:v1";
@@ -173,6 +176,7 @@ export const isSupportedSccpDomain = (domainId) =>
     SCCP_DOMAIN_TRON,
     SCCP_DOMAIN_SORA_KUSAMA,
     SCCP_DOMAIN_SORA_POLKADOT,
+    SCCP_DOMAIN_SORA2,
   ].includes(Number(domainId));
 
 export const canonicalSccpBurnPayloadBytes = (payload) => {

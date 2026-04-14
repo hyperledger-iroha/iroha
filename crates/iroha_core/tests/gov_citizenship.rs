@@ -23,7 +23,7 @@ use mv::storage::StorageReadOnly;
 use nonzero_ext::nonzero;
 
 fn build_world(def_id: &AssetDefinitionId) -> World {
-    let domain_id: DomainId = "wonderland".parse().expect("domain");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let alice_account = iroha_data_model::account::Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let escrow_account = iroha_data_model::account::Account::new(BOB_ID.clone()).build(&BOB_ID);
@@ -49,7 +49,7 @@ fn build_world(def_id: &AssetDefinitionId) -> World {
 #[test]
 fn register_and_revoke_citizenship_moves_bond() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let world = build_world(&def_id);
@@ -112,7 +112,7 @@ fn register_and_revoke_citizenship_moves_bond() {
 #[test]
 fn citizenship_gate_blocks_and_allows_governance() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let world = build_world(&def_id);
@@ -219,7 +219,7 @@ fn citizenship_gate_blocks_and_allows_governance() {
 #[test]
 fn citizenship_records_persist_across_transactions() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let world = build_world(&def_id);

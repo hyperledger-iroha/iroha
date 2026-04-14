@@ -1391,8 +1391,7 @@ mod tests {
             program: Some("cbdc.transfer".to_owned()),
             method: Some("transfer".to_owned()),
             asset: Some(
-                AssetDefinitionId::new(
-                    "wonderland".parse().expect("domain"),
+                AssetDefinitionId::new(iroha_data_model::domain::DomainId::try_new("wonderland", "universal").expect("domain"),
                     "cbdc".parse().expect("name"),
                 )
                 .to_string(),
@@ -1623,6 +1622,8 @@ mod tests {
             let cfg = Config {
                 chain: ChainId::from("00000000-0000-0000-0000-000000000000"),
                 account: account_id,
+                account_chain_discriminant:
+                    iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://127.0.0.1/").unwrap(),

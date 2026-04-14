@@ -50,7 +50,7 @@ translator: machine-google-reviewed
 - דגם כינוי:
   - זהות חשבון קנונית לעולם אינה כוללת תחום או פלח מרחב נתונים.
   - ערכי `AccountAlias` הם כריכות SNS נפרדות בשכבות על גבי `AccountId`.
-  - כינויים מוסמכים לדומיין כגון `merchant@hbl.sbp` נושאים גם דומיין וגם מרחב נתונים בקישור הכינוי.
+  - כינויים מוסמכים לדומיין כגון `merchant@banka.sbp` נושאים גם דומיין וגם מרחב נתונים בקישור הכינוי.
   - כינויים של בסיס נתונים של מרחב נתונים כגון `merchant@sbp` נושאים רק את מרחב הנתונים ולכן מתאימים באופן טבעי ל-`Account::new(...)`.
   - בדיקות ותוספות צריכים לראות תחילה את ה-`AccountId` האוניברסלי, ולאחר מכן להוסיף חכירות כינוי, הרשאות כינוי וכל מדינה בבעלות דומיין בנפרד במקום לקודד הנחות דומיין לזהות החשבון עצמו.
   - חיפוש חשבון יחיד ציבורי מתמקד כעת בכינויים (`FindAliasesByAccountId`); זהות החשבון עצמה נשארת ללא דומיין.### הגדרות ונכסים של נכסים
@@ -185,7 +185,7 @@ use iroha_crypto::KeyPair;
 use iroha_primitives::numeric::Numeric;
 
 // Domain
-let domain_id: DomainId = "wonderland".parse().unwrap();
+let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
 let new_domain = Domain::new(domain_id.clone()).with_metadata(Metadata::default());
 
 // Account
@@ -196,7 +196,7 @@ let new_account = Account::new(account_id.clone())
 
 // Asset definition and an asset for the account
 let asset_def_id = AssetDefinitionId::new(
-    "wonderland".parse().unwrap(),
+    domain_id.clone(),
     "usd".parse().unwrap(),
 );
 let new_asset_def = AssetDefinition::numeric(asset_def_id.clone())
@@ -249,7 +249,7 @@ let tx = TransactionBuilder::new("dev-chain".parse().unwrap(), account_id.clone(
 iroha ledger asset definition register \
   --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa \
   --name pkr \
-  --alias pkr#ubl.sbp
+  --alias pkr#bankb.sbp
 
 # Short alias form (no owner segment): <name>#<dataspace>
 iroha ledger asset definition register \
@@ -259,14 +259,14 @@ iroha ledger asset definition register \
 
 # Mint using alias + account components
 iroha ledger asset mint \
-  --definition-alias pkr#ubl.sbp \
+  --definition-alias pkr#bankb.sbp \
   --account sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB \
   --quantity 500
 
 # Resolve alias to the canonical Base58 id via Torii
 curl -sS http://127.0.0.1:8080/v1/assets/aliases/resolve \
   -H 'content-type: application/json' \
-  -d '{"alias":"pkr#ubl.sbp"}'
+  -d '{"alias":"pkr#bankb.sbp"}'
 ```הערת הגירה:
 - מזהי `name#domain` ישנים בהגדרת נכס אינם מתקבלים בגרסה 1.
 - בוררי נכסים ציבוריים משתמשים בפורמט אחד בלבד של הגדרת נכס: מזהי Base58 קנוניים. כינויים נשארים בוררים אופציונליים, אבל נפתרים לאותו מזהה קנוני.

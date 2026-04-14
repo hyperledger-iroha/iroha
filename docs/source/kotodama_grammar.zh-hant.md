@@ -117,7 +117,7 @@ seiyaku Name {
 語義學
 - `meta { ... }` 字段覆蓋已發出的 IVM 標頭的編譯器默認值：`abi_version`、`vector_length`（0 表示未設置）、`max_cycles`（0 表示編譯器默認值）、`features` 切換標頭功能位（ZK 跟踪、向量）宣布）。編譯器將 `max_cycles: 0` 視為“使用默認值”，並發出配置的非零默認值以滿足准入要求。不支持的功能將被忽略並發出警告。當省略 `meta {}` 時，編譯器將發出 `abi_version = 1` 並使用其餘標頭字段的選項默認值。
 - `features: ["zk", "simd"]`（別名：`"vector"`）顯式請求相應的標頭位。未知的特徵字符串現在會產生解析器錯誤而不是被忽略。
-- `state` 聲明持久合約變量。編譯器降低對 `STATE_GET/STATE_SET/STATE_DEL` 系統調用的訪問，主機將它們暫存在每個事務覆蓋中（檢查點/恢復回滾、提交時刷新到 WSV）。針對文字狀態路徑發出訪問提示；動態鍵回退到映射級衝突鍵。對於顯式主機支持的讀/寫，請使用 `state_get/state_set/state_del` 幫助程序和 `get_or_insert_default` 映射幫助程序；這些通過 Norito TLV 進行路由並保持名稱/字段順序穩定。
+- `state` 聲明持久合約變量。編譯器降低對 `STATE_GET/STATE_SET/STATE_DEL` 系統調用的訪問，主機將它們暫存在每個事務覆蓋中（檢查點/恢復回滾、提交時刷新到 WSV）。針對文字狀態路徑發出訪問提示；動態鍵回退到映射級衝突鍵。對於顯式主機支持的讀/寫，請使用 `state_get/state_set/state_del` 幫助程序和 `map.ensure(...)` 映射幫助程序；這些通過 Norito TLV 進行路由並保持名稱/字段順序穩定。
 - 保留狀態標識符；參數中隱藏 `state` 名稱或 `let` 綁定被拒絕 (`E_STATE_SHADOWED`)。
 - 狀態映射值不是一流的：直接使用狀態標識符進行映射操作和迭代。將狀態映射綁定或傳遞給用戶定義的函數被拒絕 (`E_STATE_MAP_ALIAS`)。
 - 持久狀態映射當前僅支持 `int` 和指針 ABI 密鑰類型；其他鍵類型在編譯時被拒絕。

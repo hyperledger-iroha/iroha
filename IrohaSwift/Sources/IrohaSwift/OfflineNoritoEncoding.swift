@@ -379,7 +379,12 @@ public enum OfflineNorito {
         guard let _ = AssetDefinitionAddress.decode(assetDefinitionId) else {
             throw OfflineNoritoError.invalidAssetId(raw)
         }
-        let accountId = try canonicalizeEncodedAccountId(String(components[1]))
+        let accountId: String
+        do {
+            accountId = try canonicalizeEncodedAccountId(String(components[1]))
+        } catch {
+            throw OfflineNoritoError.invalidAssetId(raw)
+        }
         guard components.count <= 3 else {
             throw OfflineNoritoError.invalidAssetId(raw)
         }

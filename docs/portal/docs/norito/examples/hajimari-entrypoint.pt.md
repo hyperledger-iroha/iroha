@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/examples/hajimari-entrypoint.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 759693341d48f72f6be07fce6adb49b1cc3fb46db2cf6c2a046d47c447247bd0
-source_last_modified: "2025-11-07T11:59:47.165125+00:00"
-translation_last_reviewed: 2026-01-30
+source_hash: 93b3329a32d69ca67bd267256a57c40d6619d07e1e39b2ec912fba3621cec123
+source_last_modified: "2026-04-08T09:19:38.793123+00:00"
+translation_last_reviewed: 2026-04-08
 ---
 
 ---
@@ -22,7 +22,7 @@ Estrutura minima de contrato Kotodama com um unico entrypoint publico e um handl
 
 - Compile o contrato com `koto_compile --abi 1` conforme mostrado em [Norito Getting Started](/norito/getting-started#1-compile-a-kotodama-contract) ou via `cargo test -p ivm developer_portal_norito_snippets_compile`.
 - Faca um smoke-test do bytecode localmente com `ivm_run` / `developer_portal_norito_snippets_run` para verificar o log `info!` e a syscall inicial antes de tocar em um nodo.
-- Implante o artefato via `iroha_cli app contracts deploy` e confirme o manifesto usando os passos em [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha_cli).
+- Implante o artefato via `iroha app contracts deploy` e confirme o manifesto usando os passos em [Norito Getting Started](/norito/getting-started#4-deploy-via-iroha).
 
 ## Guias de SDK relacionados
 

@@ -33,6 +33,7 @@ use iroha_primitives::json::Json;
 use iroha_test_network::{NetworkBuilder, init_instruction_registry};
 use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, SAMPLE_GENESIS_ACCOUNT_ID};
 use reqwest::Client;
+use tempfile::tempdir;
 
 type SurfaceSpec<'a> = (&'a [&'a str], &'a [(&'a str, &'a str)]);
 
@@ -367,24 +368,22 @@ fn with_offline_allowance_genesis(
     mut builder: NetworkBuilder,
     certificate: &OfflineWalletCertificate,
 ) -> NetworkBuilder {
-    let wonderland_domain: DomainId = "wonderland"
-        .parse()
+    let wonderland_domain = DomainId::try_new("wonderland", "universal")
         .expect("default wonderland domain should parse");
-    let garden_domain: DomainId = "garden_of_live_flowers"
-        .parse()
+    let garden_domain = DomainId::try_new("garden_of_live_flowers", "universal")
         .expect("default garden_of_live_flowers domain should parse");
-    let aid_domain: DomainId = "aid".parse().expect("default aid domain should parse");
     let preseeded_domains = BTreeSet::from([
         iroha_genesis::GENESIS_DOMAIN_ID.clone(),
         wonderland_domain.clone(),
         garden_domain,
-        aid_domain,
     ]);
 
     // Seed every domain touched by the fixture so genesis mint/register steps can resolve
     // asset-definition scopes even when they use non-wonderland domains.
     let mut required_domains = BTreeSet::new();
-    required_domains.insert(certificate.allowance.asset.definition().domain().clone());
+    if let Some(domain) = certificate.allowance.asset.definition().try_domain() {
+        required_domains.insert(domain.clone());
+    }
     for domain in required_domains {
         if !preseeded_domains.contains(&domain) {
             builder = builder.with_genesis_instruction(Register::domain(Domain::new(domain)));
@@ -406,10 +405,14 @@ fn with_offline_allowance_genesis(
 
     let asset_definition_id = certificate.allowance.asset.definition().clone();
     let scale = certificate.allowance.amount.scale();
+    let asset_definition_name = asset_definition_id
+        .try_name()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| asset_definition_id.to_string());
     // Asset definition registrations require an explicit human-facing name.
     let asset_definition =
         AssetDefinition::new(asset_definition_id.clone(), NumericSpec::fractional(scale))
-            .with_name(asset_definition_id.name().to_string());
+            .with_name(asset_definition_name);
     builder = builder.with_genesis_instruction(Register::asset_definition(asset_definition));
     builder = builder.with_genesis_instruction(SetKeyValue::asset_definition(
         certificate.allowance.asset.definition().clone(),
@@ -429,8 +432,14 @@ fn offline_allowance_genesis_helper_seeds_domain_once_and_names_asset_definition
     init_instruction_registry();
     let certificate = load_offline_certificate_fixture()?;
     let asset_definition_id = certificate.allowance.asset.definition().clone();
-    let asset_domain = asset_definition_id.domain().clone();
-    let network = with_offline_allowance_genesis(NetworkBuilder::new(), &certificate).build();
+    let asset_domain = asset_definition_id.try_domain().cloned();
+    let expected_name = asset_definition_id
+        .try_name()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| asset_definition_id.to_string());
+    let permit_dir = tempdir().expect("offline allowance permit dir");
+    let network = with_offline_allowance_genesis(NetworkBuilder::new(), &certificate)
+        .build_with_permit_dir(permit_dir.path());
     let genesis = network.genesis();
 
     let authority = SAMPLE_GENESIS_ACCOUNT_ID.clone();
@@ -440,6 +449,7 @@ fn offline_allowance_genesis_helper_seeds_domain_once_and_names_asset_definition
     for transaction in genesis.0.transactions_vec() {
         let instructions = match transaction.instructions() {
             Executable::Instructions(instructions) => instructions.iter(),
+            Executable::ContractCall(_) => continue,
             Executable::Ivm(_) | Executable::IvmProved(_) => continue,
         };
         for instruction in instructions {
@@ -447,7 +457,7 @@ fn offline_allowance_genesis_helper_seeds_domain_once_and_names_asset_definition
                 match register {
                     RegisterBox::Domain(register) => {
                         let domain = register.object().clone().build(&authority);
-                        if domain.id == asset_domain {
+                        if asset_domain.as_ref() == Some(&domain.id) {
                             domain_registrations += 1;
                         }
                     }
@@ -468,13 +478,12 @@ fn offline_allowance_genesis_helper_seeds_domain_once_and_names_asset_definition
     }
 
     assert_eq!(
-        domain_registrations, 1,
-        "offline allowance helper should register the fixture domain exactly once across genesis instructions"
+        domain_registrations,
+        usize::from(asset_domain.is_some()),
+        "offline allowance helper should only register a domain when the asset definition carries an explicit domain projection"
     );
     assert!(
-        definition_names
-            .iter()
-            .any(|name| name == asset_definition_id.name().as_ref()),
+        definition_names.iter().any(|name| name == &expected_name),
         "offline allowance helper should seed the fixture asset definition with a human-facing name"
     );
 
@@ -791,7 +800,8 @@ fn local8_literal() -> String {
         .expect("canonical hex encoding");
     let canonical = hex::decode(&canonical_hex[2..]).expect("canonical hex decoding succeeds");
 
-    let domain: DomainId = "wonderland".parse().expect("wonderland domain parses");
+    let domain: DomainId =
+        DomainId::try_new("wonderland", "universal").expect("wonderland domain parses");
     let digest = match AccountDomainSelector::from_domain(&domain).expect("selector") {
         AccountDomainSelector::LocalDigest12(bytes) => bytes,
         other => panic!("expected LocalDigest12 selector for legacy local8 fixture, got {other:?}"),
@@ -810,7 +820,7 @@ fn local8_literal() -> String {
 
 fn public_key_literal() -> String {
     let public_key = ALICE_KEYPAIR.public_key().to_string();
-    format!("{public_key}@hbl.centralbank")
+    format!("{public_key}@banka.centralbank")
 }
 
 struct KaigiRelaySeed {
@@ -2103,8 +2113,8 @@ async fn accounts_query_rejects_public_key_filter_literals() -> Result<()> {
 }
 
 #[tokio::test]
-async fn accounts_query_rejects_alias_and_dotted_i105_filter_literals() -> Result<()> {
-    let domain_id: DomainId = "aliases".parse()?;
+async fn accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals() -> Result<()> {
+    let domain_id: DomainId = DomainId::try_new("aliases", "universal")?;
     let label = AccountAlias::new(
         "primary".parse()?,
         Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
@@ -2121,7 +2131,7 @@ async fn accounts_query_rejects_alias_and_dotted_i105_filter_literals() -> Resul
         .with_genesis_instruction(Register::account(account));
     let Some(network) = start_network_async_or_skip(
         builder,
-        stringify!(accounts_query_rejects_alias_and_dotted_i105_filter_literals),
+        stringify!(accounts_query_accepts_alias_and_rejects_dotted_i105_filter_literals),
     )
     .await?
     else {
@@ -2151,10 +2161,22 @@ async fn accounts_query_rejects_alias_and_dotted_i105_filter_literals() -> Resul
         .body(alias_body)
         .send()
         .await?;
+    let alias_status = alias_resp.status();
+    let alias_body = alias_resp.text().await?;
     assert_eq!(
-        alias_resp.status(),
-        reqwest::StatusCode::BAD_REQUEST,
-        "alias literal should be rejected"
+        alias_status,
+        reqwest::StatusCode::OK,
+        "alias literal should resolve to the canonical account id, got {alias_status} body={alias_body}"
+    );
+    let alias_doc: norito::json::Value = norito::json::from_str(&alias_body)?;
+    let alias_ids = extract_account_ids(&alias_doc);
+    assert!(
+        alias_ids.iter().any(|id| id == &expected),
+        "alias literal should resolve to canonical account id {expected}, got {alias_ids:?}"
+    );
+    assert!(
+        alias_ids.iter().all(|id| !id.contains('@')),
+        "alias query should still return canonical ids, got {alias_ids:?}"
     );
 
     let body = format!(
@@ -2192,10 +2214,14 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
     init_instruction_registry();
     // Reuse pre-existing asset definitions from the test genesis to avoid permission issues when
     // registering new definitions in the wonderland domain.
-    let cash_def_id: AssetDefinitionId =
-        AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
-    let collateral_def_id: AssetDefinitionId =
-        AssetDefinitionId::new("wonderland".parse()?, "camomile".parse()?);
+    let cash_def_id: AssetDefinitionId = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "rose".parse()?,
+    );
+    let collateral_def_id: AssetDefinitionId = AssetDefinitionId::new(
+        DomainId::try_new("wonderland", "universal")?,
+        "camomile".parse()?,
+    );
     let setup_instructions: Vec<InstructionBox> = vec![
         Mint::asset_numeric(
             numeric!(1500),
@@ -2383,7 +2409,7 @@ async fn repo_agreements_emit_i105_literals() -> Result<()> {
 async fn kaigi_endpoints_emit_i105_literals() -> Result<()> {
     let relay_id = BOB_ID.clone();
     let reporter_id = ALICE_ID.clone();
-    let domain_id: DomainId = "wonderland".parse()?;
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal")?;
 
     let registration = KaigiRelayRegistration {
         relay_id: relay_id.clone(),

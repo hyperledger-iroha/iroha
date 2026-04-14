@@ -16,6 +16,7 @@ use iroha_data_model::{
     account::AccountId as DMAccountId,
     asset::prelude::{AssetDefinitionId, AssetId},
     common::Owned,
+    domain::DomainId,
     governance::types::{
         AbiVersion, ContractAbiHash, ContractCodeHash, DeployContractProposal, ProposalKind,
     },
@@ -42,8 +43,9 @@ async fn gov_proposal_get_returns_record() {
     let rec = iroha_core::state::GovernanceProposalRecord {
         proposer,
         kind: ProposalKind::DeployContract(DeployContractProposal {
-            namespace: "apps".to_string(),
-            contract_id: "calc.v1".to_string(),
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address"),
             code_hash_hex: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),
             abi_hash_hex: ContractAbiHash::from_hex_str(&"22".repeat(32)).expect("abi hash"),
             abi_version: AbiVersion::new(1),
@@ -93,9 +95,9 @@ async fn gov_proposal_get_returns_record() {
         .expect("deploy payload present");
     assert_eq!(
         deploy_payload
-            .get("contract_id")
+            .get("contract_address")
             .and_then(norito::json::Value::as_str),
-        Some("calc.v1")
+        Some("tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7")
     );
 }
 
@@ -167,7 +169,7 @@ async fn gov_council_current_uses_configured_fallback() {
     state.gov.parliament_term_blocks = 5;
     state.gov.parliament_min_stake = 200;
     state.gov.parliament_eligibility_asset_id = AssetDefinitionId::new(
-        "wonderland".parse().expect("asset id"),
+        DomainId::try_new("wonderland", "universal").expect("asset id"),
         "stake".parse().expect("asset id"),
     );
 

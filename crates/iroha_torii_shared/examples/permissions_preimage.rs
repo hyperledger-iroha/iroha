@@ -23,7 +23,7 @@ fn main() {
     let sid = [0x11u8; 32];
     let app_pk = [0x22u8; 32];
     let wallet_pk = [0x33u8; 32];
-    let _domain: DomainId = "wonderland".parse().expect("domain parses");
+    let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain parses");
     let keypair = KeyPair::from_seed(vec![0xAB; 32], Algorithm::Ed25519);
     let account_id = AccountId::new(keypair.public_key().clone()).to_string();
 

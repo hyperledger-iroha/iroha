@@ -119,8 +119,8 @@ pub struct GenVrfArgs {
     /// Seed prefix used when deriving deterministic candidate account keys.
     #[arg(long, default_value = "node")]
     pub account_prefix: String,
-    /// Domain used in generated account ids
-    #[arg(long, default_value = "wonderland")]
+    /// Fully qualified domain literal used in generated account aliases.
+    #[arg(long, default_value = "wonderland.universal")]
     pub domain: String,
     /// Output path; if omitted, prints JSON to stdout
     #[arg(long)]
@@ -215,12 +215,11 @@ impl GenVrfArgs {
 
     fn generate_candidates(&self, seed: &[u8; 64]) -> Result<Vec<norito::json::Value>> {
         let chain_bytes = self.chain_id.as_bytes();
-        let domain_id: DomainId = self
-            .domain
-            .parse()
-            .map_err(|_| eyre!("invalid --domain value"))?;
+        let domain_literal = DomainId::parse_fully_qualified(&self.domain)
+            .map_err(|err| eyre!("invalid --domain value: {err}"))?
+            .to_string();
         (0..self.count)
-            .map(|index| self.build_candidate(seed, chain_bytes, index, &domain_id))
+            .map(|index| self.build_candidate(seed, chain_bytes, index, &domain_literal))
             .collect()
     }
 
@@ -229,9 +228,9 @@ impl GenVrfArgs {
         seed: &[u8; 64],
         chain_bytes: &[u8],
         index: usize,
-        _domain_id: &DomainId,
+        domain_literal: &str,
     ) -> Result<norito::json::Value> {
-        let alias = format!("{}{}@{}", self.account_prefix, index, self.domain);
+        let alias = format!("{}{}@{domain_literal}", self.account_prefix, index);
         let account_seed = iroha_crypto::Hash::new(alias.as_bytes());
         let account_keypair = iroha_crypto::KeyPair::from_seed(
             account_seed.as_ref().to_vec(),

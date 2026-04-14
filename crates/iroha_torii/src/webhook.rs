@@ -1215,7 +1215,7 @@ fn event_filter_boxes_from_expr(
                     .collect(),
                 "domain_id" => value
                     .as_str()
-                    .and_then(|s| s.parse().ok())
+                    .and_then(|s| iroha_data_model::domain::DomainId::parse_fully_qualified(s).ok())
                     .map(|id| {
                         EventFilterBox::Data(df::DataEventFilter::Domain(
                             df::DomainEventFilter::new().for_domain(id),
@@ -1425,7 +1425,11 @@ fn event_filter_boxes_from_expr(
                         }
                         // data ids
                         "peer_id" => c.peer_id = v.as_str().and_then(|s| s.parse().ok()),
-                        "domain_id" => c.domain_id = v.as_str().and_then(|s| s.parse().ok()),
+                        "domain_id" => {
+                            c.domain_id = v.as_str().and_then(|s| {
+                                iroha_data_model::domain::DomainId::parse_fully_qualified(s).ok()
+                            })
+                        }
                         "account_id" => {
                             c.account_id = v.as_str().and_then(parse_account_id_literal)
                         }

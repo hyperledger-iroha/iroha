@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 54b6d543cff8df6e8fd50632cfed6265770edc33855f06912be603457c5b517e
 source_last_modified: "2026-04-02T18:31:54.074495+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -27,7 +27,7 @@ Garantia de pagador único que aceita recargas até um valor alvo exato e, em se
 - Ligue para `open_escrow(recipient, escrow_account, asset_definition, target_amount)` uma vez para registrar o pagador, o destinatário, a conta de garantia, a definição de ativos, a meta exata e os sinalizadores abertos/liberados/reembolsados ​​em estado de contrato durável.
 - Chamada `deposit(amount)` do mesmo pagador até `funded_amount_value == target_amount_value`; os depósitos devem permanecer positivos e qualquer recarga que possa superfinanciar o depósito é rejeitada.
 - Ligue para `release_if_ready()` para transferir os fundos garantidos para o destinatário assim que a meta for atingida, ou ligue para `refund()` enquanto o depósito ainda estiver aberto para devolver o valor financiado ao pagador.
-- Inspecione balanças com `FindAssetById`/`iroha_cli ledger asset list` e inspecione o estado do contrato com `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.
+- Inspecione balanças com `FindAssetById`/`iroha ledger asset list all --verbose` e inspecione o estado do contrato com `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json`.
 
 ## Guias SDK relacionados
 

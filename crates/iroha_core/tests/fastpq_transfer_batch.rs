@@ -14,7 +14,7 @@ use nonzero_ext::nonzero;
 
 #[test]
 fn transfer_asset_batch_records_multi_delta_transcript() {
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
 
     let (bob_id, _) = gen_account_in("wonderland");
@@ -24,7 +24,7 @@ fn transfer_asset_batch_records_multi_delta_transcript() {
     let carol_account = Account::new(carol_id.clone()).build(&ALICE_ID);
 
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&ALICE_ID);

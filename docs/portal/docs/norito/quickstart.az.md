@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e39dc94f52395bd9323177df1a7feeb7bbd4f9a3cdea07b02f9d60e7826e199e
-source_last_modified: "2026-01-22T16:26:46.506936+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: a3e8979ab9bbd6bd10b5635fc6864573e5d0dc97ad4731d7207a3cbd2b8c291c
+source_last_modified: "2026-04-08T09:18:21.504877+00:00"
+translation_last_reviewed: 2026-04-08
 title: Norito Quickstart
 description: Build, validate, and deploy a Kotodama contract with the release tooling and default single-peer network.
 slug: /norito/quickstart
@@ -19,7 +19,7 @@ müqavilə tərtib edin, onu yerli olaraq qurutun, sonra onu Torii vasitəsilə 
 istinad CLI.
 
 Nümunə müqaviləsi zəng edənin hesabına açar/dəyər cütünü yazır ki, siz edə biləsiniz
-yan təsirini dərhal `iroha_cli` ilə yoxlayın.
+yan təsirini dərhal `iroha` ilə yoxlayın.
 
 ## İlkin şərtlər
 
@@ -27,7 +27,7 @@ yan təsirini dərhal `iroha_cli` ilə yoxlayın.
   `defaults/docker-compose.single.yml`-də müəyyən edilmiş nümunə həmyaşıdını başlamaq üçün).
 - Yükləmədiyiniz halda köməkçi binaries yaratmaq üçün Rust alətlər silsiləsi (1.76+).
   nəşr olunanlar.
-- `koto_compile`, `ivm_run` və `iroha_cli` binaries. Onları buradan qura bilərsiniz
+- `koto_compile`, `ivm_run` və `iroha` binaries. Onları buradan qura bilərsiniz
   aşağıda göstərildiyi kimi iş yerini yoxlayın və ya uyğun buraxılış artefaktlarını endirin:
 
 ```sh
@@ -66,8 +66,14 @@ seiyaku Hello {
     info("Hello from Kotodama");
   }
 
+  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
+  kotoage fn main() permission(Admin) {
+    info("Hello from Kotodama");
+    write_detail();
+  }
+
   // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
+  kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),
       name!("example"),

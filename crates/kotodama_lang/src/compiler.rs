@@ -336,8 +336,15 @@ fn reserve_control_transfer_stub(code: &mut Vec<u8>) -> usize {
     start
 }
 
-fn patch_jump_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Result<(), String> {
-    let off = (target as i64) - (start as i64);
+fn patch_jump_transfer_stub(
+    code: &mut [u8],
+    start: usize,
+    target: u64,
+    pc_bias: u64,
+) -> Result<(), String> {
+    let runtime_start = start as u64 + pc_bias;
+    let runtime_target = target + pc_bias;
+    let off = (runtime_target as i64) - (runtime_start as i64);
     if (off % 4) != 0 {
         return Err(format!(
             "unaligned jump offset {off} for control transfer at {start}"
@@ -350,7 +357,7 @@ fn patch_jump_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Resul
         return Ok(());
     }
 
-    patch_pointer_literal_stub(code, start, CONTROL_TRANSFER_SCRATCH_REG, target)?;
+    patch_pointer_literal_stub(code, start, CONTROL_TRANSFER_SCRATCH_REG, runtime_target)?;
     let jalr = encoding::wide::encode_ri(
         instruction::wide::control::JALR,
         0,
@@ -361,8 +368,15 @@ fn patch_jump_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Resul
     Ok(())
 }
 
-fn patch_call_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Result<(), String> {
-    let off = (target as i64) - (start as i64);
+fn patch_call_transfer_stub(
+    code: &mut [u8],
+    start: usize,
+    target: u64,
+    pc_bias: u64,
+) -> Result<(), String> {
+    let runtime_start = start as u64 + pc_bias;
+    let runtime_target = target + pc_bias;
+    let off = (runtime_target as i64) - (runtime_start as i64);
     if (off % 4) != 0 {
         return Err(format!(
             "unaligned call offset {off} for control transfer at {start}"
@@ -377,7 +391,7 @@ fn patch_call_transfer_stub(code: &mut [u8], start: usize, target: u64) -> Resul
         return Ok(());
     }
 
-    patch_pointer_literal_stub(code, start, 1, target)?;
+    patch_pointer_literal_stub(code, start, 1, runtime_target)?;
     let jalr = encoding::wide::encode_ri(instruction::wide::control::JALR, 1, 1, 0);
     write_word(code, start + POINTER_STUB_LEN * 4, jalr);
     Ok(())
@@ -497,7 +511,7 @@ fn encode_pointer_tlv_bytes(kind: ir::DataRefKind, raw: &str) -> Option<Vec<u8>>
             (PointerType::Name, to_bytes(&nm).ok()?)
         }
         DRK::Domain => {
-            let id: iroha_data_model::domain::DomainId = raw.parse().ok()?;
+            let id = iroha_data_model::domain::DomainId::parse_fully_qualified(raw).ok()?;
             (PointerType::DomainId, to_bytes(&id).ok()?)
         }
         DRK::Json => {
@@ -613,6 +627,8 @@ impl Default for CompilerOptions {
 #[cfg(test)]
 mod tests {
     use std::collections::{HashMap, HashSet};
+
+    use iroha_data_model::DomainId;
 
     use super::{
         Compiler, CompilerOptions, ContractFeature, DEFAULT_MAX_CYCLES, GLOBAL_WILDCARD_KEY,
@@ -756,7 +772,7 @@ seiyaku MyC {
     fn far_jump_fixup_uses_literal_stub_and_jalr() {
         let mut code = Vec::new();
         let start = super::reserve_control_transfer_stub(&mut code);
-        super::patch_jump_transfer_stub(&mut code, start, 200_000).expect("patch far jump");
+        super::patch_jump_transfer_stub(&mut code, start, 200_000, 0).expect("patch far jump");
         let final_word_at = start + super::POINTER_STUB_LEN * 4;
         let final_word =
             u32::from_le_bytes(code[final_word_at..final_word_at + 4].try_into().unwrap());
@@ -775,7 +791,7 @@ seiyaku MyC {
     fn near_call_fixup_skips_stub_padding_on_return() {
         let mut code = Vec::new();
         let start = super::reserve_control_transfer_stub(&mut code);
-        super::patch_call_transfer_stub(&mut code, start, (start + 16) as u64)
+        super::patch_call_transfer_stub(&mut code, start, (start + 16) as u64, 0)
             .expect("patch near call");
 
         let call_word = u32::from_le_bytes(code[start..start + 4].try_into().unwrap());
@@ -789,6 +805,31 @@ seiyaku MyC {
             skip_word,
             super::encode_jal(0, ((super::CONTROL_TRANSFER_STUB_WORDS - 1) * 4) as i32)
                 .expect("encode stub skip")
+        );
+    }
+
+    #[test]
+    fn far_call_fixup_includes_runtime_prefix_bias_in_literal_target() {
+        let mut code = Vec::new();
+        let start = super::reserve_control_transfer_stub(&mut code);
+        let target = 200_000u64;
+        let bias = 8_192u64;
+        super::patch_call_transfer_stub(&mut code, start, target, bias).expect("patch far call");
+
+        let mut expected = vec![0u8; super::POINTER_STUB_LEN * 4];
+        super::patch_pointer_literal_stub(&mut expected, 0, 1, target + bias)
+            .expect("patch expected pointer literal");
+        assert_eq!(
+            &code[start..start + super::POINTER_STUB_LEN * 4],
+            expected.as_slice()
+        );
+
+        let final_word_at = start + super::POINTER_STUB_LEN * 4;
+        let final_word =
+            u32::from_le_bytes(code[final_word_at..final_word_at + 4].try_into().unwrap());
+        assert_eq!(
+            final_word,
+            encoding::wide::encode_ri(instruction::wide::control::JALR, 1, 1, 0)
         );
     }
 
@@ -870,20 +911,18 @@ seiyaku NegTest {
     }
 
     #[test]
-    fn json_get_numeric_emits_numeric_syscall() {
+    fn get_numeric_emits_numeric_syscall() {
         let src = r#"
 seiyaku JsonNumericTest {
   meta { abi_version: 1; }
   fn run() {
     let ev = trigger_event();
-    let _amount: Amount = json_get_numeric(ev, name("amount"));
+    let _amount: Amount = ev.get_numeric(name("amount"));
   }
 }
 "#;
         let compiler = Compiler::new();
-        let bytes = compiler
-            .compile_source(src)
-            .expect("compile json_get_numeric");
+        let bytes = compiler.compile_source(src).expect("compile get_numeric");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let needle = encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
@@ -899,20 +938,20 @@ seiyaku JsonNumericTest {
     }
 
     #[test]
-    fn json_get_asset_definition_id_emits_asset_definition_syscall() {
+    fn get_asset_definition_id_emits_asset_definition_syscall() {
         let src = r#"
 seiyaku JsonAssetDefinitionTest {
   meta { abi_version: 1; }
   fn run() {
     let ev = trigger_event();
-    let _asset = json_get_asset_definition_id(ev, name("asset_definition_id"));
+    let _asset = ev.get_asset_definition_id(name("asset_definition_id"));
   }
 }
 "#;
         let compiler = Compiler::new();
         let bytes = compiler
             .compile_source(src)
-            .expect("compile json_get_asset_definition_id");
+            .expect("compile get_asset_definition_id");
         let parsed = ProgramMetadata::parse(&bytes).expect("parse metadata");
         let needle = encoding::wide::encode_sys(
             instruction::wide::system::SCALL,
@@ -1269,6 +1308,52 @@ seiyaku Test {
     }
 
     #[test]
+    fn manifest_access_set_hints_include_state_wildcard_for_call_contract() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn relay(target: bytes, payload: Json) -> bytes permission(Admin) {
+    return call_contract(target, "settle", payload);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        let (_bytes, manifest) = compiler
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let hints = manifest
+            .access_set_hints
+            .expect("expected access_set_hints");
+        assert!(hints.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        assert!(hints.write_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        let relay = entrypoints
+            .iter()
+            .find(|entry| entry.name == "relay")
+            .expect("relay entrypoint");
+        assert!(relay.read_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        assert!(relay.write_keys.contains(&STATE_WILDCARD_KEY.to_string()));
+        assert_eq!(relay.access_hints_complete, Some(true));
+        assert!(relay.access_hints_skipped.is_empty());
+    }
+
+    #[test]
+    fn compile_json_object_builders() {
+        let src = r#"
+seiyaku Test {
+  kotoage fn build(owner: AccountId) -> Json {
+    let payload = json_object();
+    let payload = json_set_int(payload, name("bucket_id"), 1);
+    return json_set_account_id(payload, name("owner"), owner);
+  }
+}
+"#;
+        let compiler = Compiler::new();
+        compiler
+            .compile_source_with_manifest(src)
+            .expect("compile json object builders");
+    }
+
+    #[test]
     fn manifest_access_set_hints_include_create_trigger_from_json() {
         let src = r#"
 seiyaku Test {
@@ -1306,7 +1391,7 @@ seiyaku Test {
                 .expect("public key"),
         );
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
@@ -1332,11 +1417,6 @@ seiyaku Test {
         assert!(
             hints
                 .read_keys
-                .contains(&format!("domain:{}", canonical_asset.definition().domain()))
-        );
-        assert!(
-            hints
-                .read_keys
                 .contains(&format!("asset_def:{}", canonical_asset.definition()))
         );
         assert!(
@@ -1353,6 +1433,14 @@ seiyaku Test {
             hints
                 .write_keys
                 .contains(&format!("asset:{canonical_asset}"))
+        );
+        assert!(
+            canonical_asset.definition().try_domain().is_none(),
+            "canonical execute_instruction payload should decode to an opaque asset definition id",
+        );
+        assert!(
+            !hints.read_keys.iter().any(|key| key.starts_with("domain:")),
+            "opaque canonical asset ids should not synthesize a domain access hint",
         );
 
         let entrypoints = manifest.entrypoints.expect("entrypoints present");
@@ -1380,9 +1468,9 @@ seiyaku Test {
         };
         use iroha_primitives::json::Json;
 
-        let domain_id: DomainId = "wonderland".parse().unwrap();
+        let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let nft_id: NftId = "n0$wonderland".parse().unwrap();
@@ -1472,7 +1560,7 @@ seiyaku Test {
                 .expect("public key"),
         );
         let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         );
         let asset_id = AssetId::of(asset_def.clone(), account.clone());
@@ -1500,17 +1588,20 @@ seiyaku Test {
         assert!(
             hints
                 .read_keys
-                .contains(&format!("domain:{}", canonical_asset.definition().domain()))
-        );
-        assert!(
-            hints
-                .read_keys
                 .contains(&format!("asset_def:{}", canonical_asset.definition()))
         );
         assert!(
             hints
                 .read_keys
                 .contains(&format!("asset:{canonical_asset}"))
+        );
+        assert!(
+            canonical_asset.definition().try_domain().is_none(),
+            "canonical execute_query payload should decode to an opaque asset definition id",
+        );
+        assert!(
+            !hints.read_keys.iter().any(|key| key.starts_with("domain:")),
+            "opaque canonical asset ids should not synthesize a domain access hint",
         );
         assert!(hints.write_keys.is_empty());
 
@@ -1530,7 +1621,7 @@ seiyaku Test {
         let from_literal = sample_account_literal();
         let to = sample_account_id_alt();
         let to_literal = to.to_string();
-        let domain: DomainId = "wonderland".parse().unwrap();
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
         let src = format!(
             "fn main() {{ transfer_domain(account_id(\"{from_literal}\"), domain(\"{domain}\"), account_id(\"{to_literal}\")); }}"
         );
@@ -1696,6 +1787,53 @@ seiyaku Test {
     }
 
     #[test]
+    fn main_entrypoint_is_compiled_first_before_hajimari() {
+        let src = r#"
+seiyaku Hello {
+  hajimari() {
+    info("Hello from hajimari");
+  }
+
+  kotoage fn main() permission(Admin) {
+    write_detail();
+  }
+
+  kotoage fn write_detail() permission(Admin) {
+    set_account_detail(
+      authority(),
+      name("example"),
+      json("{\"hello\":\"world\"}")
+    );
+  }
+}
+"#;
+        let (bytes, manifest) = Compiler::new()
+            .compile_source_with_manifest(src)
+            .expect("compile manifest");
+        let entrypoints = manifest.entrypoints.expect("entrypoints present");
+        assert_eq!(entrypoints.len(), 3);
+        let main = entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("main entrypoint");
+        assert_eq!(main.name, "main");
+
+        let parsed = ivm_abi::metadata::ProgramMetadata::parse(&bytes).expect("parse metadata");
+        let embedded = parsed
+            .contract_interface
+            .expect("embedded contract interface");
+        let main_embedded = embedded
+            .entrypoints
+            .iter()
+            .find(|entry| entry.name == "main")
+            .expect("embedded main entrypoint");
+        assert_eq!(
+            main_embedded.entry_pc, 0,
+            "public `main` must be laid out first so raw VM startup enters `main` before `hajimari`"
+        );
+    }
+
+    #[test]
     fn staged_mint_helper_keeps_state_map_base_literals_after_call_propagation() {
         let src = r#"
 seiyaku StagedMintRequest {
@@ -1751,16 +1889,16 @@ seiyaku StagedMintRequest {
     let created_at_ms_key = name("created_at_ms");
     let expires_at_ms_key = name("expires_at_ms");
 
-    let action = json_get_name(ev, action_key);
+    let action = ev.get_name(action_key);
     if (action == name("create")) {
-      let request_id = json_get_name(ev, request_id_key);
+      let request_id = ev.get_name(request_id_key);
       let sequence = MintRequestNextSequence + 1;
-      let fi_id = json_get_name(ev, fi_id_key);
-      let to_account_id = json_get_account_id(ev, to_account_id_key);
-      let amount_i64 = json_get_int(ev, amount_i64_key);
-      let requested_by_actor_id = json_get_json(ev, requested_by_actor_id_key);
-      let created_at_ms = json_get_int(ev, created_at_ms_key);
-      let expires_at_ms = json_get_int(ev, expires_at_ms_key);
+      let fi_id = ev.get_name(fi_id_key);
+      let to_account_id = ev.get_account_id(to_account_id_key);
+      let amount_i64 = ev.get_int(amount_i64_key);
+      let requested_by_actor_id = ev.get_json(requested_by_actor_id_key);
+      let created_at_ms = ev.get_int(created_at_ms_key);
+      let expires_at_ms = ev.get_int(expires_at_ms_key);
       update_record(sequence,
                     request_id,
                     fi_id,
@@ -1796,6 +1934,20 @@ seiyaku StagedMintRequest {
         let mut dataref_kind_map: HashMap<(usize, ir::Temp), ir::DataRefKind> = HashMap::new();
         let mut int_const_map: HashMap<(usize, ir::Temp), i64> = HashMap::new();
         let mut param_temp_map: HashMap<(usize, usize), ir::Temp> = HashMap::new();
+        let mut seen_copy_dests: HashSet<(usize, ir::Temp)> = HashSet::new();
+        let mut multi_copy_dests: HashSet<(usize, ir::Temp)> = HashSet::new();
+        for (func_idx, func) in ir_prog.functions.iter().enumerate() {
+            for bb in &func.blocks {
+                for instr in &bb.instrs {
+                    if let ir::Instr::Copy { dest, .. } = instr {
+                        let key = (func_idx, *dest);
+                        if !seen_copy_dests.insert(key) {
+                            multi_copy_dests.insert(key);
+                        }
+                    }
+                }
+            }
+        }
 
         use crate::ast::UnaryOp;
         use crate::ir::DataRefKind as DRK;
@@ -1812,17 +1964,20 @@ seiyaku StagedMintRequest {
                             dataref_kind_map.remove(&dest_key);
                             int_const_map.remove(&dest_key);
                             string_literal_temps.remove(&dest_key);
-                            if let Some(val) = string_map.get(&(func_idx, *src)).cloned() {
-                                string_map.insert(dest_key, val);
-                            }
-                            if let Some(kind) = dataref_kind_map.get(&(func_idx, *src)).copied() {
-                                dataref_kind_map.insert(dest_key, kind);
-                            }
-                            if let Some(val) = int_const_map.get(&(func_idx, *src)).copied() {
-                                int_const_map.insert(dest_key, val);
-                            }
-                            if string_literal_temps.contains(&(func_idx, *src)) {
-                                string_literal_temps.insert(dest_key);
+                            if !multi_copy_dests.contains(&dest_key) {
+                                if let Some(val) = string_map.get(&(func_idx, *src)).cloned() {
+                                    string_map.insert(dest_key, val);
+                                }
+                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *src)).copied()
+                                {
+                                    dataref_kind_map.insert(dest_key, kind);
+                                }
+                                if let Some(val) = int_const_map.get(&(func_idx, *src)).copied() {
+                                    int_const_map.insert(dest_key, val);
+                                }
+                                if string_literal_temps.contains(&(func_idx, *src)) {
+                                    string_literal_temps.insert(dest_key);
+                                }
                             }
                         }
                         continue;
@@ -2002,7 +2157,7 @@ seiyaku StagedMintRequest {
         };
 
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
         let asset_definition_literal = asset_definition.to_string();
@@ -2072,9 +2227,9 @@ seiyaku Test {{
             .expect("account");
         let peer_literal = "ed0120A98BAFB0663CE08D75EBD506FEC38A84E576A7C9B0897693ED4B04FD9EF2D18D";
         let peer: PeerId = peer_literal.parse().expect("peer");
-        let domain: DomainId = "wonderland".parse().expect("domain");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
         let asset_definition = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().expect("domain"),
+            DomainId::try_new("wonderland", "universal").expect("domain"),
             "rose".parse().expect("name"),
         );
         let asset = AssetId::new(asset_definition.clone(), account.clone());
@@ -2862,6 +3017,20 @@ impl Compiler {
         let mut dataref_kind_map: HashMap<(usize, ir::Temp), ir::DataRefKind> = HashMap::new();
         let mut state_path_hints: HashMap<(usize, ir::Temp), StatePathHint> = HashMap::new();
         let mut norito_literal_map: HashMap<(usize, ir::Temp), String> = HashMap::new();
+        let mut seen_copy_dests: HashSet<(usize, ir::Temp)> = HashSet::new();
+        let mut multi_copy_dests: HashSet<(usize, ir::Temp)> = HashSet::new();
+        for (func_idx, func) in ir_prog.functions.iter().enumerate() {
+            for bb in &func.blocks {
+                for instr in &bb.instrs {
+                    if let ir::Instr::Copy { dest, .. } = instr {
+                        let key = (func_idx, *dest);
+                        if !seen_copy_dests.insert(key) {
+                            multi_copy_dests.insert(key);
+                        }
+                    }
+                }
+            }
+        }
         let func_count = ir_prog.functions.len();
         let mut access_sets: Vec<AccessSets> = vec![AccessSets::default(); func_count];
         let mut hint_diagnostics = AccessHintDiagnostics::default();
@@ -2887,23 +3056,29 @@ impl Compiler {
                             int_const_map.remove(&dest_key);
                             norito_literal_map.remove(&dest_key);
                             string_literal_temps.remove(&dest_key);
-                            if let Some(val) = string_map.get(&(func_idx, *src)).cloned() {
-                                string_map.insert(dest_key, val);
-                            }
-                            if let Some(kind) = dataref_kind_map.get(&(func_idx, *src)).copied() {
-                                dataref_kind_map.insert(dest_key, kind);
-                            }
-                            if let Some(hint) = state_path_hints.get(&(func_idx, *src)).cloned() {
-                                state_path_hints.insert(dest_key, hint);
-                            }
-                            if let Some(val) = int_const_map.get(&(func_idx, *src)).copied() {
-                                int_const_map.insert(dest_key, val);
-                            }
-                            if let Some(val) = norito_literal_map.get(&(func_idx, *src)).cloned() {
-                                norito_literal_map.insert(dest_key, val);
-                            }
-                            if string_literal_temps.contains(&(func_idx, *src)) {
-                                string_literal_temps.insert(dest_key);
+                            if !multi_copy_dests.contains(&dest_key) {
+                                if let Some(val) = string_map.get(&(func_idx, *src)).cloned() {
+                                    string_map.insert(dest_key, val);
+                                }
+                                if let Some(kind) = dataref_kind_map.get(&(func_idx, *src)).copied()
+                                {
+                                    dataref_kind_map.insert(dest_key, kind);
+                                }
+                                if let Some(hint) = state_path_hints.get(&(func_idx, *src)).cloned()
+                                {
+                                    state_path_hints.insert(dest_key, hint);
+                                }
+                                if let Some(val) = int_const_map.get(&(func_idx, *src)).copied() {
+                                    int_const_map.insert(dest_key, val);
+                                }
+                                if let Some(val) =
+                                    norito_literal_map.get(&(func_idx, *src)).cloned()
+                                {
+                                    norito_literal_map.insert(dest_key, val);
+                                }
+                                if string_literal_temps.contains(&(func_idx, *src)) {
+                                    string_literal_temps.insert(dest_key);
+                                }
                             }
                         }
                         continue;
@@ -3043,6 +3218,16 @@ impl Compiler {
                                     .writes
                                     .insert(STATE_WILDCARD_KEY.to_string());
                             }
+                        }
+                        ir::Instr::CallContract { .. } => {
+                            hint_diagnostics.state_wildcards =
+                                hint_diagnostics.state_wildcards.saturating_add(1);
+                            access_sets[func_idx]
+                                .reads
+                                .insert(STATE_WILDCARD_KEY.to_string());
+                            access_sets[func_idx]
+                                .writes
+                                .insert(STATE_WILDCARD_KEY.to_string());
                         }
                         _ => {}
                     }
@@ -5001,6 +5186,41 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
+                        Instr::CallContract {
+                            dest,
+                            contract,
+                            entrypoint,
+                            payload,
+                        } => {
+                            let contract_reg = src_reg(contract, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, contract_reg, 0)?);
+                            let publish_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&publish_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(13, 10, 0)?);
+
+                            let entrypoint_reg = src_reg(entrypoint, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, entrypoint_reg, 0)?);
+                            code.extend_from_slice(&publish_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(14, 10, 0)?);
+
+                            let payload_reg = src_reg(payload, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(10, payload_reg, 0)?);
+                            code.extend_from_slice(&publish_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(12, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, 13, 0)?);
+                            push_word(&mut code, encode_addi(11, 14, 0)?);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_CALL_CONTRACT as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::GetTriggerEvent { dest } => {
                             if !durable_enabled {
                                 return Err(i18n::translate(
@@ -6220,6 +6440,134 @@ impl Compiler {
                             push_word(&mut code, encode_addi(rd, 10, 0)?);
                             spill_back(dest, rd, spilled, imm, &mut code)?;
                         }
+                        Instr::JsonObject { dest } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_OBJECT as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::JsonSetInt {
+                            dest,
+                            json,
+                            key,
+                            value,
+                        } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            if let Some(s) = string_map.get(&(func_idx, *json)) {
+                                let key = DataKey(DataKind::Json, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, key);
+                            } else {
+                                let r = src_reg(json, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                            if let Some(s) = string_map.get(&(func_idx, *key)) {
+                                let kb = DataKey(DataKind::Name, s.clone());
+                                emit_literal_stub(&mut code, &mut fixups, 10, kb);
+                            } else {
+                                let r = src_reg(key, scratch1, &mut code)?;
+                                push_word(&mut code, encode_addi(10, r, 0)?);
+                            }
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            let value_reg = src_reg(value, scratch1, &mut code)?;
+                            push_word(&mut code, encode_addi(12, value_reg, 0)?);
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_SET_I64 as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
+                        Instr::JsonSetAccountId {
+                            dest,
+                            json,
+                            key,
+                            value,
+                        } => {
+                            if !durable_enabled {
+                                return Err(i18n::translate(
+                                    self.lang,
+                                    Message::UnsupportedBinaryOp(
+                                        "durable state requires ABI v1. Add `meta { abi_version: 1; }` or compile with `--abi 1`.",
+                                    ),
+                                ));
+                            }
+                            let mut load_ptr = |temp: &ir::Temp,
+                                                target: u8,
+                                                scratch: u8,
+                                                code: &mut Vec<u8>|
+                             -> Result<(), String> {
+                                if let Some(kind) =
+                                    dataref_kind_map.get(&(func_idx, *temp)).copied()
+                                    && let Some(lit) = string_map.get(&(func_idx, *temp)).cloned()
+                                {
+                                    let key = data_key_for_pointer(kind, &lit);
+                                    emit_literal_stub(code, &mut fixups, target, key);
+                                } else {
+                                    if string_map.contains_key(&(func_idx, *temp))
+                                        && !dataref_kind_map.contains_key(&(func_idx, *temp))
+                                    {
+                                        return Err(i18n::translate(
+                                            self.lang,
+                                            Message::SemanticError(
+                                                "pointer literal missing ABI metadata during json_set_account_id lowering",
+                                            ),
+                                        ));
+                                    }
+                                    let rs = src_reg(temp, scratch, code)?;
+                                    push_word(code, encode_addi(target, rs, 0)?);
+                                }
+                                Ok(())
+                            };
+                            load_ptr(json, 10, scratch1, &mut code)?;
+                            let pub_word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_INPUT_PUBLISH_TLV as u8,
+                            );
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(scratch2, 10, 0)?);
+                            load_ptr(key, 10, scratch1, &mut code)?;
+                            code.extend_from_slice(&pub_word.to_le_bytes());
+                            push_word(&mut code, encode_addi(11, 10, 0)?);
+                            push_word(&mut code, encode_addi(10, scratch2, 0)?);
+                            load_ptr(value, 12, scratch1, &mut code)?;
+                            let word = encoding::wide::encode_sys(
+                                instruction::wide::system::SCALL,
+                                syscalls::SYSCALL_JSON_SET_ACCOUNT_ID as u8,
+                            );
+                            code.extend_from_slice(&word.to_le_bytes());
+                            let (rd, spilled, imm) = dst_reg(dest);
+                            push_word(&mut code, encode_addi(rd, 10, 0)?);
+                            spill_back(dest, rd, spilled, imm, &mut code)?;
+                        }
                         Instr::TlvLen { dest, value } => {
                             if !durable_enabled {
                                 return Err(i18n::translate(
@@ -7115,7 +7463,7 @@ impl Compiler {
                     )
                 })?;
                 let target_pc = (func_base + target_off) as u64;
-                patch_jump_transfer_stub(&mut code, fix.at, target_pc)?;
+                patch_jump_transfer_stub(&mut code, fix.at, target_pc, 0)?;
             }
             for fix in branch_fixups {
                 let else_target = *block_offsets.get(&fix.else_label).ok_or_else(|| {
@@ -7133,8 +7481,8 @@ impl Compiler {
                 let else_target_pc = (func_base + else_target) as u64;
                 let then_target_pc = (func_base + then_target) as u64;
 
-                patch_jump_transfer_stub(&mut code, fix.jal_else_at, else_target_pc)?;
-                patch_jump_transfer_stub(&mut code, fix.jal_then_at, then_target_pc)?;
+                patch_jump_transfer_stub(&mut code, fix.jal_else_at, else_target_pc, 0)?;
+                patch_jump_transfer_stub(&mut code, fix.jal_then_at, then_target_pc, 0)?;
             }
             uses_zk_global |= uses_zk;
         }
@@ -7144,7 +7492,7 @@ impl Compiler {
             let target = *func_start_offsets.get(callee).ok_or_else(|| {
                 i18n::translate(self.lang, Message::SemanticError("unknown callee"))
             })? as u64;
-            patch_call_transfer_stub(&mut code, *at, target)?;
+            patch_call_transfer_stub(&mut code, *at, target, 0)?;
         }
 
         uses_vector_global |= detect_vector_usage(&code);
@@ -7304,10 +7652,12 @@ impl Compiler {
                     )
                 }
                 DataKey(DataKind::Domain, s) => {
-                    let id: iroha_data_model::domain::DomainId = s.parse().map_err(|e| {
-                        let err = format!("invalid DomainId literal `{s}`: {e}");
-                        i18n::translate(self.lang, Message::SemanticError(&err))
-                    })?;
+                    let id = iroha_data_model::domain::DomainId::parse_fully_qualified(s).map_err(
+                        |e| {
+                            let err = format!("invalid DomainId literal `{s}`: {e}");
+                            i18n::translate(self.lang, Message::SemanticError(&err))
+                        },
+                    )?;
                     (
                         8u16,
                         to_bytes(&id).map_err(|e| e.to_string()).map_err(|e| {
@@ -7521,6 +7871,21 @@ impl Compiler {
             if rem != 0 {
                 post_pad = 4 - rem;
             }
+        }
+        let runtime_code_prefix = contract_section.len() as u64
+            + debug_section.len() as u64
+            + lit_header_size
+            + lit_size
+            + data_bytes.len() as u64
+            + post_pad as u64;
+        // Relative near calls are invariant under the runtime prefix, but far
+        // JALR stubs need the final code-region prefix added to their absolute
+        // targets so they do not jump into the CNTR/DBG1/LTLB prefix bytes.
+        for (at, callee, _caller) in &call_fixups {
+            let target = *func_start_offsets.get(callee).ok_or_else(|| {
+                i18n::translate(self.lang, Message::SemanticError("unknown callee"))
+            })? as u64;
+            patch_call_transfer_stub(&mut code, *at, target, runtime_code_prefix)?;
         }
         if need_literals {
             let data_len = data_bytes.len() as u32;
@@ -7984,7 +8349,7 @@ fn record_isi_access(
             add_asset_def_rw(access_set, &asset_def);
         }
         ir::Instr::RegisterDomain { domain } | ir::Instr::UnregisterDomain { domain } => {
-            let Some(id) = parse_temp(string_map, func_idx, *domain) else {
+            let Some(id) = parse_domain_temp(string_map, func_idx, *domain) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
             add_domain_rw(access_set, &id);
@@ -7999,7 +8364,7 @@ fn record_isi_access(
             let Some(id) = parse_temp::<AssetDefinitionId>(string_map, func_idx, *asset) else {
                 return apply_fallback(access_set, hint_diagnostics);
             };
-            add_domain_r(access_set, id.domain());
+            add_asset_def_domain_r_if_projected(access_set, &id);
             add_asset_def_rw(access_set, &id);
         }
         ir::Instr::SetAccountDetail { account, key, .. } => {
@@ -8102,7 +8467,7 @@ fn record_isi_access(
         }
         ir::Instr::TransferDomain { domain, to } => {
             let (Some(domain), Some(to)) = (
-                parse_temp::<DomainId>(string_map, func_idx, *domain),
+                parse_domain_temp(string_map, func_idx, *domain),
                 parse_account_temp(string_map, func_idx, *to),
             ) else {
                 return apply_fallback(access_set, hint_diagnostics);
@@ -8274,7 +8639,7 @@ fn record_instruction_box_access(
                 add_account_rw(access_set, r.object.id());
             }
             RegisterBox::AssetDefinition(r) => {
-                add_domain_r(access_set, r.object.id().domain());
+                add_asset_def_domain_r_if_projected(access_set, r.object.id());
                 add_asset_def_rw(access_set, r.object.id());
             }
             RegisterBox::Nft(r) => add_nft_rw(access_set, r.object.id()),
@@ -8383,6 +8748,15 @@ fn parse_temp<T: ParseTempLiteral>(
     temp: ir::Temp,
 ) -> Option<T> {
     T::parse_temp_literal(string_map.get(&(func_idx, temp))?)
+}
+
+fn parse_domain_temp(
+    string_map: &HashMap<(usize, ir::Temp), String>,
+    func_idx: usize,
+    temp: ir::Temp,
+) -> Option<iroha_data_model::domain::DomainId> {
+    iroha_data_model::domain::DomainId::parse_fully_qualified(string_map.get(&(func_idx, temp))?)
+        .ok()
 }
 
 fn parse_account_temp(
@@ -8550,10 +8924,16 @@ fn add_asset_def_r(set: &mut AccessSets, id: &AssetDefinitionId) {
     set.reads.insert(key_asset_def(id));
 }
 
+fn add_asset_def_domain_r_if_projected(set: &mut AccessSets, id: &AssetDefinitionId) {
+    if let Some(domain) = id.try_domain() {
+        add_domain_r(set, domain);
+    }
+}
+
 fn add_asset_r(set: &mut AccessSets, id: &AssetId) {
     set.reads.insert(key_asset(id));
     add_account_r(set, id.account());
-    add_domain_r(set, id.definition().domain());
+    add_asset_def_domain_r_if_projected(set, id.definition());
     add_asset_def_r(set, id.definition());
 }
 
@@ -8569,7 +8949,7 @@ fn add_asset_rw(set: &mut AccessSets, id: &AssetId) {
     set.reads.insert(key.clone());
     set.writes.insert(key);
     add_account_r(set, id.account());
-    add_domain_r(set, id.definition().domain());
+    add_asset_def_domain_r_if_projected(set, id.definition());
     add_asset_def_r(set, id.definition());
 }
 
@@ -8649,6 +9029,7 @@ fn instr_queues_isi(instr: &ir::Instr) -> bool {
             | ir::Instr::TransferDomain { .. }
             | ir::Instr::VendorExecuteInstruction { .. }
             | ir::Instr::VendorExecuteQuery { .. }
+            | ir::Instr::CallContract { .. }
             | ir::Instr::SubscriptionBill
             | ir::Instr::SubscriptionRecordUsage
             | ir::Instr::BuildSubmitBallotInline { .. }
@@ -8786,9 +9167,9 @@ fn build_entrypoint_descriptors(
             params: func
                 .param_types
                 .iter()
-                .map(|(name, ty)| EntrypointParamDescriptor {
-                    name: name.clone(),
-                    type_name: semantic::render_type_name(ty),
+                .map(|param| EntrypointParamDescriptor {
+                    name: param.name.clone(),
+                    type_name: semantic::render_type_name(&param.ty),
                 })
                 .collect(),
             return_type: func.ret_ty.as_ref().map(semantic::render_type_name),

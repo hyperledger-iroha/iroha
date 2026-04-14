@@ -96,7 +96,7 @@ fn expected_lane_binding_for_peer(index: usize, peer_id: &PeerId) -> ExpectedLan
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
-        "nexus".parse().expect("nexus domain"),
+        DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
@@ -106,9 +106,10 @@ fn stake_asset_id_literal() -> String {
 }
 
 fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
-    iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
-        .parse()
-        .expect("default nexus fee asset id")
+    AssetDefinitionId::new(
+        DomainId::try_new("universal", "universal").expect("fee asset domain"),
+        "xor".parse().expect("fee asset name"),
+    )
 }
 
 enum RouteProbeOutcome {
@@ -310,10 +311,11 @@ fn npos_multilane_genesis_post_topology_transactions(
         topology.len()
     );
 
-    let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
-    let universal_domain: DomainId = "universal".parse().expect("universal domain");
-    let ds1_domain: DomainId = "ds1".parse().expect("ds1 domain");
-    let ds2_domain: DomainId = "ds2".parse().expect("ds2 domain");
+    let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
+    let universal_domain: DomainId =
+        DomainId::try_new("universal", "universal").expect("universal domain");
+    let ds1_domain: DomainId = DomainId::try_new("ds1", "universal").expect("ds1 domain");
+    let ds2_domain: DomainId = DomainId::try_new("ds2", "universal").expect("ds2 domain");
     let stake_asset_id = stake_asset_definition_id();
     let fee_asset_id = nexus_fee_asset_definition_id();
 

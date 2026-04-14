@@ -62,7 +62,7 @@ seiyaku ZkVoteAndUnshield {
     verify_and_submit_ballot(env_ballot, submit);
 
     let unshield = build_unshield_inline(
-      asset_definition!("62Fk4FPcMuLvW5QjDGNF2a4jAmjM"),
+      asset_definition!("6pEP9RjNoZ7beWkT3pLfKoM1dyfi"),
       authority(),
       1,
       nullifier,

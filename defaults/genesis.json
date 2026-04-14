@@ -26,7 +26,7 @@
         {
           "Register": {
             "Domain": {
-              "id": "wonderland",
+              "id": "wonderland.universal",
               "logo": null,
               "metadata": {
                 "key": "value"
@@ -71,7 +71,7 @@
         {
           "Register": {
             "Domain": {
-              "id": "garden_of_live_flowers",
+              "id": "garden_of_live_flowers.universal",
               "logo": null,
               "metadata": {
                 

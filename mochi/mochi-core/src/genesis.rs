@@ -11,7 +11,7 @@ use iroha_data_model::{
         custom::{CustomParameter, CustomParameterId},
         system::{SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter},
     },
-    prelude::{AccountId, AssetDefinitionId, AssetId, ChainId, DomainId, Name, NumericSpec},
+    prelude::{AccountId, AssetDefinitionId, AssetId, ChainId, DomainId, NumericSpec},
 };
 use iroha_executor_data_model::permission::{
     domain::CanRegisterDomain, parameter::CanSetParameters,
@@ -41,20 +41,18 @@ pub fn default_manifest(
     let mut meta = Metadata::default();
     meta.insert("key".parse()?, Json::new("value"));
 
-    let wonderland: Name = "wonderland".parse()?;
-    let wonderland_id = DomainId::new(wonderland.clone());
-    let garden: Name = "garden_of_live_flowers".parse()?;
-    let garden_id = DomainId::new(garden.clone());
+    let wonderland_id = DomainId::try_new("wonderland", "universal")?;
+    let garden_id = DomainId::try_new("garden_of_live_flowers", "universal")?;
     let rose_definition = AssetDefinitionId::new(wonderland_id.clone(), "rose".parse()?);
-    let cabbage_definition = AssetDefinitionId::new(garden_id, "cabbage".parse()?);
+    let cabbage_definition = AssetDefinitionId::new(garden_id.clone(), "cabbage".parse()?);
 
     let mut builder = builder
-        .domain_with_metadata(wonderland.clone(), meta.clone())
+        .domain_with_metadata(wonderland_id.clone(), meta.clone())
         .account_with_metadata(ALICE_ID.signatory().clone(), meta.clone())
         .account_with_metadata(BOB_ID.signatory().clone(), meta)
         .asset("rose".parse()?, NumericSpec::default())
         .finish_domain()
-        .domain(garden.clone())
+        .domain(garden_id.clone())
         .account(CARPENTER_ID.signatory().clone())
         .asset("cabbage".parse()?, NumericSpec::default())
         .finish_domain();

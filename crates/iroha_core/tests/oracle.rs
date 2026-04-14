@@ -139,7 +139,8 @@ fn observation(
 }
 
 fn world_with_providers(providers: &[AccountId]) -> World {
-    let validator_domain_id: DomainId = "validators".parse().expect("domain");
+    let validator_domain_id: DomainId =
+        DomainId::try_new("validators", "universal").expect("domain");
     let domain: Domain = Domain::new(validator_domain_id.clone())
         .build(providers.first().expect("at least one provider"));
     let accounts = providers
@@ -160,10 +161,11 @@ fn oracle_state_with_accounts(
     let reward_pool = defaults::oracle::reward_pool();
     let slash_receiver = defaults::oracle::slash_receiver();
 
-    let validator_domain_id: DomainId = "validators".parse().expect("domain");
+    let validator_domain_id: DomainId =
+        DomainId::try_new("validators", "universal").expect("domain");
     let validator_domain: Domain =
         Domain::new(validator_domain_id.clone()).build(providers.first().expect("provider"));
-    let sora_domain_id: DomainId = "sora".parse().expect("domain");
+    let sora_domain_id: DomainId = DomainId::try_new("sora", "universal").expect("domain");
     let sora_domain: Domain = Domain::new(sora_domain_id.clone()).build(&reward_pool);
 
     let asset_def = AssetDefinition::numeric(asset_def_id.clone()).build(&reward_pool);

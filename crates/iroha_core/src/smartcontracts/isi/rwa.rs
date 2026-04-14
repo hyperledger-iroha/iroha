@@ -1009,7 +1009,7 @@ pub mod isi {
             let block = new_dummy_block();
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
-            let missing_domain: DomainId = "wonderland".parse().unwrap();
+            let missing_domain: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
 
             let err = RegisterRwa {
                 rwa: NewRwa::new(
@@ -1036,7 +1036,7 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "vault".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("vault", "universal").unwrap();
             let owner = ALICE_ID.clone();
             let recipient = AccountId::new(KeyPair::random().public_key().clone());
             register_domain_and_accounts(&mut stx, &domain_id, &[owner.clone(), recipient.clone()]);
@@ -1114,7 +1114,7 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "vault".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("vault", "universal").unwrap();
             let owner = ALICE_ID.clone();
             let recipient = AccountId::new(KeyPair::random().public_key().clone());
             register_domain_and_accounts(&mut stx, &domain_id, &[owner.clone(), recipient.clone()]);
@@ -1165,7 +1165,7 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "vault".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("vault", "universal").unwrap();
             let owner = ALICE_ID.clone();
             register_domain_and_accounts(&mut stx, &domain_id, std::slice::from_ref(&owner));
 
@@ -1267,7 +1267,7 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "vault".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("vault", "universal").unwrap();
             let owner = ALICE_ID.clone();
             register_domain_and_accounts(&mut stx, &domain_id, std::slice::from_ref(&owner));
 
@@ -1303,7 +1303,7 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "vault".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("vault", "universal").unwrap();
             let owner = ALICE_ID.clone();
             let recipient = AccountId::new(KeyPair::random().public_key().clone());
             register_domain_and_accounts(&mut stx, &domain_id, &[owner.clone(), recipient.clone()]);
@@ -1359,7 +1359,7 @@ pub mod isi {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "vault".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("vault", "universal").unwrap();
             let owner = ALICE_ID.clone();
             let controller = AccountId::new(KeyPair::random().public_key().clone());
             let recipient = AccountId::new(KeyPair::random().public_key().clone());
@@ -1535,7 +1535,7 @@ pub mod query {
             let mut state_block = state.block(block.as_ref().header());
             let mut stx = state_block.transaction();
 
-            let domain_id: DomainId = "vault".parse().unwrap();
+            let domain_id: DomainId = DomainId::try_new("vault", "universal").unwrap();
             seed_domain_name_lease(&mut stx.world, &ALICE_ID, &domain_id);
             Register::domain(Domain::new(domain_id.clone()))
                 .execute(&ALICE_ID, &mut stx)

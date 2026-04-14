@@ -58,7 +58,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
 
-    let domain_id: DomainId = "nexus".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("nexus", "universal").expect("domain id");
     let account_keypair = KeyPair::random_with_algorithm(Algorithm::Ed25519);
     let account_id = AccountId::new(account_keypair.public_key().clone());
     let account_literal = account_id.to_string();
@@ -124,7 +124,7 @@ async fn nexus_dataspaces_summary_endpoint_returns_joined_snapshot() {
     state.set_nexus(nexus).expect("set nexus config");
 
     let asset_definition_id = AssetDefinitionId::new(
-        "nexus".parse().expect("domain id"),
+        DomainId::try_new("nexus", "universal").expect("domain id"),
         "xor".parse().expect("asset definition name"),
     );
     let mut block = state.block(block_header(1));

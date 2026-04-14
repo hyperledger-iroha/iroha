@@ -102,10 +102,8 @@ impl norito::json::JsonDeserialize for CouncilDerivationKind {
 /// Propose deployment of an IVM bytecode (`.to`) by hash
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Encode, Decode, iroha_schema::IntoSchema)]
 pub struct ProposeDeployContract {
-    /// Namespace for governance gating
-    pub namespace: String,
-    /// Contract identifier within the namespace
-    pub contract_id: String,
+    /// Canonical public contract address targeted by the proposal.
+    pub contract_address: crate::smart_contract::ContractAddress,
     /// Blake2b-32 hash of the compiled `.to` bytecode slated for deployment (lowercase hex).
     pub code_hash_hex: String,
     /// Blake2b-32 hash of the ABI surface expected by the host (lowercase hex).
@@ -389,8 +387,9 @@ mod tests {
     #[test]
     fn encode_roundtrip_basic() {
         let p = ProposeDeployContract {
-            namespace: "apps".into(),
-            contract_id: "my.contract".into(),
+            contract_address: "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
+                .parse()
+                .expect("contract address"),
             code_hash_hex: "aa".repeat(32),
             abi_hash_hex: "bb".repeat(32),
             abi_version: "1".into(),

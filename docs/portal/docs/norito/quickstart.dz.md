@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/quickstart.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: e39dc94f52395bd9323177df1a7feeb7bbd4f9a3cdea07b02f9d60e7826e199e
-source_last_modified: "2026-01-22T16:26:46.506936+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: a3e8979ab9bbd6bd10b5635fc6864573e5d0dc97ad4731d7207a3cbd2b8c291c
+source_last_modified: "2026-04-08T09:18:21.504877+00:00"
+translation_last_reviewed: 2026-04-08
 title: Norito Quickstart
 description: Build, validate, and deploy a Kotodama contract with the release tooling and default single-peer network.
 slug: /norito/quickstart
@@ -19,7 +19,7 @@ Norito དང་ Kotodama འདི་ འགོ་དང་པ་: གཏན་
 གཞི་བསྟུན་ CLI.
 
 དཔེ་གན་ཡིག་འདི་གིས་ ལྡེ་མིག་/གནས་གོང་ཆ་གཅིག་ འབོད་བརྡ་གཏང་མི་གི་རྩིས་ཐོ་ལུ་བྲིསཝ་ཨིན་ དེ་འབདཝ་ལས་ ཁྱོད་ཀྱིས་འབད་ཚུགས།
-`iroha_cli` དང་ཅིག་ཁར་ དེ་འཕྲོ་ལས་ ཟུར་ཕོག་འདི་བདེན་སྦྱོར་འབད།
+`iroha` དང་ཅིག་ཁར་ དེ་འཕྲོ་ལས་ ཟུར་ཕོག་འདི་བདེན་སྦྱོར་འབད།
 
 ## སྔོན་འགྲོའི་ཆ་རྐྱེན།
 
@@ -27,7 +27,7 @@ Norito དང་ Kotodama འདི་ འགོ་དང་པ་: གཏན་
   དཔེ་ཚད་ཀྱི་མཉམ་རོགས་ `defaults/docker-compose.single.yml` ནང་གསལ་ལྟར་འགོ་བཙུགས་ནི།).
 - ཁྱོད་ཀྱིས་ཕབ་ལེན་མ་འབད་བ་ཅིན་ གྲོགས་རམ་གཉིས་ལྡན་བཟོ་ནི་གི་དོན་ལུ་ རསཊི་ལག་ཆས་རྒྱུན་རིམ་ (༡.༧༦+) ཨིན།
   དཔར་བསྐྲུན་འབད་མི་ཚུ།
-- `koto_compile`, `ivm_run`, དང་ `iroha_cli` གཉིས་ལྡན་ཚུ། ཁྱོད་ཀྱིས་ཁོང་ལས་བཟོ་ཚུགས།
+- `koto_compile`, `ivm_run`, དང་ `iroha` གཉིས་ལྡན་ཚུ། ཁྱོད་ཀྱིས་ཁོང་ལས་བཟོ་ཚུགས།
   ལས་ཀའི་ས་སྟོང་བརྟག་ཞིབ་འདི་གཤམ་གསལ་ལྟར་དུ་སྟོན་ཡོད་པ་ཡང་ན་མཐུན་སྒྲིག་གསར་བཏོན་འབད་ཡོད་པའི་ཅ་རྙིང་ཚུ་ཕབ་ལེན་འབད།
 
 ```sh
@@ -66,8 +66,14 @@ seiyaku Hello {
     info("Hello from Kotodama");
   }
 
+  // Default raw-IVM entrypoint used by ivm_run / transaction ivm.
+  kotoage fn main() permission(Admin) {
+    info("Hello from Kotodama");
+    write_detail();
+  }
+
   // Public entrypoint that records a JSON marker on the caller.
-  kotoage fn write_detail() {
+  kotoage fn write_detail() permission(Admin) {
     set_account_detail(
       authority(),
       name!("example"),

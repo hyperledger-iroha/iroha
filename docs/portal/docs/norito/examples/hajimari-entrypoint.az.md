@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 8367687fcf43fcb50ab43940a4ebeb8b8ba22a3ab8a6c3ed5088c52b1fdd7baf
 source_last_modified: "2026-01-22T15:38:30.521640+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ Tək ictimai giriş nöqtəsi və dövlət tutacağı olan minimal Kotodama müq
 
 - `koto_compile --abi 1` ilə müqaviləni [Norito Başlarkən](/norito/getting-started#1-compile-a-kotodama-contract) və ya `cargo test -p ivm developer_portal_norito_snippets_compile` vasitəsilə göstərildiyi kimi tərtib edin.
 - Bir noda toxunmazdan əvvəl `info!` jurnalını və ilkin sistem çağırışını yoxlamaq üçün `ivm_run` / `developer_portal_norito_snippets_run` ilə bayt kodunu yerli olaraq sınaqdan keçirin.
-- Artefaktı `iroha_cli app contracts deploy` vasitəsilə yerləşdirin və [Norito Başlarkən](/norito/getting-started#4-deploy-via-iroha_cli) bölməsindəki addımlardan istifadə edərək manifesti təsdiqləyin.
+- Artefaktı `iroha app contracts deploy` vasitəsilə yerləşdirin və [Norito Başlarkən](/norito/getting-started#4-deploy-via-iroha) bölməsindəki addımlardan istifadə edərək manifesti təsdiqləyin.
 
 ## Əlaqədar SDK təlimatları
 

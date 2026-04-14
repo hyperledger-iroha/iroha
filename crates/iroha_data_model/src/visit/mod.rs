@@ -9,24 +9,26 @@ use crate::{
         rwa::RwaInstructionBox,
         soracloud::{
             AcknowledgeSoracloudAgentMessage, AdmitSoracloudPrivateCompileProfile,
-            AdvanceSoracloudRollout, AdvertiseSoracloudModelHost,
+            AdvanceSoracloudRollout, AdvertiseSoracloudInrouHost, AdvertiseSoracloudModelHost,
             AllowSoracloudAgentAutonomyArtifact, AllowSoracloudUploadedModel,
             AppendSoracloudUploadedModelChunk, ApproveSoracloudAgentWalletSpend,
-            CheckpointSoracloudTrainingJob, DeleteSoracloudServiceConfig,
-            DeleteSoracloudServiceSecret, DeploySoracloudAgentApartment, DeploySoracloudService,
-            EnqueueSoracloudAgentMessage, FinalizeSoracloudUploadedModelBundle,
-            HeartbeatSoracloudModelHost, JoinSoracloudHfSharedLease, LeaveSoracloudHfSharedLease,
-            MutateSoracloudState, PromoteSoracloudModelWeight,
+            CheckpointSoracloudTrainingJob, ClearSoracloudInrouReplicaRuntimeState,
+            DeleteSoracloudServiceConfig, DeleteSoracloudServiceSecret,
+            DeploySoracloudAgentApartment, DeploySoracloudService, EnqueueSoracloudAgentMessage,
+            FinalizeSoracloudUploadedModelBundle, HeartbeatSoracloudModelHost,
+            JoinSoracloudHfSharedLease, LeaveSoracloudHfSharedLease, MutateSoracloudState,
+            PromoteSoracloudModelWeight, ReconcileSoracloudInrouPlacements,
             RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
             RecordSoracloudMailboxMessage, RecordSoracloudPrivateInferenceCheckpoint,
             RecordSoracloudRuntimeReceipt, RegisterSoracloudModelArtifact,
             RegisterSoracloudModelWeight, RegisterSoracloudUploadedModelBundle,
             RenewSoracloudAgentLease, RenewSoracloudHfSharedLease,
-            RequestSoracloudAgentWalletSpend, RestartSoracloudAgentApartment,
-            RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy, RollbackSoracloudModelWeight,
-            RollbackSoracloudService, RunSoracloudAgentAutonomy, RunSoracloudFheJob,
-            SetSoracloudRuntimeState, SetSoracloudServiceConfig, SetSoracloudServiceSecret,
-            StartSoracloudPrivateInference, StartSoracloudTrainingJob, UpgradeSoracloudService,
+            ReportSoracloudServiceLeaseUsage, RequestSoracloudAgentWalletSpend,
+            RestartSoracloudAgentApartment, RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy,
+            RollbackSoracloudModelWeight, RollbackSoracloudService, RunSoracloudAgentAutonomy,
+            RunSoracloudFheJob, SetSoracloudInrouReplicaRuntimeState, SetSoracloudRuntimeState,
+            SetSoracloudServiceConfig, SetSoracloudServiceSecret, StartSoracloudPrivateInference,
+            StartSoracloudTrainingJob, UpgradeSoracloudService, WithdrawSoracloudInrouHost,
             WithdrawSoracloudModelHost,
         },
         staking::{
@@ -134,6 +136,7 @@ pub trait Visit {
 /// Walk a transaction and delegate to the provided visitor.
 pub fn visit_transaction<V: Visit + ?Sized>(visitor: &mut V, transaction: &SignedTransaction) {
     match transaction.instructions() {
+        Executable::ContractCall(_) => {}
         Executable::Ivm(bytecode) => visitor.visit_ivm(bytecode),
         Executable::IvmProved(proved) => {
             // For proved execution the semantic state transition is expressed by the overlay, but

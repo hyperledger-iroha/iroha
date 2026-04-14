@@ -701,6 +701,8 @@ struct VoteVerifyKey {
     view: u64,
     epoch: u64,
     signer: crate::sumeragi::consensus::ValidatorIndex,
+    signer_public_key: Option<PublicKey>,
+    signature_hash: Hash,
     block_hash: HashOf<BlockHeader>,
     parent_state_root: Hash,
     post_state_root: Hash,
@@ -708,12 +710,21 @@ struct VoteVerifyKey {
 
 impl VoteVerifyKey {
     fn from_vote(vote: &crate::sumeragi::consensus::Vote) -> Self {
+        Self::from_vote_with_signer_public_key(vote, None)
+    }
+
+    fn from_vote_with_signer_public_key(
+        vote: &crate::sumeragi::consensus::Vote,
+        signer_public_key: Option<PublicKey>,
+    ) -> Self {
         Self {
             phase: vote.phase,
             height: vote.height,
             view: vote.view,
             epoch: vote.epoch,
             signer: vote.signer,
+            signer_public_key,
+            signature_hash: Hash::new(&vote.bls_sig),
             block_hash: vote.block_hash,
             parent_state_root: vote.parent_state_root,
             post_state_root: vote.post_state_root,
@@ -728,9 +739,17 @@ struct VoteVerifyCacheKey {
 }
 
 impl VoteVerifyCacheKey {
+    #[cfg(test)]
     fn from_vote(vote: &crate::sumeragi::consensus::Vote) -> Self {
+        Self::from_vote_with_signer_public_key(vote, None)
+    }
+
+    fn from_vote_with_signer_public_key(
+        vote: &crate::sumeragi::consensus::Vote,
+        signer_public_key: Option<PublicKey>,
+    ) -> Self {
         Self {
-            key: VoteVerifyKey::from_vote(vote),
+            key: VoteVerifyKey::from_vote_with_signer_public_key(vote, signer_public_key),
             signature_hash: Hash::new(&vote.bls_sig),
         }
     }
@@ -1293,16 +1312,7 @@ fn normalize_signer_indices_to_view(
 }
 
 fn select_new_view_highest_qc_from_votes(
-    vote_log: &BTreeMap<
-        (
-            crate::sumeragi::consensus::Phase,
-            u64,
-            u64,
-            u64,
-            crate::sumeragi::consensus::ValidatorIndex,
-        ),
-        crate::sumeragi::consensus::Vote,
-    >,
+    accepted_votes: &BTreeMap<ValidatorIndex, crate::sumeragi::consensus::Vote>,
     signers: &BTreeSet<ValidatorIndex>,
     height: u64,
     view: u64,
@@ -1310,15 +1320,16 @@ fn select_new_view_highest_qc_from_votes(
 ) -> Option<crate::sumeragi::consensus::QcRef> {
     let mut selected: Option<crate::sumeragi::consensus::QcRef> = None;
     for signer in signers {
-        let Some(vote) = vote_log.get(&(
-            crate::sumeragi::consensus::Phase::NewView,
-            height,
-            view,
-            epoch,
-            *signer,
-        )) else {
+        let Some(vote) = accepted_votes.get(signer) else {
             continue;
         };
+        if vote.phase != crate::sumeragi::consensus::Phase::NewView
+            || vote.height != height
+            || vote.view != view
+            || vote.epoch != epoch
+        {
+            continue;
+        }
         let Some(candidate) = vote.highest_qc else {
             continue;
         };
@@ -2494,16 +2505,7 @@ fn build_signers_bitmap(signers: &BTreeSet<ValidatorIndex>, roster_len: usize) -
 }
 
 fn aggregate_vote_signatures(
-    vote_log: &BTreeMap<
-        (
-            crate::sumeragi::consensus::Phase,
-            u64,
-            u64,
-            u64,
-            crate::sumeragi::consensus::ValidatorIndex,
-        ),
-        crate::sumeragi::consensus::Vote,
-    >,
+    accepted_votes: &BTreeMap<ValidatorIndex, crate::sumeragi::consensus::Vote>,
     phase: crate::sumeragi::consensus::Phase,
     block_hash: HashOf<BlockHeader>,
     height: u64,
@@ -2516,11 +2518,15 @@ fn aggregate_vote_signatures(
     }
     let mut signatures = Vec::with_capacity(signers.len());
     for signer in signers {
-        let key = (phase, height, view, epoch, *signer);
-        let Some(vote) = vote_log.get(&key) else {
+        let Some(vote) = accepted_votes.get(signer) else {
             return Err(QcAggregateError::MissingVote { signer: *signer });
         };
-        if vote.block_hash != block_hash {
+        if vote.phase != phase
+            || vote.block_hash != block_hash
+            || vote.height != height
+            || vote.view != view
+            || vote.epoch != epoch
+        {
             return Err(QcAggregateError::MissingVote { signer: *signer });
         }
         if vote.bls_sig.is_empty() {
@@ -3794,6 +3800,10 @@ impl Actor {
             self.vote_log.remove(&key);
             self.vote_validation_cache.remove(&key);
         }
+        self.vote_log_identities
+            .retain(|_, vote| vote.height != height || vote.block_hash != block_hash);
+        self.vote_validation_cache_identities
+            .retain(|key, _| self.vote_log_identities.contains_key(key));
 
         let qc_cache_before = self.qc_cache.len();
         self.qc_cache.retain(|(_, hash, entry_height, _, _), _| {
@@ -4655,6 +4665,7 @@ impl NewViewTracker {
         None
     }
 
+    #[cfg(test)]
     fn select_with_quorum(
         &mut self,
         required: usize,
@@ -4674,6 +4685,30 @@ impl NewViewTracker {
                     quorum,
                 }
             })
+    }
+
+    fn select_with_quorum_for_height(
+        &mut self,
+        height: u64,
+        required: usize,
+        local: Option<&PeerId>,
+        roster: &[PeerId],
+    ) -> Option<NewViewSelection> {
+        if roster.is_empty() {
+            return None;
+        }
+        let roster_set: BTreeSet<_> = roster.iter().cloned().collect();
+        self.highest_entry_mut(|entry_height, _, entry| {
+            entry_height == height && entry.count_in_roster(&roster_set, local) >= required
+        })
+        .map(|(key, entry)| {
+            let quorum = entry.count_in_roster(&roster_set, local);
+            NewViewSelection {
+                key,
+                highest_qc: entry.highest_qc,
+                quorum,
+            }
+        })
     }
 
     fn highest_quorum_view_for_height(
@@ -4907,8 +4942,7 @@ impl Actor {
         height: u64,
         view: u64,
     ) -> bool {
-        self.vote_log
-            .values()
+        self.stored_votes()
             .any(|vote| vote.block_hash == block_hash && vote.height == height && vote.view == view)
     }
 
@@ -4919,7 +4953,7 @@ impl Actor {
         view: u64,
     ) -> bool {
         let expected_epoch = self.epoch_for_height(height);
-        self.vote_log.values().any(|vote| {
+        self.stored_votes().any(|vote| {
             matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
                 && vote.block_hash == block_hash
                 && vote.height == height
@@ -4935,8 +4969,7 @@ impl Actor {
         view: u64,
     ) -> usize {
         let expected_epoch = self.epoch_for_height(height);
-        self.vote_log
-            .values()
+        self.stored_votes()
             .filter(|vote| {
                 matches!(vote.phase, crate::sumeragi::consensus::Phase::Commit)
                     && vote.block_hash == block_hash
@@ -5065,7 +5098,7 @@ impl Actor {
 
     fn slot_has_vote_backed_consensus_evidence(&self, height: u64, view: u64) -> bool {
         let expected_epoch = self.epoch_for_height(height);
-        self.vote_log.values().any(|vote| {
+        self.stored_votes().any(|vote| {
             matches!(
                 vote.phase,
                 crate::sumeragi::consensus::Phase::Prepare
@@ -5086,7 +5119,7 @@ impl Actor {
 
     fn height_has_vote_backed_consensus_evidence(&self, height: u64) -> bool {
         let expected_epoch = self.epoch_for_height(height);
-        self.vote_log.values().any(|vote| {
+        self.stored_votes().any(|vote| {
             matches!(
                 vote.phase,
                 crate::sumeragi::consensus::Phase::Prepare
@@ -6333,7 +6366,7 @@ impl Actor {
     fn frontier_slot_has_local_vote_history_in_slot(&self, slot: &FrontierSlot) -> bool {
         let local_peer = self.common_config.peer.id();
         let epoch = self.epoch_for_height(slot.height);
-        self.vote_log.values().any(|vote| {
+        self.stored_votes().any(|vote| {
             matches!(
                 vote.phase,
                 crate::sumeragi::consensus::Phase::Prepare
@@ -6473,10 +6506,24 @@ impl Actor {
             return false;
         }
 
-        self.subsystems
-            .validation
-            .inflight
-            .contains_key(&block_hash)
+        let pending_commit_qc_observed =
+            self.pending
+                .pending_blocks
+                .get(&block_hash)
+                .is_some_and(|pending| {
+                    !pending.aborted
+                        && !pending.is_retired_same_height()
+                        && pending.height == height
+                        && pending.view < min_view
+                        && pending.commit_qc_observed()
+                });
+
+        pending_commit_qc_observed
+            || self
+                .subsystems
+                .validation
+                .inflight
+                .contains_key(&block_hash)
             || self
                 .subsystems
                 .commit
@@ -6892,6 +6939,37 @@ impl Actor {
             last_view: view,
             last_rotation_view: None,
             last_cause: "missing_payload",
+        });
+        true
+    }
+
+    fn seed_frontier_recovery_for_frontier_stall(
+        &mut self,
+        frontier_height: u64,
+        view: u64,
+        now: Instant,
+    ) -> bool {
+        if self.frontier_recovery_exists_at_height(frontier_height) {
+            return false;
+        }
+
+        let window = self.frontier_recovery_window();
+        let elapsed = saturating_mul_duration(window, 2);
+        let started_at = now.checked_sub(elapsed).unwrap_or(now);
+        let dependency_progress_at =
+            self.same_height_no_proposal_storm_dependency_progress_at(frontier_height);
+        self.frontier_recovery = Some(FrontierRecoveryState {
+            frontier_height,
+            phase: FrontierRecoveryPhase::CatchUp,
+            entered_at: started_at,
+            last_progress_at: started_at,
+            last_dependency_progress_at: dependency_progress_at,
+            last_action_at: None,
+            no_progress_windows: 2,
+            cleanup_done: false,
+            last_view: view,
+            last_rotation_view: None,
+            last_cause: "frontier_stall",
         });
         true
     }
@@ -9190,8 +9268,13 @@ pub(super) struct Actor {
     invalid_sig_penalty: InvalidSigPenalty,
     genesis_account: AccountId,
     vote_log: BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
+    /// Keeps every validated vote keyed by signer identity so stale-roster collisions do not
+    /// alias distinct validators that reuse the same raw signer slot.
+    vote_log_identities: BTreeMap<votes::VoteIdentityKey, crate::sumeragi::consensus::Vote>,
     /// Records the roster hash used to validate each stored vote to skip redundant rechecks.
     vote_validation_cache: BTreeMap<votes::VoteLogKey, VoteValidationCacheEntry>,
+    /// Authoritative validation metadata for `vote_log_identities`.
+    vote_validation_cache_identities: BTreeMap<votes::VoteIdentityKey, VoteValidationCacheEntry>,
     deferred_votes: BTreeMap<
         HashOf<BlockHeader>,
         BTreeMap<votes::VoteLogKey, crate::sumeragi::consensus::Vote>,
@@ -10521,7 +10604,6 @@ enum BlockSyncRosterSource {
     ValidatorCheckpointHint,
     QcHistory,
     ValidatorCheckpointHistory,
-    #[cfg(test)]
     RosterSidecar,
     PreviousBlockEvidence,
     CommitRosterJournal,
@@ -10536,7 +10618,6 @@ impl BlockSyncRosterSource {
             Self::ValidatorCheckpointHint => "validator_checkpoint_hint",
             Self::QcHistory => "commit_qc_history",
             Self::ValidatorCheckpointHistory => "validator_checkpoint_history",
-            #[cfg(test)]
             Self::RosterSidecar => "roster_sidecar",
             Self::PreviousBlockEvidence => "previous_block_evidence",
             Self::CommitRosterJournal => "commit_roster_journal",
@@ -11118,7 +11199,7 @@ fn persisted_roster_for_block(
     block_view: Option<u64>,
     roster_cache: &RosterValidationCache,
     selection_cache: Option<&mut BlockSyncRosterSelectionCache>,
-    _allow_sidecar: bool,
+    allow_sidecar: bool,
 ) -> Option<BlockSyncRosterSelection> {
     fn stake_snapshot_from_previous_roster_evidence(
         snapshot: &iroha_data_model::consensus::CommitStakeSnapshot,
@@ -11191,6 +11272,77 @@ fn persisted_roster_for_block(
             block = %block_hash,
             "persisted commit roster snapshot failed validation"
         );
+    }
+
+    if allow_sidecar && let Some(sidecar) = kura.read_roster_metadata(block_height) {
+        if sidecar.block_hash != block_hash {
+            if let Some(suppressed_since_last) =
+                allow_roster_sidecar_mismatch_warning(block_height, block_hash, sidecar.block_hash)
+            {
+                warn!(
+                    expected_height = block_height,
+                    expected = %block_hash,
+                    sidecar_height = sidecar.height,
+                    sidecar_hash = %sidecar.block_hash,
+                    suppressed_since_last,
+                    "ignoring roster sidecar with mismatched target"
+                );
+            }
+        } else {
+            let key_view = block_view
+                .or_else(|| sidecar.commit_qc.as_ref().map(|cert| cert.view))
+                .unwrap_or_else(|| {
+                    sidecar
+                        .validator_checkpoint
+                        .as_ref()
+                        .map_or(0, |checkpoint| checkpoint.view)
+                });
+            let cache_key = BlockSyncRosterCacheKey::from_hints(
+                block_hash,
+                block_height,
+                key_view,
+                consensus_mode,
+                sidecar.commit_qc.as_ref(),
+                sidecar.validator_checkpoint.as_ref(),
+                sidecar.stake_snapshot.as_ref(),
+            );
+            if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key.as_ref()) {
+                if let Some(selection) = cache.get(key) {
+                    return Some(selection);
+                }
+            }
+            if let Some(selection) = selection_from_roster_artifacts(
+                sidecar.commit_qc.as_ref(),
+                sidecar.validator_checkpoint.as_ref(),
+                sidecar.stake_snapshot.as_ref(),
+                block_hash,
+                block_height,
+                block_view,
+                BlockSyncRosterSource::RosterSidecar,
+                consensus_mode,
+                &state.chain_id,
+                mode_tag,
+                roster_cache,
+            ) {
+                if let (Some(cache), Some(key)) = (selection_cache.as_mut(), cache_key) {
+                    if selection.commit_qc.is_some() || selection.checkpoint.is_some() {
+                        cache.insert(key, selection.clone());
+                    }
+                }
+                if let Some(cert) = selection.commit_qc.as_ref() {
+                    status::record_commit_qc(cert.clone());
+                }
+                if let Some(checkpoint) = selection.checkpoint.as_ref() {
+                    status::record_validator_checkpoint(checkpoint.clone());
+                }
+                return Some(selection);
+            }
+            warn!(
+                height = block_height,
+                block = %block_hash,
+                "persisted roster sidecar failed validation"
+            );
+        }
     }
 
     let successor_height = block_height
@@ -11511,7 +11663,7 @@ fn block_sync_update_with_roster_inner(
         Some(block_view),
         roster_cache,
         None,
-        false,
+        true,
     )
     .or_else(|| {
         block_sync_history_roster_for_block(
@@ -13917,6 +14069,13 @@ impl Actor {
             && self.frontier_catchup_has_unresolved_dependency(height)
     }
 
+    fn frontier_slot_has_vote_backed_owner_state_in_slot(&self, slot: &FrontierSlot) -> bool {
+        slot.quorum_progress.votes_observed
+            || slot.quorum_progress.commit_qc_observed
+            || matches!(slot.phase, FrontierSlotPhase::AwaitCommitQc)
+            || self.slot_has_vote_backed_consensus_evidence(slot.height, slot.view)
+    }
+
     fn frontier_slot_allows_deep_catchup(&self, height: u64, _reason: &'static str) -> bool {
         height == self.committed_height_snapshot().saturating_add(1)
             && (self.frontier_slot_deep_catchup_active_at_height(height)
@@ -13929,12 +14088,35 @@ impl Actor {
         now: Instant,
         reason: &'static str,
     ) -> bool {
+        let Some((slot_block_hash, slot_height, slot_view, slot_body_missing)) = self
+            .frontier_slot
+            .as_ref()
+            .map(|slot| (slot.block_hash, slot.height, slot.view, slot.body_missing()))
+        else {
+            return false;
+        };
+        let vote_backed_frontier_owner = self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == slot_height
+                && slot.view == slot_view
+                && slot.body_present
+                && Self::frontier_slot_has_active_owner_state_in_slot(slot)
+                && self.frontier_slot_has_vote_backed_owner_state_in_slot(slot)
+        });
+        let missing_commit_qc_repair = self.missing_commit_qc_repair_active_for_round(
+            slot_block_hash,
+            slot_height,
+            slot_view,
+            self.committed_height_snapshot(),
+            now,
+        );
+        if slot_height != frontier_height
+            || (!slot_body_missing && !missing_commit_qc_repair && !vote_backed_frontier_owner)
+        {
+            return false;
+        }
         let Some(slot) = self.frontier_slot.as_mut() else {
             return false;
         };
-        if slot.height != frontier_height || !slot.body_missing() {
-            return false;
-        }
         slot.mark_passive_catchup(now, reason);
         slot.sync_compat_fields();
         if self
@@ -14348,6 +14530,13 @@ impl Actor {
         actions: FrontierSlotActions,
     ) -> FrontierRecoveryAdvance {
         let mut advance = FrontierRecoveryAdvance::None;
+        if let Some(block_hash) = actions.request_commit_pipeline_for {
+            self.request_commit_pipeline_for_pending(
+                block_hash,
+                super::status::RoundEventCauseTrace::BlockAvailable,
+                None,
+            );
+        }
         if actions.fetch_block_body && self.emit_frontier_block_body_fetch(now) {
             advance = FrontierRecoveryAdvance::CatchUp;
         }
@@ -14790,9 +14979,23 @@ impl Actor {
         if !known_block_commit_qc_repair
             && (slot.body_present || self.frontier_block_materialized_locally(slot.block_hash))
         {
-            slot.body_present = true;
-            slot.candidate.body_state = FrontierBodyState::Available;
+            let actions = slot.step(
+                now,
+                FrontierSlotEvent::OnBodyAvailable {
+                    block_hash: slot.block_hash,
+                    view: slot.view,
+                    sender: None,
+                },
+                self.frontier_slot_lag_window(),
+            );
             self.frontier_slot = Some(slot);
+            if let Some(block_hash) = actions.request_commit_pipeline_for {
+                self.request_commit_pipeline_for_pending(
+                    block_hash,
+                    super::status::RoundEventCauseTrace::BlockAvailable,
+                    None,
+                );
+            }
             return false;
         }
         if !slot.exact_fetch_armed || !matches!(slot.mode, FrontierSlotMode::Normal) {
@@ -14987,6 +15190,32 @@ impl Actor {
         self.highest_qc
     }
 
+    fn observed_recovery_qc_head(&self) -> Option<crate::sumeragi::consensus::QcHeaderRef> {
+        let cached = self
+            .qc_cache
+            .values()
+            .filter(|qc| {
+                matches!(
+                    qc.phase,
+                    crate::sumeragi::consensus::Phase::Prepare
+                        | crate::sumeragi::consensus::Phase::Commit
+                ) && self.block_known_locally(qc.subject_block_hash)
+            })
+            .map(|qc| crate::sumeragi::consensus::QcHeaderRef {
+                height: qc.height,
+                view: qc.view,
+                epoch: qc.epoch,
+                subject_block_hash: qc.subject_block_hash,
+                phase: qc.phase,
+            })
+            .max_by_key(|qc| (qc.height, qc.view, phase_rank(qc.phase)));
+
+        [self.highest_qc, self.latest_committed_qc(), cached]
+            .into_iter()
+            .flatten()
+            .max_by_key(|qc| (qc.height, qc.view, phase_rank(qc.phase)))
+    }
+
     fn lock_lag_catchup_frontier_for_highest(
         &self,
         highest_qc: crate::sumeragi::consensus::QcHeaderRef,
@@ -15012,7 +15241,7 @@ impl Actor {
     }
 
     fn lock_lag_catchup_frontier_height(&self) -> Option<u64> {
-        let highest_qc = self.highest_qc.or(self.latest_committed_qc())?;
+        let highest_qc = self.observed_recovery_qc_head()?;
         self.lock_lag_catchup_frontier_for_highest(highest_qc)
     }
 
@@ -15954,7 +16183,9 @@ impl Actor {
             invalid_sig_penalty,
             genesis_account,
             vote_log: BTreeMap::new(),
+            vote_log_identities: BTreeMap::new(),
             vote_validation_cache: BTreeMap::new(),
+            vote_validation_cache_identities: BTreeMap::new(),
             deferred_votes: BTreeMap::new(),
             consensus_recovery: BTreeMap::new(),
             recovery_pending_baseline_restore: BTreeMap::new(),
@@ -16105,6 +16336,7 @@ impl Actor {
         );
         let world = actor.state.world_view();
         actor.update_effective_timing_status_from_world(&world, actor.consensus_mode);
+        actor.frontier_block_sync_hint.set_initialized(true);
         actor.sync_external_hints();
         iroha_logger::info!(
             height = actor.state.committed_height(),
@@ -16657,7 +16889,7 @@ impl Actor {
             }
 
             let has_precommit_votes = pending.local_commit_vote_emitted()
-                || self.vote_log.values().any(|vote| {
+                || self.stored_votes().any(|vote| {
                     vote.phase == crate::sumeragi::consensus::Phase::Commit
                         && vote.block_hash == *hash
                         && vote.height == pending.height
@@ -21613,6 +21845,12 @@ impl Actor {
             .max(LOCK_LAG_PRUNE_COOLDOWN_FLOOR)
     }
 
+    fn lock_lag_prune_cooldown_active_for_height(&self, height: u64, now: Instant) -> bool {
+        self.lock_lag_prune_cooldown.is_some_and(|cooldown| {
+            cooldown.catchup_frontier_height == height && now < cooldown.expires_at
+        })
+    }
+
     fn lock_lag_frontier_stall_timings(&self) -> (Duration, Duration) {
         let ttl = self
             .recovery_missing_block_height_ttl()
@@ -22375,8 +22613,7 @@ impl Actor {
         canonical_height: u64,
     ) -> bool {
         let highest_known_height = self
-            .highest_qc
-            .or(self.latest_committed_qc())
+            .observed_recovery_qc_head()
             .map_or_else(|| self.committed_height_snapshot(), |qc| qc.height);
         if highest_known_height.max(canonical_height) > frontier_height.saturating_add(1) {
             return true;
@@ -24251,6 +24488,7 @@ impl Actor {
         let local_height = self.committed_height_snapshot();
         if height == local_height.saturating_add(1)
             && reason != "lock_lag_highest_qc_defer"
+            && self.exact_frontier_body_repair_active_at_height(height)
             && !self.frontier_slot_allows_deep_catchup(height, reason)
         {
             if self.frontier_slot_lag_window_expired(height, now) {
@@ -26063,7 +26301,13 @@ impl Actor {
         let ttl = self
             .recovery_missing_block_height_ttl()
             .max(Duration::from_millis(1));
-        let stalled_frontier_requests = self
+        let cleared_non_actionable_frontier_dependencies = self
+            .clear_non_actionable_missing_dependencies_for_height(
+                frontier_height,
+                committed_height,
+                now,
+            );
+        let stalled_missing_block_requests = self
             .pending
             .missing_block_requests
             .iter()
@@ -26074,9 +26318,36 @@ impl Actor {
                     && now.saturating_duration_since(request.last_dependency_progress) >= ttl
             })
             .count();
+        let stalled_known_block_commit_qc_requests = self
+            .pending
+            .missing_commit_qc_requests
+            .iter()
+            .filter(|(hash, request)| {
+                request.height == frontier_height
+                    && self.missing_commit_qc_request_has_actionable_dependency(
+                        **hash,
+                        request,
+                        committed_height,
+                        now,
+                    )
+                    && now.saturating_duration_since(request.first_seen) >= ttl
+                    && now.saturating_duration_since(request.last_dependency_progress) >= ttl
+            })
+            .count();
+        let stalled_vote_backed_frontier_owner = self.frontier_slot.as_ref().is_some_and(|slot| {
+            slot.height == frontier_height
+                && slot.body_present
+                && Self::frontier_slot_has_active_owner_state_in_slot(slot)
+                && self.frontier_slot_has_vote_backed_owner_state_in_slot(slot)
+                && now.saturating_duration_since(slot.observed_at) >= ttl
+                && now.saturating_duration_since(slot.timers.last_progress_at) >= ttl
+        });
+        let stalled_frontier_requests = stalled_missing_block_requests
+            .saturating_add(stalled_known_block_commit_qc_requests)
+            .saturating_add(usize::from(stalled_vote_backed_frontier_owner));
         if stalled_frontier_requests == 0 {
             self.clear_frontier_stall_reset_window_gate_for_height(frontier_height);
-            return false;
+            return cleared_non_actionable_frontier_dependencies;
         }
         if !self.allow_frontier_stall_reset_action(frontier_height, now) {
             return false;
@@ -26115,6 +26386,42 @@ impl Actor {
                 .keys()
                 .any(|(height, _)| *height > prune_threshold);
         if !has_far_future_state {
+            let mut requested_pull = false;
+            if stalled_frontier_requests > 0 {
+                // Reanchor same-height stalls to the canonical committed edge before escalating
+                // any in-slot or unified frontier controller action.
+                requested_pull = self.request_range_pull_from_anchor(
+                    frontier_height,
+                    "frontier_stall_reset",
+                    now,
+                );
+                if !requested_pull {
+                    requested_pull = self.request_range_pull_from_anchor(
+                        frontier_height,
+                        "frontier_stall_reset_fallback",
+                        now,
+                    );
+                }
+            }
+            if stalled_missing_block_requests > 0 {
+                let view = self
+                    .phase_tracker
+                    .current_view(frontier_height)
+                    .unwrap_or(0);
+                let seeded_recovery =
+                    self.seed_frontier_recovery_for_frontier_stall(frontier_height, view, now);
+                if requested_pull || seeded_recovery {
+                    return true;
+                }
+            }
+            if stalled_known_block_commit_qc_requests > 0 || stalled_vote_backed_frontier_owner {
+                // Once the exact-height payload is already local, repeated same-slot repair or
+                // vote-backed ownership no longer adds information. Reanchor to the canonical
+                // committed edge instead of letting the stale branch keep ownership indefinitely.
+                if requested_pull {
+                    return true;
+                }
+            }
             let view = self
                 .phase_tracker
                 .current_view(frontier_height)
@@ -26128,10 +26435,12 @@ impl Actor {
                 false,
                 now,
             );
-            return !matches!(advance, FrontierRecoveryAdvance::None)
+            return requested_pull
+                || !matches!(advance, FrontierRecoveryAdvance::None)
                 || self.frontier_recovery.is_some_and(|state| {
                     state.frontier_height == frontier_height
-                        && self.frontier_catchup_has_unresolved_dependency(frontier_height)
+                        && state.phase == FrontierRecoveryPhase::CatchUp
+                        && state.last_cause == "frontier_stall"
                 });
         }
 
@@ -27814,7 +28123,7 @@ impl Actor {
         }
         let dependency_missing = self.proposal_gated_by_missing_dependencies(height);
         if dependency_missing {
-            if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
+            if let Some(highest) = self.observed_recovery_qc_head() {
                 self.request_missing_block_for_highest_qc_force(highest, reason);
             }
             let _ = self.request_range_pull_from_anchor(height, reason, now);
@@ -28271,6 +28580,7 @@ impl Actor {
     ) -> bool {
         let local_height = self.committed_height_snapshot();
         if frontier_height == local_height.saturating_add(1)
+            && self.exact_frontier_body_repair_active_at_height(frontier_height)
             && !self.frontier_slot_allows_deep_catchup(frontier_height, reason)
         {
             if self.frontier_slot_lag_window_expired(frontier_height, now) {
@@ -28566,6 +28876,11 @@ impl Actor {
             self.vote_log.remove(&key);
             self.vote_validation_cache.remove(&key);
         }
+        self.vote_log_identities.retain(|_, vote| {
+            vote.phase != crate::sumeragi::consensus::Phase::NewView || vote.height < min_height
+        });
+        self.vote_validation_cache_identities
+            .retain(|key, _| self.vote_log_identities.contains_key(key));
         removed
     }
 
@@ -28888,6 +29203,16 @@ impl Actor {
                         reason: "frontier_stall_reset",
                     },
                 );
+            }
+            let queue_depths = super::status::worker_queue_depth_snapshot();
+            if self.frontier_recovery_same_slot_reassembly_active(height, view, now, queue_depths) {
+                debug!(
+                    height,
+                    view,
+                    reason,
+                    "suppressing exact-frontier recovery rotation while same-slot reassembly remains buffered"
+                );
+                return FrontierRecoveryAdvance::None;
             }
             if reason == "quorum_timeout" {
                 return self.handle_frontier_slot_event(
@@ -29291,7 +29616,7 @@ impl Actor {
             .is_some_and(|frontier_height| {
                 self.frontier_catchup_has_unresolved_dependency(frontier_height)
             });
-        if let Some(highest) = self.highest_qc.or(self.latest_committed_qc()) {
+        if let Some(highest) = self.observed_recovery_qc_head() {
             let highest_far_ahead = highest.height > local_height.saturating_add(2);
             if !(contiguous_frontier_unresolved && highest_far_ahead) {
                 triggered = true;
@@ -30356,6 +30681,21 @@ impl Actor {
             self.maybe_reset_stalled_frontier_state(committed_height, now);
         let pruned_lock_lag_future_state =
             self.prune_lock_lag_future_consensus_state(now, "idle_missing_qc");
+        let lock_lag_prune_cooldown_active = height == contiguous_frontier_height
+            && self.lock_lag_prune_cooldown_active_for_height(height, now);
+        if height == contiguous_frontier_height
+            && (pruned_lock_lag_future_state || lock_lag_prune_cooldown_active)
+        {
+            debug!(
+                height,
+                view = current_view,
+                committed_height,
+                pruned_lock_lag_future_state,
+                lock_lag_prune_cooldown_active,
+                "deferred contiguous-frontier idle view-change after lock-lag catch-up pruning"
+            );
+            return false;
+        }
         let stale_margin = self.recovery_missing_request_stale_height_margin();
         if height.saturating_add(stale_margin) < committed_height {
             // Invariant C: stale missing-height state must not spin endless MissingQc rotations.
@@ -30386,8 +30726,7 @@ impl Actor {
             return false;
         }
         let qc_head_height = self
-            .highest_qc
-            .or(committed_qc)
+            .observed_recovery_qc_head()
             .map_or(committed_height, |qc| qc.height.saturating_add(1));
         if height.saturating_add(stale_margin) < qc_head_height {
             // Invariant C (extended): stale missing-height rounds behind the evolving QC head
@@ -30617,6 +30956,22 @@ impl Actor {
                 } else {
                     ViewChangeCause::MissingQc
                 };
+                if pre_reset_frontier_reanchor_unresolved_in_window
+                    && matches!(direct_cause, ViewChangeCause::MissingQc)
+                    && !self.try_reserve_missing_qc_height_stall_rotation_window(
+                        height,
+                        direct_cause,
+                        now,
+                    )
+                {
+                    debug!(
+                        height,
+                        view = current_view,
+                        committed_height,
+                        "suppressing same-height idle view-change while in-window frontier reanchor remains unresolved"
+                    );
+                    return false;
+                }
                 debug!(
                     height,
                     view = current_view,
@@ -30752,6 +31107,22 @@ impl Actor {
                 } else {
                     ViewChangeCause::MissingQc
                 };
+            if pre_reset_frontier_reanchor_unresolved_in_window
+                && matches!(direct_cause, ViewChangeCause::MissingQc)
+                && !self.try_reserve_missing_qc_height_stall_rotation_window(
+                    height,
+                    direct_cause,
+                    now,
+                )
+            {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    "suppressing same-height idle view-change while in-window frontier reanchor remains unresolved"
+                );
+                return false;
+            }
             debug!(
                 height,
                 view = current_view,

@@ -10753,7 +10753,7 @@ mod gateway_tests {
             },
             {
                 "kind": "account_alias",
-                "account_alias": "hotline@hbl",
+                "account_alias": "hotline@banka",
                 "policy_tier": "emergency",
                 "issued_at": "2026-01-15T00:00:00Z",
                 "expires_at": "2026-01-20T00:00:00Z",
@@ -10780,7 +10780,7 @@ mod gateway_tests {
         assert_eq!(report.emergency_reviews.len(), 1);
         assert_eq!(
             report.emergency_reviews[0].descriptor.as_deref(),
-            Some("hotline@hbl")
+            Some("hotline@banka")
         );
     }
 
@@ -12384,6 +12384,8 @@ mod tests {
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
                 account,
+                account_chain_discriminant:
+                    iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair: kp,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://localhost/").unwrap(),
@@ -12743,7 +12745,10 @@ mod tests {
     }
 
     fn xor_asset_id() -> AssetDefinitionId {
-        AssetDefinitionId::new("sora".parse().unwrap(), "xor".parse().unwrap())
+        AssetDefinitionId::new(
+            iroha_data_model::domain::DomainId::try_new("sora", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        )
     }
 
     fn sample_budget_id_hex() -> String {

@@ -33,7 +33,7 @@ fn register_contract_code_bytes_stores_and_idempotent() {
     let query = LiveQueryStore::start_test();
     let kp = iroha_crypto::KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
-    let dom: DomainId = "wonderland".parse().unwrap();
+    let dom: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let auth = AccountId::of(pubkey);
     let domain = Domain::new(dom.clone()).build(&auth);
     let account = Account::new(auth.clone()).build(&auth);
@@ -101,7 +101,7 @@ fn register_contract_code_bytes_respects_size_cap() {
     let query = LiveQueryStore::start_test();
     let kp = iroha_crypto::KeyPair::random();
     let (pubkey, _) = kp.clone().into_parts();
-    let dom: DomainId = "wonderland".parse().unwrap();
+    let dom: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let auth = AccountId::of(pubkey);
     let domain = Domain::new(dom.clone()).build(&auth);
     let account = Account::new(auth.clone()).build(&auth);

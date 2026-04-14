@@ -20,11 +20,14 @@ use iroha_crypto::{KeyPair, SignatureOf};
 use iroha_data_model::{
     ChainId, Registrable as _,
     account::{Account, AccountId},
-    asset::{AssetDefinitionId, id::AssetId},
+    asset::{AssetDefinitionId, definition::AssetDefinition, id::AssetId},
     consensus::HsmBinding,
     da::commitment::DaProofPolicyBundle,
     domain::{Domain, DomainId},
-    isi::{Grant, InstructionBox, Mint, SetParameter, register::RegisterPeerWithPop},
+    isi::{
+        Grant, InstructionBox, Mint, SetParameter,
+        register::{Register, RegisterPeerWithPop},
+    },
     metadata::Metadata,
     name::Name,
     parameter::{
@@ -51,7 +54,8 @@ use iroha_executor_data_model::permission::{
 use iroha_genesis::{GenesisBlock, GenesisBuilder, GenesisTopologyEntry, ManifestCrypto};
 use iroha_primitives::{json::Json, numeric::NumericSpec, time::TimeSource, unique_vec::UniqueVec};
 use iroha_test_samples::{
-    ALICE_ID, ALICE_KEYPAIR, BOB_KEYPAIR, CARPENTER_KEYPAIR, SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
+    ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, CARPENTER_ID, CARPENTER_KEYPAIR,
+    SAMPLE_GENESIS_ACCOUNT_KEYPAIR,
 };
 #[cfg(test)]
 use norito::json::Value;
@@ -367,6 +371,8 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
     let genesis_id = sanitize_account_id(&genesis_account);
     let alice_id = sanitize_account_id(&ALICE_ID);
+    let bob_id = sanitize_account_id(&BOB_ID);
+    let carpenter_id = sanitize_account_id(&CARPENTER_ID);
     let ivm_dir = default_ivm_dir();
 
     let mut builder = if let Some(executor_path) = try_default_executor_path() {
@@ -387,41 +393,40 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
     let garden_name: Name = "garden_of_live_flowers"
         .parse()
         .expect("garden_of_live_flowers domain");
-    let aid_name: Name = "aid".parse().expect("aid domain");
     let cabbage_name: Name = "cabbage".parse().expect("cabbage asset name");
     let alice_metadata = Metadata::default();
+    let universal_dataspace: Name = "universal".parse().expect("universal dataspace");
+    let wonderland_domain =
+        DomainId::try_new(&wonderland_name, &universal_dataspace).expect("wonderland domain id");
+    let garden_domain =
+        DomainId::try_new(&garden_name, &universal_dataspace).expect("garden domain id");
 
     builder = builder
-        .domain(wonderland_name.clone())
+        .domain(wonderland_domain.clone())
         .account_with_metadata(ALICE_KEYPAIR.public_key().clone(), alice_metadata)
         .account(BOB_KEYPAIR.public_key().clone())
         .asset(rose_name, NumericSpec::default())
         .asset(camomile_name, NumericSpec::default())
         .finish_domain()
-        .domain(garden_name)
+        .domain(garden_domain.clone())
         .account(CARPENTER_KEYPAIR.public_key().clone())
         .asset(cabbage_name, NumericSpec::default())
-        .finish_domain()
-        .domain(aid_name)
         .finish_domain();
 
-    let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain id");
-    let garden_domain: DomainId = "garden_of_live_flowers"
-        .parse()
+    let wonderland_domain =
+        DomainId::parse_fully_qualified("wonderland.universal").expect("wonderland domain id");
+    let garden_domain = DomainId::parse_fully_qualified("garden_of_live_flowers.universal")
         .expect("garden_of_live_flowers domain id");
-    let aid_domain: DomainId = "aid".parse().expect("aid domain id");
     let rose_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        wonderland_domain.clone(),
         "rose".parse().unwrap(),
     );
     let camomile_definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        wonderland_domain.clone(),
         "camomile".parse().unwrap(),
     );
-    let cabbage_definition_id: AssetDefinitionId = AssetDefinitionId::new(
-        "garden_of_live_flowers".parse().unwrap(),
-        "cabbage".parse().unwrap(),
-    );
+    let cabbage_definition_id: AssetDefinitionId =
+        AssetDefinitionId::new(garden_domain.clone(), "cabbage".parse().unwrap());
     let rose_asset_id = AssetId::new(rose_definition_id.clone(), alice_id.clone());
     let cabbage_asset_id = AssetId::new(cabbage_definition_id.clone(), alice_id.clone());
 
@@ -430,24 +435,19 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         wonderland_domain.clone(),
         alice_id.clone(),
     ));
-    builder = builder.append_instruction(Transfer::domain(
-        genesis_id.clone(),
-        aid_domain.clone(),
-        alice_id.clone(),
-    ));
     builder = builder.append_instruction(Mint::asset_numeric(13u32, rose_asset_id));
     builder = builder.append_instruction(Mint::asset_numeric(44u32, cabbage_asset_id));
 
     builder = builder.next_transaction();
 
-    let test_domain_id: DomainId = "domain".parse().expect("domain id");
-    let and_domain_id: DomainId = "and".parse().expect("and domain id");
+    let test_domain_id = DomainId::parse_fully_qualified("domain.universal").expect("domain id");
+    let and_domain_id = DomainId::parse_fully_qualified("and.universal").expect("and domain id");
     let xor_asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "domain".parse().unwrap(),
+        test_domain_id.clone(),
         "xor".parse().unwrap(),
     );
     let may_and_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "and".parse().unwrap(),
+        and_domain_id.clone(),
         "MAY".parse().unwrap(),
     );
 
@@ -471,12 +471,6 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
         InstructionBox::from(Grant::account_permission(
             CanRegisterAccount {
                 domain: garden_domain.clone(),
-            },
-            alice_id.clone(),
-        )),
-        InstructionBox::from(Grant::account_permission(
-            CanRegisterAccount {
-                domain: aid_domain.clone(),
             },
             alice_id.clone(),
         )),
@@ -556,6 +550,37 @@ fn build_minimal_genesis_unexecuted_with_post_topology(
 
     for grant in grant_instructions {
         builder = builder.append_instruction(grant);
+    }
+
+    let agent_wallet_asset_definition =
+        AssetDefinitionId::parse_address_literal("61CtjvNd9T3THAR65GsMVHr82Bjc")
+            .expect("soracloud agent wallet asset definition id");
+    let hf_shared_lease_asset_definition =
+        AssetDefinitionId::parse_address_literal("5PeSrQmLNwwKtruJvDZrbrm9RuMw")
+            .expect("soracloud HF shared lease asset definition id");
+    // Topology entries only carry the peer BLS identity. Runtime accounts for validator
+    // processes are seeded later from the peer streaming identities in `NetworkBuilder`.
+    let soracloud_bootstrap_accounts =
+        BTreeSet::from([alice_id.clone(), bob_id.clone(), carpenter_id.clone()]);
+
+    builder = builder.next_transaction();
+    builder = builder.append_instruction(Register::asset_definition(
+        AssetDefinition::numeric(agent_wallet_asset_definition.clone())
+            .with_name("soracloud_agent_wallet".to_owned()),
+    ));
+    builder = builder.append_instruction(Register::asset_definition(
+        AssetDefinition::numeric(hf_shared_lease_asset_definition.clone())
+            .with_name("soracloud_hf_lease".to_owned()),
+    ));
+    for account_id in soracloud_bootstrap_accounts {
+        builder = builder.append_instruction(Mint::asset_numeric(
+            500_000_u32,
+            AssetId::new(agent_wallet_asset_definition.clone(), account_id.clone()),
+        ));
+        builder = builder.append_instruction(Mint::asset_numeric(
+            500_000_u32,
+            AssetId::new(hf_shared_lease_asset_definition.clone(), account_id),
+        ));
     }
 
     for tx_instr in extra_transactions.into_iter() {
@@ -1118,7 +1143,7 @@ mod tests {
         );
 
         let asset_definition_id: AssetDefinitionId = AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "genesis_extra".parse().unwrap(),
         );
         let instructions = vec![InstructionBox::from(Register::asset_definition(
@@ -1778,8 +1803,9 @@ mod tests {
             iroha_crypto::bls_normal_pop_prove(bls.private_key()).expect("BLS PoP generation"),
         );
 
-        let validator_id = AccountId::new(peer_id.public_key().clone());
-        let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
+        let validator_key = KeyPair::random();
+        let validator_id = AccountId::new(validator_key.public_key().clone());
+        let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
         let stake_asset_id = AssetDefinitionId::new(
             nexus_domain.clone(),
             "multilane_stake".parse().expect("stake asset name"),
@@ -1893,7 +1919,7 @@ mod tests {
         let chain_id = super::chain_id();
         let genesis_key_pair = SAMPLE_GENESIS_ACCOUNT_KEYPAIR.clone();
         let genesis_account = AccountId::new(genesis_key_pair.public_key().clone());
-        let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
+        let ivm_domain: DomainId = DomainId::try_new("ivm", "universal").expect("ivm domain");
         let gas_label: Name = "gas".parse().expect("gas label");
         let gas_account =
             Account::new(AccountId::new(KeyPair::random().public_key().clone()).clone())
@@ -2058,6 +2084,7 @@ mod tests {
                         }
                     }
                 }
+                Executable::ContractCall(_) => {}
                 Executable::Ivm(_) => {}
                 Executable::IvmProved(_) => {}
             }

@@ -896,6 +896,10 @@ mod model {
         FindSorafsProviderOwner(sorafs::prelude::FindSorafsProviderOwner),
         /// Fetch the active SNS owner for a dataspace alias.
         FindDataspaceNameOwnerById(sns::prelude::FindDataspaceNameOwnerById),
+        /// Fetch an account by stable alias.
+        FindAccountByAlias(account::prelude::FindAccountByAlias),
+        /// Fetch a domain by identifier.
+        FindDomainById(domain::prelude::FindDomainById),
         #[cfg(test)]
         #[doc(hidden)]
         __TestFallback,
@@ -952,6 +956,8 @@ mod model {
         VerifiedLaneRelayRecord(crate::nexus::VerifiedLaneRelayRecord),
         /// Account identifier payload.
         AccountId(AccountId),
+        /// Domain payload.
+        Domain(crate::domain::Domain),
     }
 
     /// The results of a single iterable query request.
@@ -2422,11 +2428,14 @@ impl_iter_queries! {
     FindAccounts => crate::account::Account,
     FindAccountIds => crate::account::AccountId,
     FindAssets => crate::asset::value::Asset,
+    asset::prelude::FindAssetsByAccountId => crate::asset::value::Asset,
     FindAssetsDefinitions => crate::asset::definition::AssetDefinition,
     repo::FindRepoAgreements => crate::repo::RepoAgreement,
     FindNfts => crate::nft::Nft,
+    nft::prelude::FindNftsByAccountId => crate::nft::Nft,
     FindRwas => crate::rwa::Rwa,
     FindDomains => crate::domain::Domain,
+    domain::prelude::FindDomainsByAccountId => crate::domain::Domain,
     FindPeers => crate::peer::PeerId,
     FindActiveTriggerIds => crate::trigger::TriggerId,
     FindTriggers => crate::trigger::Trigger,
@@ -2472,6 +2481,8 @@ impl_singular_queries! {
     da::prelude::FindDaPinIntentByLaneEpochSequence => crate::da::pin_intent::DaPinIntentWithLocation,
     nexus::prelude::FindLaneRelayEnvelopeByRef => crate::nexus::VerifiedLaneRelayRecord,
     sns::prelude::FindDataspaceNameOwnerById => crate::account::AccountId,
+    account::prelude::FindAccountByAlias => crate::account::Account,
+    domain::prelude::FindDomainById => crate::domain::Domain,
 }
 
 // NOTE: Query DSL projection traits are provided generically in dsl module now.
@@ -2731,11 +2742,11 @@ pub mod account {
     pub struct AccountAliasBindingRecord {
         /// Canonical account identifier that owns the binding.
         pub account_id: crate::account::AccountId,
-        /// Canonical alias literal such as `merchant@hbl.centralbank`.
+        /// Canonical alias literal such as `merchant@banka.centralbank`.
         pub alias: String,
         /// Dataspace alias such as `centralbank`.
         pub dataspace: String,
-        /// Optional domain qualifier such as `hbl`.
+        /// Optional domain qualifier such as `banka`.
         #[norito(default)]
         pub domain: Option<String>,
         /// Whether this alias is the account's primary label.
@@ -2762,6 +2773,16 @@ pub mod account {
             pub struct FindAccountById {
                 /// Domainless account identifier to resolve.
                 pub id: crate::account::AccountId,
+            }
+
+            /// [`FindAccountByAlias`] Iroha Query finds an `Account` by its stable alias.
+            #[derive(Display)]
+            #[display("Find account by alias `{alias:?}`")]
+            #[repr(transparent)]
+            #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+            pub struct FindAccountByAlias {
+                /// Stable account alias whose bound account should be resolved.
+                pub alias: crate::account::AccountAlias,
             }
 
             /// [`FindAccounts`] Iroha Query finds all `Account`s presented.
@@ -2799,7 +2820,7 @@ pub mod account {
                 /// Optional dataspace alias filter such as `centralbank`.
                 #[norito(default)]
                 pub dataspace: Option<String>,
-                /// Optional exact domain filter such as `hbl`.
+                /// Optional exact domain filter such as `banka`.
                 #[norito(default)]
                 pub domain: Option<String>,
             }
@@ -2839,6 +2860,13 @@ pub mod account {
         }
     }
 
+    impl FindAccountByAlias {
+        /// Return the queried stable alias.
+        pub fn alias(&self) -> &crate::account::AccountAlias {
+            &self.alias
+        }
+    }
+
     impl FindAliasesByAccountId {
         /// Return the queried account identifier.
         pub fn account_id(&self) -> &crate::account::AccountId {
@@ -2873,7 +2901,7 @@ pub mod account {
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
         pub use super::{
-            AccountAliasBindingRecord, FindAccountById, FindAccountIds,
+            AccountAliasBindingRecord, FindAccountByAlias, FindAccountById, FindAccountIds,
             FindAccountRecoveryPolicyByAlias, FindAccountRecoveryRequestByAlias, FindAccounts,
             FindAccountsWithAsset, FindAliasesByAccountId,
         };
@@ -2892,7 +2920,7 @@ pub mod asset {
     use derive_more::Display;
 
     // Bring required IDs into scope for queries! items
-    use crate::{AssetId, asset::AssetDefinitionId};
+    use crate::{AccountId, AssetId, asset::AssetDefinitionId};
 
     queries! {
         /// [`FindAssets`] Iroha Query finds all `Asset`s presented.
@@ -2906,6 +2934,16 @@ pub mod asset {
         #[display("Find all asset definitions")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct FindAssetsDefinitions;
+
+        /// [`FindAssetsByAccountId`] Iroha Query finds all `Asset`s owned by an account.
+        #[derive(Display)]
+        #[display("Find assets owned by `{id}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindAssetsByAccountId {
+            /// Identifier of the account that owns the assets.
+            pub id: AccountId,
+        }
 
         /// [`FindAssetById`] Iroha Query finds a specific `Asset` by identifier.
         #[derive(Display)]
@@ -2942,10 +2980,18 @@ pub mod asset {
         }
     }
 
+    impl FindAssetsByAccountId {
+        /// Return the queried account identifier.
+        pub fn account_id(&self) -> &AccountId {
+            &self.id
+        }
+    }
+
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
         pub use super::{
-            FindAssetById, FindAssetDefinitionById, FindAssets, FindAssetsDefinitions,
+            FindAssetById, FindAssetDefinitionById, FindAssets, FindAssetsByAccountId,
+            FindAssetsDefinitions,
         };
     }
 }
@@ -3178,6 +3224,7 @@ pub mod nft {
 
     use std::{format, string::String, vec::Vec};
 
+    use crate::AccountId;
     use derive_more::Display;
 
     queries! {
@@ -3186,11 +3233,28 @@ pub mod nft {
         #[display("Find all NFTs")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct FindNfts;
+
+        /// [`FindNftsByAccountId`] Iroha Query finds all `Nft`s owned by an account.
+        #[derive(Display)]
+        #[display("Find NFTs owned by `{id}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindNftsByAccountId {
+            /// Identifier of the account that owns the NFTs.
+            pub id: AccountId,
+        }
+    }
+
+    impl FindNftsByAccountId {
+        /// Return the queried account identifier.
+        pub fn account_id(&self) -> &AccountId {
+            &self.id
+        }
     }
 
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
-        pub use super::FindNfts;
+        pub use super::{FindNfts, FindNftsByAccountId};
     }
 }
 
@@ -3226,20 +3290,55 @@ pub mod domain {
 
     use std::{format, string::String, vec::Vec};
 
+    use crate::AccountId;
     use derive_more::Display;
 
     queries! {
+        /// [`FindDomainById`] Iroha Query finds a `Domain` by its identifier.
+        #[derive(Display)]
+        #[display("Find domain `{id}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindDomainById {
+            /// Fully qualified domain identifier to resolve.
+            pub id: crate::domain::DomainId,
+        }
+
         /// [`FindDomains`] Iroha Query finds all `Domain`s presented.
         #[derive(Copy, Display)]
         #[display("Find all domains")]
         #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
         pub struct FindDomains;
 
+        /// [`FindDomainsByAccountId`] Iroha Query finds all `Domain`s owned by an account.
+        #[derive(Display)]
+        #[display("Find domains owned by `{id}`")]
+        #[repr(transparent)]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type(unsafe {robust}))]
+        pub struct FindDomainsByAccountId {
+            /// Identifier of the account that owns the domains.
+            pub id: AccountId,
+        }
+
+    }
+
+    impl FindDomainById {
+        /// Return the queried domain identifier.
+        pub fn domain_id(&self) -> &crate::domain::DomainId {
+            &self.id
+        }
+    }
+
+    impl FindDomainsByAccountId {
+        /// Return the queried account identifier.
+        pub fn account_id(&self) -> &AccountId {
+            &self.id
+        }
     }
 
     pub mod prelude {
         //! The prelude re-exports most commonly used traits, structs and macros from this crate.
-        pub use super::FindDomains;
+        pub use super::{FindDomainById, FindDomains, FindDomainsByAccountId};
     }
 }
 
@@ -3844,7 +3943,7 @@ mod fault_injection_tests {
             action: PrivateKaigiAction::Create(PrivateCreateKaigi {
                 call: PrivateKaigiTemplate {
                     id: KaigiId::new(
-                        DomainId::from_str("kaigi").expect("domain"),
+                        DomainId::try_new("kaigi", "universal").expect("domain"),
                         Name::from_str("private-room").expect("call"),
                     ),
                     title: Some("Private".to_owned()),
@@ -3872,7 +3971,7 @@ mod fault_injection_tests {
             },
             fee_spend: PrivateKaigiFeeSpend {
                 asset_definition_id: AssetDefinitionId::new(
-                    DomainId::from_str("wonderland").expect("domain"),
+                    DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("xor").expect("name"),
                 ),
                 anchor_root: Hash::new(b"anchor"),
@@ -3994,7 +4093,7 @@ mod tests {
             action: PrivateKaigiAction::Create(PrivateCreateKaigi {
                 call: PrivateKaigiTemplate {
                     id: KaigiId::new(
-                        DomainId::from_str("kaigi").expect("domain"),
+                        DomainId::try_new("kaigi", "universal").expect("domain"),
                         Name::from_str("private-room").expect("call"),
                     ),
                     title: Some("Private".to_owned()),
@@ -4022,7 +4121,7 @@ mod tests {
             },
             fee_spend: PrivateKaigiFeeSpend {
                 asset_definition_id: AssetDefinitionId::new(
-                    DomainId::from_str("wonderland").expect("domain"),
+                    DomainId::try_new("wonderland", "universal").expect("domain"),
                     Name::from_str("xor").expect("name"),
                 ),
                 anchor_root: Hash::new(b"anchor"),

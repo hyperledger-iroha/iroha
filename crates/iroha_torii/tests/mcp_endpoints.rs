@@ -1560,10 +1560,9 @@ async fn mcp_jsonrpc_tools_call_agent_alias_gov_endpoints_dispatch() {
     for (id, tool_name, arguments) in [
         (
             10320,
-            "iroha.gov.instances.list",
+            "iroha.gov.contract.get",
             norito::json!({
-                "namespace": "nexus",
-                "limit": 1
+                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7"
             }),
         ),
         (
@@ -1726,9 +1725,7 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contract_post_endpoints_dispatch() {
     let app = build_router(cfg);
     for (id, tool_name) in [
         (10401, "iroha.contracts.deploy"),
-        (10402, "iroha.contracts.instance.create"),
-        (10403, "iroha.contracts.instance.activate"),
-        (10404, "iroha.contracts.call"),
+        (10402, "iroha.contracts.call"),
     ] {
         let (status, call) = post_mcp(
             &app,
@@ -1874,51 +1871,6 @@ async fn mcp_jsonrpc_tools_call_agent_alias_contracts_code_bytes_get_accepts_has
             .is_some_and(|status| status >= 400),
         "expected invalid code hash to be rejected by contract code-bytes alias"
     );
-}
-
-#[tokio::test]
-async fn mcp_jsonrpc_tools_call_agent_alias_contracts_instances_list_accepts_ns_shortcut() {
-    let _data_dir = test_utils::TestDataDirGuard::new();
-    let mut cfg = test_utils::mk_minimal_root_cfg();
-    cfg.torii.mcp.enabled = true;
-
-    let app = build_router(cfg);
-    let (status, call) = post_mcp(
-        &app,
-        norito::json!({
-            "jsonrpc": "2.0",
-            "id": 10410,
-            "method": "tools/call",
-            "params": {
-                "name": "iroha.contracts.instances.list",
-                "arguments": {
-                    "namespace": "payments",
-                    "limit": 5
-                }
-            }
-        }),
-    )
-    .await;
-
-    assert_eq!(status, StatusCode::OK);
-    let structured = structured_content(&call);
-    let http_status = structured.get("status").and_then(Value::as_u64);
-    assert!(
-        http_status.is_some(),
-        "contract instances-list alias should return an HTTP status"
-    );
-    if tool_is_error(&call) {
-        assert!(
-            http_status.is_some_and(|status| status >= 400),
-            "error path for contract instances-list alias should reflect HTTP error status"
-        );
-    } else {
-        assert_eq!(
-            http_status,
-            Some(200),
-            "successful contract instances-list alias should return HTTP 200"
-        );
-    }
 }
 
 #[tokio::test]
@@ -2270,8 +2222,8 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
         "expected agent-friendly proof retention MCP tool"
     );
     assert!(
-        names.iter().any(|name| name == "iroha.gov.instances.list"),
-        "expected agent-friendly governance instances-list MCP tool"
+        names.iter().any(|name| name == "iroha.gov.contract.get"),
+        "expected agent-friendly governance contract-get MCP tool"
     );
     assert!(
         names
@@ -2382,24 +2334,6 @@ async fn mcp_tools_list_exposes_account_and_transaction_interfaces() {
     assert!(
         names.iter().any(|name| name == "iroha.contracts.deploy"),
         "expected agent-friendly contract deploy MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.contracts.instance.create"),
-        "expected agent-friendly contract instance create MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.contracts.instance.activate"),
-        "expected agent-friendly contract instance activate MCP tool"
-    );
-    assert!(
-        names
-            .iter()
-            .any(|name| name == "iroha.contracts.instances.list"),
-        "expected agent-friendly contract instances-list MCP tool"
     );
     assert!(
         names.iter().any(|name| name == "iroha.contracts.call"),

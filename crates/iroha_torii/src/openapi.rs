@@ -1981,33 +1981,22 @@ fn contracts_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/contracts/instance".to_owned(),
-        Value::Object(json_post_operation(
-            "Contracts",
-            "Create a contract instance.",
-            "Create a contract instance from registered code.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
-        "/v1/contracts/instance/activate".to_owned(),
-        Value::Object(json_post_operation(
-            "Contracts",
-            "Activate a contract instance.",
-            "Activate a previously created contract instance.",
-            "#/components/schemas/JsonValue",
-            "#/components/schemas/JsonValue",
-            Vec::new(),
-        )),
-    );
-    paths.insert(
         "/v1/contracts/call".to_owned(),
         Value::Object(json_post_operation(
             "Contracts",
             "Call a deployed contract.",
             "Invoke a contract entrypoint by canonical contract address or by on-chain contract alias.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/contracts/call/simulate".to_owned(),
+        Value::Object(json_post_operation(
+            "Contracts",
+            "Simulate a deployed contract call.",
+            "Execute a public contract entrypoint locally using canonical contract address or on-chain contract alias targeting and return normalized payload, gas usage, queued instructions, and diagnostics.",
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             Vec::new(),
@@ -2057,16 +2046,6 @@ fn contracts_paths() -> Map {
                     Some("uint64"),
                 ),
             ],
-        )),
-    );
-    paths.insert(
-        "/v1/contracts/instances/{ns}".to_owned(),
-        Value::Object(json_get_operation(
-            "Contracts",
-            "List contract instances by dataspace.",
-            "Return active contract instances for a dataspace.",
-            "#/components/schemas/JsonValue",
-            vec![string_path_param("ns", "Contract dataspace identifier.")],
         )),
     );
     paths
@@ -2208,6 +2187,26 @@ fn multisig_paths() -> Map {
             "#/components/schemas/JsonValue",
             "#/components/schemas/JsonValue",
             "Multisig alias or approval not found.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/list_for_authority".to_owned(),
+        Value::Object(multisig_post_operation(
+            "List caller-authority multisig approvals.",
+            "List multisig approvals visible to the authenticated caller authority using the signatory index.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            "Caller authority is not allowed to view the requested approvals.",
+        )),
+    );
+    paths.insert(
+        "/v1/multisig/approvals/get_for_authority".to_owned(),
+        Value::Object(multisig_post_operation(
+            "Fetch a caller-authority multisig approval.",
+            "Fetch a multisig approval visible to the authenticated caller authority by proposal selector.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            "Caller authority is not allowed to view the requested approval.",
         )),
     );
     paths
@@ -2459,6 +2458,30 @@ fn zk_paths() -> Map {
 fn governance_paths() -> Map {
     let mut paths = Map::new();
     paths.insert(
+        "/v1/ministry/agenda/proposals/draft".to_owned(),
+        Value::Object(json_post_operation(
+            "Ministry",
+            "Draft a Ministry agenda proposal submission.",
+            "Build a detached-signature-ready Ministry agenda proposal transaction and return the canonical payload bytes for Connect signing.",
+            "#/components/schemas/JsonValue",
+            "#/components/schemas/JsonValue",
+            Vec::new(),
+        )),
+    );
+    paths.insert(
+        "/v1/ministry/agenda/proposals/{proposal_id}".to_owned(),
+        Value::Object(json_get_operation(
+            "Ministry",
+            "Fetch a submitted Ministry agenda proposal.",
+            "Fetch a persisted Ministry agenda proposal submission record by proposal id.",
+            "#/components/schemas/JsonValue",
+            vec![string_path_param(
+                "proposal_id",
+                "Agenda proposal identifier.",
+            )],
+        )),
+    );
+    paths.insert(
         "/v1/gov/proposals/deploy-contract".to_owned(),
         Value::Object(json_post_operation(
             "Governance",
@@ -2611,13 +2634,16 @@ fn governance_paths() -> Map {
         )),
     );
     paths.insert(
-        "/v1/gov/instances/{ns}".to_owned(),
+        "/v1/gov/contracts/{contract_address}".to_owned(),
         Value::Object(json_get_operation(
             "Governance",
-            "List contract instances by namespace.",
-            "List governance contract instances for a namespace.",
+            "Fetch a governed contract binding.",
+            "Fetch the active governance binding for a canonical contract address.",
             "#/components/schemas/JsonValue",
-            vec![string_path_param("ns", "Namespace identifier.")],
+            vec![string_path_param(
+                "contract_address",
+                "Canonical Bech32m contract address.",
+            )],
         )),
     );
     paths.insert(
@@ -4694,6 +4720,22 @@ fn sumeragi_paths() -> Map {
         Value::Object(bridge_finality_bundle_operation()),
     );
     paths.insert(
+        "/v1/sccp/capabilities".to_owned(),
+        Value::Object(sccp_capabilities_operation()),
+    );
+    paths.insert(
+        "/v1/sccp/manifests".to_owned(),
+        Value::Object(sccp_manifests_operation()),
+    );
+    paths.insert(
+        "/v1/sccp/artifacts/message/{message_id}".to_owned(),
+        Value::Object(sccp_message_artifact_operation()),
+    );
+    paths.insert(
+        "/v1/sccp/jobs/message/{message_id}".to_owned(),
+        Value::Object(sccp_message_job_operation()),
+    );
+    paths.insert(
         "/v1/sumeragi/validator-sets".to_owned(),
         Value::Object(sumeragi_validator_sets_operation()),
     );
@@ -4899,6 +4941,175 @@ fn bridge_finality_bundle_operation() -> Map {
             "Finality bundle not found for the requested height.",
             error_schema_reference(),
         ),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn sccp_capabilities_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Bridge".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Discover SCCP proof capabilities.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns the local SCCP domain id, legacy proof backends, generic message proof \
+             family, supported codecs, and the per-counterparty backend labels relayers should \
+             use for Ethereum, BSC, Solana, TON, Tron, SORA2, SORA Kusama, and SORA Polkadot."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("sccpCapabilities".to_owned()),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        json_response("SCCP capability snapshot.", schema_ref("JsonValue")),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn sccp_manifests_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Bridge".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Discover SCCP proof manifests.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns the typed per-counterparty SCCP proof manifests used to derive chain-specific \
+             backend labels, verifier targets, finality models, public inputs, and manifest seeds \
+             for Ethereum, BSC, Solana, TON, Tron, SORA2, SORA Kusama, and SORA Polkadot."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("sccpProofManifests".to_owned()),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        json_response("SCCP proof manifest collection.", schema_ref("JsonValue")),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn sccp_message_artifact_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Bridge".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Fetch a typed SCCP transparent proof artifact.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns the typed transparent SCCP proof artifact for a canonical message id, \
+             including the chain profile, public inputs, verifier-backend metadata, generated \
+             counterparty submission package, real proof bytes, and embedded Nexus message bundle. \
+             Supports JSON or Norito content negotiation via the `Accept` header."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("sccpMessageArtifact".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![string_path_param(
+            "message_id",
+            "Canonical SCCP message id hex string.",
+        )]),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        json_response(
+            "Typed SCCP transparent proof artifact.",
+            schema_ref("JsonValue"),
+        ),
+    );
+    responses.insert(
+        "404".into(),
+        json_response("SCCP message not found.", error_schema_reference()),
+    );
+    responses.insert("406".into(), not_acceptable_response());
+    operation.insert("responses".into(), Value::Object(responses));
+    let mut methods = Map::new();
+    methods.insert("get".to_owned(), Value::Object(operation));
+    methods
+}
+
+fn sccp_message_job_operation() -> Map {
+    let mut operation = Map::new();
+    operation.insert(
+        "tags".into(),
+        Value::Array(vec![Value::String("Bridge".to_owned())]),
+    );
+    operation.insert(
+        "summary".into(),
+        Value::String("Fetch a normalized SCCP counterparty proof job.".to_owned()),
+    );
+    operation.insert(
+        "description".into(),
+        Value::String(
+            "Returns a prover-oriented SCCP job for a canonical message id, including the \
+             chain-specific normalized payload projection plus the original typed Nexus message \
+             bundle. Supports JSON or Norito content negotiation via the `Accept` header."
+                .to_owned(),
+        ),
+    );
+    operation.insert(
+        "operationId".into(),
+        Value::String("sccpMessageJob".to_owned()),
+    );
+    operation.insert(
+        "parameters".into(),
+        Value::Array(vec![string_path_param(
+            "message_id",
+            "Canonical SCCP message id hex string.",
+        )]),
+    );
+    let mut responses = Map::new();
+    responses.insert(
+        "200".into(),
+        json_response(
+            "Normalized SCCP counterparty proof job.",
+            schema_ref("JsonValue"),
+        ),
+    );
+    responses.insert(
+        "404".into(),
+        json_response("SCCP message not found.", error_schema_reference()),
     );
     responses.insert("406".into(), not_acceptable_response());
     operation.insert("responses".into(), Value::Object(responses));
@@ -7047,7 +7258,7 @@ fn openapi_schemas() -> Map {
         "AccountReadResponse".to_owned(),
         norito::json!({
             "type": "object",
-            "required": ["account_id", "opaque_ids", "linked_domains"],
+            "required": ["account_id", "opaque_ids"],
             "additionalProperties": false,
             "properties": {
                 "account_id": {
@@ -7068,11 +7279,6 @@ fn openapi_schemas() -> Map {
                     "type": "array",
                     "description": "Opaque identifiers currently mapped to the account UAID.",
                     "items": { "$ref": "#/components/schemas/JsonValue" }
-                },
-                "linked_domains": {
-                    "type": "array",
-                    "description": "Domains currently linked to the subject in state indexes.",
-                    "items": { "type": "string" }
                 }
             }
         }),
@@ -9931,15 +10137,15 @@ fn openapi_schemas() -> Map {
                 { "$ref": "#/components/schemas/MultisigAccountSelector" },
                 {
                     "type": "object",
-                    "required": ["signer_account_id", "namespace", "contract_id", "entrypoint"],
+                    "required": ["signer_account_id", "entrypoint"],
                     "additionalProperties": false,
                     "properties": {
                         "signer_account_id": { "type": "string" },
                         "public_key_hex": { "type": "string" },
                         "signature_b64": { "type": "string" },
                         "creation_time_ms": { "type": "integer", "format": "uint64" },
-                        "namespace": { "type": "string" },
-                        "contract_id": { "type": "string" },
+                        "contract_address": { "type": "string" },
+                        "contract_alias": { "type": "string" },
                         "entrypoint": { "type": "string" },
                         "payload": { "type": "object" },
                         "gas_asset_id": { "type": "string" },
@@ -10183,6 +10389,10 @@ mod tests {
         assert!(paths.contains_key("/v1/sumeragi/commit-certificates"));
         assert!(paths.contains_key("/v1/bridge/finality/{height}"));
         assert!(paths.contains_key("/v1/bridge/finality/bundle/{height}"));
+        assert!(paths.contains_key("/v1/sccp/capabilities"));
+        assert!(paths.contains_key("/v1/sccp/manifests"));
+        assert!(paths.contains_key("/v1/sccp/artifacts/message/{message_id}"));
+        assert!(paths.contains_key("/v1/sccp/jobs/message/{message_id}"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets"));
         assert!(paths.contains_key("/v1/sumeragi/validator-sets/{height}"));
         assert!(paths.contains_key("/health"));
@@ -10216,7 +10426,11 @@ mod tests {
         assert!(paths.contains_key("/v1/multisig/proposals/get"));
         assert!(paths.contains_key("/v1/multisig/approvals/list"));
         assert!(paths.contains_key("/v1/multisig/approvals/get"));
+        assert!(paths.contains_key("/v1/multisig/approvals/list_for_authority"));
+        assert!(paths.contains_key("/v1/multisig/approvals/get_for_authority"));
         assert!(paths.contains_key("/v1/controls/asset-transfer/get"));
+        assert!(paths.contains_key("/v1/ministry/agenda/proposals/draft"));
+        assert!(paths.contains_key("/v1/ministry/agenda/proposals/{proposal_id}"));
         assert!(paths.contains_key("/v1/gov/proposals/deploy-contract"));
         assert!(paths.contains_key("/v1/gov/stream"));
         assert!(paths.contains_key("/v1/telemetry/live"));
@@ -10432,7 +10646,7 @@ mod tests {
         let account_assets = params_for(&doc, "/v1/accounts/{account_id}/assets");
         assert!(account_assets.contains(&"limit".to_owned()));
         assert!(account_assets.contains(&"offset".to_owned()));
-        assert!(account_assets.contains(&"asset_id".to_owned()));
+        assert!(account_assets.contains(&"asset".to_owned()));
 
         let account_transactions = params_for(&doc, "/v1/accounts/{account_id}/transactions");
         assert!(account_transactions.contains(&"limit".to_owned()));

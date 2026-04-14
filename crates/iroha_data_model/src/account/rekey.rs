@@ -9,6 +9,7 @@ use norito::codec::{Decode, Encode};
 
 use super::{Account, AccountId, Name};
 use crate::{
+    domain::DomainId,
     error::ParseError,
     nexus::{DataSpaceCatalog, DataSpaceId},
 };
@@ -155,6 +156,24 @@ impl AccountAlias {
             },
         ))
     }
+
+    /// Resolve the alias-domain scope into a dataspace-qualified [`DomainId`].
+    ///
+    /// # Errors
+    /// Returns [`ParseError`] when the alias references an unknown dataspace identifier.
+    pub fn domain_id(&self, catalog: &DataSpaceCatalog) -> Result<Option<DomainId>, ParseError> {
+        let Some(domain) = self.domain.as_ref() else {
+            return Ok(None);
+        };
+        let dataspace = catalog
+            .by_id(self.dataspace)
+            .ok_or_else(|| ParseError::new("unknown dataspace id for account alias"))?;
+        let dataspace_alias = dataspace
+            .alias
+            .parse::<Name>()
+            .map_err(|_| ParseError::new("dataspace alias in catalog is invalid"))?;
+        Ok(Some(DomainId::try_new(domain.name(), &dataspace_alias)?))
+    }
 }
 
 fn canonicalize_literal(input: &str) -> Result<String, ParseError> {
@@ -288,6 +307,17 @@ mod tests {
         assert_eq!(
             label.to_literal(&catalog).expect("literal"),
             "treasury@banking.retail"
+        );
+    }
+
+    #[test]
+    fn account_label_resolves_domain_id_with_dataspace_alias() {
+        let alias =
+            AccountAlias::from_literal("Treasury@Banking.Retail", &catalog()).expect("valid alias");
+
+        assert_eq!(
+            alias.domain_id(&catalog()).expect("resolve domain"),
+            Some(DomainId::parse_fully_qualified("banking.retail").expect("domain id"))
         );
     }
 

@@ -14,12 +14,12 @@ use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR};
 use mv::storage::StorageReadOnly;
 
 fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let asset_definition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         ),
         NumericSpec::default(),
@@ -50,7 +50,7 @@ fn build_state_and_ids() -> (State, ChainId, TriggerId, AssetId) {
     let trigger_id: TriggerId = "sse_smoke_trigger".parse().expect("trigger id");
     let asset_id = AssetId::new(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "rose".parse().unwrap(),
         ),
         ALICE_ID.clone(),

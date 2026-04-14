@@ -28,7 +28,7 @@ use nonzero_ext::nonzero;
 fn build_world(def_id: &AssetDefinitionId) -> World {
     let alice_id = ALICE_ID.clone();
     let bob_id = BOB_ID.clone();
-    let domain_id: DomainId = "wonderland".parse().expect("domain");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&alice_id);
     let alice_account = iroha_data_model::account::Account::new(alice_id.clone()).build(&alice_id);
     let escrow_account = iroha_data_model::account::Account::new(bob_id.clone()).build(&bob_id);
@@ -76,7 +76,7 @@ fn configure_state(def_id: &AssetDefinitionId, seat_cooldown_blocks: u64) -> Sta
 #[test]
 fn council_persist_enforces_service_discipline() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     // Seat cap when cooldown is disabled.
@@ -174,7 +174,7 @@ fn council_persist_enforces_service_discipline() {
 #[test]
 fn citizen_service_outcome_slashes_after_free_decline() {
     let def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "xor".parse().unwrap(),
     );
     let world = build_world(&def_id);

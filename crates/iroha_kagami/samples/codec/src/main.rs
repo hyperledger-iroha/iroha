@@ -44,7 +44,7 @@ fn main() -> Result<()> {
     let account = NewAccount::new(account_id.clone()).with_metadata(account_metadata);
 
     // Domain
-    let domain_id = DomainId::from_str("wonderland").unwrap();
+    let domain_id = DomainId::try_new("wonderland", "universal").unwrap();
     let mut domain_metadata = Metadata::default();
     domain_metadata.insert("Is_Jabberwocky_alive".parse().unwrap(), true);
     let domain = Domain::new(domain_id)

@@ -15,6 +15,7 @@ use iroha_core::{
 use iroha_data_model::{
     Registrable,
     block::BlockHeader,
+    domain::DomainId,
     events::data::{DataEvent, governance::GovernanceEvent},
     isi::governance::CastPlainBallot,
     permission::Permission,
@@ -27,7 +28,8 @@ use iroha_test_samples::ALICE_ID;
 fn plain_ballot_emits_open_event_with_window() {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let world = World::with([domain], [account], []);

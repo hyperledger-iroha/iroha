@@ -5,8 +5,8 @@ source: docs/portal/docs/norito/overview.md
 status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c28a429f0ade5a5e93c063dc7eda4b95fd0c379a7598b72f19367ca13734e443
-source_last_modified: "2025-12-29T18:16:35.153135+00:00"
-translation_last_reviewed: 2026-02-07
+source_last_modified: "2026-03-26T09:58:11.808456+00:00"
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 

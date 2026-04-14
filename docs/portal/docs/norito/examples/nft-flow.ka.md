@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 09ff44a2df8cbcb9f57017239070a16f5287cbfc59a8289ce54933e84f90a5e8
 source_last_modified: "2026-03-26T13:01:47.374572+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: crates/ivm/docs/examples/12_nft_flow.ko
 
 - დარწმუნდით, რომ NFT განმარტება (მაგალითად, `n0#wonderland`) არსებობს მფლობელის/მიმღების ანგარიშებთან ერთად, რომლებიც გამოიყენება ნაწყვეტში (`<i105-account-id>` ალისისთვის, `<i105-account-id>` ბობისთვის).
 - გამოიძახეთ `nft_issue_and_transfer` შესასვლელი წერტილი NFT-ის დასამზადებლად, გადაიტანეთ იგი ალისიდან ბობში და მიამაგრეთ მეტამონაცემების დროშა, რომელიც აღწერს გაცემას.
-- შეამოწმეთ NFT ledger-ის მდგომარეობა `iroha_cli ledger nft list --account <id>`-ით ან SDK-ის ეკვივალენტებით გადაცემის დასადასტურებლად, შემდეგ დაადასტურეთ, რომ აქტივი ამოღებულია დამწვრობის ინსტრუქციის გაშვების შემდეგ.
+- შეამოწმეთ NFT ledger-ის მდგომარეობა `iroha ledger nft list all --verbose`-ით ან SDK-ის ეკვივალენტებით გადაცემის დასადასტურებლად, შემდეგ დაადასტურეთ, რომ აქტივი ამოღებულია დამწვრობის ინსტრუქციის გაშვების შემდეგ.
 
 ## დაკავშირებული SDK სახელმძღვანელო
 

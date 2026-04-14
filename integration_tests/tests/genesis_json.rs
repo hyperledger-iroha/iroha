@@ -64,16 +64,17 @@ fn fallback_raw_genesis_from_json() -> RawGenesisTransaction {
     let mut builder = GenesisBuilder::new_without_executor(chain, PathBuf::from("."));
 
     builder = builder
-        .domain("wonderland".parse().expect("domain"))
+        .domain(DomainId::try_new("wonderland", "universal").expect("domain"))
         .account(ALICE_KEYPAIR.public_key().clone())
         .account(BOB_KEYPAIR.public_key().clone())
         .asset("rose".parse().expect("asset"), NumericSpec::default())
         .finish_domain();
 
     let genesis_account = AccountId::new(SAMPLE_GENESIS_ACCOUNT_KEYPAIR.public_key().clone());
-    let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain id");
+    let wonderland_domain: DomainId =
+        DomainId::try_new("wonderland", "universal").expect("wonderland domain id");
     let rose_definition_id: AssetDefinitionId = AssetDefinitionId::new(
-        "wonderland".parse().expect("rose asset"),
+        DomainId::try_new("wonderland", "universal").expect("rose asset"),
         "rose".parse().expect("rose asset"),
     );
 
@@ -128,7 +129,10 @@ fn genesis_asset_minted_across_peers() -> Result<()> {
         }
 
         let asset_id = AssetId::new(
-            AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap()),
+            AssetDefinitionId::new(
+                DomainId::try_new("wonderland", "universal").unwrap(),
+                "rose".parse().unwrap(),
+            ),
             ALICE_ID.clone(),
         );
         for peer in network.peers() {
@@ -195,7 +199,7 @@ fn legacy_domain_scoped_permission_grants_are_detected() {
     let typed = GenesisBuilder::new_without_executor(chain, PathBuf::from("."))
         .append_instruction(Grant::account_permission(
             iroha_executor_data_model::permission::account::CanRegisterAccount {
-                domain: "wonderland".parse().expect("domain id"),
+                domain: DomainId::try_new("wonderland", "universal").expect("domain id"),
             },
             ALICE_ID.clone(),
         ))

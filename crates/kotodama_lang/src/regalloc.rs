@@ -361,6 +361,7 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         | StringConst { .. }
         | LoadVar { .. }
         | MapNew { .. }
+        | JsonObject { .. }
         | CreateNftsForAllUsers
         | SubscriptionBill
         | SubscriptionRecordUsage
@@ -387,6 +388,16 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         DivCeil { num, denom, .. } => {
             f(*num);
             f(*denom);
+        }
+        CallContract {
+            contract,
+            entrypoint,
+            payload,
+            ..
+        } => {
+            f(*contract);
+            f(*entrypoint);
+            f(*payload);
         }
         ResolveAccountAlias { alias, .. } => f(*alias),
         Abs { src, .. } => f(*src),
@@ -631,6 +642,16 @@ fn visit_instr_uses<F: FnMut(Temp)>(instr: &Instr, mut f: F) {
         StateDel { path } => f(*path),
         DecodeInt { blob, .. } | JsonDecode { blob, .. } | NameDecode { blob, .. } => f(*blob),
         TlvLen { value, .. } => f(*value),
+        JsonSetInt {
+            json, key, value, ..
+        }
+        | JsonSetAccountId {
+            json, key, value, ..
+        } => {
+            f(*json);
+            f(*key);
+            f(*value);
+        }
         JsonGetInt { json, key, .. }
         | JsonGetNumeric { json, key, .. }
         | JsonGetJson { json, key, .. }
@@ -781,6 +802,7 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         | Instr::MapNew { dest }
         | Instr::GetAuthority { dest }
         | Instr::CurrentTimeMs { dest }
+        | Instr::CallContract { dest, .. }
         | Instr::ResolveAccountAlias { dest, .. }
         | Instr::GetTriggerEvent { dest }
         | Instr::Copy { dest, .. }
@@ -809,6 +831,9 @@ fn dest_temp(instr: &Instr) -> Option<Temp> {
         Instr::DecodeInt { dest, .. } => Some(*dest),
         Instr::TlvLen { dest, .. } => Some(*dest),
         Instr::EncodeInt { dest, .. } => Some(*dest),
+        Instr::JsonObject { dest, .. } => Some(*dest),
+        Instr::JsonSetInt { dest, .. } => Some(*dest),
+        Instr::JsonSetAccountId { dest, .. } => Some(*dest),
         Instr::PathMapKey { dest, .. } => Some(*dest),
         Instr::PathMapKeyNorito { dest, .. } => Some(*dest),
         Instr::JsonEncode { dest, .. } => Some(*dest),

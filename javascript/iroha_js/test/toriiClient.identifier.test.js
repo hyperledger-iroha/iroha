@@ -318,7 +318,7 @@ test("issueIdentifierClaimReceipt posts account-scoped requests", async () => {
 });
 
 test("issueIdentifierClaimReceipt accepts account aliases on account-id paths", async () => {
-  const alias = "operator@hbl.universal";
+  const alias = "operator@banka.universal";
   const signedReceipt = signedReceiptFixture({
     signaturePayloadHex: "0A0B0C0D",
   });

@@ -31,7 +31,7 @@ fn mk_state_with_bls_batch() -> (State, ChainId, AccountId, KeyPair) {
     let query_handle = LiveQueryStore::start_test();
     // Seed world with an account
     let kp = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
-    let domain_id: DomainId = "wonderland".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let account_id = AccountId::of(kp.public_key().clone());
     let domain = Domain::new(domain_id.clone()).build(&account_id);
     let account = Account::new(account_id.clone()).build(&account_id);

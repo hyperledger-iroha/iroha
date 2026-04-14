@@ -4,8 +4,8 @@ fn debug_contains() {
         fn f() -> int {
             let m = Map::new();
             m[7] = 111;
-            let t = contains(m, 7);
-            let f = contains(m, 8);
+            let t = m.contains(7);
+            let f = m.contains(8);
             return t*2 + f;
         }
     "#;

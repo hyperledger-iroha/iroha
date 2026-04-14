@@ -6,125 +6,95 @@ use iroha::client::Client;
 use iroha_crypto::Hash;
 use norito::json::{Map, Value};
 
-use super::shared::{canonicalize_hex32, compute_proposal_id, decode_hex32, print_with_summary};
+use super::shared::{
+    canonicalize_hex32, compute_proposal_id, decode_hex32, print_with_summary,
+    resolve_contract_address_target,
+};
 
 #[derive(clap::Args, Debug)]
 pub struct AuditDeployArgs {
-    /// Namespace to audit (e.g., apps)
-    #[arg(long, value_name = "NS")]
-    pub namespace: String,
-    /// Filter: `contract_id` substring (case-sensitive)
-    #[arg(long)]
-    pub contains: Option<String>,
-    /// Filter: code hash hex prefix (lowercase)
-    #[arg(long)]
-    pub hash_prefix: Option<String>,
-    /// Pagination offset
-    #[arg(long)]
-    pub offset: Option<u32>,
-    /// Pagination limit
-    #[arg(long)]
-    pub limit: Option<u32>,
-    /// Order: `cid_asc` (default), `cid_desc`, `hash_asc`, `hash_desc`
-    #[arg(long)]
-    pub order: Option<String>,
-}
-
-struct AuditNamespacePage {
-    total_in_state: u64,
-    offset: u64,
-    limit: u64,
-    instances: Vec<Value>,
-}
-
-struct AuditNamespaceReport {
-    records: Vec<Value>,
-    contracts_with_issues: usize,
-    issue_count: usize,
-}
-
-struct InstanceAuditReport {
-    record: Value,
-    has_issues: bool,
-    issue_count: usize,
+    #[arg(long, conflicts_with = "contract_alias")]
+    pub contract_address: Option<String>,
+    #[arg(long, conflicts_with = "contract_address")]
+    pub contract_alias: Option<String>,
 }
 
 impl Run for AuditDeployArgs {
     fn run<C: RunContext>(self, context: &mut C) -> Result<()> {
         let client: Client = context.client_from_config();
-        let page = self.fetch_page(&client)?;
-        let report = self.audit_namespace_instances(&client, &page);
-        self.print_report(context, &self.namespace, &page, report)
+        let contract_address = resolve_contract_address_target(
+            &client,
+            self.contract_address.as_deref(),
+            self.contract_alias.as_deref(),
+        )?;
+        let report = self.audit_contract(&client, &contract_address)?;
+        let found = report
+            .get("found")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let has_issues = report
+            .get("has_issues")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
+        let issue_count = report
+            .get("issue_count")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let summary = Some(format!(
+            "gov audit contract_address={} found={found} has_issues={has_issues} issue_count={issue_count}",
+            contract_address
+        ));
+        print_with_summary(context, summary, &report)
     }
 }
 
 impl AuditDeployArgs {
-    fn fetch_page(&self, client: &Client) -> Result<AuditNamespacePage> {
-        let page = client.get_gov_instances_by_ns_filtered_json(
-            &self.namespace,
-            self.contains.as_deref(),
-            self.hash_prefix.as_deref(),
-            self.offset,
-            self.limit,
-            self.order.as_deref(),
-        )?;
-
-        let total_in_state = page.get("total").and_then(Value::as_u64).unwrap_or(0);
-        let offset = page.get("offset").and_then(Value::as_u64).unwrap_or(0);
-        let limit = page.get("limit").and_then(Value::as_u64).unwrap_or(0);
-        let instances = page
-            .get("instances")
-            .and_then(Value::as_array)
-            .cloned()
-            .unwrap_or_default();
-
-        Ok(AuditNamespacePage {
-            total_in_state,
-            offset,
-            limit,
-            instances,
-        })
-    }
-
-    fn audit_namespace_instances(
+    fn audit_contract(
         &self,
         client: &Client,
-        page: &AuditNamespacePage,
-    ) -> AuditNamespaceReport {
-        let mut records = Vec::with_capacity(page.instances.len());
-        let mut contracts_with_issues = 0usize;
-        let mut issue_count = 0usize;
-
-        for entry in &page.instances {
-            if let Some(report) = Self::audit_entry(client, &self.namespace, entry) {
-                if report.has_issues {
-                    contracts_with_issues += 1;
-                }
-                issue_count += report.issue_count;
-                records.push(report.record);
-            }
-        }
-
-        AuditNamespaceReport {
-            records,
-            contracts_with_issues,
-            issue_count,
-        }
-    }
-
-    fn audit_entry(client: &Client, namespace: &str, entry: &Value) -> Option<InstanceAuditReport> {
-        let obj = entry.as_object()?;
-        let contract_id = obj.get("contract_id").and_then(Value::as_str)?;
-        let code_hash_raw = obj.get("code_hash_hex").and_then(Value::as_str)?;
+        contract_address: &iroha::data_model::smart_contract::ContractAddress,
+    ) -> Result<Value> {
+        let binding = client.get_gov_contract_json(contract_address)?;
+        let found = binding.get("found").and_then(Value::as_bool).unwrap_or(false);
+        let dataspace = binding.get("dataspace").and_then(Value::as_str);
+        let code_hash_raw = binding.get("code_hash_hex").and_then(Value::as_str);
 
         let mut record = Map::new();
-        record.insert("contract_id".into(), Value::from(contract_id));
-        record.insert("code_hash_input".into(), Value::from(code_hash_raw));
+        record.insert(
+            "contract_address".into(),
+            Value::from(contract_address.to_string()),
+        );
+        record.insert("found".into(), Value::from(found));
+        record.insert(
+            "dataspace".into(),
+            dataspace.map_or(Value::Null, Value::from),
+        );
 
         let mut manifest_map = Map::new();
         let mut proposal_map = Map::new();
         let mut code_map = Map::new();
-        let mut issues: Vec<String> = Vec::new();
+        let mut issues = Vec::new();
+
+        let Some(code_hash_raw) = code_hash_raw else {
+            manifest_map.insert("present".into(), Value::from(false));
+            proposal_map.insert("expected_id".into(), Value::Null);
+            proposal_map.insert("found".into(), Value::from(false));
+            code_map.insert("present".into(), Value::from(false));
+            if !found {
+                issues.push("contract_binding_missing".into());
+            } else {
+                issues.push("contract_binding_missing_code_hash".into());
+            }
+            return Ok(finalize_record(
+                record,
+                manifest_map,
+                proposal_map,
+                code_map,
+                issues,
+            ));
+        };
+
+        record.insert("code_hash_input".into(), Value::from(code_hash_raw));
 
         let code_hash = match canonicalize_hex32(code_hash_raw) {
             Ok(hash) => hash,
@@ -136,9 +106,9 @@ impl AuditDeployArgs {
                 code_map.insert("present".into(), Value::from(false));
                 code_map.insert("error".into(), Value::from("skipped: invalid code hash"));
                 issues.push(format!(
-                    "invalid_code_hash_hex: contract={contract_id} value={code_hash_raw}"
+                    "invalid_code_hash_hex: contract_address={contract_address} value={code_hash_raw}"
                 ));
-                return Some(InstanceAuditReport::from_maps(
+                return Ok(finalize_record(
                     record,
                     manifest_map,
                     proposal_map,
@@ -154,15 +124,14 @@ impl AuditDeployArgs {
         audit_code_map(client, &code_hash, &mut code_map, &mut issues);
         audit_proposal_map(
             client,
-            namespace,
-            contract_id,
+            contract_address,
             &code_hash,
             manifest_abi_hash.as_deref(),
             &mut proposal_map,
             &mut issues,
         );
 
-        Some(InstanceAuditReport::from_maps(
+        Ok(finalize_record(
             record,
             manifest_map,
             proposal_map,
@@ -170,65 +139,27 @@ impl AuditDeployArgs {
             issues,
         ))
     }
-
-    fn print_report<C: RunContext>(
-        &self,
-        context: &mut C,
-        namespace: &str,
-        page: &AuditNamespacePage,
-        report: AuditNamespaceReport,
-    ) -> Result<()> {
-        let AuditNamespaceReport {
-            records,
-            contracts_with_issues,
-            issue_count,
-        } = report;
-        let scanned = records.len() as u64;
-        let ok = scanned.saturating_sub(contracts_with_issues as u64);
-        let summary = format!(
-            "gov audit namespace={namespace} scanned={scanned} ok={ok} with_issues={contracts_with_issues} issue_count={issue_count}"
-        );
-
-        let mut output = Map::new();
-        output.insert("namespace".into(), Value::from(namespace));
-        output.insert("state_total".into(), Value::from(page.total_in_state));
-        output.insert("page_offset".into(), Value::from(page.offset));
-        output.insert("page_limit".into(), Value::from(page.limit));
-        output.insert("scanned".into(), Value::from(scanned));
-        output.insert(
-            "with_issues".into(),
-            Value::from(contracts_with_issues as u64),
-        );
-        output.insert("issue_count".into(), Value::from(issue_count as u64));
-        output.insert("results".into(), Value::Array(records));
-
-        let output_value = Value::Object(output);
-        print_with_summary(context, Some(summary), &output_value)
-    }
 }
 
-impl InstanceAuditReport {
-    fn from_maps(
-        mut record: Map,
-        manifest_map: Map,
-        proposal_map: Map,
-        code_map: Map,
-        issues: Vec<String>,
-    ) -> Self {
-        let issue_count = issues.len();
-        let has_issues = issue_count > 0;
-        let issues_value = Value::Array(issues.into_iter().map(Value::from).collect());
-        record.insert("manifest".into(), Value::Object(manifest_map));
-        record.insert("proposal".into(), Value::Object(proposal_map));
-        record.insert("code".into(), Value::Object(code_map));
-        record.insert("issues".into(), issues_value);
-        record.insert("has_issues".into(), Value::from(has_issues));
-        InstanceAuditReport {
-            record: Value::Object(record),
-            has_issues,
-            issue_count,
-        }
-    }
+fn finalize_record(
+    mut record: Map,
+    manifest_map: Map,
+    proposal_map: Map,
+    code_map: Map,
+    issues: Vec<String>,
+) -> Value {
+    let issue_count = issues.len();
+    let has_issues = issue_count > 0;
+    record.insert("manifest".into(), Value::Object(manifest_map));
+    record.insert("proposal".into(), Value::Object(proposal_map));
+    record.insert("code".into(), Value::Object(code_map));
+    record.insert(
+        "issues".into(),
+        Value::Array(issues.into_iter().map(Value::from).collect()),
+    );
+    record.insert("has_issues".into(), Value::from(has_issues));
+    record.insert("issue_count".into(), Value::from(issue_count as u64));
+    Value::Object(record)
 }
 
 fn audit_manifest_map(
@@ -252,8 +183,8 @@ fn audit_manifest_map(
                             manifest_map.insert("code_hash_matches".into(), Value::from(matches));
                             if !matches {
                                 issues.push(format!(
-                                "manifest_code_hash_mismatch: expected={code_hash} got={code_hash_str}"
-                            ));
+                                    "manifest_code_hash_mismatch: expected={code_hash} got={code_hash_str}"
+                                ));
                             }
                         }
                         Err(err) => {
@@ -332,8 +263,7 @@ fn audit_code_map(client: &Client, code_hash: &str, code_map: &mut Map, issues: 
 
 fn audit_proposal_map(
     client: &Client,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha::data_model::smart_contract::ContractAddress,
     code_hash: &str,
     manifest_abi_hash: Option<&str>,
     proposal_map: &mut Map,
@@ -345,20 +275,13 @@ fn audit_proposal_map(
         return;
     };
 
-    if let Some(expected_id) = resolve_proposal_id(
-        namespace,
-        contract_id,
-        code_hash,
-        abi_hash_hex,
-        proposal_map,
-        issues,
-    ) && let Some(proposal_json) =
-        fetch_proposal_json(client, &expected_id, proposal_map, issues)
+    if let Some(expected_id) =
+        resolve_proposal_id(contract_address, code_hash, abi_hash_hex, proposal_map, issues)
+        && let Some(proposal_json) = fetch_proposal_json(client, &expected_id, proposal_map, issues)
     {
         process_proposal_json(
             &proposal_json,
-            namespace,
-            contract_id,
+            contract_address,
             code_hash,
             abi_hash_hex,
             proposal_map,
@@ -368,8 +291,7 @@ fn audit_proposal_map(
 }
 
 fn resolve_proposal_id(
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha::data_model::smart_contract::ContractAddress,
     code_hash: &str,
     abi_hash_hex: &str,
     proposal_map: &mut Map,
@@ -377,8 +299,7 @@ fn resolve_proposal_id(
 ) -> Option<String> {
     match (decode_hex32(code_hash), decode_hex32(abi_hash_hex)) {
         (Ok(code_bytes), Ok(abi_bytes)) => {
-            let proposal_id_bytes =
-                compute_proposal_id(namespace, contract_id, &code_bytes, &abi_bytes);
+            let proposal_id_bytes = compute_proposal_id(contract_address, &code_bytes, &abi_bytes);
             let proposal_id_hex = hex::encode(proposal_id_bytes);
             proposal_map.insert("expected_id".into(), Value::from(proposal_id_hex.clone()));
             Some(proposal_id_hex)
@@ -417,8 +338,7 @@ fn fetch_proposal_json(
 
 fn process_proposal_json(
     proposal_json: &Value,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha::data_model::smart_contract::ContractAddress,
     code_hash: &str,
     abi_hash_hex: &str,
     proposal_map: &mut Map,
@@ -443,8 +363,7 @@ fn process_proposal_json(
         if let Some(deploy_obj) = kind_obj.get("DeployContract").and_then(Value::as_object) {
             audit_deploy_contract(
                 deploy_obj,
-                namespace,
-                contract_id,
+                contract_address,
                 code_hash,
                 abi_hash_hex,
                 proposal_map,
@@ -469,15 +388,13 @@ fn update_status(proposal_obj: &Map, proposal_map: &mut Map, issues: &mut Vec<St
 
 fn audit_deploy_contract(
     deploy_obj: &Map,
-    namespace: &str,
-    contract_id: &str,
+    contract_address: &iroha::data_model::smart_contract::ContractAddress,
     code_hash: &str,
     abi_hash_hex: &str,
     proposal_map: &mut Map,
     issues: &mut Vec<String>,
 ) {
-    check_namespace(deploy_obj, namespace, proposal_map, issues);
-    check_contract_id(deploy_obj, contract_id, proposal_map, issues);
+    check_contract_address(deploy_obj, contract_address, proposal_map, issues);
     check_hex_field(
         deploy_obj,
         &HexFieldContext {
@@ -508,34 +425,20 @@ fn audit_deploy_contract(
     );
 }
 
-fn check_namespace(
+fn check_contract_address(
     deploy_obj: &Map,
-    expected: &str,
-    proposal_map: &mut Map,
-    issues: &mut Vec<String>,
-) {
-    let namespace_value = deploy_obj.get("namespace").cloned().unwrap_or(Value::Null);
-    let namespace_match = namespace_value.as_str() == Some(expected);
-    proposal_map.insert("namespace".into(), namespace_value);
-    if !namespace_match {
-        issues.push("proposal_namespace_mismatch".into());
-    }
-}
-
-fn check_contract_id(
-    deploy_obj: &Map,
-    expected: &str,
+    expected: &iroha::data_model::smart_contract::ContractAddress,
     proposal_map: &mut Map,
     issues: &mut Vec<String>,
 ) {
     let contract_value = deploy_obj
-        .get("contract_id")
+        .get("contract_address")
         .cloned()
         .unwrap_or(Value::Null);
-    let contract_match = contract_value.as_str() == Some(expected);
-    proposal_map.insert("contract_id".into(), contract_value);
+    let contract_match = contract_value.as_str() == Some(expected.as_ref());
+    proposal_map.insert("contract_address".into(), contract_value);
     if !contract_match {
-        issues.push("proposal_contract_mismatch".into());
+        issues.push("proposal_contract_address_mismatch".into());
     }
 }
 

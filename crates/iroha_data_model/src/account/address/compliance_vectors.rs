@@ -1,7 +1,5 @@
 //! ADDR-2 compliance vector generator shared by the example binary and CLI tooling.
 
-use std::str::FromStr;
-
 use hex::encode_upper;
 use iroha_crypto::{Algorithm, KeyPair, PublicKey};
 use norito::json::{Map, Value};
@@ -12,7 +10,6 @@ use crate::{
         MultisigPolicyError,
     },
     domain::DomainId,
-    name::Name,
 };
 
 macro_rules! json_obj {
@@ -83,7 +80,7 @@ fn ed25519_pk_with(seed_byte: u8) -> PublicKey {
 }
 
 fn domain(label: &str) -> DomainId {
-    DomainId::new(Name::from_str(label).expect("valid domain name"))
+    DomainId::try_new(label, "universal").expect("valid domain id")
 }
 
 fn canonical_hex(address: &AccountAddress) -> String {

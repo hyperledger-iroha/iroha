@@ -104,6 +104,7 @@ mod tests {
         trace::{derive_polynomial_data, hash_columns_from_coefficients},
     };
     use iroha_data_model::{
+        DomainId,
         asset::id::AssetDefinitionId,
         fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
     };
@@ -200,7 +201,7 @@ mod tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: AssetDefinitionId::new(
-                "fixture".parse().unwrap(),
+                DomainId::try_new("fixture", "universal").unwrap(),
                 "xor".parse().unwrap(),
             ),
             amount: Numeric::from(75u32),

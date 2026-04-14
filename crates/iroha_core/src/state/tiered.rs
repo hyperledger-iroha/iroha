@@ -1865,8 +1865,7 @@ impl TieredStateBackend {
             let view = world.contract_instances.view();
             for (key, value) in view.iter() {
                 let key_handle = TieredKeyHandle::ContractInstance((*key).clone());
-                let key_payload = json::to_vec(&vec![key.0.clone(), key.1.clone()])
-                    .wrap_err("failed to encode contract instance key for tiered snapshot")?;
+                let key_payload = norito::codec::Encode::encode(key);
                 self.collect_entry_with_encoded_key(
                     TieredSegment::ContractInstances,
                     &key_handle,
@@ -1883,6 +1882,11 @@ impl TieredStateBackend {
         );
         collect_map!(TieredSegment::ZkAssets, ZkAsset, world.zk_assets);
         collect_map!(TieredSegment::Elections, Election, world.elections);
+        collect_map!(
+            TieredSegment::MinistryAgendaProposals,
+            MinistryAgendaProposal,
+            world.ministry_agenda_proposals
+        );
         collect_map!(
             TieredSegment::GovernanceProposals,
             GovernanceProposal,
@@ -2520,6 +2524,7 @@ mod measured_bytes_impls {
             RuntimeUpgradeSbomDigest, RuntimeUpgradeStatus,
         },
         rwa::{RwaControlPolicy, RwaData, RwaId, RwaParentRef},
+        smart_contract::ContractAddress,
         smart_contract::manifest::{
             AccessSetHints, ContractManifest, EntryPointKind, EntrypointDescriptor,
             KotobaTranslation, KotobaTranslationEntry, ManifestProvenance, TriggerCallback,
@@ -2720,6 +2725,12 @@ mod measured_bytes_impls {
         }
     }
 
+    impl MeasuredBytes for ContractAddress {
+        fn measured_bytes(&self) -> usize {
+            size_of::<ContractAddress>().saturating_add(self.as_ref().len())
+        }
+    }
+
     impl MeasuredBytes for String {
         fn measured_bytes(&self) -> usize {
             size_of::<String>().saturating_add(self.capacity())
@@ -2899,8 +2910,12 @@ mod measured_bytes_impls {
     impl MeasuredBytes for AssetDefinitionId {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<AssetDefinitionId>();
-            total = total.saturating_add(self.domain.measured_bytes_extra());
-            total = total.saturating_add(self.name.measured_bytes_extra());
+            if let Some(domain) = self.try_domain() {
+                total = total.saturating_add(domain.measured_bytes_extra());
+            }
+            if let Some(name) = self.try_name() {
+                total = total.saturating_add(name.measured_bytes_extra());
+            }
             total
         }
     }
@@ -3456,8 +3471,7 @@ mod measured_bytes_impls {
     impl MeasuredBytes for DeployContractProposal {
         fn measured_bytes(&self) -> usize {
             let mut total = size_of::<DeployContractProposal>();
-            total = total.saturating_add(self.namespace.measured_bytes_extra());
-            total = total.saturating_add(self.contract_id.measured_bytes_extra());
+            total = total.saturating_add(self.contract_address.measured_bytes_extra());
             total = total.saturating_add(self.code_hash_hex.measured_bytes_extra());
             total = total.saturating_add(self.abi_hash_hex.measured_bytes_extra());
             total = total.saturating_add(self.abi_version.measured_bytes_extra());
@@ -3545,6 +3559,90 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.status.measured_bytes_extra());
             total = total.saturating_add(self.pipeline.measured_bytes_extra());
             total = total.saturating_add(self.parliament_snapshot.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalAction {
+        fn measured_bytes(&self) -> usize {
+            size_of::<iroha_data_model::ministry::AgendaProposalAction>()
+        }
+    }
+
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaEvidenceKind {
+        fn measured_bytes(&self) -> usize {
+            size_of::<iroha_data_model::ministry::AgendaEvidenceKind>()
+        }
+    }
+
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalSummary {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<iroha_data_model::ministry::AgendaProposalSummary>();
+            total = total.saturating_add(self.title.measured_bytes_extra());
+            total = total.saturating_add(self.motivation.measured_bytes_extra());
+            total = total.saturating_add(self.expected_impact.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalTarget {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<iroha_data_model::ministry::AgendaProposalTarget>();
+            total = total.saturating_add(self.label.measured_bytes_extra());
+            total = total.saturating_add(self.hash_family.measured_bytes_extra());
+            total = total.saturating_add(self.hash_hex.measured_bytes_extra());
+            total = total.saturating_add(self.reason.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaEvidenceAttachment {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<iroha_data_model::ministry::AgendaEvidenceAttachment>();
+            total = total.saturating_add(self.kind.measured_bytes_extra());
+            total = total.saturating_add(self.uri.measured_bytes_extra());
+            total = total.saturating_add(self.digest_blake3_hex.measured_bytes_extra());
+            total = total.saturating_add(self.description.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalSubmitter {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<iroha_data_model::ministry::AgendaProposalSubmitter>();
+            total = total.saturating_add(self.name.measured_bytes_extra());
+            total = total.saturating_add(self.contact.measured_bytes_extra());
+            total = total.saturating_add(self.organization.measured_bytes_extra());
+            total = total.saturating_add(self.pgp_fingerprint.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalV1 {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<iroha_data_model::ministry::AgendaProposalV1>();
+            total = total.saturating_add(self.version.measured_bytes_extra());
+            total = total.saturating_add(self.proposal_id.measured_bytes_extra());
+            total = total.saturating_add(self.submitted_at_unix_ms.measured_bytes_extra());
+            total = total.saturating_add(self.language.measured_bytes_extra());
+            total = total.saturating_add(self.action.measured_bytes_extra());
+            total = total.saturating_add(self.summary.measured_bytes_extra());
+            total = total.saturating_add(self.tags.measured_bytes_extra());
+            total = total.saturating_add(self.targets.measured_bytes_extra());
+            total = total.saturating_add(self.evidence.measured_bytes_extra());
+            total = total.saturating_add(self.submitter.measured_bytes_extra());
+            total = total.saturating_add(self.duplicates.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for iroha_data_model::ministry::AgendaProposalRecordV1 {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<iroha_data_model::ministry::AgendaProposalRecordV1>();
+            total = total.saturating_add(self.proposal.measured_bytes_extra());
+            total = total.saturating_add(self.authority.measured_bytes_extra());
+            total = total.saturating_add(self.submitted_tx_hash_hex.measured_bytes_extra());
+            total = total.saturating_add(self.submitted_height.measured_bytes_extra());
             total
         }
     }
@@ -4102,6 +4200,7 @@ enum TieredSegment {
     SmartContractState,
     ZkAssets,
     Elections,
+    MinistryAgendaProposals,
     GovernanceProposals,
     GovernanceReferenda,
     GovernanceLocks,
@@ -4145,6 +4244,7 @@ impl TieredSegment {
             TieredSegment::SmartContractState => "smart_contract_state",
             TieredSegment::ZkAssets => "zk_assets",
             TieredSegment::Elections => "elections",
+            TieredSegment::MinistryAgendaProposals => "ministry_agenda_proposals",
             TieredSegment::GovernanceProposals => "governance_proposals",
             TieredSegment::GovernanceReferenda => "governance_referenda",
             TieredSegment::GovernanceLocks => "governance_locks",
@@ -4199,6 +4299,7 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "smart_contract_state" => TieredSegment::SmartContractState,
             "zk_assets" => TieredSegment::ZkAssets,
             "elections" => TieredSegment::Elections,
+            "ministry_agenda_proposals" => TieredSegment::MinistryAgendaProposals,
             "governance_proposals" => TieredSegment::GovernanceProposals,
             "governance_referenda" => TieredSegment::GovernanceReferenda,
             "governance_locks" => TieredSegment::GovernanceLocks,
@@ -4392,10 +4493,11 @@ pub(crate) enum TieredKeyHandle {
     CommitQc(iroha_crypto::HashOf<iroha_data_model::block::BlockHeader>),
     ContractManifest(iroha_crypto::Hash),
     ContractCode(iroha_crypto::Hash),
-    ContractInstance((String, String)),
+    ContractInstance(iroha_data_model::smart_contract::ContractAddress),
     SmartContractState(Name),
     ZkAsset(iroha_data_model::asset::AssetDefinitionId),
     Election(String),
+    MinistryAgendaProposal(String),
     GovernanceProposal([u8; 32]),
     GovernanceReferendum(String),
     GovernanceLock(String),
@@ -4439,6 +4541,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::SmartContractState(_) => TieredSegment::SmartContractState,
             TieredKeyHandle::ZkAsset(_) => TieredSegment::ZkAssets,
             TieredKeyHandle::Election(_) => TieredSegment::Elections,
+            TieredKeyHandle::MinistryAgendaProposal(_) => TieredSegment::MinistryAgendaProposals,
             TieredKeyHandle::GovernanceProposal(_) => TieredSegment::GovernanceProposals,
             TieredKeyHandle::GovernanceReferendum(_) => TieredSegment::GovernanceReferenda,
             TieredKeyHandle::GovernanceLock(_) => TieredSegment::GovernanceLocks,
@@ -4462,10 +4565,7 @@ impl TieredKeyHandle {
 
     fn encode_key(&self) -> Result<Vec<u8>> {
         match self {
-            TieredKeyHandle::ContractInstance(key) => {
-                json::to_vec(&vec![key.0.clone(), key.1.clone()])
-                    .wrap_err("failed to encode contract instance key for tiered snapshot")
-            }
+            TieredKeyHandle::ContractInstance(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Domain(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Account(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRekey(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4491,6 +4591,7 @@ impl TieredKeyHandle {
             TieredKeyHandle::SmartContractState(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::ZkAsset(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Election(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::MinistryAgendaProposal(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GovernanceProposal(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GovernanceReferendum(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::GovernanceLock(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4564,6 +4665,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::SmartContractState(key) => fetch!(world.smart_contract_state, key),
             TieredKeyHandle::ZkAsset(id) => fetch!(world.zk_assets, id),
             TieredKeyHandle::Election(id) => fetch!(world.elections, id),
+            TieredKeyHandle::MinistryAgendaProposal(id) => {
+                fetch!(world.ministry_agenda_proposals, id)
+            }
             TieredKeyHandle::GovernanceProposal(id) => fetch!(world.governance_proposals, id),
             TieredKeyHandle::GovernanceReferendum(id) => fetch!(world.governance_referenda, id),
             TieredKeyHandle::GovernanceLock(id) => fetch!(world.governance_locks, id),
@@ -4630,6 +4734,9 @@ impl TieredKeyHandle {
             TieredKeyHandle::SmartContractState(key) => fetch!(world.smart_contract_state, key),
             TieredKeyHandle::ZkAsset(id) => fetch!(world.zk_assets, id),
             TieredKeyHandle::Election(id) => fetch!(world.elections, id),
+            TieredKeyHandle::MinistryAgendaProposal(id) => {
+                fetch!(world.ministry_agenda_proposals, id)
+            }
             TieredKeyHandle::GovernanceProposal(id) => fetch!(world.governance_proposals, id),
             TieredKeyHandle::GovernanceReferendum(id) => fetch!(world.governance_referenda, id),
             TieredKeyHandle::GovernanceLock(id) => fetch!(world.governance_locks, id),
@@ -4685,6 +4792,9 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::SmartContractState(key) => write!(f, "smart_contract_state:{key}"),
             TieredKeyHandle::ZkAsset(id) => write!(f, "zk_asset:{id}"),
             TieredKeyHandle::Election(id) => write!(f, "election:{id}"),
+            TieredKeyHandle::MinistryAgendaProposal(id) => {
+                write!(f, "ministry_agenda_proposal:{id}")
+            }
             TieredKeyHandle::GovernanceProposal(id) => write!(f, "gov_proposal:{id:?}"),
             TieredKeyHandle::GovernanceReferendum(id) => write!(f, "gov_referendum:{id}"),
             TieredKeyHandle::GovernanceLock(id) => write!(f, "gov_lock:{id}"),
@@ -4869,6 +4979,20 @@ mod tests {
         assert_eq!(
             MeasuredBytes::measured_bytes(&opaque),
             std::mem::size_of::<OpaqueAccountId>()
+        );
+    }
+
+    #[test]
+    fn measured_bytes_cover_opaque_asset_definition_id() {
+        use iroha_data_model::asset::AssetDefinitionId;
+
+        let opaque = AssetDefinitionId::from_uuid_bytes_unchecked([
+            0x12, 0x34, 0x56, 0x78, 0x9a, 0xbc, 0x4d, 0xef, 0x80, 0x11, 0x22, 0x33, 0x44, 0x55,
+            0x66, 0x77,
+        ]);
+        assert_eq!(
+            MeasuredBytes::measured_bytes(&opaque),
+            std::mem::size_of::<AssetDefinitionId>()
         );
     }
 

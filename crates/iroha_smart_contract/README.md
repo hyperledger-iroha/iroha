@@ -6,23 +6,22 @@ Library crate used for writing Iroha-compliant smart contracts targeting the Iro
 
 Kotodama sources (`.ko`) compile to IVM bytecode (`.to`) which can be submitted to
 the network or executed locally. The toolchain lives in this repository under the
-`ivm` crate and exposes two binaries:
+`ivm` crate and exposes the compiler binary:
 
 - `koto_compile` – Kotodama compiler that produces `.to` bytecode (and optional
   manifests)
-- `ivm_run` – local runner that executes bytecode with mocked host bindings for
-  quick smoke tests
 
 ### 1. Install the toolchain
 
-Build the helper binaries directly from this workspace:
+Build the compiler directly from this workspace:
 
 ```bash
-cargo install --path crates/ivm --bin koto_compile --bin ivm_run
+cargo install --path crates/ivm --bin koto_compile
 ```
 
-Alternatively, invoke them in-place via `cargo run -p ivm --bin <name> -- …` or use
-the convenience targets `make examples-run` / `make examples-inspect`.
+Alternatively, invoke it in-place via `cargo run -p ivm --bin koto_compile -- …`.
+For local execution and inspection flows, use the Rust examples under
+`crates/ivm/examples` or embed `ivm::IVM` in a small harness/test.
 
 ### 2. Compile Kotodama source to IVM bytecode
 
@@ -45,15 +44,18 @@ The compiler enforces the IVM ABI header (default `abi_version = 1`). You can
 override the defaults with CLI flags or by embedding metadata blocks in Kotodama
 source (`meta { abi_version = 1; max_cycles = … }`).
 
-### 3. Smoke-test bytecode locally (optional)
+### 3. Exercise contracts locally (optional)
+
+This workspace does not currently ship a standalone `ivm_run` binary. For local
+execution, use one of the Rust examples or a small harness built against the
+`ivm` crate. For example:
 
 ```bash
-ivm_run target/examples/hello.to --args '{}'
+cargo run -p ivm --example koto_tuple_return_demo
 ```
 
-`ivm_run` accepts JSON-encoded Norito values via `--args` (default `{}`) and prints
-the resulting state updates plus any emitted events. This is useful for verifying
-logic before shipping contracts to a node.
+That path is useful for verifying contract logic before shipping bytecode to a
+node.
 
 ### 4. Submit bytecode to an Iroha network
 

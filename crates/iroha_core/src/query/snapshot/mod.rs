@@ -148,9 +148,9 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_iterable_is_ephemeral() {
-        let d1 = Domain::new("d1".parse().unwrap()).build(&ALICE_ID);
-        let d2 = Domain::new("d2".parse().unwrap()).build(&ALICE_ID);
-        let d3 = Domain::new("d3".parse().unwrap()).build(&ALICE_ID);
+        let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
+        let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
+        let d3 = Domain::new(DomainId::try_new("d3", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d1.clone(), d2.clone(), d3.clone()], [account], []);
 
@@ -188,20 +188,20 @@ mod tests {
     async fn snapshot_sorted_asset_definitions_returns_first_batch_without_cursor() {
         use iroha_primitives::json::Json;
 
-        let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
+        let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let mut ad1 = AssetDefinition::numeric(AssetDefinitionId::new(
-            "w".parse().unwrap(),
+            DomainId::try_new("w", "universal").unwrap(),
             "rose".parse().unwrap(),
         ))
         .build(&ALICE_ID);
         let mut ad2 = AssetDefinition::numeric(AssetDefinitionId::new(
-            "w".parse().unwrap(),
+            DomainId::try_new("w", "universal").unwrap(),
             "tulip".parse().unwrap(),
         ))
         .build(&ALICE_ID);
         let ad3 = AssetDefinition::numeric(AssetDefinitionId::new(
-            "w".parse().unwrap(),
+            DomainId::try_new("w", "universal").unwrap(),
             "peony".parse().unwrap(),
         ))
         .build(&ALICE_ID);
@@ -254,20 +254,20 @@ mod tests {
     async fn snapshot_sorted_asset_definitions_stored_cursor_continues_in_order() {
         use iroha_primitives::json::Json;
 
-        let domain = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
+        let domain = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let mut ad1 = AssetDefinition::numeric(AssetDefinitionId::new(
-            "w".parse().unwrap(),
+            DomainId::try_new("w", "universal").unwrap(),
             "rose".parse().unwrap(),
         ))
         .build(&ALICE_ID);
         let mut ad2 = AssetDefinition::numeric(AssetDefinitionId::new(
-            "w".parse().unwrap(),
+            DomainId::try_new("w", "universal").unwrap(),
             "tulip".parse().unwrap(),
         ))
         .build(&ALICE_ID);
         let ad3 = AssetDefinition::numeric(AssetDefinitionId::new(
-            "w".parse().unwrap(),
+            DomainId::try_new("w", "universal").unwrap(),
             "peony".parse().unwrap(),
         ))
         .build(&ALICE_ID);
@@ -348,8 +348,8 @@ mod tests {
 
     #[tokio::test]
     async fn snapshot_iterable_continuation_is_snapshot_consistent() {
-        let d1 = Domain::new("d1".parse().unwrap()).build(&ALICE_ID);
-        let d2 = Domain::new("d2".parse().unwrap()).build(&ALICE_ID);
+        let d1 = Domain::new(DomainId::try_new("d1", "universal").unwrap()).build(&ALICE_ID);
+        let d2 = Domain::new(DomainId::try_new("d2", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d1.clone(), d2.clone()], [account], []);
 
@@ -412,7 +412,7 @@ mod tests {
                 .header();
         let mut sblock = state.block(header);
         let mut stx = sblock.transaction();
-        let new_id: DomainId = "d3".parse().unwrap();
+        let new_id: DomainId = DomainId::try_new("d3", "universal").unwrap();
         Register::domain(Domain::new(new_id.clone()))
             .execute(&ALICE_ID, &mut stx)
             .expect("register domain");
@@ -433,12 +433,12 @@ mod tests {
         }
 
         assert_eq!(seen, snapshot_ids);
-        assert!(!seen.contains(&"d3".parse::<DomainId>().unwrap()));
+        assert!(!seen.contains(&DomainId::try_new("d3", "universal").unwrap()));
     }
 
     #[tokio::test]
     async fn snapshot_singular_find_parameters_smoke() {
-        let d = Domain::new("w".parse().unwrap()).build(&ALICE_ID);
+        let d = Domain::new(DomainId::try_new("w", "universal").unwrap()).build(&ALICE_ID);
         let a = alice_account();
         let world = World::with([d], [a], []);
         let kura = Kura::blank_kura_for_testing();
@@ -462,7 +462,7 @@ mod tests {
 
     #[tokio::test]
     async fn stored_cursor_requires_budget_on_continue() {
-        let d = Domain::new("lane".parse().unwrap()).build(&ALICE_ID);
+        let d = Domain::new(DomainId::try_new("lane", "universal").unwrap()).build(&ALICE_ID);
         let account = alice_account();
         let world = World::with([d], [account], []);
 

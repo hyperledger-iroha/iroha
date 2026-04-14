@@ -713,6 +713,7 @@ fn numeric_to_u64(field: &'static str, value: &Numeric) -> Result<u64, Error> {
 mod tests {
     use iroha_crypto::Hash;
     use iroha_data_model::{
+        DomainId,
         asset::id::AssetDefinitionId,
         fastpq::{TransferDeltaTranscript, TransferTranscript},
     };
@@ -787,7 +788,10 @@ mod tests {
         use iroha_test_samples::{ALICE_ID, BOB_ID};
         let alice = (*ALICE_ID).clone();
         let bob = (*BOB_ID).clone();
-        let asset = AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap());
+        let asset = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        );
         let delta = TransferDeltaTranscript {
             from_account: alice.clone(),
             to_account: bob.clone(),
@@ -949,7 +953,7 @@ mod tests {
             from_account: (*BOB_ID).clone(),
             to_account: (*ALICE_ID).clone(),
             asset_definition: AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "lily".parse().unwrap(),
             ),
             amount: Numeric::from(7u32),

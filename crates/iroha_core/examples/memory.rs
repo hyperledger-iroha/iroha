@@ -100,7 +100,7 @@ mod util {
     }
 
     pub fn gen_asset(asset_definition: AssetDefinitionId) -> Asset {
-        let account_id = gen_account_in(&asset_definition.domain).0;
+        let account_id = gen_account_in(asset_definition.domain()).0;
         let asset_id = AssetId::new(asset_definition, account_id);
         let value: u64 = rand::random();
         Asset::new(asset_id, value)

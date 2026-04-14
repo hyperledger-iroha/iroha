@@ -24,7 +24,7 @@ fn fixture_account(hex_public_key: &str) -> AccountId {
 fn kotodama_pointer_abi_asset_ops_end_to_end() {
     // Compile Kotodama sample
     let asset_def_seed: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonder".parse().unwrap(),
+        DomainId::try_new("wonder", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
     let sample_asset_literal = asset_def_seed.canonical_address();
@@ -69,7 +69,7 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
     let mut block = state.block(header);
     let mut tx = block.transaction();
     // Setup: register domains required by account ids and asset definition.
-    let account_domain_id: DomainId = "wonderland".parse().unwrap();
+    let account_domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let asset_def = AssetDefinitionId::parse_address_literal(&sample_asset_literal)
         .expect("canonical asset definition literal");
     let reg_account_domain =
@@ -143,7 +143,7 @@ fn kotodama_pointer_abi_asset_ops_end_to_end() {
 #[test]
 fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonder".parse().unwrap(),
+        DomainId::try_new("wonder", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
     let asset_literal = asset_def.canonical_address();
@@ -191,7 +191,7 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
     let mut block = state.block(header);
     let mut tx = block.transaction();
 
-    let account_domain_id: DomainId = "wonderland".parse().unwrap();
+    let account_domain_id: DomainId = DomainId::try_new("wonderland", "universal").unwrap();
     let reg_account_domain =
         RegisterBox::from(Register::domain(Domain::new(account_domain_id.clone())));
     let reg_asset_domain =
@@ -238,7 +238,7 @@ fn kotodama_state_loaded_pointers_drive_transfer_asset() {
 #[test]
 fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
     let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonder".parse().unwrap(),
+        DomainId::try_new("wonder", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
     let asset_literal = asset_def.canonical_address();
@@ -305,7 +305,7 @@ fn kotodama_name_keyed_state_loaded_pointers_survive_cross_call() {
 #[test]
 fn kotodama_mixed_name_keyed_state_loaded_pointers_survive_cross_call() {
     let asset_def: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonder".parse().unwrap(),
+        DomainId::try_new("wonder", "universal").unwrap(),
         "coin".parse().unwrap(),
     );
     let asset_literal = asset_def.canonical_address();

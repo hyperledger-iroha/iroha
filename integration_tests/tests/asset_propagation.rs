@@ -18,11 +18,12 @@ fn client_mint_asset_should_increase_amount_on_another_peer() -> Result<()> {
     // offsets, which are currently unstable in debug builds.
     init_instruction_registry();
 
-    let domain_id: DomainId = "domain".parse()?;
+    let domain_id: DomainId = DomainId::try_new("domain", "universal")?;
     let create_domain = Register::domain(Domain::new(domain_id.clone()));
     let (account_id, _account_keypair) = gen_account_in("domain");
     let create_account = Register::account(Account::new(account_id.clone()));
-    let asset_definition_id = AssetDefinitionId::new("domain".parse()?, "xor".parse()?);
+    let asset_definition_id =
+        AssetDefinitionId::new(DomainId::try_new("domain", "universal")?, "xor".parse()?);
     let create_asset = Register::asset_definition({
         let __asset_definition_id = asset_definition_id.clone();
         AssetDefinition::numeric(__asset_definition_id.clone())

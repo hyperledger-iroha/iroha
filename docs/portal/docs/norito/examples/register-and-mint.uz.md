@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4e686495c642a08740504c4bb5f88e623c89a896787388b61e4451f550f87af6
 source_last_modified: "2026-03-26T13:01:47.376183+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ Ruxsat berilgan domen yaratish, aktivlarni ro'yxatdan o'tkazish va deterministik
 
 - Har bir SDK tezkor ishga tushirishda sozlash bosqichini aks ettirgan holda maqsadli hisob qaydnomasi (masalan, Alice uchun `<i105-account-id>`) mavjudligiga ishonch hosil qiling.
 - ROSE aktivi ta'rifini yaratish uchun `register_and_mint` kirish nuqtasini chaqiring va bitta tranzaksiyada Elisga 250 birlik bering.
-- Yalpiz muvaffaqiyatli bo'lganligini tasdiqlash uchun `client.request(FindAccountAssets)` yoki `iroha_cli ledger asset list --account <i105-account-id>` orqali balanslarni tekshiring.
+- Yalpiz muvaffaqiyatli bo'lganligini tasdiqlash uchun `client.request(FindAccountAssets)` yoki `iroha ledger asset list all --verbose` orqali balanslarni tekshiring.
 
 ## Tegishli SDK qo'llanmalari
 

@@ -198,13 +198,13 @@ translator: machine-google-reviewed
 - Параметрді жаңарту:
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` жаңартылады және `ConfigurationEvent::Changed` шығарады.CLI / Torii актив анықтамасының идентификаторы + бүркеншік ат мысалдары:
 - Канондық Base58 идентификаторымен + айқын атпен + ұзын бүркеншік атпен тіркеліңіз:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
 - Канондық Base58 идентификаторымен + айқын атаумен + қысқа бүркеншік атпен тіркеліңіз:
   - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - Бүркеншік атпен жалбыз + тіркелгі құрамдастары:
-  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
 - Канондық Base58 идентификаторына бүркеншік атты шешіңіз:
-  - JSON `{ "alias": "pkr#ubl.sbp" }` бар `POST /v1/assets/aliases/resolve`
+  - JSON `{ "alias": "pkr#bankb.sbp" }` бар `POST /v1/assets/aliases/resolve`
 
 Көшіру жазбасы:
 - `name#domain` мәтіндік актив анықтамасының идентификаторлары бірінші шығарылымда әдейі қолдау көрсетілмейді; канондық Base58 идентификаторларын пайдаланыңыз немесе нүктелі бүркеншік атты шешіңіз.

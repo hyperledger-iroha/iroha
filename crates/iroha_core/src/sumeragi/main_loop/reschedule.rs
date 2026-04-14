@@ -274,7 +274,7 @@ impl Actor {
                     aborted_expired.push((*hash, pending.height, pending.view));
                     continue;
                 }
-                let has_votes = self.vote_log.values().any(|vote| {
+                let has_votes = self.stored_votes().any(|vote| {
                     vote.block_hash == *hash
                         && vote.height == pending.height
                         && vote.view == pending.view

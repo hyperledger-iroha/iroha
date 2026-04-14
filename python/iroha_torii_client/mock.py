@@ -98,9 +98,11 @@ class _MockState:
         self.gov_council_audit: Dict[str, Any] = {}
         self.gov_council_derive_result: Dict[str, Any] = {}
         self.gov_council_persist_result: Dict[str, Any] = {}
-        self.gov_instances: Dict[str, Dict[str, Any]] = {}
+        self.gov_contracts: Dict[str, Dict[str, Any]] = {}
         self.contract_manifests: Dict[str, Dict[str, Any]] = {}
         self.contract_code_bytes: Dict[str, Dict[str, Any]] = {}
+        self.contract_deploy_response: Dict[str, Any] = {}
+        self.contract_call_response: Dict[str, Any] = {}
         self.gov_proposals: Dict[str, Dict[str, Any]] = {}
         self.gov_propose_deploy_response: Dict[str, Any] = {}
         self.gov_finalize_response: Dict[str, Any] = {}
@@ -109,6 +111,8 @@ class _MockState:
         self.gov_locks: Dict[str, Dict[str, Any]] = {}
         self.gov_tallies: Dict[str, Dict[str, Any]] = {}
         self.gov_unlock_stats: Dict[str, Any] = {}
+        self.sccp_message_artifacts: Dict[str, Dict[str, Any]] = {}
+        self.sccp_message_jobs: Dict[str, Dict[str, Any]] = {}
         self.reset()
 
     # ------------------------------------------------------------------
@@ -153,6 +157,10 @@ class _MockState:
             return self._account_get(account_id)
         if method == "POST" and path == "/v1/gov/proposals/deploy-contract":
             return self._gov_propose_deploy(body)
+        if method == "POST" and path == "/v1/contracts/deploy":
+            return self._contracts_deploy(body)
+        if method == "POST" and path == "/v1/contracts/call":
+            return self._contracts_call(body)
         if method == "POST" and path == "/v1/gov/finalize":
             return self._gov_finalize(body)
         if method == "POST" and path == "/v1/gov/enact":
@@ -161,9 +169,9 @@ class _MockState:
             return self._gov_protected_set(body)
         if method == "GET" and path == "/v1/gov/protected-namespaces":
             return self._gov_protected_get()
-        if method == "GET" and path.startswith("/v1/gov/instances/"):
-            namespace = path.split("/")[-1]
-            return self._gov_instances_get(namespace)
+        if method == "GET" and path.startswith("/v1/gov/contracts/"):
+            contract_address = unquote(path.rsplit("/", 1)[-1])
+            return self._gov_contract_get(contract_address)
         if method == "GET" and path.startswith("/v1/gov/locks/"):
             referendum_id = path.split("/")[-1]
             return self._gov_locks_get(referendum_id)
@@ -209,12 +217,24 @@ class _MockState:
             return _json_response(HTTPStatus.OK, self.sumeragi_rbc_sessions)
         if method == "GET" and path == "/v1/node/capabilities":
             return _json_response(HTTPStatus.OK, self.node_capabilities)
+        if method == "GET" and path == "/v1/sccp/capabilities":
+            return _json_response(HTTPStatus.OK, self.sccp_capabilities)
+        if method == "GET" and path == "/v1/sccp/manifests":
+            return _json_response(HTTPStatus.OK, self.sccp_proof_manifests)
+        if method == "GET" and path.startswith("/v1/sccp/artifacts/message/"):
+            message_id = path.split("/")[-1].lower()
+            return self._sccp_message_artifact_get(message_id)
+        if method == "GET" and path.startswith("/v1/sccp/jobs/message/"):
+            message_id = path.split("/")[-1].lower()
+            return self._sccp_message_job_get(message_id)
         if method == "POST" and path == "/__mock__/pipeline/config":
             return self._pipeline_config(body)
         if method == "POST" and path == "/__mock__/accounts/config":
             return self._account_config(body)
         if method == "POST" and path == "/__mock__/gov/config":
             return self._gov_config(body)
+        if method == "POST" and path == "/__mock__/sccp/config":
+            return self._sccp_config(body)
         if method == "POST" and path == "/__mock__/reset":
             self.reset()
             return _Response(HTTPStatus.OK, body=b"{}", headers={"Content-Type": "application/json"})
@@ -241,9 +261,35 @@ class _MockState:
             }
             self.gov_council_derive_result = {"ok": True, "epoch": 0, "members": []}
             self.gov_council_persist_result = {"ok": True, "epoch": 0, "members": []}
-            self.gov_instances.clear()
+            self.gov_contracts.clear()
             self.contract_manifests.clear()
             self.contract_code_bytes.clear()
+            self.contract_deploy_response = {
+                "ok": True,
+                "contract_alias": "router::universal",
+                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                "previous_contract_address": None,
+                "upgraded": False,
+                "dataspace": "universal",
+                "deploy_nonce": 0,
+                "tx_hash_hex": "11" * 32,
+                "code_hash_hex": "22" * 32,
+                "abi_hash_hex": "33" * 32,
+            }
+            self.contract_call_response = {
+                "ok": True,
+                "submitted": True,
+                "dataspace": "universal",
+                "code_hash_hex": "22" * 32,
+                "abi_hash_hex": "33" * 32,
+                "creation_time_ms": 0,
+                "contract_address": "tairac1qyqqqqqqqqqqqq95fes93ygegsv5enq9mqsz6x4lv4vp9ggff82m7",
+                "tx_hash_hex": "44" * 32,
+                "entrypoint": "ping",
+                "transaction_scaffold_b64": "AQID",
+                "signed_transaction_b64": "BAUG",
+                "signing_message_b64": "BwgJ",
+            }
             self.gov_proposals.clear()
             self.gov_propose_deploy_response = {"ok": True, "proposal_id": "mock-proposal"}
             self.gov_finalize_response = {"ok": True, "tx_instructions": []}
@@ -260,9 +306,92 @@ class _MockState:
             self.node_capabilities = {
                 "abi_version": 1,
                 "data_model_version": 1,
+                "signed_transaction_schema_hash_hex": "7ad1ae306dffd89a7ad1ae306dffd89a",
             }
+            self.sccp_capabilities = {
+                "local_domain": 0,
+                "local_chain": "sora",
+                "proof_family": "stark-fri-v1",
+                "burn_bundle_path": "/v1/sccp/proofs/burn/{message_id}",
+                "governance_bundle_path": "/v1/sccp/proofs/governance/{message_id}",
+                "message_bundle_path": "/v1/sccp/proofs/message/{message_id}",
+                "message_proof_path": "/v1/sccp/artifacts/message/{message_id}",
+                "message_job_path": "/v1/sccp/jobs/message/{message_id}",
+                "proof_manifest_path": "/v1/sccp/manifests",
+                "legacy_burn_registry_backend": "bridge/sccp/burn-v1",
+                "legacy_governance_registry_backend": "bridge/sccp/governance-v1",
+                "proof_submit_path": "/v1/bridge/proofs/submit",
+                "message_submit_path": "/v1/bridge/messages",
+                "message_payload_kinds": ["asset_register", "route_activate", "transfer"],
+                "codecs": [],
+                "counterparties": [],
+            }
+            self.sccp_proof_manifests = {
+                "local_domain": 0,
+                "local_chain": "sora",
+                "proof_family": "stark-fri-v1",
+                "manifests": [],
+            }
+            self.sccp_message_artifacts = {}
+            self.sccp_message_jobs = {}
             self._seed_reports()
             self._seed_sumeragi()
+
+    def _sccp_config(self, body: bytes) -> _Response:
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except json.JSONDecodeError as err:
+            raise ValueError(f"invalid sccp config: {err}") from err
+        if not isinstance(payload, dict):
+            raise ValueError("sccp config must be an object")
+
+        capabilities = payload.get("capabilities")
+        if capabilities is not None:
+            if not isinstance(capabilities, dict):
+                raise ValueError("capabilities must be an object")
+            self.sccp_capabilities = dict(capabilities)
+
+        manifests = payload.get("manifests")
+        if manifests is not None:
+            if not isinstance(manifests, dict):
+                raise ValueError("manifests must be an object")
+            self.sccp_proof_manifests = dict(manifests)
+
+        artifacts = payload.get("message_artifacts")
+        if artifacts is not None:
+            if not isinstance(artifacts, dict):
+                raise ValueError("message_artifacts must be an object")
+            normalized_artifacts: Dict[str, Dict[str, Any]] = {}
+            for message_id, artifact in artifacts.items():
+                if not isinstance(artifact, dict):
+                    raise ValueError("message_artifacts entry must be an object")
+                normalized_artifacts[str(message_id).lower()] = dict(artifact)
+            self.sccp_message_artifacts = normalized_artifacts
+
+        jobs = payload.get("message_jobs")
+        if jobs is not None:
+            if not isinstance(jobs, dict):
+                raise ValueError("message_jobs must be an object")
+            normalized_jobs: Dict[str, Dict[str, Any]] = {}
+            for message_id, job in jobs.items():
+                if not isinstance(job, dict):
+                    raise ValueError("message_jobs entry must be an object")
+                normalized_jobs[str(message_id).lower()] = dict(job)
+            self.sccp_message_jobs = normalized_jobs
+
+        return _json_response(HTTPStatus.OK, {"ok": True})
+
+    def _sccp_message_artifact_get(self, message_id: str) -> _Response:
+        payload = self.sccp_message_artifacts.get(message_id)
+        if payload is None:
+            return _json_response(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        return _json_response(HTTPStatus.OK, payload)
+
+    def _sccp_message_job_get(self, message_id: str) -> _Response:
+        payload = self.sccp_message_jobs.get(message_id)
+        if payload is None:
+            return _json_response(HTTPStatus.NOT_FOUND, {"error": "not found"})
+        return _json_response(HTTPStatus.OK, payload)
 
     # ------------------------------------------------------------------
     # Governance endpoints
@@ -334,18 +463,18 @@ class _MockState:
         else:
             self.gov_council_persist_result = {"ok": True, "epoch": 0, "members": []}
 
-        instances_payload = payload.get("instances")
-        if instances_payload is not None:
-            if not isinstance(instances_payload, dict):
-                raise ValueError("instances must be an object")
-            normalized_instances: Dict[str, Dict[str, Any]] = {}
-            for ns, page in instances_payload.items():
-                if not isinstance(page, dict):
-                    raise ValueError("instances entry must be an object")
-                normalized_instances[str(ns)] = page
-            self.gov_instances = normalized_instances
+        gov_contracts_payload = payload.get("gov_contracts")
+        if gov_contracts_payload is not None:
+            if not isinstance(gov_contracts_payload, dict):
+                raise ValueError("gov_contracts must be an object")
+            normalized_contracts: Dict[str, Dict[str, Any]] = {}
+            for contract_address, entry in gov_contracts_payload.items():
+                if not isinstance(entry, dict):
+                    raise ValueError("gov_contracts entry must be an object")
+                normalized_contracts[str(contract_address)] = entry
+            self.gov_contracts = normalized_contracts
         else:
-            self.gov_instances = {}
+            self.gov_contracts = {}
 
         manifests_payload = payload.get("manifests")
         if manifests_payload is not None:
@@ -372,6 +501,18 @@ class _MockState:
             self.contract_code_bytes = normalized_code_bytes
         else:
             self.contract_code_bytes = {}
+
+        contract_deploy_payload = payload.get("contract_deploy_response")
+        if contract_deploy_payload is not None:
+            if not isinstance(contract_deploy_payload, dict):
+                raise ValueError("contract_deploy_response must be an object")
+            self.contract_deploy_response = dict(contract_deploy_payload)
+
+        contract_call_payload = payload.get("contract_call_response")
+        if contract_call_payload is not None:
+            if not isinstance(contract_call_payload, dict):
+                raise ValueError("contract_call_response must be an object")
+            self.contract_call_response = dict(contract_call_payload)
 
         proposals_payload = payload.get("proposals")
         if proposals_payload is not None:
@@ -505,7 +646,9 @@ class _MockState:
                 raise ValueError(f"invalid propose-deploy payload: {err}") from err
             if not isinstance(payload, dict):
                 raise ValueError("propose-deploy payload must be an object")
-            for key in ("namespace", "contract_id", "code_hash", "abi_hash"):
+            if ("contract_address" in payload) == ("contract_alias" in payload):
+                raise ValueError("propose-deploy payload must include exactly one of contract_address or contract_alias")
+            for key in ("code_hash", "abi_hash"):
                 if key not in payload:
                     raise ValueError(f"propose-deploy payload missing '{key}'")
         response = json.loads(json.dumps(self.gov_propose_deploy_response))
@@ -665,14 +808,17 @@ class _MockState:
             raise KeyError("governance zk ballot not configured")
         return _json_response(HTTPStatus.OK, entry["ballot_zk"])
 
-    def _gov_instances_get(self, namespace: str) -> _Response:
-        page = self.gov_instances.get(namespace)
-        if page is None:
+    def _gov_contract_get(self, contract_address: str) -> _Response:
+        entry = self.gov_contracts.get(contract_address)
+        if entry is None:
             return _json_response(
                 HTTPStatus.OK,
-                {"total": 0, "offset": 0, "limit": 0, "instances": []},
+                {"found": False, "contract_address": contract_address, "dataspace": None, "code_hash_hex": None},
             )
-        return _json_response(HTTPStatus.OK, page)
+        payload = dict(entry)
+        payload.setdefault("found", True)
+        payload.setdefault("contract_address", contract_address)
+        return _json_response(HTTPStatus.OK, payload)
 
     def _gov_council_audit(self, epoch: Optional[int]) -> _Response:
         payload = dict(self.gov_council_audit)
@@ -709,6 +855,43 @@ class _MockState:
         if payload is None:
             return _json_response(HTTPStatus.NOT_FOUND, {"error": "code bytes not found"})
         return _json_response(HTTPStatus.OK, payload)
+
+    def _contracts_deploy(self, body: bytes) -> _Response:
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except json.JSONDecodeError as err:
+            raise ValueError(f"invalid contract deploy payload: {err}") from err
+        if not isinstance(payload, dict):
+            raise ValueError("contract deploy payload must be an object")
+        for key in ("authority", "private_key", "code_b64", "contract_alias"):
+            value = payload.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"contract deploy payload missing '{key}'")
+        if "dataspace" in payload:
+            raise ValueError("contract deploy payload must not include dataspace")
+        if "manifest" in payload:
+            raise ValueError("contract deploy payload must not include manifest")
+        if "lease_expiry_ms" in payload and not isinstance(payload.get("lease_expiry_ms"), (int, float, str)):
+            raise ValueError("contract deploy payload lease_expiry_ms must be numeric")
+        return _json_response(HTTPStatus.ACCEPTED, dict(self.contract_deploy_response))
+
+    def _contracts_call(self, body: bytes) -> _Response:
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except json.JSONDecodeError as err:
+            raise ValueError(f"invalid contract call payload: {err}") from err
+        if not isinstance(payload, dict):
+            raise ValueError("contract call payload must be an object")
+        for key in ("authority", "private_key"):
+            value = payload.get(key)
+            if not isinstance(value, str) or not value.strip():
+                raise ValueError(f"contract call payload missing '{key}'")
+        if ("contract_address" in payload) == ("contract_alias" in payload):
+            raise ValueError("contract call payload must include exactly one of contract_address or contract_alias")
+        gas_limit = payload.get("gas_limit")
+        if not isinstance(gas_limit, (int, float, str)):
+            raise ValueError("contract call payload missing 'gas_limit'")
+        return _json_response(HTTPStatus.ACCEPTED, dict(self.contract_call_response))
 
     def _gov_proposals_get(self, proposal_id: str) -> _Response:
         key = proposal_id.lower()

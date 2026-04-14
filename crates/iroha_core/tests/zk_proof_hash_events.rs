@@ -18,12 +18,12 @@ use iroha_data_model::{
 fn zk_events_carry_proof_hash_in_metadata_inserted() {
     // Build initial world with domain/account/asset definition
     let (authority_id, kp) = iroha_test_samples::gen_account_in("zkd");
-    let domain_id: DomainId = "zkd".parse().unwrap();
+    let domain_id: DomainId = DomainId::try_new("zkd", "universal").unwrap();
     let domain: Domain = Domain::new(domain_id.clone()).build(&authority_id);
     let acc = Account::new(authority_id.clone()).build(&authority_id);
     let ad: AssetDefinition = AssetDefinition::new(
         iroha_data_model::asset::AssetDefinitionId::new(
-            "zkd".parse().unwrap(),
+            DomainId::try_new("zkd", "universal").unwrap(),
             "zcoin".parse().unwrap(),
         ),
         NumericSpec::default(),
@@ -50,7 +50,7 @@ fn zk_events_carry_proof_hash_in_metadata_inserted() {
 
     // Prepare ZK ISIs: mint, register policy, transfer, unshield
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "zkd".parse().unwrap(),
+        DomainId::try_new("zkd", "universal").unwrap(),
         "zcoin".parse().unwrap(),
     );
     let asset = AssetId::of(asset_def_id.clone(), authority_id.clone());

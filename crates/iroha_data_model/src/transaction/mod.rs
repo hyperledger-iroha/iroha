@@ -11,7 +11,10 @@ pub mod receipt;
 /// Signed transaction forms and helpers.
 pub mod signed;
 
-pub use executable::{Executable, IvmBytecode, IvmProved};
+pub use executable::{
+    Executable, IvmBytecode, IvmProved, TransactionGasLimitError, insert_transaction_gas_limit,
+    parse_transaction_gas_limit, require_transaction_gas_limit, transaction_gas_limit_metadata_key,
+};
 pub use private_kaigi::{
     PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
     PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction,
@@ -33,7 +36,9 @@ pub mod prelude {
         PrivateCreateKaigi, PrivateEndKaigi, PrivateJoinKaigi, PrivateKaigiAction,
         PrivateKaigiArtifacts, PrivateKaigiFeeSpend, PrivateKaigiTemplate, PrivateKaigiTransaction,
         SignedTransaction, TX_SUBMISSION_RECEIPT_DOMAIN, TimeTriggerEntrypoint, TransactionBuilder,
-        TransactionEntrypoint, TransactionResult, TransactionResultInner, TransactionSignature,
-        TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload, error::prelude::*,
+        TransactionEntrypoint, TransactionGasLimitError, TransactionResult, TransactionResultInner,
+        TransactionSignature, TransactionSubmissionReceipt, TransactionSubmissionReceiptPayload,
+        error::prelude::*, insert_transaction_gas_limit, parse_transaction_gas_limit,
+        require_transaction_gas_limit, transaction_gas_limit_metadata_key,
     };
 }

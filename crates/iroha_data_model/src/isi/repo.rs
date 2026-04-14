@@ -181,18 +181,23 @@ impl crate::seal::Instruction for RepoInstructionBox {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use iroha_crypto::{Algorithm, KeyPair};
+
     use crate::repo::RepoGovernance;
 
     const INITIATOR: &str =
         "sorauロ1NラhBUd2BツヲトiヤニツヌKSテaリメモQラrメoリナnウリbQウQJニLJ5HSE";
     const COUNTERPARTY: &str =
         "sorauロ1PaQスGh1エ6pAワnqクfJuソMムVqマvQミレシセヒaネウハc1コハ1GGM2D";
-    const CUSTODIAN: &str = "2CAE42qVd4hgS46pNUbsbgpK9UvsYSvnRkz15xzUiGc4QWLVzjpjhpg3KFuUyM3zDYfc7kc5QD3ct3BWmQgPDTa13kdC1k52T3Wgw7bUdccEKbhvMmX42d7tktNVdHSR8YjVJ3NyPN5jqBWWFCu6eefZ6E9nSw41JV4oRg";
-
     fn parse_account(raw: &str) -> AccountId {
         AccountId::parse_encoded(raw)
             .expect("valid account")
             .into_account_id()
+    }
+
+    fn seeded_account(seed: u8) -> AccountId {
+        let keypair = KeyPair::from_seed(vec![seed; 32], Algorithm::Ed25519);
+        AccountId::new(keypair.public_key().clone())
     }
 
     #[test]
@@ -202,14 +207,14 @@ mod tests {
         let counterparty = parse_account(COUNTERPARTY);
         let cash_leg = RepoCashLeg {
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: 1_000u32.into(),
         };
         let collateral_leg = RepoCollateralLeg::new(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
             1_100u32.into(),
@@ -241,14 +246,14 @@ mod tests {
         let counterparty = parse_account(COUNTERPARTY);
         let cash_leg = RepoCashLeg {
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: 1_000u32.into(),
         };
         let collateral_leg = RepoCollateralLeg::new(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
             1_100u32.into(),
@@ -277,17 +282,17 @@ mod tests {
         let agreement_id: RepoAgreementId = "daily_repo".parse().expect("id");
         let initiator = parse_account(INITIATOR);
         let counterparty = parse_account(COUNTERPARTY);
-        let custodian = parse_account(CUSTODIAN);
+        let custodian = seeded_account(0xCD);
         let cash_leg = RepoCashLeg {
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: 1_000u32.into(),
         };
         let collateral_leg = RepoCollateralLeg::new(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
             1_100u32.into(),
@@ -328,14 +333,14 @@ mod tests {
         let counterparty = parse_account(COUNTERPARTY);
         let cash_leg = RepoCashLeg {
             asset_definition_id: iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "usd".parse().unwrap(),
             ),
             quantity: 1_000u32.into(),
         };
         let collateral_leg = RepoCollateralLeg::new(
             iroha_data_model::asset::AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "bond".parse().unwrap(),
             ),
             1_100u32.into(),

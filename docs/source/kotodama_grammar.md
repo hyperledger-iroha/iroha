@@ -110,7 +110,7 @@ seiyaku Name {
 Semantics
 - `meta { ... }` fields override compiler defaults for the emitted IVM header: `abi_version`, `vector_length` (0 means unset), `max_cycles` (0 means compiler default), `features` toggles header feature bits (ZK tracing, vector announce). The compiler treats `max_cycles: 0` as “use default” and emits the configured non‑zero default to satisfy admission requirements. Unsupported features are ignored with a warning. When `meta {}` is omitted, the compiler emits `abi_version = 1` and uses the option defaults for the remaining header fields.
 - `features: ["zk", "simd"]` (aliases: `"vector"`) explicitly requests the corresponding header bits. Unknown feature strings now produce a parser error instead of being ignored.
-- `state` declares durable contract variables. The compiler lowers accesses into `STATE_GET/STATE_SET/STATE_DEL` syscalls and the host stages them in a per-transaction overlay (checkpoint/restore rollback, flush-on-commit into WSV). Access hints are emitted for literal state paths; dynamic keys fall back to map-level conflict keys. For explicit host-backed reads/writes, use the `state_get/state_set/state_del` helpers and the `get_or_insert_default` map helpers; these route through Norito TLVs and keep names/field order stable.
+- `state` declares durable contract variables. The compiler lowers accesses into `STATE_GET/STATE_SET/STATE_DEL` syscalls and the host stages them in a per-transaction overlay (checkpoint/restore rollback, flush-on-commit into WSV). Access hints are emitted for literal state paths; dynamic keys fall back to map-level conflict keys. For explicit host-backed reads/writes, use the `state_get/state_set/state_del` helpers plus `map.get_or(...)` / `map.ensure(...)`; these route through Norito TLVs and keep names/field order stable.
 - State identifiers are reserved; shadowing a `state` name in parameters or `let` bindings is rejected (`E_STATE_SHADOWED`).
 - State map values are not first-class: use the state identifier directly for map operations and iteration. Binding or passing state maps to user-defined functions is rejected (`E_STATE_MAP_ALIAS`).
 - Durable state maps currently support `int` and pointer-ABI key types only; other key types are rejected at compile time.
@@ -156,8 +156,9 @@ Notes
 - `authority` optionally overrides the trigger authority (AccountId string literal). If omitted,
   the runtime uses the contract-activation authority.
 - Metadata values must be JSON literals (`string`, `number`, `bool`, `null`) or `json!(...)`.
-- Runtime-injected trigger metadata keys: `contract_namespace`, `contract_id`,
-  `contract_entrypoint`, `contract_code_hash`, `contract_trigger_id`.
+- Runtime-injected trigger metadata keys: `contract_address`, optional
+  `contract_alias`, `contract_entrypoint`, `contract_code_hash`,
+  `contract_trigger_id`.
 
 ## Functions and Parameters
 
@@ -269,7 +270,11 @@ Host/syscall builtins (map to SCALL; exact numbers in ivm.md)
 - `verify_ds_proof(DataSpaceId*, ProofBlob?)`
 - `use_asset_handle(AssetHandle*, Blob[NoritoBytes], ProofBlob?)`
 - `axt_commit()`
-- `contains(Map<K,V>, K) -> bool`
+- `map.contains(key) -> bool`
+- `map.get_or(key, default) -> V`
+- `map.ensure(key, default) -> V`
+- `name.path(segment) -> Name`
+- `json.get_int(key)`, `json.get_numeric(key)`, `json.get_json(key)`, `json.get_name(key)`, `json.get_account_id(key)`, `json.get_asset_definition_id(key)`, `json.get_nft_id(key)`, `json.get_blob_hex(key)`
 
 Utility builtins
 - `info(string|int)`: emits a structured event/message via OUTPUT.
@@ -294,9 +299,12 @@ Type: `Map<K, V>`
 - Durable state maps (`state Map<...>`) use Norito-encoded keys/values. Supported keys: `int` or pointer types. Supported values: `int`, `bool`, `Json`, `Blob`/`bytes`, pointer types, tuples of durable-supported values, or structs whose fields are all durable-supported values.
 - `Map::new()` allocates and zero-initializes the single in-memory entry (key/value = 0); for non-`Map<int,int>` maps, provide an explicit type annotation or return type.
 - State maps are not first-class values: you cannot reassign them (e.g., `M = Map::new()`); update entries via indexing (`M[key] = value`).
+- Internal helper functions may accept durable state-map handles with `state Map<K, V>` parameters. These handles are non-first-class and only valid for map operations and forwarding to other `state Map` helper parameters.
 - Operations:
   - Indexing: `map[key]` get/set value (set performed via host syscall; see runtime API mapping).
-  - Existence: `contains(map, key) -> bool` (lowered helper; may be an intrinsic syscall).
+  - Existence/defaults: `map.contains(key)`, `map.get_or(key, default)`, `map.ensure(key, default)` (lowered helpers; may be intrinsic syscalls).
+  - Path building: `base.path(segment)` lowers to the durable-path helpers for integer or Norito-encoded segments.
+  - JSON field extraction: `json.get_*` lowers to the corresponding typed JSON helper syscall.
   - Iteration: `for (k, v) in map { ... }` with deterministic order and mutation rules.
 - Composite durable map values are written and read as whole values. Partial field updates on stored records still lower to a load-modify-store pattern in user code.
 

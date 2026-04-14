@@ -10,6 +10,8 @@ pub mod content;
 pub mod domain;
 pub mod identifier;
 pub mod kaigi;
+/// Ministry agenda submission handlers.
+pub mod ministry;
 pub mod multisig;
 pub mod nft;
 /// Offline allowance settlement instruction handlers.
@@ -123,8 +125,16 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterPinManifest>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::ApprovePinManifest>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RetirePinManifest>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::BindManifestAlias>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterProviderOwner>,
     dispatch_instruction::<iroha_data_model::isi::sorafs::UnregisterProviderOwner>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterCapacityDeclaration>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RecordCapacityTelemetry>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::RegisterCapacityDispute>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::IssueReplicationOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::CompleteReplicationOrder>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::SetPricingSchedule>,
+    dispatch_instruction::<iroha_data_model::isi::sorafs::UpsertProviderCredit>,
     dispatch_instruction::<iroha_data_model::isi::content::PublishContentBundle>,
     dispatch_instruction::<iroha_data_model::isi::content::RetireContentBundle>,
     dispatch_instruction::<iroha_data_model::isi::soradns::SubmitDirectoryDraft>,
@@ -182,6 +192,9 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::soracloud::HeartbeatSoracloudModelHost>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::WithdrawSoracloudModelHost>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::ReconcileSoracloudModelHosts>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::AdvertiseSoracloudInrouHost>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::WithdrawSoracloudInrouHost>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ReconcileSoracloudInrouPlacements>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::ReportSoracloudModelHostViolation>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::DeploySoracloudAgentApartment>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RenewSoracloudAgentLease>,
@@ -212,6 +225,9 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     >,
     dispatch_instruction::<iroha_data_model::isi::soracloud::AdvanceSoracloudRollout>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudRuntimeState>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::SetSoracloudInrouReplicaRuntimeState>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ClearSoracloudInrouReplicaRuntimeState>,
+    dispatch_instruction::<iroha_data_model::isi::soracloud::ReportSoracloudServiceLeaseUsage>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudMailboxMessage>,
     dispatch_instruction::<iroha_data_model::isi::soracloud::RecordSoracloudRuntimeReceipt>,
     dispatch_instruction::<iroha_data_model::isi::oracle::RegisterOracleFeed>,
@@ -250,6 +266,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<zk::PruneProofs>,
     dispatch_instruction::<iroha_data_model::isi::bridge::SubmitBridgeProof>,
     dispatch_instruction::<iroha_data_model::isi::bridge::RecordBridgeReceipt>,
+    dispatch_instruction::<iroha_data_model::isi::bridge::RecordSccpMessage>,
     dispatch_instruction::<confidential::PublishPedersenParams>,
     dispatch_instruction::<confidential::SetPedersenParamsLifecycle>,
     dispatch_instruction::<confidential::PublishPoseidonParams>,
@@ -260,6 +277,7 @@ const INSTRUCTION_HANDLERS: &[InstructionHandler] = &[
     dispatch_instruction::<iroha_data_model::isi::endorsement::RegisterDomainCommittee>,
     dispatch_instruction::<iroha_data_model::isi::endorsement::SetDomainEndorsementPolicy>,
     dispatch_instruction::<iroha_data_model::isi::endorsement::SubmitDomainEndorsement>,
+    dispatch_instruction::<iroha_data_model::isi::ministry::SubmitAgendaProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeDeployContract>,
     dispatch_instruction::<iroha_data_model::isi::governance::ProposeRuntimeUpgradeProposal>,
     dispatch_instruction::<iroha_data_model::isi::governance::CastZkBallot>,
@@ -518,14 +536,16 @@ mod tests {
         let world = World::with([], [], []);
         let query_handle = LiveQueryStore::start_test();
         let state = State::new(world, kura.clone(), query_handle);
-        let asset_definition_id =
-            iroha_data_model::asset::AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+        let asset_definition_id = iroha_data_model::asset::AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        );
         let block_header = ValidBlock::new_dummy(&KeyPair::random().into_parts().1)
             .as_ref()
             .header();
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
-        let wonderland: DomainId = "wonderland".parse()?;
+        let wonderland: DomainId = DomainId::try_new("wonderland", "universal")?;
         Register::domain(Domain::new(wonderland.clone()))
             .execute(&SAMPLE_GENESIS_ACCOUNT_ID, &mut state_transaction)?;
         Register::account(Account::new(ALICE_ID.clone()))
@@ -916,7 +936,10 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
-        let definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+        let definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        );
         let account_id = ALICE_ID.clone();
         let key = "Bytes".parse::<Name>()?;
         SetKeyValue::asset_definition(
@@ -948,7 +971,10 @@ mod tests {
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
-        let asset_definition_id = AssetDefinitionId::new("wonderland".parse()?, "rose".parse()?);
+        let asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "rose".parse()?,
+        );
         let asset_id = AssetId::new(asset_definition_id, account_id.clone());
         Mint::asset_numeric(numeric!(1), asset_id.clone())
             .execute(&account_id, &mut state_transaction)?;
@@ -978,7 +1004,7 @@ mod tests {
             .header();
         let mut state_block = state.block(block_header);
         let mut state_transaction = state_block.transaction();
-        let domain_id = "wonderland".parse::<DomainId>()?;
+        let domain_id = DomainId::try_new("wonderland", "universal")?;
         let account_id = ALICE_ID.clone();
         let key = "Bytes".parse::<Name>()?;
         SetKeyValue::domain(domain_id.clone(), key.clone(), vec![1_u32, 2_u32, 3_u32])
@@ -1122,7 +1148,7 @@ mod tests {
         let mut state_transaction = state_block.transaction();
         let account_id = ALICE_ID.clone();
         assert!(matches!(
-            Register::domain(Domain::new("genesis".parse()?))
+            Register::domain(Domain::new(DomainId::try_new("genesis", "universal")?))
                 .execute(&account_id, &mut state_transaction)
                 .expect_err("Error expected"),
             Error::InvariantViolation(_)

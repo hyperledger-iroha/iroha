@@ -155,6 +155,42 @@ const VERIFYING_KEY_STATUS_VALUES = new Set([
 const VERIFYING_KEY_STATUS_ALIASES = new Map(
   [...VERIFYING_KEY_STATUS_VALUES].map((value) => [value.toLowerCase(), value]),
 );
+const SCCP_FINALITY_MODEL_VALUES = new Set([
+  "EthereumBeaconExecution",
+  "BscValidatorSet",
+  "SolanaFinalizedSlot",
+  "TonMasterchain",
+  "TronDpos",
+  "SubstrateGrandpa",
+]);
+const SCCP_PROOF_SECURITY_MODEL_VALUES = new Set(["RecursiveZk"]);
+const SCCP_ANCHOR_GOVERNANCE_VALUES = new Set(["SoraParliament"]);
+const SCCP_VERIFIER_TARGET_VALUES = new Set([
+  "EvmContract",
+  "SolanaProgram",
+  "TonContract",
+  "TronContract",
+  "SubstrateRuntime",
+]);
+const SCCP_DESTINATION_VERIFIER_PLAN_VALUES = new Set([
+  "Unknown",
+  "EvmGroth16Bn254Adapter",
+  "SolanaProgramNativeRecursive",
+  "TonContractNativeRecursive",
+  "TronContractNativeRecursive",
+  "SubstrateRuntimeNativeRecursive",
+]);
+const SCCP_HUB_MESSAGE_KIND_VALUES = new Set([
+  "Burn",
+  "TokenAdd",
+  "TokenPause",
+  "TokenResume",
+  "AssetRegister",
+  "RouteActivate",
+  "Transfer",
+]);
+const SCCP_CHAIN_FAMILY_VALUES = new Set(["Evm", "Solana", "Ton", "Tron", "Substrate"]);
+const SCCP_MESSAGE_PAYLOAD_KIND_VALUES = new Set(["AssetRegister", "RouteActivate", "Transfer"]);
 const SUBSCRIPTION_STATUS_VALUES = new Set([
   "active",
   "paused",
@@ -4100,6 +4136,88 @@ export class ToriiClient {
   }
 
   /**
+   * Fetch SCCP capability discovery (`GET /v1/sccp/capabilities`).
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async getSccpCapabilities(options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getSccpCapabilities");
+    const response = await this._request("GET", "/v1/sccp/capabilities", {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    return normalizeSccpCapabilitiesResponse(payload);
+  }
+
+  /**
+   * Fetch typed SCCP proof manifests (`GET /v1/sccp/manifests`).
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async getSccpProofManifests(options = {}) {
+    const { signal } = normalizeSignalOnlyOption(options, "getSccpProofManifests");
+    const response = await this._request("GET", "/v1/sccp/manifests", {
+      headers: { Accept: "application/json" },
+      signal,
+    });
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    return normalizeSccpProofManifestSetResponse(payload);
+  }
+
+  /**
+   * Fetch a typed SCCP transparent message-proof artifact (`GET /v1/sccp/artifacts/message/{message_id}`).
+   * @param {string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView} messageIdHex
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async getSccpMessageProofArtifact(messageIdHex, options = {}) {
+    const normalizedMessageId = normalizeHex32String(
+      messageIdHex,
+      "getSccpMessageProofArtifact.messageIdHex",
+    );
+    const { signal } = normalizeSignalOnlyOption(options, "getSccpMessageProofArtifact");
+    const response = await this._request(
+      "GET",
+      `/v1/sccp/artifacts/message/${normalizedMessageId}`,
+      {
+        headers: { Accept: "application/json" },
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    return normalizeSccpMessageTransparentProofArtifact(payload);
+  }
+
+  /**
+   * Fetch a normalized SCCP counterparty proof job (`GET /v1/sccp/jobs/message/{message_id}`).
+   * @param {string|Buffer|Uint8Array|ArrayBuffer|ArrayBufferView} messageIdHex
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<object>}
+   */
+  async getSccpMessageProofJob(messageIdHex, options = {}) {
+    const normalizedMessageId = normalizeHex32String(
+      messageIdHex,
+      "getSccpMessageProofJob.messageIdHex",
+    );
+    const { signal } = normalizeSignalOnlyOption(options, "getSccpMessageProofJob");
+    const response = await this._request(
+      "GET",
+      `/v1/sccp/jobs/message/${normalizedMessageId}`,
+      {
+        headers: { Accept: "application/json" },
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    return normalizeSccpCounterpartyProofJob(payload);
+  }
+
+  /**
    * Fetch the active ABI version (`GET /v1/runtime/abi/active`).
    * @param {{signal?: AbortSignal}} [options]
    * @returns {Promise<ToriiRuntimeAbiActiveResponse>}
@@ -5047,6 +5165,67 @@ export class ToriiClient {
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
     return normalizeGovernanceCouncilAuditResponse(payload);
+  }
+
+  /**
+   * Draft a Ministry agenda proposal submission transaction (`POST /v1/ministry/agenda/proposals/draft`).
+   * @param {{ proposal: Record<string, unknown>, authority: string }} payload
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async draftMinistryAgendaProposal(payload, options = {}) {
+    const body = JSON.stringify(normalizeMinistryAgendaProposalDraftRequest(payload));
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "draftMinistryAgendaProposal",
+    );
+    const response = await this._request(
+      "POST",
+      "/v1/ministry/agenda/proposals/draft",
+      {
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+        },
+        body,
+        signal,
+      },
+    );
+    await this._expectStatus(response, [200]);
+    const draft = await this._maybeJson(response);
+    return normalizeMinistryAgendaProposalDraftResponse(draft);
+  }
+
+  /**
+   * Fetch a submitted Ministry agenda proposal record (`GET /v1/ministry/agenda/proposals/{proposal_id}`).
+   * @param {string} proposalId
+   * @returns {Promise<Record<string, unknown>>}
+   */
+  async getMinistryAgendaProposal(proposalId, options = {}) {
+    const normalizedProposalId = requireNonEmptyString(
+      proposalId,
+      "getMinistryAgendaProposal.proposalId",
+    );
+    const { signal } = normalizeSignalOnlyOption(
+      options,
+      "getMinistryAgendaProposal",
+    );
+    const response = await this._request(
+      "GET",
+      `/v1/ministry/agenda/proposals/${encodeURIComponent(normalizedProposalId)}`,
+      {
+        headers: { Accept: "application/json" },
+        signal,
+      },
+    );
+    if (response.status === 404) {
+      return normalizeMinistryAgendaProposalGetResponse(
+        { found: false, record: null },
+        "ministry agenda proposal lookup response",
+      );
+    }
+    await this._expectStatus(response, [200]);
+    const payload = await this._maybeJson(response);
+    return normalizeMinistryAgendaProposalGetResponse(payload);
   }
 
   /**
@@ -6575,44 +6754,6 @@ export class ToriiClient {
   }
 
   /**
-   * Deploy and activate a contract instance atomically (`POST /v1/contracts/instance`).
-   * @param {DeployContractInstanceRequest} request
-   * @returns {Promise<DeployContractInstanceResponse | null>}
-   */
-  async deployContractInstance(request = {}) {
-    const payload = normalizeDeployContractInstanceRequest(request);
-    const response = await this._request("POST", "/v1/contracts/instance", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-    await this._expectStatus(response, [200, 202]);
-    const body = await this._maybeJson(response);
-    return body ? normalizeDeployContractInstanceResponse(body) : null;
-  }
-
-  /**
-   * Activate an existing contract instance (`POST /v1/contracts/instance/activate`).
-   * @param {ActivateContractInstanceRequest} request
-   * @returns {Promise<ActivateContractInstanceResponse | null>}
-   */
-  async activateContractInstance(request = {}) {
-    const payload = normalizeActivateContractInstanceRequest(request);
-    const response = await this._request("POST", "/v1/contracts/instance/activate", {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-      },
-      body: JSON.stringify(payload),
-    });
-    await this._expectStatus(response, [200, 202]);
-    const body = await this._maybeJson(response);
-    return body ? normalizeActivateContractInstanceResponse(body) : null;
-  }
-
-  /**
    * Invoke a deployed contract instance (`POST /v1/contracts/call`).
    * @param {ContractCallRequest} request
    * @param {{signal?: AbortSignal}} [options]
@@ -6816,75 +6957,25 @@ export class ToriiClient {
   }
 
   /**
-   * List active contract instances for a namespace (`GET /v1/contracts/instances/{ns}`).
-   * @param {string} namespace
-   * @param {ContractInstanceListOptions} [options]
-   * @returns {Promise<ContractInstanceListResponse>}
+   * Read the governance binding for one contract address (`GET /v1/gov/contracts/{contract_address}`).
+   * @param {string} contractAddress
+   * @param {{signal?: AbortSignal}} [options]
+   * @returns {Promise<ToriiGovernanceContractResponse>}
    */
-  async listContractInstances(namespace, options = {}) {
-    const normalizedNamespace = requireNonEmptyString(namespace, "namespace");
-    const { signal, params } = buildContractInstanceListQuery(options);
+  async getGovernanceContract(contractAddress, options = {}) {
+    const normalizedAddress = requireNonEmptyString(contractAddress, "contractAddress");
+    const { signal } = normalizeSignalOnlyOption(options, "getGovernanceContract");
     const response = await this._request(
       "GET",
-      `/v1/contracts/instances/${encodeURIComponent(normalizedNamespace)}`,
+      `/v1/gov/contracts/${encodeURIComponent(normalizedAddress)}`,
       {
         headers: { Accept: "application/json" },
-        params: params ?? undefined,
         signal: signal ?? undefined,
       },
     );
     await this._expectStatus(response, [200]);
     const payload = await this._maybeJson(response);
-    return normalizeContractInstanceListResponse(payload);
-  }
-
-  /**
-   * Iterate contract instances for a namespace with automatic pagination.
-   * @param {string} namespace
-   * @param {ContractInstanceIteratorOptions} [options]
-   * @returns {AsyncGenerator<ContractInstanceRecord, void, unknown>}
-   */
-  iterateContractInstances(namespace, options = {}) {
-    const normalizedNamespace = requireNonEmptyString(namespace, "namespace");
-    const fetchPage = (pageOptions) =>
-      this.listContractInstances(normalizedNamespace, pageOptions);
-    return this._iterateContractInstancePages(fetchPage, options);
-  }
-
-  /**
-   * List governance-tracked contract instances for a namespace (`GET /v1/gov/instances/{ns}`).
-   * @param {string} namespace
-   * @param {ContractInstanceListOptions} [options]
-   * @returns {Promise<ContractInstanceListResponse>}
-   */
-  async listGovernanceInstances(namespace, options = {}) {
-    const normalizedNamespace = requireNonEmptyString(namespace, "namespace");
-    const { signal, params } = buildContractInstanceListQuery(options);
-    const response = await this._request(
-      "GET",
-      `/v1/gov/instances/${encodeURIComponent(normalizedNamespace)}`,
-      {
-        headers: { Accept: "application/json" },
-        params: params ?? undefined,
-        signal: signal ?? undefined,
-      },
-    );
-    await this._expectStatus(response, [200]);
-    const payload = await this._maybeJson(response);
-    return normalizeContractInstanceListResponse(payload);
-  }
-
-  /**
-   * Iterate governance-tracked contract instances for a namespace.
-   * @param {string} namespace
-   * @param {ContractInstanceIteratorOptions} [options]
-   * @returns {AsyncGenerator<ContractInstanceRecord, void, unknown>}
-   */
-  iterateGovernanceInstances(namespace, options = {}) {
-    const normalizedNamespace = requireNonEmptyString(namespace, "namespace");
-    const fetchPage = (pageOptions) =>
-      this.listGovernanceInstances(normalizedNamespace, pageOptions);
-    return this._iterateContractInstancePages(fetchPage, options);
+    return normalizeGovernanceContractResponse(payload);
   }
 
   /**
@@ -11421,14 +11512,10 @@ function parseGovernanceActivations(payload) {
         `governance.recent_manifest_activations[${index}] must be an object`,
       );
     }
-    const namespace =
-      entry.namespace === undefined || entry.namespace === null
+    const contractAddress =
+      entry.contract_address === undefined || entry.contract_address === null
         ? ""
-        : String(entry.namespace);
-    const contractId =
-      entry.contract_id === undefined || entry.contract_id === null
-        ? ""
-        : String(entry.contract_id);
+        : String(entry.contract_address);
     const codeHash =
       entry.code_hash_hex === undefined || entry.code_hash_hex === null
         ? ""
@@ -11438,8 +11525,7 @@ function parseGovernanceActivations(payload) {
         ? null
         : String(entry.abi_hash_hex);
     return {
-      namespace,
-      contract_id: contractId,
+      contract_address: contractAddress,
       code_hash_hex: codeHash,
       abi_hash_hex: abiHash,
       height: coerceNestedInt(
@@ -12581,8 +12667,10 @@ function parseGovernanceProposalKind(payload, context) {
 function parseGovernanceDeployContract(payload, context) {
   const record = ensureRecord(payload, context);
   return {
-    namespace: requireNonEmptyString(record.namespace, `${context}.namespace`),
-    contract_id: requireNonEmptyString(record.contract_id, `${context}.contract_id`),
+    contract_address: requireNonEmptyString(
+      record.contract_address,
+      `${context}.contract_address`,
+    ),
     code_hash_hex: requireNonEmptyString(record.code_hash_hex, `${context}.code_hash_hex`),
     abi_hash_hex: requireNonEmptyString(record.abi_hash_hex, `${context}.abi_hash_hex`),
     abi_version: requireNonEmptyString(record.abi_version, `${context}.abi_version`),
@@ -13131,6 +13219,1006 @@ function normalizeNodeCapabilitiesResponse(payload) {
         "node capabilities response.crypto.curves",
       ),
     },
+  };
+}
+
+function normalizeSccpCapabilitiesResponse(payload) {
+  const record = ensureRecord(payload, "sccp capabilities response");
+  return {
+    localDomain: ToriiClient._normalizeUnsignedInteger(
+      record.local_domain,
+      "sccp capabilities response.local_domain",
+      { allowZero: true },
+    ),
+    localChain: requireNonEmptyString(
+      record.local_chain,
+      "sccp capabilities response.local_chain",
+    ),
+    proofFamily: requireNonEmptyString(
+      record.proof_family,
+      "sccp capabilities response.proof_family",
+    ),
+    burnBundlePath: requireNonEmptyString(
+      record.burn_bundle_path,
+      "sccp capabilities response.burn_bundle_path",
+    ),
+    governanceBundlePath: requireNonEmptyString(
+      record.governance_bundle_path,
+      "sccp capabilities response.governance_bundle_path",
+    ),
+    messageBundlePath: requireNonEmptyString(
+      record.message_bundle_path,
+      "sccp capabilities response.message_bundle_path",
+    ),
+    messageProofPath: requireNonEmptyString(
+      record.message_proof_path,
+      "sccp capabilities response.message_proof_path",
+    ),
+    messageJobPath: requireNonEmptyString(
+      record.message_job_path,
+      "sccp capabilities response.message_job_path",
+    ),
+    recentMessagesPath: requireNonEmptyString(
+      record.recent_messages_path,
+      "sccp capabilities response.recent_messages_path",
+    ),
+    proofManifestPath: requireNonEmptyString(
+      record.proof_manifest_path,
+      "sccp capabilities response.proof_manifest_path",
+    ),
+    legacyBurnRegistryBackend: requireNonEmptyString(
+      record.legacy_burn_registry_backend,
+      "sccp capabilities response.legacy_burn_registry_backend",
+    ),
+    legacyGovernanceRegistryBackend: requireNonEmptyString(
+      record.legacy_governance_registry_backend,
+      "sccp capabilities response.legacy_governance_registry_backend",
+    ),
+    proofSubmitPath: optionalString(
+      record.proof_submit_path ?? null,
+      "sccp capabilities response.proof_submit_path",
+    ),
+    messageSubmitPath: optionalString(
+      record.message_submit_path ?? null,
+      "sccp capabilities response.message_submit_path",
+    ),
+    messagePayloadKinds: parseStringArray(
+      record.message_payload_kinds,
+      "sccp capabilities response.message_payload_kinds",
+    ).map((value, index) =>
+      requireNonEmptyString(value, `sccp capabilities response.message_payload_kinds[${index}]`),
+    ),
+    codecs: parseRecordArray(
+      record.codecs,
+      "sccp capabilities response.codecs",
+    ).map((entry, index) =>
+      normalizeSccpCodecCapability(entry, `sccp capabilities response.codecs[${index}]`),
+    ),
+    counterparties: parseRecordArray(
+      record.counterparties,
+      "sccp capabilities response.counterparties",
+    ).map((entry, index) =>
+      normalizeSccpCounterpartyCapability(
+        entry,
+        `sccp capabilities response.counterparties[${index}]`,
+      ),
+    ),
+  };
+}
+
+function normalizeSccpCodecCapability(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    id: ToriiClient._normalizeUnsignedInteger(record.id, `${context}.id`, { allowZero: false }),
+    key: requireNonEmptyString(record.key, `${context}.key`),
+    description: requireNonEmptyString(record.description, `${context}.description`),
+  };
+}
+
+function normalizeSccpCounterpartyCapability(value, context) {
+  const record = ensureRecord(value, context);
+  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
+  return {
+    domain: ToriiClient._normalizeUnsignedInteger(record.domain, `${context}.domain`, {
+      allowZero: true,
+    }),
+    chain: requireNonEmptyString(record.chain, `${context}.chain`),
+    verifierBackendKey: requireNonEmptyString(
+      verifierBackend.key,
+      `${context}.verifier_backend.key`,
+    ),
+    messageBackend: requireNonEmptyString(record.message_backend, `${context}.message_backend`),
+    registryBackend: requireNonEmptyString(
+      record.registry_backend,
+      `${context}.registry_backend`,
+    ),
+    counterpartyAccountCodec: ToriiClient._normalizeUnsignedInteger(
+      record.counterparty_account_codec,
+      `${context}.counterparty_account_codec`,
+      { allowZero: false },
+    ),
+    counterpartyAccountCodecKey: requireNonEmptyString(
+      record.counterparty_account_codec_key,
+      `${context}.counterparty_account_codec_key`,
+    ),
+    destinationRollout:
+      record.destination_rollout == null
+        ? null
+        : normalizeSccpDestinationRollout(
+            record.destination_rollout,
+            `${context}.destination_rollout`,
+          ),
+    productionReady: requireBooleanLike(record.production_ready, `${context}.production_ready`),
+    disabledReason: optionalString(
+      record.disabled_reason ?? null,
+      `${context}.disabled_reason`,
+    ),
+  };
+}
+
+function normalizeSccpDestinationRollout(value, context) {
+  const record = ensureRecord(value, context);
+  const verifierPlan = requireNonEmptyString(record.verifier_plan, `${context}.verifier_plan`);
+  if (!SCCP_DESTINATION_VERIFIER_PLAN_VALUES.has(verifierPlan)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.verifier_plan must be a supported SCCP destination verifier plan`,
+      `${context}.verifier_plan`,
+    );
+  }
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    verifierPlan,
+    immutableVerifierReady: requireBooleanLike(
+      record.immutable_verifier_ready,
+      `${context}.immutable_verifier_ready`,
+    ),
+    anchorsReady: requireBooleanLike(record.anchors_ready, `${context}.anchors_ready`),
+    verifierIdentity: optionalString(record.verifier_identity ?? null, `${context}.verifier_identity`),
+    verifierCodeHash: optionalString(
+      record.verifier_code_hash ?? null,
+      `${context}.verifier_code_hash`,
+    ),
+    anchorId: optionalString(record.anchor_id ?? null, `${context}.anchor_id`),
+    blockers: parseStringArray(record.blockers ?? [], `${context}.blockers`).map((entry, index) =>
+      requireNonEmptyString(entry, `${context}.blockers[${index}]`),
+    ),
+  };
+}
+
+function normalizeSccpSubmissionArgument(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    key: requireNonEmptyString(record.key, `${context}.key`),
+    description: requireNonEmptyString(record.description, `${context}.description`),
+  };
+}
+
+function normalizeSccpCounterpartySubmissionTemplate(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    encoding: requireNonEmptyString(record.encoding, `${context}.encoding`),
+    submissionKind: requireNonEmptyString(record.submission_kind, `${context}.submission_kind`),
+    verifierEntrypoint: requireNonEmptyString(
+      record.verifier_entrypoint,
+      `${context}.verifier_entrypoint`,
+    ),
+    requiredArguments: parseRecordArray(
+      record.required_arguments,
+      `${context}.required_arguments`,
+    ).map((entry, index) =>
+      normalizeSccpSubmissionArgument(entry, `${context}.required_arguments[${index}]`),
+    ),
+  };
+}
+
+function normalizeSccpSubmissionArgumentValue(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    key: requireNonEmptyString(record.key, `${context}.key`),
+    encoding: requireNonEmptyString(record.encoding, `${context}.encoding`),
+    bytes: normalizeArbitraryHex(record.bytes, `${context}.bytes`),
+  };
+}
+
+function normalizeSccpEvmWordPublicInputs(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    messageId: normalizeHex32String(record.message_id, `${context}.message_id`),
+    payloadHash: normalizeHex32String(record.payload_hash, `${context}.payload_hash`),
+    targetDomainWord: normalizeHex32String(
+      record.target_domain_word,
+      `${context}.target_domain_word`,
+    ),
+    commitmentRoot: normalizeHex32String(record.commitment_root, `${context}.commitment_root`),
+    finalityHeightWord: normalizeHex32String(
+      record.finality_height_word,
+      `${context}.finality_height_word`,
+    ),
+    finalityBlockHash: normalizeHex32String(
+      record.finality_block_hash,
+      `${context}.finality_block_hash`,
+    ),
+  };
+}
+
+function normalizeSccpPlatformSubmissionPayload(value, context) {
+  const record = ensureRecord(value, context);
+  const platform = requireNonEmptyString(record.platform, `${context}.platform`);
+  const payload = ensureRecord(record.payload, `${context}.payload`);
+  switch (platform) {
+    case "evm_contract_call":
+    case "tron_contract_call":
+      return {
+        kind: platform,
+        value: {
+          proofBytes: normalizeArbitraryHex(payload.proof_bytes, `${context}.payload.proof_bytes`),
+          publicInputs: normalizeSccpEvmWordPublicInputs(
+            payload.public_inputs,
+            `${context}.payload.public_inputs`,
+          ),
+          statementHash: normalizeHex32String(
+            payload.statement_hash,
+            `${context}.payload.statement_hash`,
+          ),
+        },
+      };
+    case "solana_program_instruction":
+    case "substrate_runtime_call":
+      return {
+        kind: platform,
+        value: {
+          proofBytes: normalizeArbitraryHex(payload.proof_bytes, `${context}.payload.proof_bytes`),
+          publicInputsBytes: normalizeArbitraryHex(
+            payload.public_inputs_bytes,
+            `${context}.payload.public_inputs_bytes`,
+          ),
+          bundleBytes: normalizeArbitraryHex(
+            payload.bundle_bytes,
+            `${context}.payload.bundle_bytes`,
+          ),
+        },
+      };
+    case "ton_internal_message":
+      return {
+        kind: platform,
+        value: {
+          proofCell: normalizeArbitraryHex(payload.proof_cell, `${context}.payload.proof_cell`),
+          publicInputsCell: normalizeArbitraryHex(
+            payload.public_inputs_cell,
+            `${context}.payload.public_inputs_cell`,
+          ),
+          bundleCell: normalizeArbitraryHex(
+            payload.bundle_cell,
+            `${context}.payload.bundle_cell`,
+          ),
+        },
+      };
+    default:
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context}.platform must be a supported SCCP platform payload`,
+        `${context}.platform`,
+      );
+  }
+}
+
+function normalizeSccpCounterpartySubmissionPackage(value, context) {
+  const record = ensureRecord(value, context);
+  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    proofFamily: requireNonEmptyString(record.proof_family, `${context}.proof_family`),
+    verifierBackendKey: requireNonEmptyString(
+      verifierBackend.key,
+      `${context}.verifier_backend.key`,
+    ),
+    envelopeEncoding: requireNonEmptyString(
+      record.envelope_encoding,
+      `${context}.envelope_encoding`,
+    ),
+    submissionKind: requireNonEmptyString(
+      record.submission_kind,
+      `${context}.submission_kind`,
+    ),
+    verifierEntrypoint: requireNonEmptyString(
+      record.verifier_entrypoint,
+      `${context}.verifier_entrypoint`,
+    ),
+    platformPayload: normalizeSccpPlatformSubmissionPayload(
+      record.platform_payload,
+      `${context}.platform_payload`,
+    ),
+    arguments: parseRecordArray(record.arguments, `${context}.arguments`).map((entry, index) =>
+      normalizeSccpSubmissionArgumentValue(entry, `${context}.arguments[${index}]`),
+    ),
+    envelopeBytes: normalizeArbitraryHex(record.envelope_bytes, `${context}.envelope_bytes`),
+  };
+}
+
+function normalizeSccpDestinationBinding(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    key: requireNonEmptyString(record.key, `${context}.key`),
+    bindingHash: normalizeHex32String(record.binding_hash, `${context}.binding_hash`),
+  };
+}
+
+function normalizeSccpProofEnvelopeSummary(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    backend: requireNonEmptyString(record.backend, `${context}.backend`),
+    circuitId: requireNonEmptyString(record.circuit_id, `${context}.circuit_id`),
+    vkHash: normalizeHex32String(record.vk_hash, `${context}.vk_hash`),
+    publicInputsSchemaHash: normalizeHex32String(
+      record.public_inputs_schema_hash,
+      `${context}.public_inputs_schema_hash`,
+    ),
+    publicInputsSchemaLenBytes: ToriiClient._normalizeUnsignedInteger(
+      record.public_inputs_schema_len_bytes,
+      `${context}.public_inputs_schema_len_bytes`,
+      { allowZero: true },
+    ),
+    publicInputColumnCount: ToriiClient._normalizeUnsignedInteger(
+      record.public_input_column_count,
+      `${context}.public_input_column_count`,
+      { allowZero: true },
+    ),
+    publicInputWordCount: ToriiClient._normalizeUnsignedInteger(
+      record.public_input_word_count,
+      `${context}.public_input_word_count`,
+      { allowZero: true },
+    ),
+    openProofLenBytes: ToriiClient._normalizeUnsignedInteger(
+      record.open_proof_len_bytes,
+      `${context}.open_proof_len_bytes`,
+      { allowZero: true },
+    ),
+    backendProofLenBytes: ToriiClient._normalizeUnsignedInteger(
+      record.backend_proof_len_bytes,
+      `${context}.backend_proof_len_bytes`,
+      { allowZero: true },
+    ),
+    auxLenBytes: ToriiClient._normalizeUnsignedInteger(
+      record.aux_len_bytes,
+      `${context}.aux_len_bytes`,
+      { allowZero: true },
+    ),
+  };
+}
+
+function normalizeSccpProofManifestSetResponse(payload) {
+  const record = ensureRecord(payload, "sccp proof manifests response");
+  return {
+    localDomain: ToriiClient._normalizeUnsignedInteger(
+      record.local_domain,
+      "sccp proof manifests response.local_domain",
+      { allowZero: true },
+    ),
+    localChain: requireNonEmptyString(
+      record.local_chain,
+      "sccp proof manifests response.local_chain",
+    ),
+    proofFamily: requireNonEmptyString(
+      record.proof_family,
+      "sccp proof manifests response.proof_family",
+    ),
+    manifests: parseRecordArray(
+      record.manifests,
+      "sccp proof manifests response.manifests",
+    ).map((entry, index) =>
+      normalizeSccpProofManifest(entry, `sccp proof manifests response.manifests[${index}]`),
+    ),
+  };
+}
+
+function normalizeSccpProofManifest(value, context) {
+  const record = ensureRecord(value, context);
+  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
+  const securityModel = requireNonEmptyString(record.security_model, `${context}.security_model`);
+  const anchorGovernance = requireNonEmptyString(
+    record.anchor_governance,
+    `${context}.anchor_governance`,
+  );
+  const finalityModel = requireNonEmptyString(record.finality_model, `${context}.finality_model`);
+  const verifierTarget = requireNonEmptyString(
+    record.verifier_target,
+    `${context}.verifier_target`,
+  );
+  if (!SCCP_PROOF_SECURITY_MODEL_VALUES.has(securityModel)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.security_model must be a supported SCCP proof security model`,
+      `${context}.security_model`,
+    );
+  }
+  if (!SCCP_ANCHOR_GOVERNANCE_VALUES.has(anchorGovernance)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.anchor_governance must be a supported SCCP anchor governance mode`,
+      `${context}.anchor_governance`,
+    );
+  }
+  if (!SCCP_FINALITY_MODEL_VALUES.has(finalityModel)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.finality_model must be a supported SCCP finality model`,
+      `${context}.finality_model`,
+    );
+  }
+  if (!SCCP_VERIFIER_TARGET_VALUES.has(verifierTarget)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.verifier_target must be a supported SCCP verifier target`,
+      `${context}.verifier_target`,
+    );
+  }
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    localDomain: ToriiClient._normalizeUnsignedInteger(record.local_domain, `${context}.local_domain`, {
+      allowZero: true,
+    }),
+    localChain: requireNonEmptyString(record.local_chain, `${context}.local_chain`),
+    counterpartyDomain: ToriiClient._normalizeUnsignedInteger(
+      record.counterparty_domain,
+      `${context}.counterparty_domain`,
+      { allowZero: true },
+    ),
+    chain: requireNonEmptyString(record.chain, `${context}.chain`),
+    proofFamily: requireNonEmptyString(record.proof_family, `${context}.proof_family`),
+    securityModel,
+    anchorGovernance,
+    destinationBinding: normalizeSccpDestinationBinding(
+      record.destination_binding,
+      `${context}.destination_binding`,
+    ),
+    verifierBackendKey: requireNonEmptyString(
+      verifierBackend.key,
+      `${context}.verifier_backend.key`,
+    ),
+    messageBackend: requireNonEmptyString(record.message_backend, `${context}.message_backend`),
+    registryBackend: requireNonEmptyString(record.registry_backend, `${context}.registry_backend`),
+    counterpartyAccountCodec: ToriiClient._normalizeUnsignedInteger(
+      record.counterparty_account_codec,
+      `${context}.counterparty_account_codec`,
+      { allowZero: false },
+    ),
+    counterpartyAccountCodecKey: requireNonEmptyString(
+      record.counterparty_account_codec_key,
+      `${context}.counterparty_account_codec_key`,
+    ),
+    finalityModel,
+    verifierTarget,
+    manifestSeed: requireNonEmptyString(record.manifest_seed, `${context}.manifest_seed`),
+    requiredPublicInputs: parseStringArray(
+      record.required_public_inputs,
+      `${context}.required_public_inputs`,
+    ).map((entry, index) =>
+      requireNonEmptyString(entry, `${context}.required_public_inputs[${index}]`),
+    ),
+    messagePayloadKinds: parseStringArray(
+      record.message_payload_kinds,
+      `${context}.message_payload_kinds`,
+    ).map((entry, index) =>
+      requireNonEmptyString(entry, `${context}.message_payload_kinds[${index}]`),
+    ),
+    destinationRollout:
+      record.destination_rollout == null
+        ? null
+        : normalizeSccpDestinationRollout(
+            record.destination_rollout,
+            `${context}.destination_rollout`,
+          ),
+    productionReady: requireBooleanLike(record.production_ready, `${context}.production_ready`),
+    disabledReason: optionalString(
+      record.disabled_reason ?? null,
+      `${context}.disabled_reason`,
+    ),
+    submissionTemplate: normalizeSccpCounterpartySubmissionTemplate(
+      record.submission_template,
+      `${context}.submission_template`,
+    ),
+  };
+}
+
+function normalizeSccpMessageTransparentProofArtifact(payload) {
+  const context = "sccp message proof artifact response";
+  const record = ensureRecord(payload, context);
+  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
+  const securityModel = requireNonEmptyString(record.security_model, `${context}.security_model`);
+  const anchorGovernance = requireNonEmptyString(
+    record.anchor_governance,
+    `${context}.anchor_governance`,
+  );
+  const finalityModel = requireNonEmptyString(record.finality_model, `${context}.finality_model`);
+  const verifierTarget = requireNonEmptyString(
+    record.verifier_target,
+    `${context}.verifier_target`,
+  );
+  if (!SCCP_PROOF_SECURITY_MODEL_VALUES.has(securityModel)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.security_model must be a supported SCCP proof security model`,
+      `${context}.security_model`,
+    );
+  }
+  if (!SCCP_ANCHOR_GOVERNANCE_VALUES.has(anchorGovernance)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.anchor_governance must be a supported SCCP anchor governance mode`,
+      `${context}.anchor_governance`,
+    );
+  }
+  if (!SCCP_FINALITY_MODEL_VALUES.has(finalityModel)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.finality_model must be a supported SCCP finality model`,
+      `${context}.finality_model`,
+    );
+  }
+  if (!SCCP_VERIFIER_TARGET_VALUES.has(verifierTarget)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.verifier_target must be a supported SCCP verifier target`,
+      `${context}.verifier_target`,
+    );
+  }
+  const artifact = {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    localDomain: ToriiClient._normalizeUnsignedInteger(record.local_domain, `${context}.local_domain`, {
+      allowZero: true,
+    }),
+    counterpartyDomain: ToriiClient._normalizeUnsignedInteger(
+      record.counterparty_domain,
+      `${context}.counterparty_domain`,
+      { allowZero: true },
+    ),
+    proofFamily: requireNonEmptyString(record.proof_family, `${context}.proof_family`),
+    securityModel,
+    anchorGovernance,
+    destinationBinding: normalizeSccpDestinationBinding(
+      record.destination_binding,
+      `${context}.destination_binding`,
+    ),
+    verifierBackendKey: requireNonEmptyString(
+      verifierBackend.key,
+      `${context}.verifier_backend.key`,
+    ),
+    messageBackend: requireNonEmptyString(record.message_backend, `${context}.message_backend`),
+    registryBackend: requireNonEmptyString(record.registry_backend, `${context}.registry_backend`),
+    manifestSeed: requireNonEmptyString(record.manifest_seed, `${context}.manifest_seed`),
+    finalityModel,
+    verifierTarget,
+    publicInputs: normalizeSccpMessageTransparentPublicInputs(
+      record.public_inputs,
+      `${context}.public_inputs`,
+    ),
+    proofBytes: normalizeArbitraryHex(record.proof_bytes, `${context}.proof_bytes`),
+    proofEnvelopeSummary:
+      record.proof_envelope_summary === undefined || record.proof_envelope_summary === null
+        ? null
+        : normalizeSccpProofEnvelopeSummary(
+            record.proof_envelope_summary,
+            `${context}.proof_envelope_summary`,
+          ),
+    submissionPackage: normalizeSccpCounterpartySubmissionPackage(
+      record.submission_package,
+      `${context}.submission_package`,
+    ),
+    bundle: normalizeSccpMessageProofBundle(record.bundle, `${context}.bundle`),
+  };
+  if (artifact.bundle.commitment.messageId !== artifact.publicInputs.messageId) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.bundle.commitment.message_id must match public_inputs.message_id`,
+      `${context}.bundle.commitment.message_id`,
+    );
+  }
+  if (artifact.bundle.commitment.payloadHash !== artifact.publicInputs.payloadHash) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.bundle.commitment.payload_hash must match public_inputs.payload_hash`,
+      `${context}.bundle.commitment.payload_hash`,
+    );
+  }
+  if (artifact.bundle.commitmentRoot !== artifact.publicInputs.commitmentRoot) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.bundle.commitment_root must match public_inputs.commitment_root`,
+      `${context}.bundle.commitment_root`,
+    );
+  }
+  return artifact;
+}
+
+function normalizeSccpCounterpartyProofJob(payload) {
+  const context = "sccp message proof job response";
+  const record = ensureRecord(payload, context);
+  const verifierBackend = ensureRecord(record.verifier_backend, `${context}.verifier_backend`);
+  const chainFamily = requireNonEmptyString(record.chain_family, `${context}.chain_family`);
+  const securityModel = requireNonEmptyString(record.security_model, `${context}.security_model`);
+  const anchorGovernance = requireNonEmptyString(
+    record.anchor_governance,
+    `${context}.anchor_governance`,
+  );
+  const finalityModel = requireNonEmptyString(record.finality_model, `${context}.finality_model`);
+  const verifierTarget = requireNonEmptyString(
+    record.verifier_target,
+    `${context}.verifier_target`,
+  );
+  if (!SCCP_CHAIN_FAMILY_VALUES.has(chainFamily)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.chain_family must be a supported SCCP chain family`,
+      `${context}.chain_family`,
+    );
+  }
+  if (!SCCP_PROOF_SECURITY_MODEL_VALUES.has(securityModel)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.security_model must be a supported SCCP proof security model`,
+      `${context}.security_model`,
+    );
+  }
+  if (!SCCP_ANCHOR_GOVERNANCE_VALUES.has(anchorGovernance)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.anchor_governance must be a supported SCCP anchor governance mode`,
+      `${context}.anchor_governance`,
+    );
+  }
+  if (!SCCP_FINALITY_MODEL_VALUES.has(finalityModel)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.finality_model must be a supported SCCP finality model`,
+      `${context}.finality_model`,
+    );
+  }
+  if (!SCCP_VERIFIER_TARGET_VALUES.has(verifierTarget)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.verifier_target must be a supported SCCP verifier target`,
+      `${context}.verifier_target`,
+    );
+  }
+  const job = {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    chainFamily,
+    chain: requireNonEmptyString(record.chain, `${context}.chain`),
+    localDomain: ToriiClient._normalizeUnsignedInteger(record.local_domain, `${context}.local_domain`, {
+      allowZero: true,
+    }),
+    counterpartyDomain: ToriiClient._normalizeUnsignedInteger(
+      record.counterparty_domain,
+      `${context}.counterparty_domain`,
+      { allowZero: true },
+    ),
+    proofFamily: requireNonEmptyString(record.proof_family, `${context}.proof_family`),
+    securityModel,
+    anchorGovernance,
+    destinationBinding: normalizeSccpDestinationBinding(
+      record.destination_binding,
+      `${context}.destination_binding`,
+    ),
+    verifierBackendKey: requireNonEmptyString(
+      verifierBackend.key,
+      `${context}.verifier_backend.key`,
+    ),
+    messageBackend: requireNonEmptyString(record.message_backend, `${context}.message_backend`),
+    registryBackend: requireNonEmptyString(record.registry_backend, `${context}.registry_backend`),
+    manifestSeed: requireNonEmptyString(record.manifest_seed, `${context}.manifest_seed`),
+    finalityModel,
+    verifierTarget,
+    publicInputs: normalizeSccpMessageTransparentPublicInputs(
+      record.public_inputs,
+      `${context}.public_inputs`,
+    ),
+    payloadKind: requireNonEmptyString(record.payload_kind, `${context}.payload_kind`),
+    payloadProjection: normalizeSccpPayloadProjection(
+      record.payload_projection,
+      `${context}.payload_projection`,
+    ),
+    proofEnvelopeSummary:
+      record.proof_envelope_summary === undefined || record.proof_envelope_summary === null
+        ? null
+        : normalizeSccpProofEnvelopeSummary(
+            record.proof_envelope_summary,
+            `${context}.proof_envelope_summary`,
+          ),
+    submissionTemplate: normalizeSccpCounterpartySubmissionTemplate(
+      record.submission_template,
+      `${context}.submission_template`,
+    ),
+    submissionPackage: normalizeSccpCounterpartySubmissionPackage(
+      record.submission_package,
+      `${context}.submission_package`,
+    ),
+    bundle: normalizeSccpMessageProofBundle(record.bundle, `${context}.bundle`),
+  };
+  if (job.bundle.commitment.messageId !== job.publicInputs.messageId) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.bundle.commitment.message_id must match public_inputs.message_id`,
+      `${context}.bundle.commitment.message_id`,
+    );
+  }
+  if (job.bundle.commitment.payloadHash !== job.publicInputs.payloadHash) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.bundle.commitment.payload_hash must match public_inputs.payload_hash`,
+      `${context}.bundle.commitment.payload_hash`,
+    );
+  }
+  if (job.bundle.commitmentRoot !== job.publicInputs.commitmentRoot) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.bundle.commitment_root must match public_inputs.commitment_root`,
+      `${context}.bundle.commitment_root`,
+    );
+  }
+  return job;
+}
+
+function normalizeSccpPayloadProjection(value, context) {
+  const record = ensureRecord(value, context);
+  const entries = Object.entries(record);
+  if (entries.length !== 1) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must contain exactly one SCCP payload projection variant`,
+      context,
+    );
+  }
+  const [[kind, body]] = entries;
+  const variant = ensureRecord(body, `${context}.${kind}`);
+  if (!SCCP_MESSAGE_PAYLOAD_KIND_VALUES.has(kind)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} has unsupported SCCP payload projection variant`,
+      context,
+    );
+  }
+  const payload = { ...variant };
+  const numericFields = {
+    AssetRegister: ["version", "target_domain", "home_domain", "nonce", "decimals"],
+    RouteActivate: ["version", "source_domain", "target_domain", "nonce"],
+    Transfer: [
+      "version",
+      "source_domain",
+      "dest_domain",
+      "nonce",
+      "asset_home_domain",
+      "amount",
+    ],
+  }[kind];
+  for (const field of numericFields) {
+    payload[field] = ToriiClient._normalizeUnsignedInteger(
+      payload[field],
+      `${context}.${kind}.${field}`,
+      { allowZero: true },
+    );
+  }
+  if (kind === "AssetRegister" || kind === "RouteActivate" || kind === "Transfer") {
+    payload.asset_id = normalizeSccpNormalizedCodecValue(
+      payload.asset_id,
+      `${context}.${kind}.asset_id`,
+    );
+  }
+  if (kind === "RouteActivate" || kind === "Transfer") {
+    payload.route_id = normalizeSccpNormalizedCodecValue(
+      payload.route_id,
+      `${context}.${kind}.route_id`,
+    );
+  }
+  if (kind === "Transfer") {
+    payload.sender = normalizeSccpNormalizedCodecValue(
+      payload.sender,
+      `${context}.${kind}.sender`,
+    );
+    payload.recipient = normalizeSccpNormalizedCodecValue(
+      payload.recipient,
+      `${context}.${kind}.recipient`,
+    );
+  }
+  return { kind, value: payload };
+}
+
+function normalizeSccpNormalizedCodecValue(value, context) {
+  const record = ensureRecord(value, context);
+  const entries = Object.entries(record);
+  if (entries.length !== 1) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must contain exactly one SCCP codec variant`,
+      context,
+    );
+  }
+  const [[kind, body]] = entries;
+  const variant = ensureRecord(body, `${context}.${kind}`);
+  switch (kind) {
+    case "TextUtf8":
+      return {
+        kind,
+        value: requireNonEmptyString(variant.value, `${context}.${kind}.value`),
+      };
+    case "EvmHex":
+    case "SolanaBase58":
+      return {
+        kind,
+        bytes: normalizeSccpCodecScalarValue(variant.bytes, `${context}.${kind}.bytes`),
+      };
+    case "TonRaw":
+      return {
+        kind,
+        workchain: coerceInteger(variant.workchain, `${context}.${kind}.workchain`),
+        account: normalizeSccpCodecScalarValue(variant.account, `${context}.${kind}.account`),
+      };
+    case "TronBase58Check":
+      return {
+        kind,
+        payload: normalizeSccpCodecScalarValue(variant.payload, `${context}.${kind}.payload`),
+      };
+    default:
+      throw createValidationError(
+        ValidationErrorCode.INVALID_OBJECT,
+        `${context} has unsupported SCCP codec variant`,
+        context,
+      );
+  }
+}
+
+function normalizeSccpCodecScalarValue(value, context) {
+  if (Buffer.isBuffer(value)) {
+    return value.toString("hex");
+  }
+  if (ArrayBuffer.isView(value)) {
+    return Buffer.from(value.buffer, value.byteOffset, value.byteLength).toString("hex");
+  }
+  if (value instanceof ArrayBuffer) {
+    return Buffer.from(value).toString("hex");
+  }
+  if (Array.isArray(value)) {
+    return normalizeByteArray(value, context).toString("hex");
+  }
+  const text = requireNonEmptyString(value, context).trim();
+  if (/^(0x)?[0-9a-fA-F]+$/.test(text)) {
+    return normalizeArbitraryHex(text, context);
+  }
+  return text;
+}
+
+function normalizeSccpMessageTransparentPublicInputs(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    messageId: normalizeHex32String(record.message_id, `${context}.message_id`),
+    payloadHash: normalizeHex32String(record.payload_hash, `${context}.payload_hash`),
+    targetDomain: ToriiClient._normalizeUnsignedInteger(record.target_domain, `${context}.target_domain`, {
+      allowZero: true,
+    }),
+    commitmentRoot: normalizeHex32String(record.commitment_root, `${context}.commitment_root`),
+    finalityHeight: ToriiClient._normalizeUnsignedInteger(
+      record.finality_height,
+      `${context}.finality_height`,
+      { allowZero: true },
+    ),
+    finalityBlockHash: normalizeHex32String(
+      record.finality_block_hash,
+      `${context}.finality_block_hash`,
+    ),
+  };
+}
+
+function normalizeSccpMessageProofBundle(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    commitmentRoot: normalizeHex32String(record.commitment_root, `${context}.commitment_root`),
+    commitment: normalizeSccpHubCommitment(record.commitment, `${context}.commitment`),
+    merkleProof: normalizeSccpMerkleProof(record.merkle_proof, `${context}.merkle_proof`),
+    payload: normalizeSccpPayloadEnvelope(record.payload, `${context}.payload`),
+    finalityProof: normalizeArbitraryHex(record.finality_proof, `${context}.finality_proof`),
+  };
+}
+
+function normalizeSccpHubCommitment(value, context) {
+  const record = ensureRecord(value, context);
+  const kind = requireNonEmptyString(record.kind, `${context}.kind`);
+  if (!SCCP_HUB_MESSAGE_KIND_VALUES.has(kind)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.kind must be a supported SCCP message kind`,
+      `${context}.kind`,
+    );
+  }
+  return {
+    version: ToriiClient._normalizeUnsignedInteger(record.version, `${context}.version`, {
+      allowZero: false,
+    }),
+    kind,
+    targetDomain: ToriiClient._normalizeUnsignedInteger(record.target_domain, `${context}.target_domain`, {
+      allowZero: true,
+    }),
+    messageId: normalizeHex32String(record.message_id, `${context}.message_id`),
+    payloadHash: normalizeHex32String(record.payload_hash, `${context}.payload_hash`),
+    parliamentCertificateHash:
+      record.parliament_certificate_hash === undefined || record.parliament_certificate_hash === null
+        ? null
+        : normalizeHex32String(
+            record.parliament_certificate_hash,
+            `${context}.parliament_certificate_hash`,
+          ),
+  };
+}
+
+function normalizeSccpMerkleProof(value, context) {
+  const record = ensureRecord(value, context);
+  return {
+    steps: parseRecordArray(record.steps, `${context}.steps`).map((entry, index) =>
+      normalizeSccpMerkleStep(entry, `${context}.steps[${index}]`),
+    ),
+  };
+}
+
+function normalizeSccpMerkleStep(value, context) {
+  const record = ensureRecord(value, context);
+  if (typeof record.sibling_is_left !== "boolean") {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context}.sibling_is_left must be boolean`,
+      `${context}.sibling_is_left`,
+    );
+  }
+  return {
+    siblingHash: normalizeHex32String(record.sibling_hash, `${context}.sibling_hash`),
+    siblingIsLeft: record.sibling_is_left,
+  };
+}
+
+function normalizeSccpPayloadEnvelope(value, context) {
+  const record = ensureRecord(value, context);
+  const keys = Object.keys(record);
+  if (keys.length !== 1) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must contain exactly one SCCP payload variant`,
+      context,
+    );
+  }
+  const [kind] = keys;
+  if (!SCCP_MESSAGE_PAYLOAD_KIND_VALUES.has(kind)) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} must use a supported SCCP payload variant`,
+      context,
+    );
+  }
+  return {
+    kind,
+    value: ensureRecord(record[kind], `${context}.${kind}`),
   };
 }
 
@@ -15288,6 +16376,16 @@ function parseStringArray(value, context) {
   });
 }
 
+function parseRecordArray(value, context) {
+  if (value == null) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${context} must be an array of objects`);
+  }
+  return value.map((entry, index) => ensureRecord(entry, `${context}[${index}]`));
+}
+
 function isPlainObject(value) {
   if (value === null || typeof value !== "object" || Array.isArray(value)) {
     return false;
@@ -17422,24 +18520,95 @@ function normalizeDeployContractRequest(input) {
   const record = ensureRecord(input, "deployContract request");
   const credentials = normalizeAuthorityCredentials(record, "deployContract");
   const codeB64 = record.code_b64 ?? record.codeB64;
+  const contractAlias = record.contract_alias ?? record.contractAlias;
   const payload = {
     ...credentials,
     code_b64: normalizeRequiredBase64Payload(
       codeB64,
       "deployContract.codeB64",
     ),
+    contract_alias: requireNonEmptyString(
+      contractAlias,
+      "deployContract.contract_alias",
+    ),
   };
-  const manifest = record.manifest;
-  if (manifest !== undefined && manifest !== null) {
-    payload.manifest = normalizeManifestPayload(manifest, "deployContract.manifest");
+  if (record.dataspace !== undefined && record.dataspace !== null) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "deployContract.dataspace is not accepted by /v1/contracts/deploy; use contractAlias to select the dataspace",
+      "deployContract.dataspace",
+    );
+  }
+  if (record.manifest !== undefined && record.manifest !== null) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      "deployContract.manifest is not accepted by /v1/contracts/deploy",
+      "deployContract.manifest",
+    );
+  }
+  const leaseExpiryValue = record.lease_expiry_ms ?? record.leaseExpiryMs;
+  if (leaseExpiryValue !== undefined && leaseExpiryValue !== null) {
+    const leaseExpiryMs = coerceInteger(
+      leaseExpiryValue,
+      "deployContract.lease_expiry_ms",
+    );
+    if (leaseExpiryMs < 0) {
+      throw createValidationError(
+        ValidationErrorCode.INVALID_NUMERIC,
+        "deployContract.lease_expiry_ms must be a non-negative integer",
+        "deployContract.lease_expiry_ms",
+      );
+    }
+    payload.lease_expiry_ms = leaseExpiryMs;
   }
   return payload;
 }
 
 function normalizeDeployContractResponse(payload) {
   const record = ensureRecord(payload, "deployContract response");
+  const contractAlias =
+    record.contract_alias === undefined || record.contract_alias === null
+      ? null
+      : requireNonEmptyString(
+          record.contract_alias,
+          "deployContract.response.contract_alias",
+        );
+  const contractAddress =
+    record.contract_address === undefined || record.contract_address === null
+      ? null
+      : requireNonEmptyString(
+          record.contract_address,
+          "deployContract.response.contract_address",
+        );
+  const previousContractAddress =
+    record.previous_contract_address === undefined
+      || record.previous_contract_address === null
+      ? null
+      : requireNonEmptyString(
+          record.previous_contract_address,
+          "deployContract.response.previous_contract_address",
+        );
+  const dataspace =
+    record.dataspace === undefined || record.dataspace === null
+      ? null
+      : requireNonEmptyString(record.dataspace, "deployContract.response.dataspace");
+  const deployNonce =
+    record.deploy_nonce === undefined || record.deploy_nonce === null
+      ? null
+      : coerceInteger(record.deploy_nonce, "deployContract.response.deploy_nonce");
+  const txHashHex =
+    record.tx_hash_hex === undefined || record.tx_hash_hex === null
+      ? null
+      : normalizeHex32String(record.tx_hash_hex, "deployContract.response.tx_hash_hex");
   return {
     ok: Boolean(record.ok),
+    contract_alias: contractAlias,
+    contract_address: contractAddress,
+    previous_contract_address: previousContractAddress,
+    upgraded: Boolean(record.upgraded),
+    dataspace,
+    deploy_nonce: deployNonce,
+    tx_hash_hex: txHashHex,
     code_hash_hex: normalizeHex32String(
       record.code_hash_hex,
       "deployContract.response.code_hash_hex",
@@ -17449,32 +18618,6 @@ function normalizeDeployContractResponse(payload) {
       "deployContract.response.abi_hash_hex",
     ),
   };
-}
-
-function normalizeDeployContractInstanceRequest(input) {
-  const record = ensureRecord(input, "deployContractInstance request");
-  const credentials = normalizeAuthorityCredentials(record, "deployContractInstance");
-  const codeB64 = record.code_b64 ?? record.codeB64;
-  const payload = {
-    ...credentials,
-    namespace: requireNonEmptyString(record.namespace, "deployContractInstance.namespace"),
-    contract_id: requireNonEmptyString(
-      record.contract_id ?? record.contractId,
-      "deployContractInstance.contractId",
-    ),
-    code_b64: normalizeRequiredBase64Payload(
-      codeB64,
-      "deployContractInstance.codeB64",
-    ),
-  };
-  const manifest = record.manifest;
-  if (manifest !== undefined && manifest !== null) {
-    payload.manifest = normalizeManifestPayload(
-      manifest,
-      "deployContractInstance.manifest",
-    );
-  }
-  return payload;
 }
 
 function normalizeGovernanceFinalizePayload(input) {
@@ -17531,6 +18674,83 @@ function normalizeGovernanceEnactPayload(input) {
     );
   }
   return payload;
+}
+
+function normalizeMinistryAgendaProposalDraftRequest(input) {
+  const record = ensureRecord(input, "draftMinistryAgendaProposal payload");
+  return {
+    proposal: ensureRecord(
+      record.proposal,
+      "draftMinistryAgendaProposal.proposal",
+    ),
+    authority: requireNonEmptyString(
+      record.authority,
+      "draftMinistryAgendaProposal.authority",
+    ),
+  };
+}
+
+function normalizeMinistryAgendaProposalRecord(
+  payload,
+  context = "ministry agenda proposal record",
+) {
+  const record = ensureRecord(payload, context);
+  return {
+    proposal: ensureRecord(record.proposal, `${context}.proposal`),
+    authority: requireNonEmptyString(record.authority, `${context}.authority`),
+    submitted_tx_hash_hex: normalizeHex32String(
+      record.submitted_tx_hash_hex,
+      `${context}.submitted_tx_hash_hex`,
+    ),
+    submitted_height: ToriiClient._normalizeUnsignedInteger(
+      record.submitted_height,
+      `${context}.submitted_height`,
+      { allowZero: true },
+    ),
+  };
+}
+
+function normalizeMinistryAgendaProposalDraftResponse(
+  payload,
+  context = "ministry agenda proposal draft response",
+) {
+  const record = ensureRecord(payload, context);
+  const base = normalizeGovernanceDraftResponse(
+    {
+      ok: record.ok,
+      tx_instructions: record.tx_instructions ?? [],
+    },
+    context,
+  );
+  return {
+    ok: base.ok,
+    agenda_proposal_id: requireNonEmptyString(
+      record.agenda_proposal_id,
+      `${context}.agenda_proposal_id`,
+    ),
+    authority: requireNonEmptyString(record.authority, `${context}.authority`),
+    tx_instructions: base.tx_instructions,
+    signable_transaction_b64: requireNonEmptyString(
+      record.signable_transaction_b64,
+      `${context}.signable_transaction_b64`,
+    ),
+  };
+}
+
+function normalizeMinistryAgendaProposalGetResponse(
+  payload,
+  context = "ministry agenda proposal lookup response",
+) {
+  const record = ensureRecord(payload, context);
+  const found = Boolean(record.found);
+  const proposalRecord =
+    record.record === undefined || record.record === null
+      ? null
+      : normalizeMinistryAgendaProposalRecord(record.record, `${context}.record`);
+  return {
+    found,
+    record: proposalRecord,
+  };
 }
 
 function normalizeGovernanceWindow(value, name) {
@@ -17680,14 +18900,13 @@ function normalizeGovernanceBallotResponse(payload, context) {
 
 function normalizeGovernanceDeployContractProposalPayload(input) {
   const record = ensureRecord(input, "governanceProposeDeployContract payload");
-  const namespace = requireNonEmptyString(
-    record.namespace,
-    "governanceProposeDeployContract.namespace",
-  );
-  const contractId = requireNonEmptyString(
-    record.contract_id ?? record.contractId,
-    "governanceProposeDeployContract.contractId",
-  );
+  const contractAddressValue = record.contract_address ?? record.contractAddress ?? null;
+  const contractAliasValue = record.contract_alias ?? record.contractAlias ?? null;
+  if ((contractAddressValue == null) === (contractAliasValue == null)) {
+    throw new TypeError(
+      "governanceProposeDeployContract requires exactly one of contract_address or contract_alias",
+    );
+  }
   const abiVersion = requireNonEmptyString(
     record.abi_version ?? record.abiVersion ?? "1",
     "governanceProposeDeployContract.abiVersion",
@@ -17703,12 +18922,21 @@ function normalizeGovernanceDeployContractProposalPayload(input) {
     throw new TypeError("governanceProposeDeployContract.abi_hash is required");
   }
   const payload = {
-    namespace,
-    contract_id: contractId,
     abi_version: abiVersion,
     code_hash: normalizeHashLike32(codeHashValue, "governanceProposeDeployContract.code_hash"),
     abi_hash: normalizeHashLike32(abiHashValue, "governanceProposeDeployContract.abi_hash"),
   };
+  if (contractAddressValue != null) {
+    payload.contract_address = requireNonEmptyString(
+      contractAddressValue,
+      "governanceProposeDeployContract.contract_address",
+    );
+  } else {
+    payload.contract_alias = requireNonEmptyString(
+      contractAliasValue,
+      "governanceProposeDeployContract.contract_alias",
+    );
+  }
   const windowValue =
     record.window;
   if (windowValue !== undefined && windowValue !== null) {
@@ -18117,65 +19345,40 @@ function normalizeArbitraryHex(value, name) {
   return hex.toLowerCase();
 }
 
-function normalizeDeployContractInstanceResponse(payload) {
-  const record = ensureRecord(payload, "deployContractInstance response");
+function normalizeContractTargetSelector(record, context) {
+  const contractAddress = pickOverride(record, "contract_address", "contractAddress");
+  const contractAlias = pickOverride(record, "contract_alias", "contractAlias");
+  const hasContractAddress = contractAddress !== undefined && contractAddress !== null;
+  const hasContractAlias = contractAlias !== undefined && contractAlias !== null;
+  if (hasContractAddress === hasContractAlias) {
+    throw createValidationError(
+      ValidationErrorCode.INVALID_OBJECT,
+      `${context} requires exactly one of contract_address or contract_alias`,
+      normalizeErrorPath(context),
+    );
+  }
+  if (hasContractAddress) {
+    return {
+      contract_address: requireNonEmptyString(
+        contractAddress,
+        `${context}.contract_address`,
+      ),
+    };
+  }
   return {
-    ok: Boolean(record.ok),
-    namespace: requireNonEmptyString(record.namespace, "deployContractInstance.namespace"),
-    contract_id: requireNonEmptyString(
-      record.contract_id,
-      "deployContractInstance.contractId",
+    contract_alias: requireNonEmptyString(
+      contractAlias,
+      `${context}.contract_alias`,
     ),
-    code_hash_hex: normalizeHex32String(
-      record.code_hash_hex,
-      "deployContractInstance.code_hash_hex",
-    ),
-    abi_hash_hex: normalizeHex32String(
-      record.abi_hash_hex,
-      "deployContractInstance.abi_hash_hex",
-    ),
-  };
-}
-
-function normalizeActivateContractInstanceRequest(input) {
-  const record = ensureRecord(input, "activateContractInstance request");
-  const credentials = normalizeAuthorityCredentials(record, "activateContractInstance");
-  return {
-    ...credentials,
-    namespace: requireNonEmptyString(
-      record.namespace,
-      "activateContractInstance.namespace",
-    ),
-    contract_id: requireNonEmptyString(
-      record.contract_id ?? record.contractId,
-      "activateContractInstance.contractId",
-    ),
-    code_hash: normalizeHex32String(
-      record.code_hash ?? record.codeHash,
-      "activateContractInstance.codeHash",
-    ),
-  };
-}
-
-function normalizeActivateContractInstanceResponse(payload) {
-  const record = ensureRecord(payload, "activateContractInstance response");
-  return {
-    ok: Boolean(record.ok),
   };
 }
 
 function normalizeContractCallRequest(input) {
   const record = ensureRecord(input, "contractCall request");
   const credentials = normalizeAuthorityCredentials(record, "contractCall");
-  const namespace = requireNonEmptyString(record.namespace, "contractCall.namespace");
-  const contractId = requireNonEmptyString(
-    record.contract_id ?? record.contractId,
-    "contractCall.contractId",
-  );
   const normalized = {
     ...credentials,
-    namespace,
-    contract_id: contractId,
+    ...normalizeContractTargetSelector(record, "contractCall"),
   };
   if (record.entrypoint !== undefined && record.entrypoint !== null) {
     normalized.entrypoint = requireNonEmptyString(
@@ -18204,15 +19407,12 @@ function normalizeContractCallRequest(input) {
 
 function normalizeContractCallResponse(payload) {
   const record = ensureRecord(payload, "contractCall response");
-  return {
+  const normalized = {
     ok: Boolean(record.ok),
-    namespace: requireNonEmptyString(
-      record.namespace,
-      "contractCall response.namespace",
-    ),
-    contract_id: requireNonEmptyString(
-      record.contract_id,
-      "contractCall response.contract_id",
+    submitted: Boolean(record.submitted),
+    dataspace: requireNonEmptyString(
+      record.dataspace,
+      "contractCall response.dataspace",
     ),
     code_hash_hex: normalizeHex32String(
       record.code_hash_hex,
@@ -18222,18 +19422,55 @@ function normalizeContractCallResponse(payload) {
       record.abi_hash_hex,
       "contractCall response.abi_hash_hex",
     ),
-    tx_hash_hex: normalizeHex32String(
+    creation_time_ms: ToriiClient._normalizeUnsignedInteger(
+      record.creation_time_ms,
+      "contractCall response.creation_time_ms",
+      { allowZero: true },
+    ),
+  };
+  if (record.contract_address !== undefined && record.contract_address !== null) {
+    normalized.contract_address = requireNonEmptyString(
+      record.contract_address,
+      "contractCall response.contract_address",
+    );
+  }
+  if (record.tx_hash_hex !== undefined && record.tx_hash_hex !== null) {
+    normalized.tx_hash_hex = normalizeHex32String(
       record.tx_hash_hex,
       "contractCall response.tx_hash_hex",
-    ),
-    entrypoint:
-      record.entrypoint === undefined || record.entrypoint === null
-        ? null
-        : requireNonEmptyString(
-            record.entrypoint,
-            "contractCall response.entrypoint",
-          ),
-  };
+    );
+  } else {
+    normalized.tx_hash_hex = null;
+  }
+  normalized.entrypoint =
+    record.entrypoint === undefined || record.entrypoint === null
+      ? null
+      : requireNonEmptyString(
+          record.entrypoint,
+          "contractCall response.entrypoint",
+        );
+  normalized.transaction_scaffold_b64 =
+    record.transaction_scaffold_b64 === undefined || record.transaction_scaffold_b64 === null
+      ? null
+      : normalizeRequiredBase64Payload(
+          record.transaction_scaffold_b64,
+          "contractCall response.transaction_scaffold_b64",
+        );
+  normalized.signed_transaction_b64 =
+    record.signed_transaction_b64 === undefined || record.signed_transaction_b64 === null
+      ? null
+      : normalizeRequiredBase64Payload(
+          record.signed_transaction_b64,
+          "contractCall response.signed_transaction_b64",
+        );
+  normalized.signing_message_b64 =
+    record.signing_message_b64 === undefined || record.signing_message_b64 === null
+      ? null
+      : normalizeRequiredBase64Payload(
+          record.signing_message_b64,
+          "contractCall response.signing_message_b64",
+        );
+  return normalized;
 }
 
 function normalizeMultisigAccountSelector(input, context) {
@@ -18341,14 +19578,7 @@ function normalizeMultisigContractCallProposeRequest(input) {
       record.signer_account_id ?? record.signerAccountId,
       "proposeMultisigContractCall request.signer_account_id",
     ),
-    namespace: requireNonEmptyString(
-      record.namespace,
-      "proposeMultisigContractCall request.namespace",
-    ),
-    contract_id: requireNonEmptyString(
-      record.contract_id ?? record.contractId,
-      "proposeMultisigContractCall request.contract_id",
-    ),
+    ...normalizeContractTargetSelector(record, "proposeMultisigContractCall request"),
     entrypoint: requireNonEmptyString(
       record.entrypoint,
       "proposeMultisigContractCall request.entrypoint",
@@ -18729,98 +19959,25 @@ function normalizeManifestEntrypointKind(value, name) {
   return "value" in record ? { kind, value: record.value } : { kind };
 }
 
-const CONTRACT_INSTANCE_ORDER_VALUES = new Set(["cid_asc", "cid_desc", "hash_asc", "hash_desc"]);
-const CONTRACT_INSTANCE_OPTION_KEYS = new Set([
-  "contains",
-  "hash_prefix",
-  "hashPrefix",
-  "offset",
-  "limit",
-  "order",
-  "signal",
-]);
-const HEX_PREFIX_REGEX = /^[0-9a-f]+$/i;
-
-function buildContractInstanceListQuery(options = {}) {
-  const normalizedOptions =
-    options === undefined ? {} : ensureRecord(options, "contractInstances options");
-  assertSupportedOptionKeys(
-    normalizedOptions,
-    CONTRACT_INSTANCE_OPTION_KEYS,
-    "contractInstances options",
-  );
-  const { signal } = normalizeSignalOption(normalizedOptions, "contractInstances");
-  const params = {};
-  const contains = normalizedOptions.contains;
-  const hashPrefix = normalizedOptions.hash_prefix ?? normalizedOptions.hashPrefix;
-  const offset = normalizedOptions.offset;
-  const limit = normalizedOptions.limit;
-  const order = normalizedOptions.order;
-  if (contains !== undefined && contains !== null) {
-    params.contains = requireNonEmptyString(contains, "contractInstances.contains");
-  }
-  if (hashPrefix !== undefined && hashPrefix !== null) {
-    params.hash_prefix = normalizeHashPrefix(hashPrefix, "contractInstances.hashPrefix");
-  }
-  if (offset !== undefined && offset !== null) {
-    params.offset = ToriiClient._normalizeUnsignedInteger(
-      offset,
-      "contractInstances.offset",
-      { allowZero: true },
-    );
-  }
-  if (limit !== undefined && limit !== null) {
-    params.limit = ToriiClient._normalizeUnsignedInteger(
-      limit,
-      "contractInstances.limit",
-      { allowZero: false },
-    );
-  }
-  if (order !== undefined && order !== null) {
-    params.order = normalizeContractInstanceOrder(order, "contractInstances.order");
-  }
-  return { signal, params: Object.keys(params).length === 0 ? undefined : params };
-}
-
-function normalizeContractInstanceListResponse(payload) {
-  const record = ensureRecord(payload ?? {}, "contract instances response");
-  const rawInstances = record.instances ?? [];
-  if (!Array.isArray(rawInstances)) {
-    throw new TypeError("contract instances response.instances must be an array");
-  }
-  const instances = rawInstances.map((entry, index) => {
-    const item = ensureRecord(entry, `contract instances response.instances[${index}]`);
-    return {
-      contract_id: requireNonEmptyString(
-        item.contract_id,
-        `contractInstances.instances[${index}].contract_id`,
-      ),
-      code_hash_hex: normalizeHex32String(
-        item.code_hash_hex,
-        `contractInstances.instances[${index}].code_hash_hex`,
-      ),
-    };
-  });
-  const limitValue =
-    record.limit ?? instances.length ?? 0;
+function normalizeGovernanceContractResponse(payload) {
+  const record = ensureRecord(payload ?? {}, "governance contract response");
   return {
-    namespace: requireNonEmptyString(record.namespace ?? "", "contractInstances.namespace"),
-    total: ToriiClient._normalizeUnsignedInteger(
-      record.total ?? instances.length ?? 0,
-      "contractInstances.total",
-      { allowZero: true },
+    found: Boolean(record.found),
+    contract_address: requireNonEmptyString(
+      record.contract_address,
+      "governanceContract.contract_address",
     ),
-    offset: ToriiClient._normalizeUnsignedInteger(
-      record.offset ?? 0,
-      "contractInstances.offset",
-      { allowZero: true },
-    ),
-    limit: ToriiClient._normalizeUnsignedInteger(
-      limitValue,
-      "contractInstances.limit",
-      { allowZero: true },
-    ),
-    instances,
+    dataspace:
+      record.dataspace == null
+        ? null
+        : requireNonEmptyString(record.dataspace, "governanceContract.dataspace"),
+    code_hash_hex:
+      record.code_hash_hex == null
+        ? null
+        : normalizeHex32String(
+            record.code_hash_hex,
+            "governanceContract.code_hash_hex",
+          ),
   };
 }
 
@@ -23446,24 +24603,6 @@ function normalizeAccountAssetListItem(value, context) {
     asset_id: assetId,
     quantity,
   };
-  return normalized;
-}
-
-function normalizeHashPrefix(value, context) {
-  const normalized = requireNonEmptyString(value, context);
-  if (!HEX_PREFIX_REGEX.test(normalized)) {
-    throw new TypeError(`${context} must be a non-empty hexadecimal string`);
-  }
-  return normalized.toLowerCase();
-}
-
-function normalizeContractInstanceOrder(value, context) {
-  const normalized = requireNonEmptyString(value, context).toLowerCase();
-  if (!CONTRACT_INSTANCE_ORDER_VALUES.has(normalized)) {
-    throw new TypeError(
-      `${context} must be one of ${Array.from(CONTRACT_INSTANCE_ORDER_VALUES).join(", ")}`,
-    );
-  }
   return normalized;
 }
 

@@ -3835,7 +3835,7 @@ mod tests {
 
             assert_eq!(
                 register.rwa.domain,
-                "commodities".parse::<DomainId>().expect("domain")
+                DomainId::try_new("commodities", "universal").expect("domain")
             );
             assert_eq!(
                 register.rwa.quantity,
@@ -5752,8 +5752,7 @@ struct PyDomainId {
 impl PyDomainId {
     #[new]
     fn new(value: &str) -> PyResult<Self> {
-        let inner = value
-            .parse()
+        let inner = DomainId::parse_fully_qualified(value)
             .map_err(|err| PyValueError::new_err(format!("invalid domain id `{value}`: {err}")))?;
         Ok(Self { inner })
     }
@@ -5969,7 +5968,7 @@ impl Instruction {
         domain_id: &str,
         metadata: Option<&Bound<'py, PyAny>>,
     ) -> PyResult<Self> {
-        let domain_id: DomainId = domain_id.parse().map_err(|err| {
+        let domain_id = DomainId::parse_fully_qualified(domain_id).map_err(|err| {
             PyValueError::new_err(format!("invalid domain id `{domain_id}`: {err}"))
         })?;
         let metadata = py_to_metadata(py, metadata)?;
@@ -6305,7 +6304,7 @@ impl Instruction {
         ensure_ed25519_account(&source)?;
         let destination = parse_account_id(destination)?;
         ensure_ed25519_account(&destination)?;
-        let domain_id: DomainId = domain_id.parse().map_err(|err| {
+        let domain_id = DomainId::parse_fully_qualified(domain_id).map_err(|err| {
             PyValueError::new_err(format!("invalid domain id `{domain_id}`: {err}"))
         })?;
         let instruction = Transfer::domain(source, domain_id, destination);

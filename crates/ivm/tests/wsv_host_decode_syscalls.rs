@@ -115,6 +115,36 @@ fn wsv_host_json_get_asset_definition_id_reads_address_literals() {
 }
 
 #[test]
+fn wsv_host_json_get_asset_definition_id_direct_reads_address_literals() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(wsv_host());
+
+    let json = br#"{"asset_definition_id":"62Fk4FPcMuLvW5QjDGNF2a4jAmjM"}"#;
+    let p_json = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Json, json))
+        .expect("alloc json");
+    let p_key = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Name, b"asset_definition_id"))
+        .expect("alloc key");
+
+    let prog =
+        common::assemble_syscalls(&[syscalls::SYSCALL_JSON_GET_ASSET_DEFINITION_ID_DIRECT as u8]);
+    vm.set_register(10, p_json);
+    vm.set_register(11, p_key);
+    vm.load_program(&prog).expect("load program");
+    vm.run().expect("json get asset definition id");
+
+    let out_ptr = vm.register(10);
+    let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+    assert_eq!(tlv.type_id, PointerType::AssetDefinitionId);
+    let asset: AssetDefinitionId = norito::decode_from_bytes(tlv.payload).expect("decode asset");
+    assert_eq!(
+        asset,
+        AssetDefinitionId::parse_address_literal("62Fk4FPcMuLvW5QjDGNF2a4jAmjM").unwrap()
+    );
+}
+
+#[test]
 fn wsv_host_schema_decode_roundtrip() {
     let mut vm = IVM::new(u64::MAX);
     vm.set_host(wsv_host());
@@ -144,6 +174,50 @@ fn wsv_host_schema_decode_roundtrip() {
         .expect("alloc encoded order bytes");
 
     let prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_DECODE as u8]);
+    vm.set_register(10, p_schema);
+    vm.set_register(11, p_bytes_in);
+    vm.load_program(&prog).expect("load program");
+    vm.run().expect("schema decode");
+
+    let out_ptr = vm.register(10);
+    let tlv = vm.memory.validate_tlv(out_ptr).expect("output tlv");
+    assert_eq!(tlv.type_id, PointerType::Json);
+    let value: norito::json::Value = common::json_from_payload(tlv.payload);
+    let obj = value.as_object().expect("json object");
+    assert_eq!(obj.get("qty").and_then(|v| v.as_i64()), Some(10));
+    assert_eq!(obj.get("side").and_then(|v| v.as_str()), Some("buy"));
+}
+
+#[test]
+fn wsv_host_schema_decode_roundtrip_direct() {
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(wsv_host());
+
+    let schema = b"Order";
+    let json = br#"{"qty":10,"side":"buy"}"#;
+
+    let p_schema = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Name, schema))
+        .expect("alloc schema");
+    let p_json = vm
+        .alloc_input_tlv(&make_tlv(PointerType::Json, json))
+        .expect("alloc order json");
+
+    let enc_prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_ENCODE_DIRECT as u8]);
+    vm.set_register(10, p_schema);
+    vm.set_register(11, p_json);
+    vm.load_program(&enc_prog).expect("load program");
+    vm.run().expect("schema encode");
+
+    let p_bytes = vm.register(10);
+    let encoded = vm.memory.validate_tlv(p_bytes).expect("encoded tlv");
+    assert_eq!(encoded.type_id, PointerType::NoritoBytes);
+
+    let p_bytes_in = vm
+        .alloc_input_tlv(&make_tlv(PointerType::NoritoBytes, encoded.payload))
+        .expect("alloc encoded order bytes");
+
+    let prog = common::assemble_syscalls(&[syscalls::SYSCALL_SCHEMA_DECODE_DIRECT as u8]);
     vm.set_register(10, p_schema);
     vm.set_register(11, p_bytes_in);
     vm.load_program(&prog).expect("load program");

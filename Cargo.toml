@@ -40,6 +40,7 @@ iroha_crypto = { path = "crates/iroha_crypto", default-features = false, feature
 iroha_macro = { path = "crates/iroha_macro", default-features = false }
 iroha_futures = { path = "crates/iroha_futures" }
 iroha_genesis = { path = "crates/iroha_genesis" }
+iroha_sccp = { path = "crates/iroha_sccp" }
 norito = { path = "crates/norito", features = ["json", "json-std-io", "strict-safe", "gpu-compression"] }
 norito_derive = { path = "crates/norito_derive" }
 iroha_ffi = { path = "crates/iroha_ffi" }
@@ -157,6 +158,7 @@ toml = "0.9.8"
 bincode = "2.0.1"
 zstd = "0.13.3"
 time = { version = "0.3.44", default-features = false, features = ["formatting", "parsing"] }
+serde = "1.0.228"
 
 tiny-keccak = { version = "2.0.2", features = ["sha3"] }
 scrypt = { version = "0.11.0", default-features = false, features = ["std"] }
@@ -300,7 +302,8 @@ members = [
     "tools/soranet-relay",
     "tools/norito_codegen_exporter",
     "tools/soradns-resolver",
-    "tools/telemetry-schema-diff"
+    "tools/telemetry-schema-diff",
+    "tools/kotlin-fixture-gen"
 ]
 exclude = [
     "mochi/fixtures",

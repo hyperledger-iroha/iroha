@@ -576,8 +576,7 @@ enum MetadataTarget {
 
 fn parse_metadata_target(kind: u8, object: String) -> BridgeResult<MetadataTarget> {
     match kind {
-        0 => object
-            .parse::<DomainId>()
+        0 => DomainId::parse_fully_qualified(&object)
             .map(MetadataTarget::Domain)
             .map_err(|_| BridgeError::MetadataTarget),
         1 => parse_account_id(object).map(MetadataTarget::Account),
@@ -6026,10 +6025,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
     creation_time_ms: u64,
     ttl_ms: u64,
     ttl_present: c_uchar,
-    namespace_ptr: *const c_char,
-    namespace_len: c_ulong,
-    contract_id_ptr: *const c_char,
-    contract_id_len: c_ulong,
+    contract_address_ptr: *const c_char,
+    contract_address_len: c_ulong,
     code_hash_ptr: *const c_char,
     code_hash_len: c_ulong,
     abi_hash_ptr: *const c_char,
@@ -6058,14 +6055,17 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
 
         let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let namespace = unsafe { read_string_bridge(namespace_ptr, namespace_len) }?;
-        let contract_id = unsafe { read_string_bridge(contract_id_ptr, contract_id_len) }?;
+        let contract_address_raw =
+            unsafe { read_string_bridge(contract_address_ptr, contract_address_len) }?;
         let code_hash_raw = unsafe { read_string_bridge(code_hash_ptr, code_hash_len) }?;
         let abi_hash_raw = unsafe { read_string_bridge(abi_hash_ptr, abi_hash_len) }?;
         let abi_version = unsafe { read_string_bridge(abi_version_ptr, abi_version_len) }?;
 
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
+        let contract_address = contract_address_raw
+            .parse()
+            .map_err(|_| BridgeError::Governance)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let code_hash_arr = parse_hex_32(&code_hash_raw)?;
         let abi_hash_arr = parse_hex_32(&abi_hash_raw)?;
@@ -6102,8 +6102,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         let manifest_provenance = manifest.provenance.clone().ok_or(BridgeError::Governance)?;
 
         let proposal = ProposeDeployContract {
-            namespace,
-            contract_id,
+            contract_address,
             code_hash_hex,
             abi_hash_hex,
             abi_version,
@@ -6138,10 +6137,8 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
     creation_time_ms: u64,
     ttl_ms: u64,
     ttl_present: c_uchar,
-    namespace_ptr: *const c_char,
-    namespace_len: c_ulong,
-    contract_id_ptr: *const c_char,
-    contract_id_len: c_ulong,
+    contract_address_ptr: *const c_char,
+    contract_address_len: c_ulong,
     code_hash_ptr: *const c_char,
     code_hash_len: c_ulong,
     abi_hash_ptr: *const c_char,
@@ -6172,14 +6169,17 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         let algorithm = parse_algorithm_code(algorithm_code)?;
         let chain = unsafe { read_string_bridge(chain_ptr, chain_len) }?;
         let authority_str = unsafe { read_string_bridge(authority_ptr, authority_len) }?;
-        let namespace = unsafe { read_string_bridge(namespace_ptr, namespace_len) }?;
-        let contract_id = unsafe { read_string_bridge(contract_id_ptr, contract_id_len) }?;
+        let contract_address_raw =
+            unsafe { read_string_bridge(contract_address_ptr, contract_address_len) }?;
         let code_hash_raw = unsafe { read_string_bridge(code_hash_ptr, code_hash_len) }?;
         let abi_hash_raw = unsafe { read_string_bridge(abi_hash_ptr, abi_hash_len) }?;
         let abi_version = unsafe { read_string_bridge(abi_version_ptr, abi_version_len) }?;
 
         let chain_id = chain.parse().map_err(|_| BridgeError::ChainId)?;
         let authority = parse_account_id(authority_str)?;
+        let contract_address = contract_address_raw
+            .parse()
+            .map_err(|_| BridgeError::Governance)?;
         let ttl = parse_ttl(ttl_ms, ttl_present != 0)?;
         let code_hash_arr = parse_hex_32(&code_hash_raw)?;
         let abi_hash_arr = parse_hex_32(&abi_hash_raw)?;
@@ -6216,8 +6216,7 @@ pub unsafe extern "C" fn connect_norito_encode_governance_propose_deploy_signed_
         let manifest_provenance = manifest.provenance.clone().ok_or(BridgeError::Governance)?;
 
         let proposal = ProposeDeployContract {
-            namespace,
-            contract_id,
+            contract_address,
             code_hash_hex,
             abi_hash_hex,
             abi_version,
@@ -7388,7 +7387,7 @@ mod accel_tests {
 
     fn asset_definition_literal(domain: &str, name: &str) -> String {
         AssetDefinitionId::new(
-            DomainId::from_str(domain).expect("domain"),
+            DomainId::try_new(domain, "universal").expect("domain"),
             Name::from_str(name).expect("name"),
         )
         .to_string()
@@ -7407,7 +7406,7 @@ mod accel_tests {
             .map(iroha_data_model::account::ParsedAccountId::into_account_id)
             .expect("parse account");
         let definition = AssetDefinitionId::new(
-            "bank".parse().expect("domain"),
+            DomainId::try_new("bank", "universal").expect("domain"),
             "usd".parse().expect("asset name"),
         );
         let asset = AssetId::new(definition.clone(), account_id.clone());
@@ -8470,7 +8469,7 @@ mod offline_challenge_tests {
         let (controller_account, controller_cstr) = account_with_cstring("bank", 21);
         let (_, receiver_cstr) = account_with_cstring("bank", 99);
         let asset_definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "bank".parse().unwrap(),
+            DomainId::try_new("bank", "universal").unwrap(),
             "usd".parse().unwrap(),
         );
         let asset_id = AssetId::new(asset_definition, controller_account.clone());
@@ -8665,8 +8664,10 @@ mod offline_fastpq_proof_tests {
         let bundle_id = Hash::new(b"bundle-fastpq");
         let certificate_id = Hash::new(b"cert-fastpq");
         let header = sample_header(bundle_id, certificate_id);
-        let asset_definition =
-            AssetDefinitionId::new("default".parse().unwrap(), "xor".parse().unwrap());
+        let asset_definition = AssetDefinitionId::new(
+            DomainId::try_new("default", "universal").unwrap(),
+            "xor".parse().unwrap(),
+        );
         let asset_id = AssetId::new(asset_definition, owner);
         let receipt_amounts = vec![Numeric::new(10, 0), Numeric::new(15, 0)];
         let claimed_delta = Numeric::new(25, 0);
@@ -11075,7 +11076,7 @@ mod offline_receipt_challenge_tests {
 
     fn sample_asset_id(account: &AccountId) -> AssetId {
         let definition: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-            "wonderland".parse().unwrap(),
+            DomainId::try_new("wonderland", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         AssetId::new(definition, account.clone())
@@ -12527,7 +12528,8 @@ mod tests {
     }
 
     fn sample_rwa_id_literal() -> String {
-        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities".to_owned()
+        "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef$commodities.universal"
+            .to_owned()
     }
 
     const LIVE_EMAIL_CLAIM_SIGNATURE_HEX: &str = "9262CA8C755D47207ED0CD2E19892DFAA4612701A36DCAF87173D42CC754DFB6A66158856FDFD25974C2A11E9FC32940CA0DF18CAC25A38CB5DEDC4625E67900";
@@ -12842,7 +12844,7 @@ mod tests {
 
     #[test]
     fn zk_ballot_public_inputs_rejects_noncanonical_owner() {
-        let domain: DomainId = "wonderland".parse().expect("domain");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
         let keypair = KeyPair::from_seed(vec![0xCC; 32], Algorithm::Ed25519);
         let account = AccountId::new(keypair.public_key().clone());
         let address_hex = account.to_canonical_hex().expect("canonical hex");
@@ -13852,7 +13854,7 @@ mod sorafs_tests {
         let sender = test_account_id(1);
         let receiver = test_account_id(2);
         let asset_def = iroha_data_model::asset::id::AssetDefinitionId::new(
-            "default".parse().unwrap(),
+            DomainId::try_new("default", "universal").unwrap(),
             "xor".parse().unwrap(),
         );
         let asset = AssetId::new(asset_def, sender.clone());

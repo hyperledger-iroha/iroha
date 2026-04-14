@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: dcd8de175a7c5172158a03e1a25b254c90a11e62c173f95b8d9e4a387df6ba09
 source_last_modified: "2026-03-26T13:01:47.372931+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: crates/ivm/docs/examples/08_call_transfer_asset.ko
 
 - Ֆինանսավորեք պայմանագրային մարմնին (օրինակ՝ `<i105-account-id>` պայմանագրային հաշվի համար) այն ակտիվով, որը նա կփոխանցի և մարմնին կտրամադրի `CanTransfer` դերը կամ համարժեք թույլտվությունը:
 - Զանգահարեք `call_transfer_asset` մուտքի կետ՝ պայմանագրային հաշվից 5 միավոր Բոբին փոխանցելու համար (`<i105-account-id>`)՝ արտացոլելով այն ճանապարհը, որով շղթայական ավտոմատացումը կարող է փաթեթավորել հյուրընկալող զանգերը:
-- Ստուգեք մնացորդները `FindAccountAssets`-ի կամ `iroha_cli ledger asset list --account <i105-account-id>`-ի միջոցով և ստուգեք իրադարձությունները՝ հաստատելու համար, որ մետատվյալների պահակը գրանցել է փոխանցման համատեքստը:
+- Ստուգեք մնացորդները `FindAccountAssets`-ի կամ `iroha ledger asset list all --verbose`-ի միջոցով և ստուգեք իրադարձությունները՝ հաստատելու համար, որ մետատվյալների պահակը գրանցել է փոխանցման համատեքստը:
 
 ## Առնչվող SDK ուղեցույցներ
 

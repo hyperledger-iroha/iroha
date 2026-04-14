@@ -7,7 +7,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     num::NonZeroU64,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -24,6 +27,7 @@ use iroha_data_model::{
     account::AccountId,
     block::{BlockHeader, SignedBlock},
     content::ContentAuthMode,
+    domain::DomainId,
     jurisdiction::JdgSignatureScheme,
     permission,
     prelude::{Account, Domain, ExposedPrivateKey, Grant},
@@ -244,7 +248,8 @@ pub fn random_authority() -> AuthorityCreds {
 
 /// Build a minimal world that contains the given authority account in `wonderland`.
 pub fn world_with_authority(authority: &AccountId) -> iroha_core::state::World {
-    let domain_id: iroha_data_model::domain::DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: iroha_data_model::domain::DomainId =
+        DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(authority);
     let account = Account::new(authority.clone()).build(authority);
     iroha_core::state::World::with([domain], [account], [])
@@ -288,30 +293,24 @@ pub fn deploy_request_json(
     private_key: &ExposedPrivateKey,
     code_b64: &str,
 ) -> String {
+    static DEPLOY_ALIAS_COUNTER: AtomicU64 = AtomicU64::new(1);
+
+    let alias = iroha_data_model::smart_contract::ContractAlias::from_components(
+        &format!(
+            "deploy{}",
+            DEPLOY_ALIAS_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ),
+        None,
+        "universal",
+    )
+    .expect("construct contract alias");
     let value = crate::json_object(vec![
         crate::json_entry("authority", account.clone()),
         crate::json_entry("private_key", private_key.to_string()),
         crate::json_entry("code_b64", code_b64),
+        crate::json_entry("contract_alias", alias),
     ]);
     norito::json::to_json(&value).expect("serialize deploy request")
-}
-
-/// Build JSON string for activate-instance request body.
-pub fn activate_instance_request_json(
-    account: &AccountId,
-    private_key: &ExposedPrivateKey,
-    namespace: &str,
-    contract_id: &str,
-    code_hash_hex: &str,
-) -> String {
-    let value = crate::json_object(vec![
-        crate::json_entry("authority", account.clone()),
-        crate::json_entry("private_key", private_key.to_string()),
-        crate::json_entry("namespace", namespace),
-        crate::json_entry("contract_id", contract_id),
-        crate::json_entry("code_hash", code_hash_hex),
-    ]);
-    norito::json::to_json(&value).expect("serialize activate request")
 }
 
 /// Build JSON string for contract call request body.
@@ -359,24 +358,6 @@ pub fn contract_view_request_json(
     entries.push(crate::json_entry("gas_limit", options.gas_limit));
     let value = crate::json_object(entries);
     norito::json::to_json(&value).expect("serialize contract view request")
-}
-
-/// Build JSON string for combined deploy+activate request body.
-pub fn deploy_and_activate_request_json(
-    account: &AccountId,
-    private_key: &ExposedPrivateKey,
-    namespace: &str,
-    contract_id: &str,
-    code_b64: &str,
-) -> String {
-    let value = crate::json_object(vec![
-        crate::json_entry("authority", account.clone()),
-        crate::json_entry("private_key", private_key.to_string()),
-        crate::json_entry("namespace", namespace),
-        crate::json_entry("contract_id", contract_id),
-        crate::json_entry("code_b64", code_b64),
-    ]);
-    norito::json::to_json(&value).expect("serialize deploy+activate request")
 }
 
 /// Build a minimal actual configuration root suitable for constructing Kiso and Torii in tests.
@@ -566,6 +547,8 @@ pub fn mk_minimal_root_cfg() -> iroha_config::parameters::actual::Root {
             ram_lfe: None,
             faucet: None,
             tx_history: None,
+            webhooks_enabled: defaults::torii::WEBHOOKS_ENABLED,
+            zk_attachments_enabled: defaults::torii::ZK_ATTACHMENTS_ENABLED,
             events_buffer_capacity: defaults::torii::events_buffer_capacity(),
             ws_message_timeout: Duration::from_millis(defaults::torii::WS_MESSAGE_TIMEOUT_MS),
             query_rate_per_authority_per_sec: None,

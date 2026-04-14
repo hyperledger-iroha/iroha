@@ -463,7 +463,9 @@ impl IvmConfig {
             .saturating_mul(crate::gas_to_stack_multiplier());
         let configured = self.stack_limit_bytes.max(64 * 1024);
         let budget = self.stack_budget_bytes.max(1);
-        configured.min(gas_cap_bytes).min(budget).max(64 * 1024)
+        crate::memory::Memory::align_stack_bytes(
+            configured.min(gas_cap_bytes).min(budget).max(64 * 1024),
+        )
     }
 
     /// Create a builder seeded with this configuration's values.

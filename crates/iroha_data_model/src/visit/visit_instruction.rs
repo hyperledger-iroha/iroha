@@ -10,24 +10,26 @@ use crate::{
         nexus::{RegisterVerifiedLaneRelay, SetLaneRelayEmergencyValidators},
         soracloud::{
             AcknowledgeSoracloudAgentMessage, AdmitSoracloudPrivateCompileProfile,
-            AdvanceSoracloudRollout, AdvertiseSoracloudModelHost,
+            AdvanceSoracloudRollout, AdvertiseSoracloudInrouHost, AdvertiseSoracloudModelHost,
             AllowSoracloudAgentAutonomyArtifact, AllowSoracloudUploadedModel,
             AppendSoracloudUploadedModelChunk, ApproveSoracloudAgentWalletSpend,
-            CheckpointSoracloudTrainingJob, DeleteSoracloudServiceConfig,
-            DeleteSoracloudServiceSecret, DeploySoracloudAgentApartment, DeploySoracloudService,
-            EnqueueSoracloudAgentMessage, FinalizeSoracloudUploadedModelBundle,
-            HeartbeatSoracloudModelHost, JoinSoracloudHfSharedLease, LeaveSoracloudHfSharedLease,
-            MutateSoracloudState, PromoteSoracloudModelWeight,
+            CheckpointSoracloudTrainingJob, ClearSoracloudInrouReplicaRuntimeState,
+            DeleteSoracloudServiceConfig, DeleteSoracloudServiceSecret,
+            DeploySoracloudAgentApartment, DeploySoracloudService, EnqueueSoracloudAgentMessage,
+            FinalizeSoracloudUploadedModelBundle, HeartbeatSoracloudModelHost,
+            JoinSoracloudHfSharedLease, LeaveSoracloudHfSharedLease, MutateSoracloudState,
+            PromoteSoracloudModelWeight, ReconcileSoracloudInrouPlacements,
             RecordSoracloudAgentAutonomyExecution, RecordSoracloudDecryptionRequest,
             RecordSoracloudMailboxMessage, RecordSoracloudPrivateInferenceCheckpoint,
             RecordSoracloudRuntimeReceipt, RegisterSoracloudModelArtifact,
             RegisterSoracloudModelWeight, RegisterSoracloudUploadedModelBundle,
             RenewSoracloudAgentLease, RenewSoracloudHfSharedLease,
-            RequestSoracloudAgentWalletSpend, RestartSoracloudAgentApartment,
-            RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy, RollbackSoracloudModelWeight,
-            RollbackSoracloudService, RunSoracloudAgentAutonomy, RunSoracloudFheJob,
-            SetSoracloudRuntimeState, SetSoracloudServiceConfig, SetSoracloudServiceSecret,
-            StartSoracloudPrivateInference, StartSoracloudTrainingJob, UpgradeSoracloudService,
+            ReportSoracloudServiceLeaseUsage, RequestSoracloudAgentWalletSpend,
+            RestartSoracloudAgentApartment, RetrySoracloudTrainingJob, RevokeSoracloudAgentPolicy,
+            RollbackSoracloudModelWeight, RollbackSoracloudService, RunSoracloudAgentAutonomy,
+            RunSoracloudFheJob, SetSoracloudInrouReplicaRuntimeState, SetSoracloudRuntimeState,
+            SetSoracloudServiceConfig, SetSoracloudServiceSecret, StartSoracloudPrivateInference,
+            StartSoracloudTrainingJob, UpgradeSoracloudService, WithdrawSoracloudInrouHost,
             WithdrawSoracloudModelHost,
         },
         staking::{
@@ -176,6 +178,15 @@ fn visit_soracloud_service_instruction<V: Visit + ?Sized>(
         visitor.visit_heartbeat_soracloud_model_host(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<WithdrawSoracloudModelHost>() {
         visitor.visit_withdraw_soracloud_model_host(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<AdvertiseSoracloudInrouHost>() {
+        visitor.visit_advertise_soracloud_inrou_host(v);
+    } else if let Some(v) = isi.as_any().downcast_ref::<WithdrawSoracloudInrouHost>() {
+        visitor.visit_withdraw_soracloud_inrou_host(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<ReconcileSoracloudInrouPlacements>()
+    {
+        visitor.visit_reconcile_soracloud_inrou_placements(v);
     } else {
         return false;
     }
@@ -292,6 +303,21 @@ fn visit_soracloud_training_instruction<V: Visit + ?Sized>(
         visitor.visit_advance_soracloud_rollout(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<SetSoracloudRuntimeState>() {
         visitor.visit_set_soracloud_runtime_state(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<SetSoracloudInrouReplicaRuntimeState>()
+    {
+        visitor.visit_set_soracloud_inrou_replica_runtime_state(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<ClearSoracloudInrouReplicaRuntimeState>()
+    {
+        visitor.visit_clear_soracloud_inrou_replica_runtime_state(v);
+    } else if let Some(v) = isi
+        .as_any()
+        .downcast_ref::<ReportSoracloudServiceLeaseUsage>()
+    {
+        visitor.visit_report_soracloud_service_lease_usage(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RecordSoracloudMailboxMessage>() {
         visitor.visit_record_soracloud_mailbox_message(v);
     } else if let Some(v) = isi.as_any().downcast_ref::<RecordSoracloudRuntimeReceipt>() {
@@ -484,6 +510,9 @@ macro_rules! instruction_visitors {
             visit_advertise_soracloud_model_host(&AdvertiseSoracloudModelHost),
             visit_heartbeat_soracloud_model_host(&HeartbeatSoracloudModelHost),
             visit_withdraw_soracloud_model_host(&WithdrawSoracloudModelHost),
+            visit_advertise_soracloud_inrou_host(&AdvertiseSoracloudInrouHost),
+            visit_withdraw_soracloud_inrou_host(&WithdrawSoracloudInrouHost),
+            visit_reconcile_soracloud_inrou_placements(&ReconcileSoracloudInrouPlacements),
             visit_deploy_soracloud_agent_apartment(&DeploySoracloudAgentApartment),
             visit_renew_soracloud_agent_lease(&RenewSoracloudAgentLease),
             visit_restart_soracloud_agent_apartment(&RestartSoracloudAgentApartment),
@@ -511,6 +540,9 @@ macro_rules! instruction_visitors {
             visit_record_soracloud_private_inference_checkpoint(&RecordSoracloudPrivateInferenceCheckpoint),
             visit_advance_soracloud_rollout(&AdvanceSoracloudRollout),
             visit_set_soracloud_runtime_state(&SetSoracloudRuntimeState),
+            visit_set_soracloud_inrou_replica_runtime_state(&SetSoracloudInrouReplicaRuntimeState),
+            visit_clear_soracloud_inrou_replica_runtime_state(&ClearSoracloudInrouReplicaRuntimeState),
+            visit_report_soracloud_service_lease_usage(&ReportSoracloudServiceLeaseUsage),
             visit_record_soracloud_mailbox_message(&RecordSoracloudMailboxMessage),
             visit_record_soracloud_runtime_receipt(&RecordSoracloudRuntimeReceipt),
         }
@@ -565,7 +597,7 @@ mod tests {
             }
         }
 
-        let _domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let key_pair = KeyPair::from_seed(vec![0x11; 32], Algorithm::Ed25519);
         let validator = AccountId::new(key_pair.public_key().clone());
         let instruction = RegisterPublicLaneValidator::new(
@@ -598,7 +630,7 @@ mod tests {
             }
         }
 
-        let _domain: DomainId = "wonderland".parse().expect("domain id");
+        let _domain: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
         let validator_key = KeyPair::from_seed(vec![0x12; 32], Algorithm::Ed25519);
         let peer_key = KeyPair::from_seed(vec![0x13; 32], Algorithm::Ed25519);
         let validator = AccountId::new(validator_key.public_key().clone());

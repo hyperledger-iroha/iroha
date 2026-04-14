@@ -789,9 +789,11 @@ fn bind_alias_rejects_expiry_after_retention_epoch() {
 fn make_state() -> State {
     let kura = Kura::blank_kura_for_testing();
     let live = LiveQueryStore::start_test();
-    let default_domain: DomainId = iroha_data_model::account::address::default_domain_name()
-        .parse()
-        .expect("default account domain label");
+    let default_domain = DomainId::try_new(
+        iroha_data_model::account::address::default_domain_name().as_ref(),
+        "universal",
+    )
+    .expect("default account domain label");
     let alice = alice();
     let bob = iroha_test_samples::BOB_ID.clone();
     let domain = Domain::new(default_domain.clone()).build(&alice);
@@ -843,9 +845,11 @@ fn default_policy() -> PinPolicy {
 
 fn bootstrap_sorafs(tx: &mut iroha_core::state::StateTransaction<'_, '_>) {
     let alice = alice();
-    let default_domain: DomainId = iroha_data_model::account::address::default_domain_name()
-        .parse()
-        .expect("default account domain label");
+    let default_domain = DomainId::try_new(
+        iroha_data_model::account::address::default_domain_name().as_ref(),
+        "universal",
+    )
+    .expect("default account domain label");
     if tx.world().domains().get(&default_domain).is_none() {
         Register::domain(Domain::new(default_domain.clone()))
             .execute(&alice, tx)

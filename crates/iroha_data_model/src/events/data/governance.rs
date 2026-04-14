@@ -74,10 +74,8 @@ mod model {
         pub id: [u8; 32],
         /// Proposer account id
         pub proposer: crate::account::AccountId,
-        /// Namespace (protected scope)
-        pub namespace: String,
-        /// Contract identifier within the namespace
-        pub contract_id: String,
+        /// Canonical public contract address targeted by the proposal when applicable.
+        pub contract_address: Option<crate::smart_contract::ContractAddress>,
     }
 
     /// Lock created payload.

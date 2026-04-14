@@ -13,8 +13,10 @@ fn query_accessors_return_inner_values() {
     let permissions_query = FindPermissionsByAccountId::new(account_id.clone());
     assert_eq!(permissions_query.account_id(), &account_id);
 
-    let asset_definition_id =
-        AssetDefinitionId::new("domain".parse().unwrap(), "asset".parse().unwrap());
+    let asset_definition_id = AssetDefinitionId::new(
+        DomainId::try_new("domain", "universal").unwrap(),
+        "asset".parse().unwrap(),
+    );
     let accounts_query = FindAccountsWithAsset::new(asset_definition_id.clone());
     assert_eq!(accounts_query.asset_definition_id(), &asset_definition_id);
 

@@ -32,7 +32,8 @@ pub fn gen_account_in(domain: impl core::fmt::Display) -> (AccountId, KeyPair) {
         let seed_bytes = next_calibration_seed(&base_seed, &domain_str);
         KeyPair::from_seed(seed_bytes, Algorithm::default())
     });
-    let _: DomainId = domain_str.parse().expect("domain name should be valid");
+    let _: DomainId =
+        DomainId::try_new(domain_str.as_str(), "universal").expect("domain name should be valid");
     let account_id = AccountId::new(key_pair.public_key().clone());
     (account_id, key_pair)
 }
@@ -145,7 +146,8 @@ macro_rules! declare_account_with_keypair {
     ( $account_id:ident, $domain:literal, $key_pair:ident, $public_key:literal, $private_key:literal ) => {
         /// A standardized [`AccountId`].
         pub static $account_id: LazyLock<AccountId> = LazyLock::new(|| {
-            let _: DomainId = $domain.parse().expect("domain should be a valid Name");
+            let _: DomainId =
+                DomainId::try_new($domain, "universal").expect("domain should be a valid Name");
             AccountId::new($key_pair.public_key().clone())
         });
 

@@ -438,7 +438,7 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::rotate"));
         grant_manifest_permission(&mut state.world, &authority, dataspace);
 
-        let domain_id: DomainId = "space.publish".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("space", "publish").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
@@ -506,7 +506,7 @@ mod tests {
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::activate"));
         grant_manifest_permission(&mut state.world, &authority, dataspace);
 
-        let domain_id: DomainId = "spaces.activate".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("spaces", "activate").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
@@ -569,7 +569,7 @@ mod tests {
         seed_dataspace_catalog(&mut state, dataspace);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
 
-        let domain_id: DomainId = "spaces.revoke".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("spaces", "revoke").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let kp = KeyPair::random();
         let account_id = AccountId::new(kp.public_key().clone());
@@ -660,7 +660,7 @@ mod tests {
         seed_dataspace_catalog(&mut state, dataspace);
         grant_manifest_permission(&mut state.world, &authority, dataspace);
 
-        let domain_id: DomainId = "spaces.expire".parse().expect("domain id");
+        let domain_id: DomainId = DomainId::try_new("spaces", "expire").expect("domain id");
         seed_domain(&mut state, &domain_id, &authority);
         let kp = KeyPair::random();
         let account_id = AccountId::new(kp.public_key().clone());

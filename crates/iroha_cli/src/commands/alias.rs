@@ -96,7 +96,7 @@ pub struct ByAccountArgs {
     /// Optional dataspace alias filter such as `centralbank`.
     #[arg(long)]
     pub dataspace: Option<String>,
-    /// Optional exact domain filter such as `hbl`.
+    /// Optional exact domain filter such as `banka`.
     #[arg(long)]
     pub domain: Option<String>,
 }
@@ -483,13 +483,13 @@ mod tests {
             "--dataspace",
             "centralbank",
             "--domain",
-            "hbl",
+            "banka",
         ]);
         match wrapper.command {
             Command::ByAccount(args) => {
                 assert_eq!(args.account_id, SAMPLE_ACCOUNT_ID);
                 assert_eq!(args.dataspace.as_deref(), Some("centralbank"));
-                assert_eq!(args.domain.as_deref(), Some("hbl"));
+                assert_eq!(args.domain.as_deref(), Some("banka"));
             }
             _ => panic!("unexpected command"),
         }
@@ -509,6 +509,8 @@ mod tests {
             let cfg = Config {
                 chain: ChainId::from("test-chain"),
                 account,
+                account_chain_discriminant:
+                    iroha_config::parameters::defaults::common::chain_discriminant(),
                 key_pair: kp,
                 basic_auth: None,
                 torii_api_url: Url::parse("http://localhost/").unwrap(),
@@ -722,7 +724,7 @@ mod tests {
             &mut ctx,
             SAMPLE_ACCOUNT_ID,
             Some("centralbank"),
-            Some("hbl"),
+            Some("banka"),
             |_, _, _, _| {
                 Ok(Response::builder()
                     .status(StatusCode::OK)
@@ -731,9 +733,9 @@ mod tests {
                         "account_id": SAMPLE_ACCOUNT_ID,
                         "total": 1,
                         "items": [{
-                            "alias": "merchant@hbl.centralbank",
+                            "alias": "merchant@banka.centralbank",
                             "dataspace": "centralbank",
-                            "domain": "hbl",
+                            "domain": "banka",
                             "is_primary": true
                         }],
                         "source": "on_chain"
@@ -743,7 +745,7 @@ mod tests {
         )
         .expect("helper should succeed");
         assert_eq!(ctx.printed.len(), 1);
-        assert!(ctx.printed[0].contains("merchant@hbl.centralbank"));
+        assert!(ctx.printed[0].contains("merchant@banka.centralbank"));
     }
 
     #[test]
@@ -752,16 +754,16 @@ mod tests {
             account_id: SAMPLE_ACCOUNT_ID.to_string(),
             total: 1,
             items: vec![AliasLookupByAccountItem {
-                alias: "merchant@hbl.centralbank".to_string(),
+                alias: "merchant@banka.centralbank".to_string(),
                 dataspace: "centralbank".to_string(),
-                domain: Some("hbl".to_string()),
+                domain: Some("banka".to_string()),
                 is_primary: true,
             }],
             source: Some("on_chain".to_string()),
         };
         let text = render_alias_by_account_text(&dto);
         assert!(text.contains("has 1 matching alias(es)"));
-        assert!(text.contains("merchant@hbl.centralbank"));
+        assert!(text.contains("merchant@banka.centralbank"));
     }
 
     #[test]

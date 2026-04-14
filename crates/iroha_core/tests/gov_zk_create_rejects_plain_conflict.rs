@@ -29,7 +29,7 @@ use nonzero_ext::nonzero;
 fn create_election_rejects_plain_conflict() {
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let domain_id: DomainId = "wonderland".parse().expect("domain");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let domain = Domain::new(domain_id.clone()).build(&iroha_test_samples::ALICE_ID);
     let account =
         Account::new(iroha_test_samples::ALICE_ID.clone()).build(&iroha_test_samples::ALICE_ID);

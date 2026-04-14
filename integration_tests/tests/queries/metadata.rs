@@ -22,7 +22,8 @@ fn find_accounts_with_asset() {
             return Ok(());
         };
         let test_client = network.client();
-        let wonderland_domain: DomainId = "wonderland".parse().expect("wonderland domain");
+        let wonderland_domain: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("wonderland domain");
 
         let key = Name::from_str("key").unwrap();
         let another_key = Name::from_str("another_key").unwrap();

@@ -1,477 +1,485 @@
 # Soracloud CLI and Control Plane
 
-Soracloud v1 is an authoritative, IVM-only runtime.
+Soracloud v1 is an authoritative mixed-plane runtime:
 
-- `iroha app soracloud init` is the only offline command. It scaffolds
-  `container_manifest.json`, `service_manifest.json`, and optional template
-  artifacts for Soracloud services.
-- All other Soracloud CLI commands are network-backed only and require
-  `--torii-url`.
-- The CLI does not maintain any local Soracloud control-plane mirror or state
-  file.
-- Torii serves public Soracloud status and mutation routes directly from
-  authoritative world state plus the embedded Soracloud runtime manager.
+- deterministic services run on `SoraContainerRuntimeV1::Ivm`
+- hosted HTTP services run on `execution_plane = HttpService` with
+  `runtime = Inrou`
+
+The control plane remains authoritative. Torii serves status and mutation
+routes directly from committed world state plus the embedded Soracloud runtime
+manager; the CLI does not keep a shadow control-plane mirror.
 
 ## Runtime Scope
 
-- Soracloud v1 accepts only `SoraContainerRuntimeV1::Ivm`.
-- `NativeProcess` remains rejected.
-- Ordered mailbox execution runs admitted IVM handlers directly.
-- Hydration and materialization come from committed SoraFS/DA content rather
-  than synthetic local snapshots.
-- `SoraContainerManifestV1` now carries `required_config_names` and
-  `required_secret_names`, plus explicit `config_exports`. Deploy, upgrade,
-  and rollback fail closed when the effective authoritative material set would
-  not satisfy those declared bindings or when a config export targets a
-  non-required config or a duplicate env/file destination.
-- Committed service config entries are now materialized under
-  `services/<service>/<version>/configs/<config_name>` as canonical JSON
-  payload files.
-- Explicit config env exports are projected into
-  `services/<service>/<version>/effective_env.json`, and file exports are
-  materialized under
-  `services/<service>/<version>/config_exports/<relative_path>`. Exported
-  values use the canonical JSON payload text of the referenced config entry.
-- Soracloud IVM handlers can now read those authoritative config payloads
-  directly through the runtime host `ReadConfig` surface, so ordinary
-  `query`/`update` handlers do not need to guess node-local file paths just to
-  consume committed service config.
-- Committed service secret envelopes are now materialized under
-  `services/<service>/<version>/secret_envelopes/<secret_name>` as
-  authoritative envelope files.
-- Ordinary Soracloud IVM handlers can now read those committed secret
-  envelopes directly through the runtime host `ReadSecretEnvelope` surface.
-- The legacy private-runtime fallback tree is now synchronized from committed
-  deployment state under `secrets/<service>/<version>/<secret_name>` so the
-  older raw secret read path and the authoritative control plane point at the
-  same bytes.
-- Private-runtime `ReadSecret` now resolves authoritative deployment
-  `service_secrets` first and only falls back to the legacy node-local
-  `secrets/<service>/<version>/...` materialized file tree when no committed
-  service secret entry exists for the requested key.
-- Secret ingestion is still intentionally narrower than config ingestion:
-  `ReadSecretEnvelope` is the public-safe ordinary-handler contract, while
-  `ReadSecret` remains private-runtime-only and still returns the committed
-  envelope ciphertext bytes rather than a plaintext mount contract.
-- Runtime service plans now expose the corresponding ingestion capability
-  booleans plus the declared `config_exports` and effective projected
-  environment, so status consumers can tell whether a materialized revision
-  supports host config reads, host secret-envelope reads, private raw secret
-  reads, and explicit config injection without inferring it from handler
-  classes alone.
+- Use `HttpService + Inrou` for collector-heavy, SSE, cache-backed, or
+  browser-assisted workloads that need a hosted HTTP plane.
+- Use deterministic IVM services for wallet auth, confidential vault state,
+  governance-sensitive mutations, and other replay-safe handlers.
+- Public routing is longest-prefix authoritative, so one host can safely split
+  `/api/v1/search*` to a hosted service while `/api/auth*` and
+  `/api/v1/user*` stay on an IVM service.
+- Hosted services declare persistent lease-backed storage through
+  `lease_volumes`.
+- `PersistentRootLeaseVolume` is required for `HttpService + Inrou`, must mount
+  at `/`, and is materialized per replica.
+- Non-root `ServiceLeaseVolume` and `ConfidentialLeaseVolume` attachments are
+  shared across replicas of the same service revision by default.
+- At runtime, each mounted volume is exposed as:
+  - `SORACLOUD_LEASE_VOLUME_<NAME>_DIR`
+  - `SORACLOUD_LEASE_VOLUME_<NAME>_MOUNT_PATH`
+- Config and secret materialization is still authoritative. Deploy, upgrade,
+  and rollback fail closed when required config/secret bindings are missing or
+  inconsistent with the active manifests.
+- The current local workflow validates both planes together with
+  `iroha app soracloud app local-plan`, resolves manifest-adjacent workspace
+  scripts with `iroha app soracloud app local-dev` and
+  `iroha app soracloud app build-and-sync`, and verifies deterministic vault
+  builds with `verify-build.sh`. This is a dev shim for the deterministic
+  plane, not a full embedded IVM runtime.
 
-## CLI Commands
+## Offline Scaffolding Commands
 
 - `iroha app soracloud init`
-  - offline scaffold only.
-  - supports `baseline`, `site`, `webapp`, and `pii-app` templates.
+  - scaffolds one service pair:
+    - `container_manifest.json`
+    - `service_manifest.json`
+  - templates now include:
+    - `baseline`
+    - `http-service`
+    - `site`
+    - `webapp`
+    - `pii-app`
+    - `hayahi-app`
+- `iroha app soracloud app init`
+  - scaffolds an app manifest plus one or more service pairs
+  - templates now include:
+    - `single-api`
+    - `split-app`
+  - `single-api` produces a root-bound frontend plus one deterministic API
+    service under `/api`
+  - `split-app` produces a SoraFS frontend plus one hosted live API and one
+    deterministic vault API
+- `iroha app soracloud app local-plan`
+  - validates every service referenced by an app manifest locally
+  - prints the mixed-plane runtime split:
+    - hosted `/api/v1/*` ownership for `HttpService + Inrou`
+    - deterministic handler ownership for `/api/auth*` and `/api/v1/user*`
+  - prints the frontend CID gateway URL template when `publish_mode = CidOnly`
+  - prints the root `manifest_path`, root `hostname`, then each service's
+    resolved `container_manifest_path` and `service_manifest_path` for
+    service-scoped Soracloud commands
+  - prints each child service `workspace_dir` plus discovered child scripts such
+    as `dev.sh`, `build.sh`, and `verify-build.sh` when present
+  - reports the manifest-adjacent root script paths for `local-dev.sh`,
+    `build-and-sync.sh`, `deploy.sh`, and `upgrade.sh`
+- `iroha app soracloud app local-dev`
+  - resolves `local-dev.sh` adjacent to the app manifest
+  - `--dry-run` prints the resolved working directory, script path, mixed-plane
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
+  - without `--dry-run`, executes the local app entrypoint in place
+- `iroha app soracloud app build-and-sync`
+  - resolves `build-and-sync.sh` adjacent to the app manifest
+  - `--dry-run` prints the resolved working directory, script path, mixed-plane
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
+  - without `--dry-run`, executes the root rebuild + manifest-sync entrypoint in place
+- `iroha app soracloud app deploy-workspace`
+  - resolves `deploy.sh` adjacent to the app manifest
+  - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
+  - `--dry-run` prints the resolved working directory, script path, mixed-plane
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
+- `iroha app soracloud app upgrade-workspace`
+  - resolves `upgrade.sh` adjacent to the app manifest
+  - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
+  - `--dry-run` prints the resolved working directory, script path, mixed-plane
+    summary, the same root app identity fields that `app local-plan` reports,
+    and the same child service plus route plan
+- `iroha app soracloud sync-manifests`
+  - recomputes `container.bundle_hash`, the service-side referenced container
+    hash, and matching schema versions after local edits
+  - supports:
+    - one service pair via `--container`, `--service`, and optional
+      `--bundle-file`
+    - every service in an app manifest via `--app-manifest`
+- `iroha app soracloud local-plan`
+  - validates one service pair locally
+  - prints the service execution plane, runtime, route ownership, handler routes,
+    and manifest-adjacent root script paths
+- `iroha app soracloud local-dev`
+  - resolves `local-dev.sh` adjacent to one container/service manifest pair
+  - `--dry-run` prints the resolved working directory, script path, and the
+    same service plan that `local-plan` reports, including routes, counts, and
+    workspace scripts
+  - without `--dry-run`, executes the local service entrypoint in place
+- `iroha app soracloud build-and-sync`
+  - resolves `build-and-sync.sh` adjacent to one container/service manifest pair
+  - `--dry-run` prints the resolved working directory, script path, and the
+    same service plan that `local-plan` reports, including routes, counts, and
+    workspace scripts
+  - without `--dry-run`, executes the root rebuild + manifest-sync entrypoint in place
+- `iroha app soracloud deploy-workspace`
+  - resolves `deploy.sh` adjacent to one container/service manifest pair
+  - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
+  - `--dry-run` prints the resolved working directory, script path, and the
+    same service plan that `local-plan` reports, including routes, counts, and
+    workspace scripts
+- `iroha app soracloud upgrade-workspace`
+  - resolves `upgrade.sh` adjacent to one container/service manifest pair
+  - forwards `TORII_URL` and optional `API_TOKEN` into the generated root script
+  - `--dry-run` prints the resolved working directory, script path, and the
+    same service plan that `local-plan` reports, including routes, counts, and
+    workspace scripts
+
+## Network-Backed Commands
+
+All deploy, upgrade, rollback, rollout, status, config, secret, HF lease,
+training-job, model registry/status, and app mutation commands are
+Torii-backed and require `--torii-url`.
+
 - `iroha app soracloud deploy`
-  - validates `SoraDeploymentBundleV1` admission rules locally, signs the
-    request, and calls `POST /v1/soracloud/deploy`.
-  - `--initial-configs <path>` and `--initial-secrets <path>` may now attach
-    authoritative inline service config / secret maps atomically with the
-    first deploy so required bindings can be satisfied on first admission.
-  - the CLI now signs the HTTP request canonically with either
-    `X-Iroha-Account`, `X-Iroha-Signature`, `X-Iroha-Timestamp-Ms`, and
-    `X-Iroha-Nonce` for ordinary single-signature accounts, or
-    `X-Iroha-Account` plus `X-Iroha-Witness` when
-    `soracloud.http_witness_file` points at a multisig witness JSON payload;
-    Torii returns a deterministic draft transaction instruction set and the
-    CLI then submits the real transaction through the normal Iroha client
-    lane.
-  - Torii also enforces SCR-host admission caps and fail-closed capability
-    checks before the mutation is accepted.
+  - validates a single `SoraDeploymentBundleV1` locally and submits it to
+    `POST /v1/soracloud/deploy`
+  - returns the same local route and workspace-script projection that
+    `local-plan` reports, plus the live mutation response
 - `iroha app soracloud upgrade`
-  - validates and signs a new bundle revision, then calls
-    `POST /v1/soracloud/upgrade`.
-  - the same `--initial-configs <path>` / `--initial-secrets <path>` flow is
-    available for atomic material updates during upgrade.
-  - The same SCR-host admission checks run server-side before the upgrade is
-    admitted.
+  - validates and submits one upgraded bundle to
+    `POST /v1/soracloud/upgrade`
+  - returns the same local route and workspace-script projection that
+    `local-plan` reports, plus the live mutation response
+- `iroha app soracloud app deploy`
+  - loads `app_manifest.json`
+  - synchronizes every referenced service pair before submission
+  - publishes the declared static site from `static_site.dist_dir`
+  - deploys every referenced service in one pass
+  - returns the root app `manifest_path`, root `workspace_dir`, root
+    `workspace_scripts`, root `hostname`, the frontend publish projection, the
+    top-level app `routes` split, and one manifest-derived service entry per
+    app service alongside the mutation responses
+- `iroha app soracloud app upgrade`
+  - follows the same app-wide flow, but uses upgrade semantics
+  - returns the same app-scoped root manifest/hostname/workspace metadata,
+    frontend, top-level `routes`, and service projection
 - `iroha app soracloud status`
-  - queries authoritative service status from `GET /v1/soracloud/status`.
-- `iroha app soracloud config-*`
-  - `config-set`, `config-delete`, and `config-status` are Torii-backed only.
-  - the CLI signs canonical service-config provenance payloads and calls
-    `POST /v1/soracloud/service/config/set`,
-    `POST /v1/soracloud/service/config/delete`, and
-    `GET /v1/soracloud/service/config/status`.
-  - config entries are persisted in authoritative deployment state and remain
-    attached across deploy/upgrade/rollback revision changes.
-  - `config-delete` now fails closed when the active revision still declares
-    the named config in `container.required_config_names`.
-- `iroha app soracloud secret-*`
-  - `secret-set`, `secret-delete`, and `secret-status` are Torii-backed only.
-  - the CLI signs canonical service-secret provenance payloads and calls
-    `POST /v1/soracloud/service/secret/set`,
-    `POST /v1/soracloud/service/secret/delete`, and
-    `GET /v1/soracloud/service/secret/status`.
-  - secret entries are persisted as authoritative `SecretEnvelopeV1` records
-    in deployment state and survive normal service revision changes.
-  - `secret-delete` now fails closed when the active revision still declares
-    the named secret in `container.required_secret_names`.
-- `iroha app soracloud rollback`
-  - signs rollback metadata and calls `POST /v1/soracloud/rollback`.
-- `iroha app soracloud rollout`
-  - signs rollout metadata and calls `POST /v1/soracloud/rollout`.
-- `iroha app soracloud agent-*`
-  - all apartment lifecycle, wallet, mailbox, and autonomy commands are
-    Torii-backed only.
-- `iroha app soracloud training-*`
-  - all training job commands are Torii-backed only.
-- `iroha app soracloud model-*`
-  - all model artifact, weight, uploaded-model, and private-runtime commands
-    are Torii-backed only.
-  - the uploaded-model/private-runtime surface now lives in the same family:
-    `model-upload-encryption-recipient`, `model-upload-init`,
-    `model-upload-chunk`, `model-upload-finalize`, `model-upload-status`,
-    `model-compile`, `model-compile-status`, `model-allow`,
-    `model-run-private`, `model-run-status`, `model-decrypt-output`, and
-    `model-publish-private`.
-  - `model-run-private` now hides the draft-then-finalize runtime handshake in
-    the CLI and returns the authoritative post-finalize session status.
-  - `model-publish-private` now supports both a prepared
-    bundle/chunk/finalize/compile/allow publish plan and a higher-level
-    draft document. The draft now carries `source: PrivateModelSourceV1`,
-    which accepts either `LocalDir { path }` or
-    `HuggingFaceSnapshot { repo, revision }`.
-  - when called with `--draft-file`, the CLI normalizes the declared source
-    into a deterministic temp tree, validates the v1 HF safetensors contract,
-    deterministically serializes and encrypts the bundle against the active
-    Torii upload recipient, shards it into fixed-size encrypted chunks,
-    optionally writes the prepared plan via `--emit-plan-file`, and then
-    executes the upload/finalize/compile/allow sequence.
-  - `HuggingFaceSnapshot` revisions are mandatory and must be pinned commit
-    SHAs; branch-like refs are rejected fail-closed.
-  - the admitted source layout is intentionally narrow in v1: `config.json`,
-    tokenizer assets, one or more `*.safetensors` shards, and optional
-    processor/preprocessor metadata for image-capable models. GGUF, ONNX,
-    other non-safetensors weights, and arbitrary nested custom layouts are
-    rejected.
-  - when called with `--plan-file`, the CLI still consumes an already
-    prepared publish-plan document and fail-closes when the plan's upload
-    recipient no longer matches the authoritative Torii recipient.
-  - see `uploaded_private_models.md` for the design that layers those routes
-    onto the existing model registry and artifact/weight records.
-- `model-host` control-plane routes
-  - Torii now exposes authoritative
-    `POST /v1/soracloud/model-host/advertise`,
-    `POST /v1/soracloud/model-host/heartbeat`,
-    `POST /v1/soracloud/model-host/withdraw`, and
-    `GET /v1/soracloud/model-host/status`.
-  - these routes persist opt-in validator host capability adverts in
-    authoritative world state and let operators inspect which validators are
-    currently advertising model-host capacity.
-  - `iroha app soracloud model-host-advertise`,
-    `model-host-heartbeat`, `model-host-withdraw`, and
-    `model-host-status` now sign the same canonical provenance payloads as the
-    raw API and call the matching Torii routes directly.
-- `iroha app soracloud hf-*`
-  - `hf-deploy`, `hf-status`, `hf-lease-leave`, and `hf-lease-renew` are
-    Torii-backed only.
-  - `hf-deploy` and `hf-lease-renew` now also auto-admit the deterministic
-    generated HF inference service for the requested `service_name`, and
-    auto-admit the deterministic generated HF apartment for
-    `apartment_name` when one is requested, before the shared-lease mutation
-    is submitted.
-  - reuse is fail-closed: if the named service/apartment already exists but is
-    not the expected generated HF deployment for that canonical source, the HF
-    mutation is rejected instead of silently binding the lease to unrelated
-    Soracloud objects.
-  - when the embedded runtime manager is attached, `hf-status` now also
-    returns a runtime projection for the canonical source, including bound
-    services/apartments, queued next-window visibility, and local bundle/
-    artifact cache misses; `importer_pending` follows that runtime projection
-    instead of relying only on the authoritative source enum.
-  - when `hf-deploy` or `hf-lease-renew` admits the generated HF service in
-    the same transaction as the shared-lease mutation, the authoritative HF
-    source now flips to `Ready` immediately and `importer_pending` stays
-    `false` in the response.
-  - HF lease status and mutation responses now also expose any authoritative
-    placement snapshot already attached to the active lease window, including
-    assigned hosts, eligible-host count, warm-host count, and separate
-    storage-vs-compute fee fields.
-  - `hf-deploy` and `hf-lease-renew` now derive the canonical HF resource
-    profile from the resolved Hugging Face repo metadata before they submit the
-    mutation:
-    - Torii inspects the repo `siblings`, prefers `.gguf` over
-      `.safetensors` over PyTorch weight layouts, HEADs the selected files to
-      derive `required_model_bytes`, and maps that to a first-release
-      backend/format plus RAM/disk floors;
-    - lease admission fails closed when no live validator host advert can
-      satisfy that profile; and
-    - when a host set is available, the active window now records a
-      deterministic stake-weighted placement and a separate compute reservation
-      fee alongside the existing storage lease accounting.
-  - later members joining an active HF window now pay prorated storage and
-    compute shares for only the remaining window, while earlier members
-    receive the same deterministic storage refund and compute-refund accounting
-    from that late join.
-  - the embedded runtime manager can synthesize the generated HF stub bundle
-    locally, so those generated services can materialize without waiting for a
-    committed SoraFS payload just for the placeholder inference bundle.
-  - the embedded runtime manager now also imports allowlisted Hugging Face repo
-    files into `soracloud_runtime.state_dir/hf_sources/<source_id>/files/` and
-    persists a local `import_manifest.json` with the resolved commit, imported
-    files, skipped files, and any importer error.
-  - generated HF `metadata` local reads now return that local import manifest,
-    including the imported file inventory plus whether local execution and
-    bridge fallback are enabled for the node.
-  - generated HF `infer` local reads now prefer on-node execution against the
-    imported shared bytes:
-    - `irohad` materializes an embedded Python adapter script under the local
-      Soracloud runtime state directory and invokes it through
-      `soracloud_runtime.hf.local_runner_program`;
-    - the embedded runner first checks for a deterministic fixture stanza in
-      `config.json` (used by tests), then otherwise loads the imported source
-      directory through `transformers.pipeline(..., local_files_only=True)` so
-      the model executes against the shared local import instead of pulling
-      fresh Hub bytes; and
-    - if `soracloud_runtime.hf.allow_inference_bridge_fallback = true` and
-      `soracloud_runtime.hf.inference_token` is configured, the runtime falls
-      back to the configured HF Inference base URL only when local execution
-      is unavailable or fails and the caller explicitly opts in with
-      `x-soracloud-hf-allow-bridge-fallback: 1`, `true`, or `yes`.
-  - the runtime projection now keeps an HF source in `PendingImport` until a
-    successful local import manifest exists, and importer failures surface as
-    runtime `Failed` plus `last_error` instead of silently reporting `Ready`.
-  - generated HF apartments now consume approved autonomy runs through the
-    node-local runtime path:
-    - `agent-autonomy-run` now follows a two-step flow: the first signed
-      mutation records the authoritative approval and returns a deterministic
-      draft transaction, then a second signed finalize request asks the
-      embedded runtime manager to execute that approved run against the bound
-      generated HF `/infer` service and returns any authoritative follow-up
-      instructions as another deterministic draft;
-    - the approved run record now also persists a canonical
-      `request_commitment`, so the later generated service receipt can be
-      bound back to the exact authoritative autonomy approval;
-    - approvals can now persist an optional canonical `workflow_input_json`
-      body; when present, the embedded runtime forwards that exact JSON payload
-      to the generated HF `/infer` handler, and when absent it falls back to
-      the older `run_label`-as-`inputs` envelope with the authoritative
-      `artifact_hash` / `provenance_hash` / `budget_units` / `run_id` carried
-      as structured parameters;
-    - `workflow_input_json` can now also opt into deterministic sequential
-      multi-step execution with
-      `{ "workflow_version": 1, "steps": [...] }`, where each step runs a
-      generated HF `/infer` request and later steps can reference prior outputs
-      via `${run.*}`, `${previous.text|json|result_commitment}`, and
-      `${steps.<step_id>.text|json|result_commitment}` placeholders; and
-    - both the mutation response and `agent-autonomy-status` now surface the
-      node-local execution summary when available, including success/failure,
-      the bound service revision, deterministic result commitments, checkpoint
-      / journal artifact hashes, the generated service `AuditReceipt`, and the
-      parsed JSON response body.
-    - when that generated service receipt is present, Torii records it into
-      authoritative `soracloud_runtime_receipts` and exposes the resulting
-      authoritative runtime receipt on recent run status alongside the
-      node-local execution summary.
-    - the generated-HF autonomy path now also records a dedicated authoritative
-      apartment `AutonomyRunExecuted` audit event, and recent-run status
-      returns that execution audit alongside the authoritative runtime receipt.
-  - `hf-lease-renew` now has two modes:
-    - if the current window is expired or drained, it immediately opens a fresh
-      window;
-    - if the current window is still active, it queues the caller as the
-      next-window sponsor, charges the full next-window storage and compute
-      reservation fees up front, persists the deterministic next-window
-      placement plan, and exposes that queued sponsorship through `hf-status`
-      until a later mutation rolls the pool forward.
-  - generated HF public `/infer` ingress now resolves the authoritative
-    placement and, when the receiving node is not the warm primary, proxies the
-    request over Soracloud P2P control messages to the assigned primary host;
-    the embedded runtime still fails closed on direct replica/unassigned local
-    execution and generated HF runtime receipts carry `placement_id`,
-    validator, and peer attribution from the authoritative placement record.
-  - when that proxy-to-primary path times out, closes before a response, or
-    comes back with a non-client runtime failure from the authoritative
-    primary, the ingress node now reports `AssignedHeartbeatMiss` for that
-    primary and enqueues `ReconcileSoracloudModelHosts` through the same
-    internal mutation lane.
-  - authoritative expired-host reconciliation now records persisted
-    model-host violation evidence, reuses the public-lane validator slash path,
-    and applies the default HF shared-lease penalty policy:
-    `warmup_no_show_slash_bps=500`,
-    `assigned_heartbeat_miss_slash_bps=250`,
-    `assigned_heartbeat_miss_strike_threshold=3`, and
-    `advert_contradiction_slash_bps=1000`.
-  - locally assigned HF runtime health now also feeds that same evidence path:
-    reconcile-time import/warmup failures on a local `Warming` host emit
-    `WarmupNoShow`, and resident-worker failures on the local warm primary
-    emit throttled `AssignedHeartbeatMiss` reports through the normal
-    transaction queue.
-  - reconcile now also pre-starts and probes resident HF workers for locally
-    assigned warm/warming hosts, including replicas, so a replica can fail
-    closed into the authoritative `AssignedHeartbeatMiss` path before any
-    public `/infer` request ever lands on the primary.
-  - when that local probe succeeds, the runtime now also emits one
-    authoritative `model-host-heartbeat` mutation for the local validator when
-    the assigned host is still `Warming` or the active host advert needs a TTL
-    refresh, so successful local readiness promotes the same authoritative
-    placement/advert state that manual heartbeats would update.
-  - when the runtime emits a local `WarmupNoShow` or
-    `AssignedHeartbeatMiss`, it now also enqueues
-    `ReconcileSoracloudModelHosts` through the same internal mutation lane so
-    authoritative failover/backfill starts immediately instead of waiting for
-    a later periodic host-expiry sweep.
-  - when public generated-HF ingress fails even earlier because the committed
-    placement has no warm primary to proxy to, Torii now asks the runtime
-    handle to enqueue that same authoritative
-    `ReconcileSoracloudModelHosts` instruction immediately instead of waiting
-    for a later expiry or worker-failure signal.
-  - when public generated-HF ingress does receive a proxied success response,
-    Torii now verifies the included runtime receipt still proves execution by
-    the committed warm primary for the active placement; missing or mismatched
-    placement attribution now fails closed and hints that same authoritative
-    `ReconcileSoracloudModelHosts` path instead of returning a
-    non-authoritative response. Torii also now rejects proxied success
-    responses when the runtime receipt commitments or certification policy do
-    not match the response it is about to return, and that same bad-receipt
-    path also feeds the remote-primary `AssignedHeartbeatMiss` reporting
-    hook.
-  - proxied generated-HF execution failures now request that same
-    authoritative `ReconcileSoracloudModelHosts` path after reporting the
-    remote primary health fault, rather than waiting for a later expiry
-    sweep.
-  - Torii now binds each pending generated-HF proxy request to the
-    authoritative primary peer it targeted. A proxy response from the wrong
-    peer is now ignored instead of poisoning that pending request, so only
-    the authoritative primary can complete or fail the request. A proxy
-    response from the expected peer with an unsupported proxy response schema
-    version still fails closed instead of being accepted only because its
-    `request_id` matched a pending request. If the wrong peer that answered
-    is itself still an assigned generated-HF host for that placement, the
-    runtime now reports that host through the existing
-    `WarmupNoShow` / `AssignedHeartbeatMiss` evidence path based on its
-    authoritative assignment status and also hints authoritative
-    `ReconcileSoracloudModelHosts`, so stale primary/replica authority drift
-    feeds the control loop instead of only being ignored at ingress.
-  - incoming Soracloud proxy execution is also now restricted to the intended
-    generated-HF `infer` query case on the committed warm primary. Non-HF
-    public local-read routes, and generated-HF requests delivered to a node
-    that is no longer the authoritative warm primary, now fail closed instead
-    of executing over the P2P proxy path. The authoritative primary also now
-    recomputes the canonical generated-HF request commitment before execution,
-    so forged or mismatched proxy envelopes fail closed.
-  - when an assigned replica or stale former primary rejects that incoming
-    generated-HF proxy execution because it is no longer the authoritative
-    warm primary, the receiver-side runtime now also hints
-    `ReconcileSoracloudModelHosts` instead of relying only on the caller-side
-    routing view.
-  - when that same incoming generated-HF proxy authority failure happens on
-    the local authoritative primary itself, the runtime now treats it as a
-    first-class host-health signal: warm primaries self-report
-    `AssignedHeartbeatMiss`, warming primaries self-report `WarmupNoShow`,
-    and both paths immediately reuse the same authoritative
-    `ReconcileSoracloudModelHosts` control loop.
-  - when that same non-primary receiver is still one of the authoritative
-    assigned hosts and can resolve the warm primary from committed chain state,
-    it now re-proxies the generated-HF request onward to that primary instead
-    of failing immediately. Unassigned validators fail closed instead of acting
-    as generic intermediary HF proxy hops, and the original ingress node still
-    validates the returned runtime receipt against authoritative placement
-    state. If that assigned-replica onward hop to the primary fails after the
-    request is actually dispatched, the receiver-side runtime reports the
-    remote primary health fault and hints authoritative
-    `ReconcileSoracloudModelHosts`; if the local assigned replica cannot even
-    attempt that onward hop because its own proxy transport/runtime is missing,
-    the failure is now treated as a local assigned-host fault instead of
-    blaming the primary.
-  - reconcile now also emits `AdvertContradiction` automatically when the
-    local validator's configured runtime peer id disagrees with the
-    authoritative `model-host-advertise` peer id for that validator.
-  - valid model-host re-advertise mutations now also synchronize authoritative
-    assigned-host `peer_id` / `host_class` metadata and recompute current
-    placement reservation fees when the host class changes.
-  - contradictory model-host re-advertise mutations now emit immediate
-    `AdvertContradiction` evidence, apply the existing validator slash/evict
-    path, and refresh affected placements instead of just failing validation.
-  - remaining HF hosting work is now:
-    - broader cross-node/runtime-cluster health signals beyond the local
-      validator's direct worker/warmup observations plus assigned-host
-      receiver-side authority failures when remote-peer internal health should
-      also feed the authoritative rebalance/slash path.
-  - generated HF local execution now keeps a resident per-source Python worker
-    alive under `irohad`, reuses the loaded model across repeated `/infer`
-    calls, and restarts that worker deterministically if the local import
-    manifest changes or the process exits.
-  - these routes are not the private uploaded-model path. HF shared leases stay
-    focused on shared source/import membership rather than encrypted on-chain
-    private model bytes.
-  - generated HF autonomy approvals now support deterministic sequential
-    multi-step request envelopes, but broader non-linear/tool-using
-    orchestration and artifact-graph execution still remain follow-up work
-    beyond chained `/infer` steps.
+  - accepts `--service-name` directly or resolves the filter from
+    `--container` plus `--service`
+  - queries authoritative service state from `GET /v1/soracloud/status`
+  - projects typed `schema_version`, service counts, and service summaries while
+    preserving the raw Torii payload
+  - when driven by `--container` plus `--service`, also keeps the same local
+    route and workspace-script projection that `local-plan` reports
+- `iroha app soracloud config-*` and `iroha app soracloud secret-*`
+  - accept `--service-name` directly or resolve the owning service from
+    `--container` plus `--service`
+  - keep service-scoped material operations aligned with manifest workspaces
+  - when driven by `--container` plus `--service`, attach the same local
+    `service_plan` projection that `local-plan` reports
+- `iroha app soracloud rollback` and `iroha app soracloud rollout`
+  - accept `--service-name` directly or resolve the target service from
+    `--container` plus `--service`
+  - keep rollback and rollout control aligned with manifest workspaces
+  - when driven by `--container` plus `--service`, attach the same local
+    `service_plan` projection that `local-plan` reports
+- `iroha app soracloud hf-deploy`, `hf-status`, `hf-lease-renew`, and `hf-lease-leave`
+  - accept `--service-name` directly or resolve the bound service from
+    `--container` plus `--service` when a service name applies
+  - keep HF shared-lease membership aligned with manifest workspaces
+  - when driven by `--container` plus `--service`, attach the same local
+    `service_plan` projection that `local-plan` reports
+- `iroha app soracloud training-job-*`
+  - accept `--service-name` directly or resolve the owning service from
+    `--container` plus `--service`
+  - keep training-job control aligned with manifest workspaces
+  - when driven by `--container` plus `--service`, attach the same local
+    `service_plan` projection that `local-plan` reports
+- `iroha app soracloud model-artifact-*`, `model-weight-*`,
+  `model-upload-encryption-recipient`, `model-upload-init`,
+  `model-upload-chunk`, `model-upload-finalize`, `model-upload-status`,
+  `model-compile`, `model-compile-status`, `model-allow`,
+  `model-run-private`, `model-run-status`, `model-decrypt-output`, and
+  `model-publish-private`
+  - accept `--service-name` directly or resolve the owning service from
+    `--container` plus `--service` when a service name applies
+  - keep model registry and uploaded-model status control aligned with
+    manifest workspaces
+  - when driven by `--container` plus `--service`, attach the same local
+    `service_plan` projection that `local-plan` reports
+- `iroha app soracloud app status`
+  - keeps one status entry per service declared in one app manifest
+  - projects the root app `manifest_path`, root `workspace_dir`, root
+    `workspace_scripts`, root `hostname`, the top-level app `routes` split, the
+    frontend publish mode, and the expected CID-gateway or root-binding URL
+    when a static site is configured
+  - projects child manifest paths, `workspace_dir`, plane/runtime, route
+    ownership, and the matched Torii control-plane status when present
+  - keeps missing manifest services visible instead of dropping them from the
+    app-scoped output
 
-## Status Semantics
+## Hosted Service Lease Volumes
 
-`/v1/soracloud/status` and the related agent/training/model status endpoints now
-reflect authoritative runtime state:
+Hosted HTTP services can persist mutable shared state without inventing their
+own local directory contract.
 
-- admitted service revisions from committed world state;
-- runtime hydration/materialization state from the embedded runtime manager;
-- real mailbox execution receipts and failure state;
-- published journal/checkpoint artifacts;
-- cache and runtime health instead of placeholder status shims.
+Example manifest shape:
 
-If authoritative runtime material is stale or unavailable, reads fail closed
-instead of falling back to local state mirrors.
-
-`/v1/soracloud/status` is the only documented Soracloud status endpoint in v1.
-There is no separate `/v1/soracloud/registry` route.
-
-## Removed Local Scaffolding
-
-These older local-simulation concepts no longer exist in v1:
-
-- CLI-local registry/state files or registry-path options
-- Torii-local file-backed control-plane mirrors
-
-## Example
-
-```bash
-iroha app soracloud deploy \
-  --container container_manifest.json \
-  --service service_manifest.json \
-  --torii-url http://127.0.0.1:8080 \
-  --api-token <token-if-required> \
-  --timeout-secs 10
+```json
+{
+  "lease_volumes": [
+    { "volume_name": "root_disk", "mount_path": "/" },
+    { "volume_name": "shared_cache", "mount_path": "/var/lib/soracloud/shared-cache" },
+    { "volume_name": "search_sessions", "mount_path": "/var/lib/soracloud/search-sessions" },
+    { "volume_name": "collector_state", "mount_path": "/var/lib/soracloud/collector-state" },
+    { "volume_name": "runtime_cache", "mount_path": "/var/lib/soracloud/runtime-cache" }
+  ]
+}
 ```
 
-## Notes
+For the example above, the service receives:
 
-- Local validation still runs before requests are signed and submitted.
-- Standard Soracloud mutation endpoints no longer accept raw `authority` /
-  `private_key` JSON fields for deploy, upgrade, rollback, rollout, agent
-  lifecycle, training, model-host, and model-weight paths; Torii authenticates
-  those requests from the canonical HTTP signature headers instead.
-- Multisig-controlled Soracloud owners now use `X-Iroha-Witness`; point
-  `soracloud.http_witness_file` at the exact witness JSON you want the CLI to
-  replay for the next mutation request, and Torii will fail closed if the
-  witness subject account or canonical request hash does not match.
-- `hf-deploy` and `hf-lease-renew` now include client-signed auxiliary
-  provenance for the deterministic generated HF service/apartment artifacts,
-  so Torii no longer needs caller private keys to admit those follow-up
-  objects.
-- `agent-autonomy-run` and `model/run-private` now use a draft-then-finalize
-  flow: the first signed mutation records the authoritative approval/start,
-  and a second signed finalize request executes the runtime path and returns
-  any authoritative follow-up instructions as deterministic draft
-  transactions.
-- `model/decrypt-output` now returns the authoritative private-inference
-  checkpoint as a deterministic draft transaction, signed only by the outer
-  transaction rather than by an embedded Torii-held private key.
-- ZK attachment CRUD now keys tenancy off the signed Iroha account and still
-  treats API tokens as an extra access gate when enabled.
-- Public Soracloud local-read ingress now applies explicit per-IP rate and
-  concurrency limits and re-checks public route visibility before local or
-  proxied execution.
-- Private-runtime capability enforcement happens inside the Soracloud host ABI,
-  not inside CLI or Torii-local scaffolding.
-- `ram_lfe` remains a separate hidden-function subsystem. User-uploaded private
-  transformer execution should reuse Soracloud FHE/decryption governance and
-  model registries, not the `ram_lfe` request path.
-- Runtime health, hydration, and execution are sourced from
-  `[soracloud_runtime]` configuration and committed state, not environment
-  toggles.
+- `SORACLOUD_LEASE_VOLUME_ROOT_DISK_DIR`
+- `SORACLOUD_LEASE_VOLUME_ROOT_DISK_MOUNT_PATH`
+- `SORACLOUD_LEASE_VOLUME_SHARED_CACHE_DIR`
+- `SORACLOUD_LEASE_VOLUME_SHARED_CACHE_MOUNT_PATH`
+- `SORACLOUD_LEASE_VOLUME_SEARCH_SESSIONS_DIR`
+- `SORACLOUD_LEASE_VOLUME_SEARCH_SESSIONS_MOUNT_PATH`
+- `SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_DIR`
+- `SORACLOUD_LEASE_VOLUME_COLLECTOR_STATE_MOUNT_PATH`
+- `SORACLOUD_LEASE_VOLUME_RUNTIME_CACHE_DIR`
+- `SORACLOUD_LEASE_VOLUME_RUNTIME_CACHE_MOUNT_PATH`
+
+The `_DIR` value is the materialized runtime path. The `_MOUNT_PATH` value is
+the logical mount path declared in the manifest.
+
+## Inrou Smoke
+
+Inrou now supports both local backend classes: `FirecrackerKvm` on Linux/KVM
+and `PortableVm` everywhere else. Mixed-host validator fleets still proxy
+hosted HTTP through authoritatively placed healthy replicas, but local
+materialization is no longer restricted to Linux/KVM peers. The repo now ships
+dedicated smoke entrypoints for both local backend classes plus a mixed-host
+orchestrator:
+
+```bash
+cargo xtask soracloud-inrou-smoke portable
+sudo cargo xtask soracloud-inrou-smoke firecracker
+cargo xtask soracloud-inrou-smoke mixed-host --inventory ./fixtures/soracloud/inrou_mixed_host_inventory.example.toml
+```
+
+PortableVm stays unprivileged and requires only native-ISA QEMU, `qemu-img`,
+`virtiofsd` (or `qemu-virtiofsd`), and `tar`. The Firecracker/KVM path keeps
+the Linux host prerequisites for tap networking and the NFS transport adapter:
+
+- host OS is Linux
+- the caller is root
+- `/dev/kvm` exists
+- `/dev/net/tun` exists
+- `/proc/sys/net/ipv4/ip_forward = 1`
+- `firecracker`, `ip`, `iptables`, `tar`, `exportfs`, `rpc.nfsd`, `mount`,
+  `chown`, and `mke2fs` or `mkfs.ext4` are on `PATH`
+
+Portable smoke expects:
+
+- `IROHA_INROU_PORTABLE_KERNEL_IMAGE`
+- `IROHA_INROU_PORTABLE_ROOTFS_IMAGE`
+- optional `IROHA_INROU_PORTABLE_INITRD_IMAGE`
+
+Firecracker smoke expects:
+
+- `IROHA_INROU_LINUX_KVM_KERNEL_IMAGE`
+- `IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE`
+- optional `IROHA_INROU_LINUX_KVM_INITRD_IMAGE`
+
+Focused validation now covers both shared-storage transports:
+
+- `build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay`
+- `ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file`
+- `build_inrou_user_data_projects_mounts_overlay_and_replica_env`
+- `write_inrou_firecracker_config_serializes_boot_source_drives_and_network`
+- `ensure_inrou_root_disk_copies_once_and_reuses_existing_rootfs`
+- `planned_inrou_tap_firewall_rules_keep_isolated_policy_private`
+
+The portable path mounts shared lease storage through `virtio-fs`. The
+Firecracker fast path keeps the backend-private NFS adapter, but both backends
+now expose the same guest-visible lease semantics through the LeaseFs
+authority. Mixed-host acceptance is expected to cover one Linux/KVM
+Firecracker validator, one non-Linux PortableVm validator, and one proxy-only
+validator that publishes zero hosted capacity.
+
+## Recommended Hosted-Service Workflow
+
+Use the `http-service` scaffold for one hosted HTTP service that should run on
+the Soracloud hosted plane without an app manifest wrapper.
+
+Build and refresh the single service pair:
+
+```bash
+cd .soracloud-live
+iroha app soracloud local-plan --container ./container_manifest.json --service ./service_manifest.json
+./build-and-sync.sh
+iroha app soracloud build-and-sync --container ./container_manifest.json --service ./service_manifest.json --dry-run
+```
+
+Run the local hosted-service dev entrypoint:
+
+```bash
+cd .soracloud-live
+iroha app soracloud local-plan --container ./container_manifest.json --service ./service_manifest.json
+./local-dev.sh
+iroha app soracloud local-dev --container ./container_manifest.json --service ./service_manifest.json --dry-run
+```
+
+Deploy or upgrade through the same hosted-service root scripts:
+
+```bash
+cd .soracloud-live
+TORII_URL=http://127.0.0.1:8080 ./deploy.sh
+iroha app soracloud deploy-workspace --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha app soracloud deploy --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
+iroha app soracloud upgrade-workspace --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha app soracloud upgrade --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+iroha app soracloud status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+iroha app soracloud config-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+iroha app soracloud secret-status --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+iroha app soracloud rollback --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
+```
+
+The direct `deploy`, `upgrade`, and manifest-pair `status` outputs keep the
+same local route and workspace-script projection that `local-plan` reports,
+alongside the live control-plane data.
+
+## Recommended Single-App Workflow
+
+Use the single-api scaffold for apps that need:
+
+- one root-bound static frontend on the public host
+- one deterministic IVM API on the same host under `/api`
+- no hosted `Inrou` plane and no split `/api` ownership
+
+```bash
+iroha app soracloud app init \
+  --template single-api \
+  --app-name docs_portal \
+  --app-version 1.0.0 \
+  --output-dir .soracloud-docs-portal
+```
+
+Build the frontend and API bundle:
+
+```bash
+cd .soracloud-docs-portal
+./build-and-sync.sh
+iroha app soracloud app build-and-sync --manifest ./app_manifest.json --dry-run
+```
+
+For local development, the scaffold also includes:
+
+- `services/api/dev.sh` to run a local `/api/healthz` HTTP shim
+- `./local-dev.sh` to boot the frontend plus the local API shim
+- `./build-and-sync.sh` to rebuild the frontend and deterministic bytecode and
+  refresh manifest hashes
+- `./deploy.sh` to run the full app-wide publish + deploy flow
+- `./upgrade.sh` to rerun the same rebuild path and submit the app upgrade
+
+Run the root-bound app locally:
+
+```bash
+cd .soracloud-docs-portal
+./local-dev.sh
+iroha app soracloud app local-dev --manifest ./app_manifest.json --dry-run
+```
+
+Deploy the root-bound frontend plus the API service in one step:
+
+```bash
+cd .soracloud-docs-portal
+TORII_URL=http://127.0.0.1:8080 ./deploy.sh
+iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+```
+
+Upgrade the root-bound frontend plus the API service in one step:
+
+```bash
+cd .soracloud-docs-portal
+TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
+iroha app soracloud app upgrade-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+```
+
+This path keeps the frontend at `/` and the API at `/api/healthz` on the same
+hostname.
+
+## Recommended Mixed-App Workflow
+
+Use the split-app scaffold for apps that need:
+
+- a static frontend published to SoraFS
+- a hosted live API on Inrou
+- a deterministic IVM vault or auth plane
+
+```bash
+iroha app soracloud app init \
+  --template split-app \
+  --app-name hayahi \
+  --app-version 1.0.0 \
+  --output-dir .soracloud-hayahi
+```
+
+For local development, the scaffold includes:
+
+- `frontend/` Vite dev mode for the same-host `/api` base with proxy rules for
+  the live and vault planes
+- `services/live/dev.sh` to run the hosted HTTP starter directly with local
+  fallback lease directories
+- `services/vault/dev.sh` to run the local vault HTTP shim for `/api/auth*` and
+  `/api/v1/user*`
+- `services/vault/verify-build.sh` to recompile the deterministic vault
+  contract and verify that the committed build outputs still match
+- `./local-dev.sh` to boot the frontend plus both local API processes
+- `./build-and-sync.sh` to rebuild all artifacts and refresh manifest hashes
+- `./deploy.sh` to run the full app-wide publish + deploy flow
+- `./upgrade.sh` to rerun the same rebuild path and submit the app upgrade
+
+Run the local mixed-app loop:
+
+```bash
+cd .soracloud-hayahi
+./local-dev.sh
+iroha app soracloud app local-dev --manifest ./app_manifest.json --dry-run
+```
+
+Build the three app surfaces and refresh manifest hashes:
+
+```bash
+cd .soracloud-hayahi
+./build-and-sync.sh
+iroha app soracloud app build-and-sync --manifest ./app_manifest.json --dry-run
+```
+
+Inspect the local split-plane routing and frontend publish shape before deploy:
+
+```bash
+iroha app soracloud app local-plan \
+  --manifest .soracloud-hayahi/app_manifest.json
+```
+
+Deploy the static site plus every service without SSH or manual pinning:
+
+```bash
+cd .soracloud-hayahi
+TORII_URL=http://127.0.0.1:8080 ./deploy.sh
+iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+```
+
+Upgrade the static site plus every service without SSH or manual pinning:
+
+```bash
+cd .soracloud-hayahi
+TORII_URL=http://127.0.0.1:8080 ./upgrade.sh
+iroha app soracloud app upgrade-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+```
+
+For Taira-style deployments, keep Torii root bound to Torii itself and publish
+the frontend only through SoraFS CID URLs under
+`https://taira.sora.org/sorafs/cid/...`.

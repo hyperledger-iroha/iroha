@@ -85,7 +85,7 @@ final class AccountIdTests: XCTestCase {
         let publicKey = Data(repeating: 0x11, count: 32)
         let i105 = try AccountId.makeI105(publicKey: publicKey)
         let alias = "alice@dataspace"
-        let scopedAlias = "alice@hbl.dataspace"
+        let scopedAlias = "alice@banka.dataspace"
 
         XCTAssertEqual(AccountId.normalizeForComparison(i105), i105)
         XCTAssertEqual(AccountId.normalizeForComparison(alias), alias)
@@ -97,7 +97,7 @@ final class AccountIdTests: XCTestCase {
 
     func testNormalizeForComparisonDoesNotCanonicalizeLegacyLiterals() {
         let publicKey = Data(repeating: 0xAB, count: 32)
-        let rawUpper = "ed0120\(publicKey.map { String(format: "%02X", $0) }.joined())@HBL.SBP"
+        let rawUpper = "ed0120\(publicKey.map { String(format: "%02X", $0) }.joined())@BANKA.SBP"
         XCTAssertEqual(AccountId.normalizeForComparison(rawUpper), rawUpper)
         XCTAssertFalse(AccountId.matchesForComparison(rawUpper, rawUpper.lowercased()))
     }

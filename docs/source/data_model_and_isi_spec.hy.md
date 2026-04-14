@@ -198,13 +198,13 @@ ID-ներն ունեն կայուն լարային ձևեր՝ `Display`/`FromStr
 - Պարամետրի թարմացում.
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())`-ը թարմացնում և թողարկում է `ConfigurationEvent::Changed`:CLI / Torii ակտիվի սահմանման id + կեղծանունների օրինակներ.
 - Գրանցվեք կանոնական Base58 ID-ով + բացահայտ անունով + երկար կեղծանունով.
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
 - Գրանցվեք կանոնական Base58 id-ով + բացահայտ անունով + կարճ կեղծանունով.
   - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - Անանուխը կեղծանունով + հաշվի բաղադրիչներ.
-  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
 - Լուծել alias-ը կանոնական Base58 id:
-  - `POST /v1/assets/aliases/resolve` JSON `{ "alias": "pkr#ubl.sbp" }`-ով
+  - `POST /v1/assets/aliases/resolve` JSON `{ "alias": "pkr#bankb.sbp" }`-ով
 
 Միգրացիոն նշում.
 - `name#domain` տեքստային ակտիվների սահմանման ID-ները միտումնավոր չեն աջակցվում առաջին թողարկումում. օգտագործեք կանոնական Base58 ID-ներ կամ լուծեք կետավոր կեղծանունը:

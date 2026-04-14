@@ -102,7 +102,7 @@ async fn transactions_endpoint_accepts_encoded_account_segments() {
 #[tokio::test]
 async fn transactions_endpoint_rejects_invalid_account_segment() {
     let app = test_router();
-    let literal = "not-an-i105@hbl.dataspace";
+    let literal = "not-an-i105@banka.dataspace";
     let resp = app
         .clone()
         .oneshot(
@@ -171,7 +171,7 @@ async fn transactions_query_accepts_default_domain_without_suffix() {
 #[tokio::test]
 async fn transactions_endpoint_rejects_public_key_segments() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = format!("{ACCOUNT_SIGNATORY}@hbl.dataspace");
+    let literal = format!("{ACCOUNT_SIGNATORY}@banka.dataspace");
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("public-key literal must fail to parse")
         .reason();
@@ -384,7 +384,7 @@ async fn transactions_query_rejects_checksum_mismatch() {
 #[tokio::test]
 async fn transactions_query_placeholder_literal_rejected_without_shim() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = "ignored@hbl.dataspace";
+    let literal = "ignored@banka.dataspace";
     let reason = AccountId::parse_encoded(literal)
         .expect_err("placeholder literal should fail checksum validation")
         .reason();
@@ -453,7 +453,7 @@ async fn transactions_query_valid_literals_do_not_bump_invalid_metrics() {
 #[tokio::test]
 async fn transactions_query_endpoint_rejects_public_key_segment() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = format!("{ACCOUNT_SIGNATORY}@hbl.dataspace");
+    let literal = format!("{ACCOUNT_SIGNATORY}@banka.dataspace");
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("public-key literal must fail to parse")
         .reason();
@@ -587,7 +587,7 @@ async fn assets_endpoint_invalid_segments_increment_metric() {
 #[tokio::test]
 async fn assets_endpoint_rejects_public_key_segments() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = format!("{ACCOUNT_SIGNATORY}@hbl.dataspace");
+    let literal = format!("{ACCOUNT_SIGNATORY}@banka.dataspace");
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("public-key literal must fail to parse")
         .reason();
@@ -681,7 +681,7 @@ async fn assets_query_endpoint_invalid_segments_increment_metric() {
 #[tokio::test]
 async fn assets_query_endpoint_rejects_public_key_segments() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = format!("{ACCOUNT_SIGNATORY}@hbl.dataspace");
+    let literal = format!("{ACCOUNT_SIGNATORY}@banka.dataspace");
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("public-key literal must fail to parse")
         .reason();
@@ -1333,7 +1333,7 @@ async fn nexus_public_lane_stake_accepts_default_domain_validator_literals() {
 #[tokio::test]
 async fn nexus_public_lane_stake_rejects_public_key_validator() {
     let (app, metrics) = test_router_with_metrics();
-    let literal = format!("{ACCOUNT_SIGNATORY}@hbl.dataspace");
+    let literal = format!("{ACCOUNT_SIGNATORY}@banka.dataspace");
     let encoded = encode_query_value(&literal);
     let reason = AccountId::parse_encoded(&literal)
         .expect_err("public-key literal must fail to parse")
@@ -1437,7 +1437,7 @@ fn build_test_router() -> (Router, Arc<Metrics>) {
     let kura = Kura::blank_kura_for_testing();
     let query = LiveQueryStore::start_test();
     let local_peer_id = PeerId::new(cfg.common.key_pair.public_key().clone());
-    let domain_id: DomainId = "wonderland".parse().expect("domain parses");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain parses");
     let signatory: PublicKey = ACCOUNT_SIGNATORY.parse().expect("key parses");
     let account_id = AccountId::new(signatory);
     let account = Account::new(account_id.clone()).build(&account_id);

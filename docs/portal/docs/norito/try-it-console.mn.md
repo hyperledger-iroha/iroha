@@ -4,9 +4,9 @@ direction: ltr
 source: docs/portal/docs/norito/try-it-console.md
 status: complete
 generator: scripts/sync_docs_i18n.py
-source_hash: 5246118a539e2031dcafb8cf384ac7d20b8abc28b67ee1555e1b1211779fe390
-source_last_modified: "2026-01-22T16:26:46.508367+00:00"
-translation_last_reviewed: 2026-02-07
+source_hash: 2b1c75d262ff579d7b04df9122c9a9c55cd8d694a04cd326d3138717f396cfe7
+source_last_modified: "2026-03-26T11:40:25.614954+00:00"
+translation_last_reviewed: 2026-04-08
 title: Norito Try-It Console
 description: Use the developer-portal proxy, Swagger, and RapiDoc widgets to send real Torii / Norito-RPC requests directly from the documentation site.
 translator: machine-google-reviewed

@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.Arrays;
+import java.util.Base64;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -382,6 +383,67 @@ public final class HttpClientTransport implements IrohaClient {
   public CompletableFuture<RamLfeReceiptVerifyResponse> verifyRamLfeReceipt(
       final Map<String, Object> receipt, final String outputHex) {
     return verifyRamLfeReceipt(new RamLfeReceiptVerifyRequest(receipt, outputHex));
+  }
+
+  /** Deploys contract bytecode via `POST /v1/contracts/deploy`. */
+  public CompletableFuture<Optional<ContractDeployResponse>> deployContract(
+      final String authority,
+      final String privateKey,
+      final String codeB64,
+      final String contractAlias,
+      final Long leaseExpiryMs) {
+    final byte[] body =
+        encodeJsonBody(
+            buildDeployContractPayload(authority, privateKey, codeB64, contractAlias, leaseExpiryMs));
+    final TransportRequest request = buildJsonPostRequest("/v1/contracts/deploy", body);
+    return fetchOptionalJson(request, ContractJsonParser::parseDeployResponse, "contract deploy");
+  }
+
+  /** Deploys contract bytecode via `POST /v1/contracts/deploy`. */
+  public CompletableFuture<Optional<ContractDeployResponse>> deployContract(
+      final String authority,
+      final String privateKey,
+      final String codeB64,
+      final String contractAlias) {
+    return deployContract(authority, privateKey, codeB64, contractAlias, null);
+  }
+
+  /** Calls a deployed contract via `POST /v1/contracts/call`. */
+  public CompletableFuture<ContractCallResponse> callContract(
+      final String authority,
+      final String privateKey,
+      final long gasLimit,
+      final String contractAddress,
+      final String contractAlias,
+      final String entrypoint,
+      final Object payload,
+      final String gasAssetId) {
+    final byte[] body =
+        encodeJsonBody(
+            buildContractCallPayload(
+                authority,
+                privateKey,
+                gasLimit,
+                contractAddress,
+                contractAlias,
+                entrypoint,
+                payload,
+                gasAssetId));
+    final TransportRequest request = buildJsonPostRequest("/v1/contracts/call", body);
+    return fetchJson(request, ContractJsonParser::parseCallResponse, "contract call");
+  }
+
+  /** Fetches one governance binding via `GET /v1/gov/contracts/{contract_address}`. */
+  public CompletableFuture<GovernanceContractResponse> getGovernanceContract(
+      final String contractAddress) {
+    final String normalizedAddress = normalizeNonBlank(contractAddress, "contractAddress");
+    final TransportRequest request =
+        buildJsonGetRequest(
+            "/v1/gov/contracts/" + encodePathSegment(normalizedAddress), Map.of());
+    return fetchJson(
+        request,
+        ContractJsonParser::parseGovernanceContractResponse,
+        "governance contract");
   }
 
   /** Creates a transport backed by the platform HTTP executor (OkHttp on Android). */
@@ -1449,6 +1511,57 @@ public final class HttpClientTransport implements IrohaClient {
     return future;
   }
 
+  private <T> CompletableFuture<Optional<T>> fetchOptionalJson(
+      final TransportRequest request,
+      final Function<byte[], T> parser,
+      final String errorContext) {
+    notifyRequest(request);
+    final CompletableFuture<Optional<T>> future = new CompletableFuture<>();
+    executor
+        .execute(request)
+        .whenComplete(
+            (response, throwable) -> {
+              if (throwable != null) {
+                final Throwable cause =
+                    throwable instanceof CompletionException ? throwable.getCause() : throwable;
+                final RuntimeException error =
+                    new RuntimeException(errorContext + " request failed", cause);
+                notifyFailure(request, cause);
+                future.completeExceptionally(error);
+                return;
+              }
+              final ClientResponse clientResponse =
+                  new ClientResponse(
+                      response.statusCode(),
+                      response.body(),
+                      response.message(),
+                      null,
+                      extractRejectCode(response));
+              if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                final RuntimeException error =
+                    new RuntimeException(
+                        errorContext + " request failed with status " + response.statusCode());
+                notifyFailure(request, error);
+                future.completeExceptionally(error);
+                return;
+              }
+              if (response.body().length == 0) {
+                notifyResponse(request, clientResponse);
+                future.complete(Optional.empty());
+                return;
+              }
+              try {
+                final T parsed = parser.apply(response.body());
+                notifyResponse(request, clientResponse);
+                future.complete(Optional.of(parsed));
+              } catch (final RuntimeException ex) {
+                notifyFailure(request, ex);
+                future.completeExceptionally(ex);
+              }
+            });
+    return future;
+  }
+
   private static byte[] encodeJsonBody(final Map<String, Object> payload) {
     return JsonEncoder.encode(Objects.requireNonNull(payload, "payload"))
         .getBytes(StandardCharsets.UTF_8);
@@ -1536,6 +1649,90 @@ public final class HttpClientTransport implements IrohaClient {
       payload.put("output_hex", normalizeEvenLengthHex(outputHex, "outputHex"));
     }
     return payload;
+  }
+
+  static Map<String, Object> buildDeployContractPayload(
+      final String authority,
+      final String privateKey,
+      final String codeB64,
+      final String contractAlias,
+      final Long leaseExpiryMs) {
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("authority", normalizeNonBlank(authority, "authority"));
+    payload.put("private_key", normalizeNonBlank(privateKey, "privateKey"));
+    payload.put("code_b64", normalizeRequiredBase64Payload(codeB64, "codeB64"));
+    payload.put("contract_alias", normalizeNonBlank(contractAlias, "contractAlias"));
+    if (leaseExpiryMs != null) {
+      if (leaseExpiryMs.longValue() < 0L) {
+        throw new IllegalArgumentException("leaseExpiryMs must be non-negative");
+      }
+      payload.put("lease_expiry_ms", leaseExpiryMs);
+    }
+    return payload;
+  }
+
+  static Map<String, Object> buildContractCallPayload(
+      final String authority,
+      final String privateKey,
+      final long gasLimit,
+      final String contractAddress,
+      final String contractAlias,
+      final String entrypoint,
+      final Object payloadValue,
+      final String gasAssetId) {
+    if (gasLimit < 0L) {
+      throw new IllegalArgumentException("gasLimit must be non-negative");
+    }
+    final Map<String, Object> payload = new LinkedHashMap<>();
+    payload.put("authority", normalizeNonBlank(authority, "authority"));
+    payload.put("private_key", normalizeNonBlank(privateKey, "privateKey"));
+    payload.putAll(buildContractTargetSelector(contractAddress, contractAlias));
+    if (entrypoint != null) {
+      payload.put("entrypoint", normalizeNonBlank(entrypoint, "entrypoint"));
+    }
+    if (payloadValue != null) {
+      payload.put("payload", payloadValue);
+    }
+    if (gasAssetId != null) {
+      payload.put("gas_asset_id", normalizeNonBlank(gasAssetId, "gasAssetId"));
+    }
+    payload.put("gas_limit", gasLimit);
+    return payload;
+  }
+
+  static Map<String, String> buildContractTargetSelector(
+      final String contractAddress, final String contractAlias) {
+    final boolean hasContractAddress = contractAddress != null;
+    final boolean hasContractAlias = contractAlias != null;
+    if (hasContractAddress == hasContractAlias) {
+      throw new IllegalArgumentException(
+          "Exactly one of contractAddress or contractAlias must be provided");
+    }
+    final Map<String, String> selector = new LinkedHashMap<>();
+    if (hasContractAddress) {
+      selector.put(
+          "contract_address",
+          normalizeNonBlank(contractAddress, "contractAddress"));
+      return selector;
+    }
+    selector.put(
+        "contract_alias",
+        normalizeNonBlank(contractAlias, "contractAlias"));
+    return selector;
+  }
+
+  static String normalizeRequiredBase64Payload(final String value, final String field) {
+    final String normalized = normalizeNonBlank(value, field);
+    final byte[] decoded;
+    try {
+      decoded = Base64.getDecoder().decode(normalized);
+    } catch (final IllegalArgumentException ex) {
+      throw new IllegalArgumentException(field + " must be valid base64", ex);
+    }
+    if (decoded.length == 0) {
+      throw new IllegalArgumentException(field + " must not decode to empty bytes");
+    }
+    return normalized;
   }
 
   static String normalizeOptionalNonBlank(final String value, final String field) {

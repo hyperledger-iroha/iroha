@@ -69,11 +69,14 @@ fn encode_prog_syscall_uses_valid_metadata_header() {
 fn ivm_syscall_data_events_follow_order() {
     // World with domain/account and asset definition for mint
     let (authority_id, _) = iroha_test_samples::gen_account_in("wonderland");
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain = Domain::new(domain_id.clone()).build(&authority_id);
     let account = Account::new(authority_id.clone()).build(&authority_id);
     let asset_def = AssetDefinition::new(
-        AssetDefinitionId::new("wonderland".parse().unwrap(), "rose".parse().unwrap()),
+        AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal").unwrap(),
+            "rose".parse().unwrap(),
+        ),
         NumericSpec::default(),
     )
     .build(&authority_id);
@@ -119,7 +122,7 @@ fn ivm_syscall_data_events_follow_order() {
     let ptr_val2 = store_tlv(&mut vm, &mut cursor, PointerType::Json, &val2_bytes);
 
     let asset_def_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "rose".parse().unwrap(),
     );
     let asset_bytes = norito::to_bytes(&asset_def_id).expect("encode asset definition");

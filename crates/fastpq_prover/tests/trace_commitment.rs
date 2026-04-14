@@ -12,6 +12,7 @@ use fastpq_prover::{
 use iroha_crypto::Hash;
 use iroha_data_model::{
     asset::id::AssetDefinitionId,
+    domain::DomainId,
     fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
 };
 use iroha_primitives::numeric::Numeric;
@@ -106,7 +107,7 @@ fn sample_transfer_transcript() -> TransferTranscript {
         from_account: (*ALICE_ID).clone(),
         to_account: (*BOB_ID).clone(),
         asset_definition: AssetDefinitionId::new(
-            "fixture".parse().unwrap(),
+            DomainId::try_new("fixture", "universal").unwrap(),
             "xor".parse().unwrap(),
         ),
         amount: Numeric::from(75u32),

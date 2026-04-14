@@ -180,7 +180,8 @@ mod tests {
 
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::portfolio"));
         let account = iroha_test_samples::ALICE_ID.clone();
-        let domain_id: DomainId = "wonderland".parse().expect("static domain id");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("static domain id");
         let def_id = AssetDefinitionId::new(
             domain_id.clone(),
             "cash".parse().expect("static asset name"),
@@ -216,7 +217,8 @@ mod tests {
 
         let uaid = UniversalAccountId::from_hash(Hash::new(b"uaid::split"));
         let account = iroha_test_samples::ALICE_ID.clone();
-        let domain_id: DomainId = "wonderland".parse().expect("static domain id");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("static domain id");
         let def_id = AssetDefinitionId::new(
             domain_id.clone(),
             "cash".parse().expect("static asset name"),

@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 54b6d543cff8df6e8fd50632cfed6265770edc33855f06912be603457c5b517e
 source_last_modified: "2026-04-02T18:31:54.074495+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -27,7 +27,7 @@ source: crates/kotodama_lang/src/samples/threshold_escrow.ko
 - 呼叫 `open_escrow(recipient, escrow_account, asset_definition, target_amount)` 一次，記錄持久合約狀態下的付款人、收款人、託管帳戶、資產定義、確切目標以及開啟/釋放/退款標誌。
 - 從同一付款人撥打 `deposit(amount)` 直至 `funded_amount_value == target_amount_value`；存款必須保持正值，任何超出託管資金的充值都會被拒絕。
 - 一旦達到目標，請致電 `release_if_ready()` 將託管資金轉移給收款人，或在託管仍處於開放狀態時致電 `refund()` 將資金金額退還給付款人。
-- 使用 `FindAssetById` / `iroha_cli ledger asset list` 檢查餘額，並使用 `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json` 檢查合約狀態。
+- 使用 `FindAssetById` / `iroha ledger asset list all --verbose` 檢查餘額，並使用 `GET /v1/contracts/state?paths=payer_account,recipient_account,escrow_account_id,escrow_asset_definition,target_amount_value,funded_amount_value,is_open,is_released,is_refunded&decode=json` 檢查合約狀態。
 
 ## 相關SDK指南
 

@@ -198,13 +198,13 @@ translator: machine-google-reviewed
 - עדכון פרמטר:
   - `SetParameter(SumeragiParameter::BlockTimeMs(2500).into())` מעדכן ופולט `ConfigurationEvent::Changed`.CLI / Torii מזהה הגדרת נכס + דוגמאות כינוי:
 - הרשמה עם מזהה Base58 הקנוני + שם מפורש + כינוי ארוך:
-  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#ubl.sbp`
+  - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#bankb.sbp`
 - הרשמה עם מזהה Base58 הקנוני + שם מפורש + כינוי קצר:
   - `iroha ledger asset definition register --id 66owaQmAQMuHxPzxUN3bqZ6FJfDa --name pkr --alias pkr#sbp`
 - נטבע בכינוי + רכיבי חשבון:
-  - `iroha ledger asset mint --definition-alias pkr#ubl.sbp --account <i105> --quantity 500`
+  - `iroha ledger asset mint --definition-alias pkr#bankb.sbp --account <i105> --quantity 500`
 - פתרון כינוי למזהה קנוני Base58:
-  - `POST /v1/assets/aliases/resolve` עם JSON `{ "alias": "pkr#ubl.sbp" }`
+  - `POST /v1/assets/aliases/resolve` עם JSON `{ "alias": "pkr#bankb.sbp" }`
 
 הערת הגירה:
 - מזהי `name#domain` הגדרת נכסים טקסטואליים נותרו ללא תמיכה במכוון במהדורה הראשונה; השתמש במזהי Base58 קנוניים או פתרון כינוי מנוקד.

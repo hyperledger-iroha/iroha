@@ -247,8 +247,8 @@ export interface MultisigAccountSelector {
 
 export interface MultisigContractCallProposeRequest extends MultisigAccountSelector {
   signerAccountId: string;
-  namespace: string;
-  contractId: string;
+  contractAddress?: string;
+  contractAlias?: string;
   entrypoint: string;
   payload?: JsonValue;
   gasAssetId?: string | null;
@@ -265,7 +265,8 @@ export interface MultisigContractCallProposeRequest extends MultisigAccountSelec
   multisig_account_id?: string;
   multisig_account_alias?: string;
   signer_account_id?: string;
-  contract_id?: string;
+  contract_address?: string;
+  contract_alias?: string;
   gas_asset_id?: string | null;
   fee_sponsor?: string | null;
   gas_limit?: number | string | bigint | null;
@@ -283,8 +284,8 @@ export interface MultisigContractCallProposePayload {
   multisig_account_id?: string;
   multisig_account_alias?: string;
   signer_account_id: string;
-  namespace: string;
-  contract_id: string;
+  contract_address?: string;
+  contract_alias?: string;
   entrypoint: string;
   payload: JsonValue;
   gas_asset_id?: string;
@@ -423,6 +424,8 @@ export const SCCP_DOMAIN_TON: number;
 export const SCCP_DOMAIN_TRON: number;
 export const SCCP_DOMAIN_SORA_KUSAMA: number;
 export const SCCP_DOMAIN_SORA_POLKADOT: number;
+export const SCCP_DOMAIN_SORA2: number;
+export const SCCP_STARK_FRI_PROOF_FAMILY_V1: string;
 export const SCCP_CORE_REMOTE_DOMAINS: number[];
 
 export interface SccpBurnPayload {
@@ -3282,8 +3285,7 @@ export interface ToriiGovernanceManifestQuorumSnapshot {
 }
 
 export interface ToriiGovernanceManifestActivationSnapshot {
-  namespace: string;
-  contract_id: string;
+  contract_address: string;
   code_hash_hex: string;
   abi_hash_hex?: string | null;
   height: number;
@@ -3303,11 +3305,17 @@ export interface ToriiGovernanceStatusSnapshot {
 export type ToriiGovernanceProposalStatus = "Proposed" | "Approved" | "Rejected" | "Enacted";
 
 export interface ToriiGovernanceDeployContractProposal {
-  namespace: string;
-  contract_id: string;
+  contract_address: string;
   code_hash_hex: string;
   abi_hash_hex: string;
   abi_version: string;
+}
+
+export interface ToriiGovernanceContractResponse {
+  found: boolean;
+  contract_address: string;
+  dataspace: string | null;
+  code_hash_hex: string | null;
 }
 
 export interface ToriiGovernanceProposalKind {
@@ -3490,11 +3498,36 @@ export interface ToriiGovernanceDraftResponse {
   reason?: string | null;
 }
 
+export interface MinistryAgendaProposalDraftRequest {
+  proposal: Record<string, unknown>;
+  authority: string;
+}
+
+export interface MinistryAgendaProposalDraftResponse {
+  ok: boolean;
+  agenda_proposal_id: string;
+  authority: string;
+  tx_instructions: ReadonlyArray<ToriiGovernanceDraftInstruction>;
+  signable_transaction_b64: string;
+}
+
+export interface MinistryAgendaProposalRecord {
+  proposal: Record<string, unknown>;
+  authority: string;
+  submitted_tx_hash_hex: string;
+  submitted_height: number;
+}
+
+export interface MinistryAgendaProposalGetResponse {
+  found: boolean;
+  record: MinistryAgendaProposalRecord | null;
+}
+
 export type ToriiGovernanceBallotDirection = "Aye" | "Nay" | "Abstain";
 
 export interface ToriiGovernanceDeployContractProposalRequest {
-  namespace: string;
-  contractId: string;
+  contractAddress?: string;
+  contractAlias?: string;
   codeHash: string | BinaryLike;
   abiHash: string | BinaryLike;
   abiVersion?: string;
@@ -4136,6 +4169,312 @@ export interface ToriiNodeCurveCapabilities {
   registryVersion: number;
   allowedCurveIds: ReadonlyArray<number>;
   allowedCurveBitmap: ReadonlyArray<number>;
+}
+
+export interface ToriiSccpCodecCapability {
+  id: number;
+  key: string;
+  description: string;
+}
+
+export interface ToriiSccpCounterpartyCapability {
+  domain: number;
+  chain: string;
+  verifierBackendKey: string;
+  messageBackend: string;
+  registryBackend: string;
+  counterpartyAccountCodec: number;
+  counterpartyAccountCodecKey: string;
+  productionReady: boolean;
+  disabledReason: string | null;
+}
+
+export interface ToriiSccpCapabilities {
+  localDomain: number;
+  localChain: string;
+  proofFamily: string;
+  burnBundlePath: string;
+  governanceBundlePath: string;
+  messageBundlePath: string;
+  messageProofPath: string;
+  messageJobPath: string;
+  recentMessagesPath: string;
+  proofManifestPath: string;
+  legacyBurnRegistryBackend: string;
+  legacyGovernanceRegistryBackend: string;
+  proofSubmitPath: string | null;
+  messageSubmitPath: string | null;
+  messagePayloadKinds: ReadonlyArray<string>;
+  codecs: ReadonlyArray<ToriiSccpCodecCapability>;
+  counterparties: ReadonlyArray<ToriiSccpCounterpartyCapability>;
+}
+
+export type ToriiSccpProofFinalityModel =
+  | "EthereumBeaconExecution"
+  | "BscValidatorSet"
+  | "SolanaFinalizedSlot"
+  | "TonMasterchain"
+  | "TronDpos"
+  | "SubstrateGrandpa";
+
+export type ToriiSccpProofVerifierTarget =
+  | "EvmContract"
+  | "SolanaProgram"
+  | "TonContract"
+  | "TronContract"
+  | "SubstrateRuntime";
+
+export type ToriiSccpProofSecurityModel = "RecursiveZk";
+
+export type ToriiSccpAnchorGovernance = "SoraParliament";
+
+export interface ToriiSccpDestinationBinding {
+  version: number;
+  key: string;
+  bindingHash: string;
+}
+
+export interface ToriiSccpProofManifest {
+  version: number;
+  localDomain: number;
+  localChain: string;
+  counterpartyDomain: number;
+  chain: string;
+  proofFamily: string;
+  securityModel: ToriiSccpProofSecurityModel;
+  anchorGovernance: ToriiSccpAnchorGovernance;
+  destinationBinding: ToriiSccpDestinationBinding;
+  verifierBackendKey: string;
+  messageBackend: string;
+  registryBackend: string;
+  counterpartyAccountCodec: number;
+  counterpartyAccountCodecKey: string;
+  finalityModel: ToriiSccpProofFinalityModel;
+  verifierTarget: ToriiSccpProofVerifierTarget;
+  manifestSeed: string;
+  requiredPublicInputs: ReadonlyArray<string>;
+  messagePayloadKinds: ReadonlyArray<string>;
+  productionReady: boolean;
+  disabledReason: string | null;
+  submissionTemplate: ToriiSccpCounterpartySubmissionTemplate;
+}
+
+export interface ToriiSccpProofManifestSet {
+  localDomain: number;
+  localChain: string;
+  proofFamily: string;
+  manifests: ReadonlyArray<ToriiSccpProofManifest>;
+}
+
+export type ToriiSccpHubMessageKind =
+  | "Burn"
+  | "TokenAdd"
+  | "TokenPause"
+  | "TokenResume"
+  | "AssetRegister"
+  | "RouteActivate"
+  | "Transfer";
+
+export type ToriiSccpMessagePayloadKind = "AssetRegister" | "RouteActivate" | "Transfer";
+
+export interface ToriiSccpHubCommitment {
+  version: number;
+  kind: ToriiSccpHubMessageKind;
+  targetDomain: number;
+  messageId: string;
+  payloadHash: string;
+  parliamentCertificateHash: string | null;
+}
+
+export interface ToriiSccpMerkleStep {
+  siblingHash: string;
+  siblingIsLeft: boolean;
+}
+
+export interface ToriiSccpMerkleProof {
+  steps: ReadonlyArray<ToriiSccpMerkleStep>;
+}
+
+export interface ToriiSccpPayloadEnvelope {
+  kind: ToriiSccpMessagePayloadKind;
+  value: Readonly<Record<string, unknown>>;
+}
+
+export interface ToriiSccpMessageProofBundle {
+  version: number;
+  commitmentRoot: string;
+  commitment: ToriiSccpHubCommitment;
+  merkleProof: ToriiSccpMerkleProof;
+  payload: ToriiSccpPayloadEnvelope;
+  finalityProof: string;
+}
+
+export interface ToriiSccpMessageTransparentPublicInputs {
+  version: number;
+  messageId: string;
+  payloadHash: string;
+  targetDomain: number;
+  commitmentRoot: string;
+  finalityHeight: number;
+  finalityBlockHash: string;
+}
+
+export interface ToriiSccpEvmWordPublicInputs {
+  messageId: string;
+  payloadHash: string;
+  targetDomainWord: string;
+  commitmentRoot: string;
+  finalityHeightWord: string;
+  finalityBlockHash: string;
+}
+
+export type ToriiSccpPlatformSubmissionPayload =
+  | {
+      kind: "evm_contract_call" | "tron_contract_call";
+      value: {
+        proofBytes: string;
+        publicInputs: ToriiSccpEvmWordPublicInputs;
+        statementHash: string;
+      };
+    }
+  | {
+      kind: "solana_program_instruction" | "substrate_runtime_call";
+      value: {
+        proofBytes: string;
+        publicInputsBytes: string;
+        bundleBytes: string;
+      };
+    }
+  | {
+      kind: "ton_internal_message";
+      value: {
+        proofCell: string;
+        publicInputsCell: string;
+        bundleCell: string;
+      };
+    };
+
+export interface ToriiSccpSubmissionArgumentValue {
+  key: string;
+  encoding: string;
+  bytes: string;
+}
+
+export interface ToriiSccpCounterpartySubmissionPackage {
+  version: number;
+  proofFamily: string;
+  verifierBackendKey: string;
+  envelopeEncoding: string;
+  submissionKind: string;
+  verifierEntrypoint: string;
+  platformPayload: ToriiSccpPlatformSubmissionPayload;
+  arguments: ReadonlyArray<ToriiSccpSubmissionArgumentValue>;
+  envelopeBytes: string;
+}
+
+export interface ToriiSccpMessageTransparentProofArtifact {
+  version: number;
+  localDomain: number;
+  counterpartyDomain: number;
+  proofFamily: string;
+  securityModel: ToriiSccpProofSecurityModel;
+  anchorGovernance: ToriiSccpAnchorGovernance;
+  destinationBinding: ToriiSccpDestinationBinding;
+  verifierBackendKey: string;
+  messageBackend: string;
+  registryBackend: string;
+  manifestSeed: string;
+  finalityModel: ToriiSccpProofFinalityModel;
+  verifierTarget: ToriiSccpProofVerifierTarget;
+  publicInputs: ToriiSccpMessageTransparentPublicInputs;
+  proofBytes: string;
+  submissionPackage: ToriiSccpCounterpartySubmissionPackage;
+  bundle: ToriiSccpMessageProofBundle;
+}
+
+export interface ToriiSccpSubmissionArgument {
+  key: string;
+  description: string;
+}
+
+export interface ToriiSccpCounterpartySubmissionTemplate {
+  version: number;
+  encoding: string;
+  submissionKind: string;
+  verifierEntrypoint: string;
+  requiredArguments: ReadonlyArray<ToriiSccpSubmissionArgument>;
+}
+
+export type ToriiSccpChainFamily = "Evm" | "Solana" | "Ton" | "Tron" | "Substrate";
+
+export type ToriiSccpNormalizedCodecValue =
+  | { kind: "TextUtf8"; value: string }
+  | { kind: "EvmHex"; bytes: string }
+  | { kind: "SolanaBase58"; bytes: string }
+  | { kind: "TonRaw"; workchain: number; account: string }
+  | { kind: "TronBase58Check"; payload: string };
+
+export type ToriiSccpPayloadProjection =
+  | {
+      kind: "AssetRegister";
+      value: {
+        version: number;
+        target_domain: number;
+        home_domain: number;
+        nonce: number;
+        asset_id: ToriiSccpNormalizedCodecValue;
+        decimals: number;
+      };
+    }
+  | {
+      kind: "RouteActivate";
+      value: {
+        version: number;
+        source_domain: number;
+        target_domain: number;
+        nonce: number;
+        asset_id: ToriiSccpNormalizedCodecValue;
+        route_id: ToriiSccpNormalizedCodecValue;
+      };
+    }
+  | {
+      kind: "Transfer";
+      value: {
+        version: number;
+        source_domain: number;
+        dest_domain: number;
+        nonce: number;
+        asset_home_domain: number;
+        asset_id: ToriiSccpNormalizedCodecValue;
+        amount: number;
+        sender: ToriiSccpNormalizedCodecValue;
+        recipient: ToriiSccpNormalizedCodecValue;
+        route_id: ToriiSccpNormalizedCodecValue;
+      };
+    };
+
+export interface ToriiSccpCounterpartyProofJob {
+  version: number;
+  chainFamily: ToriiSccpChainFamily;
+  chain: string;
+  localDomain: number;
+  counterpartyDomain: number;
+  proofFamily: string;
+  securityModel: ToriiSccpProofSecurityModel;
+  anchorGovernance: ToriiSccpAnchorGovernance;
+  destinationBinding: ToriiSccpDestinationBinding;
+  verifierBackendKey: string;
+  messageBackend: string;
+  registryBackend: string;
+  manifestSeed: string;
+  finalityModel: ToriiSccpProofFinalityModel;
+  verifierTarget: ToriiSccpProofVerifierTarget;
+  publicInputs: ToriiSccpMessageTransparentPublicInputs;
+  payloadKind: string;
+  payloadProjection: ToriiSccpPayloadProjection;
+  submissionTemplate: ToriiSccpCounterpartySubmissionTemplate;
+  submissionPackage: ToriiSccpCounterpartySubmissionPackage;
+  bundle: ToriiSccpMessageProofBundle;
 }
 
 export interface ToriiLoggerConfig {
@@ -5335,8 +5674,8 @@ export interface GovernanceWindowInput {
 }
 
 export interface ProposeDeployContractInstructionInput {
-  namespace: string;
-  contractId: string;
+  contractAddress?: string;
+  contractAlias?: string;
   codeHash: HashLike;
   abiHash: HashLike;
   abiVersion?: string;
@@ -5574,43 +5913,29 @@ export interface RegisterContractCodeRequest {
 export interface DeployContractRequest {
   authority: string;
   privateKey: string;
+  contractAlias: string;
   codeB64: string | ArrayBufferView | ArrayBuffer | Buffer;
-  manifest?: ToriiContractManifestInput | null;
+  leaseExpiryMs?: number | null;
 }
 
 export interface DeployContractResponse {
   ok: boolean;
+  contract_alias: string | null;
+  contract_address: string | null;
+  previous_contract_address: string | null;
+  upgraded: boolean;
+  dataspace: string | null;
+  deploy_nonce: number | null;
+  tx_hash_hex: string | null;
   code_hash_hex: string;
   abi_hash_hex: string;
-}
-
-export interface DeployContractInstanceRequest extends DeployContractRequest {
-  namespace: string;
-  contractId: string;
-}
-
-export interface DeployContractInstanceResponse extends DeployContractResponse {
-  namespace: string;
-  contract_id: string;
-}
-
-export interface ActivateContractInstanceRequest {
-  authority: string;
-  privateKey: string;
-  namespace: string;
-  contractId: string;
-  codeHash: string;
-}
-
-export interface ActivateContractInstanceResponse {
-  ok: boolean;
 }
 
 export interface ContractCallRequest {
   authority: string;
   privateKey: string;
-  namespace: string;
-  contractId: string;
+  contractAddress?: string;
+  contractAlias?: string;
   entrypoint?: string | null;
   payload?: unknown;
   gasAssetId?: string | null;
@@ -5619,12 +5944,17 @@ export interface ContractCallRequest {
 
 export interface ContractCallResponse {
   ok: boolean;
-  namespace: string;
-  contract_id: string;
+  submitted: boolean;
+  dataspace: string;
+  contract_address?: string;
   code_hash_hex: string;
   abi_hash_hex: string;
-  tx_hash_hex: string;
+  creation_time_ms: number;
+  tx_hash_hex: string | null;
   entrypoint: string | null;
+  transaction_scaffold_b64: string | null;
+  signed_transaction_b64: string | null;
+  signing_message_b64: string | null;
 }
 
 export interface ContractManifestRecord {
@@ -5656,33 +5986,6 @@ export interface ContractManifestRecord {
 
 export interface ContractCodeBytesRecord {
   code_b64: string;
-}
-
-export interface ContractInstanceRecord {
-  contract_id: string;
-  code_hash_hex: string;
-}
-
-export interface ContractInstanceListResponse {
-  namespace: string;
-  total: number;
-  offset: number;
-  limit: number;
-  instances: ReadonlyArray<ContractInstanceRecord>;
-}
-
-export interface ContractInstanceListOptions {
-  contains?: string | null;
-  hashPrefix?: string | null;
-  offset?: number | string | bigint;
-  limit?: number | string | bigint;
-  order?: "cid_asc" | "cid_desc" | "hash_asc" | "hash_desc" | null;
-  signal?: AbortSignal;
-}
-
-export interface ContractInstanceIteratorOptions extends ContractInstanceListOptions {
-  pageSize?: NumericLike;
-  maxItems?: NumericLike;
 }
 
 export interface SorafsPinResponse {
@@ -6452,18 +6755,6 @@ export interface RegisterSmartContractBytesInstructionInput {
   code: ArrayBufferView | ArrayBuffer | Buffer | string;
 }
 
-export interface DeactivateContractInstanceInstructionInput {
-  namespace: string;
-  contractId: string;
-  reason?: string | null;
-}
-
-export interface ActivateContractInstanceInstructionInput {
-  namespace: string;
-  contractId: string;
-  codeHash: HashLike;
-}
-
 export interface RemoveSmartContractBytesInstructionInput {
   codeHash: HashLike;
   reason?: string | null;
@@ -6782,32 +7073,6 @@ export interface RegisterSmartContractBytesTransactionInput {
   authority: string;
   codeHash: HashLike;
   code: ArrayBufferView | ArrayBuffer | Buffer | string;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-}
-
-export interface DeactivateContractInstanceTransactionInput {
-  chainId: string;
-  authority: string;
-  namespace: string;
-  contractId: string;
-  reason?: string | null;
-  metadata?: MetadataLike;
-  creationTimeMs?: number | null;
-  ttlMs?: number | null;
-  nonce?: number | null;
-  privateKey: Buffer | ArrayBuffer | ArrayBufferView;
-}
-
-export interface ActivateContractInstanceTransactionInput {
-  chainId: string;
-  authority: string;
-  namespace: string;
-  contractId: string;
-  codeHash: HashLike;
   metadata?: MetadataLike;
   creationTimeMs?: number | null;
   ttlMs?: number | null;
@@ -7327,6 +7592,18 @@ export declare class ToriiClient {
     options?: { signal?: AbortSignal },
   ): Promise<ToriiNetworkTimeStatus>;
   getNodeCapabilities(options?: { signal?: AbortSignal }): Promise<ToriiNodeCapabilities>;
+  getSccpCapabilities(options?: { signal?: AbortSignal }): Promise<ToriiSccpCapabilities>;
+  getSccpProofManifests(
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiSccpProofManifestSet>;
+  getSccpMessageProofArtifact(
+    messageIdHex: string | Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiSccpMessageTransparentProofArtifact>;
+  getSccpMessageProofJob(
+    messageIdHex: string | Buffer | Uint8Array | ArrayBuffer | ArrayBufferView,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiSccpCounterpartyProofJob>;
   getRuntimeAbiActive(
     options?: { signal?: AbortSignal },
   ): Promise<ToriiRuntimeAbiActiveResponse>;
@@ -7487,6 +7764,14 @@ export declare class ToriiClient {
   getGovernanceCouncilAudit(
     options?: ToriiGovernanceCouncilAuditOptions,
   ): Promise<ToriiGovernanceCouncilAuditResponse>;
+  draftMinistryAgendaProposal(
+    payload: MinistryAgendaProposalDraftRequest,
+    options?: { signal?: AbortSignal },
+  ): Promise<MinistryAgendaProposalDraftResponse>;
+  getMinistryAgendaProposal(
+    proposalId: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<MinistryAgendaProposalGetResponse>;
   governanceFinalizeReferendum(
     payload: ToriiGovernanceFinalizeRequest,
     options?: { signal?: AbortSignal },
@@ -7704,12 +7989,6 @@ export declare class ToriiClient {
   ): RbcSampleRequestOptions;
   registerContractCode(request: RegisterContractCodeRequest): Promise<unknown | null>;
   deployContract(request: DeployContractRequest): Promise<DeployContractResponse | null>;
-  deployContractInstance(
-    request: DeployContractInstanceRequest,
-  ): Promise<DeployContractInstanceResponse | null>;
-  activateContractInstance(
-    request: ActivateContractInstanceRequest,
-  ): Promise<ActivateContractInstanceResponse | null>;
   callContract(
     request: ContractCallRequest,
     options?: { signal?: AbortSignal },
@@ -7739,22 +8018,10 @@ export declare class ToriiClient {
   ): Promise<MultisigProposalGetResponse>;
   getContractManifest(codeHashHex: string): Promise<ContractManifestRecord | null>;
   getContractCodeBytes(codeHashHex: string): Promise<ContractCodeBytesRecord | null>;
-  listContractInstances(
-    namespace: string,
-    options?: ContractInstanceListOptions,
-  ): Promise<ContractInstanceListResponse>;
-  iterateContractInstances(
-    namespace: string,
-    options?: ContractInstanceIteratorOptions,
-  ): AsyncGenerator<ContractInstanceRecord, void, unknown>;
-  listGovernanceInstances(
-    namespace: string,
-    options?: ContractInstanceListOptions,
-  ): Promise<ContractInstanceListResponse>;
-  iterateGovernanceInstances(
-    namespace: string,
-    options?: ContractInstanceIteratorOptions,
-  ): AsyncGenerator<ContractInstanceRecord, void, unknown>;
+  getGovernanceContract(
+    contractAddress: string,
+    options?: { signal?: AbortSignal },
+  ): Promise<ToriiGovernanceContractResponse>;
   listTriggers(options?: TriggerListOptions): Promise<ToriiTriggerListPage>;
   iterateTriggers(
     options?: TriggerIteratorOptions,
@@ -8170,6 +8437,11 @@ export function resignSignedTransaction(
 
 export function encodeSignedTransactionNorito(
   signedTransaction: ArrayBufferView | ArrayBuffer | Buffer,
+): Buffer;
+
+export function finalizeSignedTransaction(
+  unsignedTxBytes: ArrayBufferView | ArrayBuffer | Buffer,
+  detachedSignature: ArrayBufferView | ArrayBuffer | Buffer,
 ): Buffer;
 
 export interface OfflineEnvelope {
@@ -8710,12 +8982,6 @@ export function buildRegisterSmartContractCodeTransaction(
 export function buildRegisterSmartContractBytesTransaction(
   input: RegisterSmartContractBytesTransactionInput,
 ): SignedTransactionResult;
-export function buildDeactivateContractInstanceTransaction(
-  input: DeactivateContractInstanceTransactionInput,
-): SignedTransactionResult;
-export function buildActivateContractInstanceTransaction(
-  input: ActivateContractInstanceTransactionInput,
-): SignedTransactionResult;
 export function buildRemoveSmartContractBytesTransaction(
   input: RemoveSmartContractBytesTransactionInput,
 ): SignedTransactionResult;
@@ -9125,6 +9391,10 @@ export function buildPersistCouncilForEpochInstruction(
   input: PersistCouncilForEpochInstructionInput,
 ): object;
 
+export function buildSubmitAgendaProposalInstruction(
+  input: { proposal: Record<string, unknown> },
+): object;
+
 export interface ClaimTwitterFollowRewardInstructionInput {
   bindingHash:
     | {
@@ -9215,14 +9485,6 @@ export function buildRegisterSmartContractCodeInstruction(
 
 export function buildRegisterSmartContractBytesInstruction(
   input: RegisterSmartContractBytesInstructionInput,
-): object;
-
-export function buildDeactivateContractInstanceInstruction(
-  input: DeactivateContractInstanceInstructionInput,
-): object;
-
-export function buildActivateContractInstanceInstruction(
-  input: ActivateContractInstanceInstructionInput,
 ): object;
 
 export function buildRemoveSmartContractBytesInstruction(

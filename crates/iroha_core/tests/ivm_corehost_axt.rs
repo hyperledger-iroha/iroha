@@ -2967,7 +2967,7 @@ fn core_host_rejects_placeholder_policy_with_zero_manifest_root() {
     let dsid = DataSpaceId::new(88);
     let uaid = UniversalAccountId::from_hash(iroha_crypto::Hash::new(b"uaid-corehost-placeholder"));
 
-    let domain_id: DomainId = "wonderland".parse().expect("domain");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     let account = Account::new(authority.clone())
         .with_uaid(Some(uaid))
         .build(&authority);

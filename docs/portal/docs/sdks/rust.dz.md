@@ -54,18 +54,14 @@ telemetry URLs བདེན་བཤད་རྒྱུ་ཆ་ དུས་ཚ�
 use iroha::client::{Client, ClientConfiguration};
 use iroha_data_model::{
  isi::prelude::*,
- prelude::{AccountId, ChainId, DomainId, Name},
+ prelude::{AccountId, ChainId, Domain, DomainId},
 };
-use iroha_crypto::{KeyPair, PublicKey};
+use iroha_crypto::KeyPair;
 
 fn submit_example() -> eyre::Result<()> {
  let chain_id = ChainId::from("00000000-0000-0000-0000-000000000000");
- let account_id = AccountId::new(
- Name::from_str("alice")?,
- DomainId::from_str("wonderland")?,
- );
-
  let key_pair = KeyPair::generate_ed25519(); // replace with a persistent key in real apps
+ let account_id = AccountId::new(key_pair.public_key().clone());
 
  let cfg = ClientConfiguration {
  chain: chain_id.clone(),
@@ -76,9 +72,7 @@ fn submit_example() -> eyre::Result<()> {
 
  let client = Client::new(cfg)?;
 
- let instruction = Register {
- object: Domain::new(Name::from_str("research")?, None),
- };
+ let instruction = Register::domain(Domain::new(DomainId::try_new("research", "universal")?));
 
  let tx = client.build_transaction([instruction]);
  let signed = tx.sign(&key_pair)?;

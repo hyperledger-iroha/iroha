@@ -876,7 +876,7 @@ fn process_proof_attachment(ctx: &ProverContext, attachment: &ProofAttachment) -
     if !backend_allowed(backend_str, &ctx.allowed_backends) {
         errors.push(format!("backend `{backend_str}` not allowed"));
     }
-    if backend_str == "stark/fri-v1" || backend_str.starts_with("stark/fri-v1/") {
+    if backend_str == "stark/fri" || backend_str.starts_with("stark/fri/") {
         if let Some(state) = ctx.state.as_ref() {
             if !state.zk_snapshot().stark.enabled {
                 errors.push("stark verification is disabled in node configuration".into());
@@ -1711,7 +1711,7 @@ mod tests {
     }
 
     fn fixture_attachment_bytes() -> Vec<u8> {
-        let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add-v1", [0u8; 32]);
+        let fixture = halo2_fixture_envelope("halo2/ipa:tiny-add", [0u8; 32]);
         let proof = fixture.proof_box("halo2/ipa");
         let vk = fixture.vk_box("halo2/ipa").expect("fixture vk bytes");
         let attachment = ProofAttachment::new_inline("halo2/ipa".into(), proof, vk);

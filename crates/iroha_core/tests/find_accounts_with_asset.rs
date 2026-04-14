@@ -41,7 +41,7 @@ fn multi_account_mint_returns_only_positive_holders() {
     let mut state_block = state.block(header);
     let mut stx = state_block.transaction();
 
-    let domain_id: DomainId = "wonderland".parse().expect("domain");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain");
     Register::domain(Domain::new(domain_id.clone()))
         .execute(&ALICE_ID, &mut stx)
         .expect("register domain");
@@ -58,7 +58,7 @@ fn multi_account_mint_returns_only_positive_holders() {
     }
 
     let definition_id: AssetDefinitionId = iroha_data_model::asset::AssetDefinitionId::new(
-        "wonderland".parse().unwrap(),
+        DomainId::try_new("wonderland", "universal").unwrap(),
         "multi_coin".parse().unwrap(),
     );
     Register::asset_definition(

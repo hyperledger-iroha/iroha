@@ -238,6 +238,12 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
 
     let code_bytes = minimal_contract_artifact();
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&code_bytes);
+    let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
+        "deploy_test",
+        None,
+        "universal",
+    )
+    .expect("contract alias");
     let pk = iroha_data_model::prelude::ExposedPrivateKey(
         iroha_test_samples::ALICE_KEYPAIR.private_key().clone(),
     );
@@ -254,6 +260,10 @@ async fn deploy_and_get_contract_manifest_via_torii() -> Result<()> {
         (
             "code_b64",
             norito::json::to_value(&code_b64).expect("serialize bytecode"),
+        ),
+        (
+            "contract_alias",
+            norito::json::to_value(&contract_alias).expect("serialize contract alias"),
         ),
     ])
     .expect("serialize contract deploy body");
@@ -427,6 +437,12 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
 
     let code_bytes = contract_state_probe_artifact();
     let code_b64 = base64::engine::general_purpose::STANDARD.encode(&code_bytes);
+    let contract_alias = iroha_data_model::smart_contract::ContractAlias::from_components(
+        "contract_state_probe",
+        None,
+        "universal",
+    )
+    .expect("contract alias");
     let pk = iroha_data_model::prelude::ExposedPrivateKey(
         iroha_test_samples::ALICE_KEYPAIR.private_key().clone(),
     );
@@ -444,6 +460,10 @@ async fn contract_state_survives_across_calls_in_sora_profile_network() -> Resul
         (
             "code_b64",
             norito::json::to_value(&code_b64).expect("serialize bytecode"),
+        ),
+        (
+            "contract_alias",
+            norito::json::to_value(&contract_alias).expect("serialize contract alias"),
         ),
     ])
     .expect("serialize deploy body");

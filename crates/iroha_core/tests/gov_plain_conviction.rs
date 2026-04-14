@@ -25,7 +25,7 @@ fn plain_ballot_conviction_applies() {
     // Build minimal state/transaction
     let kura = Kura::blank_kura_for_testing();
     let query_handle = LiveQueryStore::start_test();
-    let domain_id: DomainId = "wonderland".parse().expect("domain id");
+    let domain_id: DomainId = DomainId::try_new("wonderland", "universal").expect("domain id");
     let domain: Domain = Domain::new(domain_id.clone()).build(&ALICE_ID);
     let account: Account = Account::new(ALICE_ID.clone()).build(&ALICE_ID);
     let world = World::with([domain], [account], []);

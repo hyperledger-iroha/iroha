@@ -110,8 +110,7 @@ fn main() -> Result<()> {
         &private_key,
         [
             InstructionBox::from(ActivateContractInstance {
-                namespace: args.dataspace.clone(),
-                contract_id: contract_address.to_string(),
+                contract_address: contract_address.clone(),
                 code_hash,
             }),
             InstructionBox::from(SetKeyValue::account(

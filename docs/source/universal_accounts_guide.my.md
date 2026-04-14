@@ -92,7 +92,7 @@ Publish` run (roadmap reference: `roadmap.md:2209`)။
 
 Universal-account စတင်ဖြန့်ချိခြင်းသည် canonical အကောင့်အထောက်အထားပုံစံကို ပြောင်းလဲခြင်းမရှိပါ-- `AccountId` သည် canonical၊ domainless အကောင့်ဘာသာရပ်အဖြစ် ကျန်ရှိနေပါသည်။
 - `AccountAlias` တန်ဖိုးများသည် ထိုအကြောင်းအရာ၏ထိပ်တွင် သီးခြား SNS နှောင်ကြိုးများဖြစ်သည်။ တစ်
-  `merchant@hbl.sbp` နှင့် dataspace-root alias ကဲ့သို့သော ဒိုမိန်းအရည်အချင်းပြည့်မီသော alias
+  `merchant@banka.sbp` နှင့် dataspace-root alias ကဲ့သို့သော ဒိုမိန်းအရည်အချင်းပြည့်မီသော alias
   `merchant@sbp` ကဲ့သို့သော တူညီသော canonical `AccountId` နှစ်ခုလုံးကို ဖြေရှင်းနိုင်သည်။
 - Canonical အကောင့်မှတ်ပုံတင်ခြင်းသည် အမြဲတမ်း `Account::new(AccountId)` /
   `NewAccount::new(AccountId)`; domain-qualified သို့မဟုတ် domain-materialized မရှိပါ။

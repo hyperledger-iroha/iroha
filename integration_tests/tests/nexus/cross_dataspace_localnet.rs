@@ -104,7 +104,7 @@ const SOAK_ITERATIONS_ENV: &str = "IROHA_NEXUS_CROSS_SOAK_ITERATIONS";
 
 fn stake_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
-        "nexus".parse().expect("nexus domain"),
+        DomainId::try_new("nexus", "universal").expect("nexus domain"),
         "xor".parse().expect("stake asset name"),
     )
 }
@@ -114,9 +114,10 @@ fn stake_asset_id_literal() -> String {
 }
 
 fn nexus_fee_asset_definition_id() -> AssetDefinitionId {
-    iroha_config::parameters::defaults::nexus::fees::fee_asset_id()
-        .parse()
-        .expect("default nexus fee asset id")
+    AssetDefinitionId::new(
+        DomainId::try_new("universal", "universal").expect("fee asset domain"),
+        "xor".parse().expect("fee asset name"),
+    )
 }
 
 fn parse_positive_usize_override(raw: Option<&str>, default: usize) -> usize {
@@ -366,18 +367,19 @@ fn npos_multilane_genesis_post_topology_transactions(
         "expected {TOTAL_PEERS} peers in genesis topology, got {}",
         topology.len()
     );
-    let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
-    let universal_domain: DomainId = "universal".parse().expect("universal domain");
-    let ds1_domain: DomainId = "ds1".parse().expect("ds1 domain");
-    let ds2_domain: DomainId = "ds2".parse().expect("ds2 domain");
+    let nexus_domain: DomainId = DomainId::try_new("nexus", "universal").expect("nexus domain");
+    let universal_domain: DomainId =
+        DomainId::try_new("universal", "universal").expect("universal domain");
+    let ds1_domain: DomainId = DomainId::try_new("ds1", "universal").expect("ds1 domain");
+    let ds2_domain: DomainId = DomainId::try_new("ds2", "universal").expect("ds2 domain");
     let stake_asset_id = stake_asset_definition_id();
     let fee_asset_id = nexus_fee_asset_definition_id();
     let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "nexus".parse().expect("asset definition domain"),
+        DomainId::try_new("nexus", "universal").expect("asset definition domain"),
         "ds1coin".parse().expect("asset definition name"),
     );
     let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "nexus".parse().expect("asset definition domain"),
+        DomainId::try_new("nexus", "universal").expect("asset definition domain"),
         "ds2coin".parse().expect("asset definition name"),
     );
     let mut bootstrap_tx = vec![
@@ -1624,11 +1626,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         }
     }
     let ds1_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "nexus".parse().expect("asset definition"),
+        DomainId::try_new("nexus", "universal").expect("asset definition"),
         "ds1coin".parse().expect("asset definition"),
     );
     let ds2_asset_def: AssetDefinitionId = AssetDefinitionId::new(
-        "nexus".parse().expect("asset definition"),
+        DomainId::try_new("nexus", "universal").expect("asset definition"),
         "ds2coin".parse().expect("asset definition"),
     );
     let bob_transfer_ds1_permission: Permission = CanTransferAssetWithDefinition {

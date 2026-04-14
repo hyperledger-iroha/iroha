@@ -242,7 +242,8 @@ pub fn build_state(
         let _guard = rt.enter();
         LiveQueryStore::start_test()
     };
-    let domain_id: DomainId = "bench".parse().expect("valid bench domain id");
+    let domain_id: DomainId =
+        DomainId::try_new("bench", "universal").expect("valid bench domain id");
     let domain = Domain::new(domain_id.clone()).build(account_id);
     let state = State::new(
         World::with(
@@ -322,7 +323,7 @@ pub fn build_state(
 }
 
 fn construct_domain_id(i: usize) -> DomainId {
-    format!("non_inlinable_domain_name_{i}").parse().unwrap()
+    DomainId::try_new(format!("non_inlinable_domain_name_{i}"), "universal").unwrap()
 }
 
 fn generate_account_id(seed: u128) -> AccountId {

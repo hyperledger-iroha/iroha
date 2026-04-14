@@ -66,7 +66,7 @@ public sealed class SignedQueryBuilderTests
     public void BuildSignedEncodesFindAliasesByAccountIdWithFilters()
     {
         var envelope = new SignedQueryBuilder(FixtureAccountId)
-            .FindAliasesByAccountId(FixtureAccountId, dataspace: "sbp", domain: "hbl")
+            .FindAliasesByAccountId(FixtureAccountId, dataspace: "sbp", domain: "banka")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
 
         var (singularDiscriminant, singularPayload) = ReadSingularQuery(envelope);
@@ -78,7 +78,7 @@ public sealed class SignedQueryBuilderTests
         var domainOption = ReadField(structPayload[(offsetAfterAccountId + offsetAfterDataspace)..], out _);
 
         Assert.Equal("sbp", ReadOptionalString(dataspaceOption));
-        Assert.Equal("hbl", ReadOptionalString(domainOption));
+        Assert.Equal("banka", ReadOptionalString(domainOption));
 
         AssertSignatureVerifies(envelope);
     }
@@ -149,22 +149,22 @@ public sealed class SignedQueryBuilderTests
     public void BuildSignedEncodesDomainEndorsementQueries()
     {
         var endorsementsEnvelope = new SignedQueryBuilder(FixtureAccountId)
-            .FindDomainEndorsements("hbl")
+            .FindDomainEndorsements("banka")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (endorsementsDiscriminant, endorsementsPayload) = ReadSingularQuery(endorsementsEnvelope);
         Assert.Equal(9u, endorsementsDiscriminant);
         var endorsementsStruct = ReadField(endorsementsPayload, out _);
         var endorsementsDomain = ReadNoritoString(ReadField(endorsementsStruct, out _));
-        Assert.Equal("hbl", endorsementsDomain);
+        Assert.Equal("banka", endorsementsDomain);
 
         var policyEnvelope = new SignedQueryBuilder(FixtureAccountId)
-            .FindDomainEndorsementPolicy("hbl")
+            .FindDomainEndorsementPolicy("banka")
             .BuildSigned(Convert.FromHexString(FixtureSeedHex));
         var (policyDiscriminant, policyPayload) = ReadSingularQuery(policyEnvelope);
         Assert.Equal(10u, policyDiscriminant);
         var policyStruct = ReadField(policyPayload, out _);
         var policyDomain = ReadNoritoString(ReadField(policyStruct, out _));
-        Assert.Equal("hbl", policyDomain);
+        Assert.Equal("banka", policyDomain);
 
         var committeeEnvelope = new SignedQueryBuilder(FixtureAccountId)
             .FindDomainCommittee("committee-7")

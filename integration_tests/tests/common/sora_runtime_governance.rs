@@ -25,12 +25,13 @@ use iroha::data_model::{
     },
     query::account::prelude::FindAccounts,
     runtime::RuntimeUpgradeManifest,
+    smart_contract::ContractAddress,
 };
 use iroha_crypto::KeyPair;
 use iroha_executor_data_model::permission::governance::{
     CanEnactGovernance, CanProposeContractDeployment, CanSubmitGovernanceBallot,
 };
-use iroha_test_network::NetworkBuilder;
+use iroha_test_network::{NetworkBuilder, ensure_domain_registration_lease_for_network};
 use iroha_test_samples::{ALICE_ID, gen_account_in};
 
 const CITIZEN_COUNT: usize = 20;
@@ -41,7 +42,7 @@ const BALLOT_DURATION_BLOCKS: u64 = 20;
 const THIRD_REFERENDUM_VOTERS: usize = 8;
 const THIRD_REFERENDUM_APPROVE_VOTERS: usize = 5;
 const GOV_MAX_CONVICTION: u64 = 6;
-const GOV_DOMAIN_ID: &str = "govsmoke";
+const GOV_DOMAIN_ID: &str = "govsmoke.universal";
 const FIRST_CONTRACT_ID: &str = "parliament.lifecycle.smoke.contract";
 const SECOND_CONTRACT_ID: &str = "parliament.lifecycle.smoke.reject.contract";
 const RUNTIME_UPGRADE_NAME: &str = "parliament.runtime.upgrade.smoke";
@@ -64,11 +65,24 @@ fn governance_escrow_account_literal() -> String {
 
 fn governance_asset_definition_id() -> AssetDefinitionId {
     AssetDefinitionId::new(
-        GOV_DOMAIN_ID
-            .parse()
-            .expect("governance domain id must parse"),
+        DomainId::parse_fully_qualified(GOV_DOMAIN_ID).expect("governance domain id must parse"),
         "xor".parse().expect("governance asset name must parse"),
     )
+}
+
+fn governance_contract_address(contract_id: &str) -> ContractAddress {
+    let deploy_nonce = match contract_id {
+        FIRST_CONTRACT_ID => 1,
+        SECOND_CONTRACT_ID => 2,
+        other => panic!("unexpected governance test contract id `{other}`"),
+    };
+    ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        &ALICE_ID,
+        deploy_nonce,
+        iroha::data_model::nexus::DataSpaceId::GLOBAL,
+    )
+    .expect("governance test contract address")
 }
 
 pub fn tune_client_timeouts(client: &mut Client) {
@@ -911,16 +925,18 @@ pub async fn setup_runtime_governance_fixture(
         "generated citizen identities must be unique"
     );
 
-    let gov_domain_id: DomainId = GOV_DOMAIN_ID.parse()?;
+    let gov_domain_id = DomainId::parse_fully_qualified(GOV_DOMAIN_ID)?;
     let asset_def_id = governance_asset_definition_id();
+    ensure_domain_registration_lease_for_network(&network, &gov_domain_id)
+        .wrap_err("seed governance domain registration lease")?;
     alice
-        .submit(Register::domain(Domain::new(gov_domain_id.clone())))
+        .submit_blocking(Register::domain(Domain::new(gov_domain_id.clone())))
         .wrap_err("register governance domain")?;
     wait_for_domain_registration(&alice, &gov_domain_id, Duration::from_secs(180))
         .await
         .wrap_err("wait for governance domain registration")?;
     alice
-        .submit(Register::asset_definition(
+        .submit_blocking(Register::asset_definition(
             AssetDefinition::numeric(asset_def_id.clone())
                 .with_name(asset_def_id.name().to_string()),
         ))
@@ -931,15 +947,15 @@ pub async fn setup_runtime_governance_fixture(
 
     let enact_perm: Permission = CanEnactGovernance.into();
     let runtime_propose_perm: Permission = CanProposeContractDeployment {
-        contract_id: FIRST_CONTRACT_ID.to_string(),
+        contract_address: governance_contract_address(FIRST_CONTRACT_ID),
     }
     .into();
     let secondary_propose_perm: Permission = CanProposeContractDeployment {
-        contract_id: SECOND_CONTRACT_ID.to_string(),
+        contract_address: governance_contract_address(SECOND_CONTRACT_ID),
     }
     .into();
     alice
-        .submit_all([
+        .submit_all_blocking([
             Grant::account_permission(runtime_propose_perm, ALICE_ID.clone()),
             Grant::account_permission(secondary_propose_perm, ALICE_ID.clone()),
             Grant::account_permission(enact_perm, ALICE_ID.clone()),
@@ -947,7 +963,7 @@ pub async fn setup_runtime_governance_fixture(
         .wrap_err("grant governance proposal/enact permissions to alice")?;
 
     alice
-        .submit_all(
+        .submit_all_blocking(
             citizens
                 .iter()
                 .map(|(account_id, _)| Register::account(Account::new(account_id.clone()))),
@@ -963,12 +979,21 @@ pub async fn setup_runtime_governance_fixture(
     let total_fund = CITIZEN_FUND.saturating_mul(u128::try_from(CITIZEN_COUNT).expect("count"))
         + extra_runtime_budget;
     let alice_asset_id = AssetId::new(asset_def_id.clone(), ALICE_ID.clone());
-    alice
+    let funding_mint_tx_hash = alice
         .submit(Mint::asset_numeric(
             u64::try_from(total_fund).expect("total fund should fit u64"),
             alice_asset_id.clone(),
         ))
         .wrap_err("mint governance balances for runtime-governance fixture setup")?;
+    wait_for_tx_applied(
+        &http,
+        &alice.torii_url,
+        &hex::encode(funding_mint_tx_hash.as_ref()),
+        Duration::from_secs(180),
+        "wait for runtime-governance fixture proposer funding mint tx to be applied",
+    )
+    .await
+    .wrap_err("wait for runtime-governance fixture proposer funding mint tx")?;
     wait_for_asset_balance(
         &alice,
         alice_asset_id.clone(),
@@ -979,7 +1004,7 @@ pub async fn setup_runtime_governance_fixture(
     .await?;
 
     alice
-        .submit_all(citizens.iter().map(|(account_id, _)| {
+        .submit_all_blocking(citizens.iter().map(|(account_id, _)| {
             Transfer::asset_numeric(
                 AssetId::new(asset_def_id.clone(), ALICE_ID.clone()),
                 u64::try_from(CITIZEN_FUND).expect("fund amount should fit u64"),

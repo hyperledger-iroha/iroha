@@ -8,7 +8,7 @@ status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: 4e686495c642a08740504c4bb5f88e623c89a896787388b61e4451f550f87af6
 source_last_modified: "2026-03-26T13:01:47.376183+00:00"
-translation_last_reviewed: 2026-04-02
+translation_last_reviewed: 2026-04-08
 translator: machine-google-reviewed
 ---
 
@@ -25,7 +25,7 @@ source: crates/ivm/docs/examples/13_register_and_mint.ko
 
 - SDK-ийн хурдан эхлүүлэх бүрт тохируулах үе шатыг тусгаж, очих хаяг (жишээ нь, `<i105-account-id>` for Alice) байгаа эсэхийг шалгаарай.
 - ROSE хөрөнгийн тодорхойлолтыг үүсгэхийн тулд `register_and_mint` нэвтрэх цэгийг дуудаж, нэг гүйлгээнд 250 нэгжийг Алис руу илгээнэ үү.
-- Үлдэгдлийг `client.request(FindAccountAssets)` эсвэл `iroha_cli ledger asset list --account <i105-account-id>`-ээр шалгана уу.
+- Үлдэгдлийг `client.request(FindAccountAssets)` эсвэл `iroha ledger asset list all --verbose`-ээр шалгана уу.
 
 ## Холбогдох SDK гарын авлага
 

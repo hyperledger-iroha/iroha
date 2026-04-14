@@ -22,7 +22,7 @@ fn find_accounts_with_asset() -> Result<()> {
     let result: Result<()> = (|| {
         // Registering new asset definition
         let definition_id = AssetDefinitionId::new(
-            "wonderland".parse().expect("Valid"),
+            DomainId::try_new("wonderland", "universal").expect("Valid"),
             "test_coin".parse().expect("Valid"),
         );
         let asset_definition = {

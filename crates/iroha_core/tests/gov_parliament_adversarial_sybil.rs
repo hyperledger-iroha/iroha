@@ -41,6 +41,19 @@ fn canonical_abi_hash_bytes() -> [u8; 32] {
     ivm::syscalls::compute_abi_hash(ivm::SyscallPolicy::AbiV1)
 }
 
+fn proposal_contract_address(
+    authority: &AccountId,
+    deploy_nonce: u64,
+) -> iroha_data_model::smart_contract::ContractAddress {
+    iroha_data_model::smart_contract::ContractAddress::derive(
+        iroha_config::parameters::defaults::common::chain_discriminant(),
+        authority,
+        deploy_nonce,
+        iroha_data_model::nexus::DataSpaceId::GLOBAL,
+    )
+    .expect("proposal contract address")
+}
+
 fn manifest_provenance(
     code_hash_hex: &str,
     abi_hash_hex: &str,
@@ -468,8 +481,7 @@ fn duplicate_approvals_do_not_count_twice_for_quorum() {
         &mut state,
         proposal_id,
         ProposalKind::DeployContract(DeployContractProposal {
-            namespace: "sora".to_owned(),
-            contract_id: "malicious.dupcheck.v1".to_owned(),
+            contract_address: proposal_contract_address(&attacker_a, 0),
             code_hash_hex: ContractCodeHash::from_hex_str(&"11".repeat(32)).expect("code hash"),
             abi_hash_hex: ContractAbiHash::from_hex_str(&hex::encode(canonical_abi_hash_bytes()))
                 .expect("abi hash"),
@@ -611,8 +623,7 @@ fn wealthy_non_members_cannot_open_referendum_without_sortition_capture() {
         &mut state,
         proposal_id,
         ProposalKind::DeployContract(DeployContractProposal {
-            namespace: "sora".to_owned(),
-            contract_id: "harm.blocked.v1".to_owned(),
+            contract_address: proposal_contract_address(&honest_a, 1),
             code_hash_hex: ContractCodeHash::from_hex_str(&"33".repeat(32)).expect("code hash"),
             abi_hash_hex: ContractAbiHash::from_hex_str(&hex::encode(canonical_abi_hash_bytes()))
                 .expect("abi hash"),

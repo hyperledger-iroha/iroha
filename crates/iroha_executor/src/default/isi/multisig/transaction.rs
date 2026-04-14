@@ -476,7 +476,7 @@ mod tests {
 
     #[test]
     fn proposer_authorized_by_signatory_or_self() {
-        let domain: DomainId = "wonderland".parse().expect("valid domain");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("valid domain");
         let signer = account(1, &domain);
         let multisig = account(2, &domain);
         let other = account(3, &domain);
@@ -506,7 +506,7 @@ mod tests {
 
     #[test]
     fn approver_authorized_by_signatory_or_self() {
-        let domain: DomainId = "wonderland".parse().expect("valid domain");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("valid domain");
         let signer = account(4, &domain);
         let multisig = account(5, &domain);
         let other = account(6, &domain);
@@ -532,7 +532,7 @@ mod tests {
 
     #[test]
     fn canceler_must_be_the_multisig_subject() {
-        let domain: DomainId = "wonderland".parse().expect("valid domain");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("valid domain");
         let multisig = account(10, &domain);
         let same_subject = multisig.clone();
         let other = account(11, &domain);
@@ -549,7 +549,7 @@ mod tests {
 
     #[test]
     fn derived_multisig_account_is_rejected() {
-        let domain: DomainId = "derived".parse().expect("valid domain");
+        let domain: DomainId = DomainId::try_new("derived", "universal").expect("valid domain");
         let signer = account(7, &domain);
         let spec = sample_spec(&domain, &signer);
         let seed = HashOf::<(DomainId, MultisigSpec)>::new(&(domain.clone(), spec.clone()));
@@ -568,7 +568,7 @@ mod tests {
 
     #[test]
     fn non_derived_multisig_account_is_allowed() {
-        let domain: DomainId = "non-derived".parse().expect("valid domain");
+        let domain: DomainId = DomainId::try_new("non-derived", "universal").expect("valid domain");
         let signer = account(8, &domain);
         let spec = sample_spec(&domain, &signer);
         let seed = HashOf::<(DomainId, MultisigSpec)>::new(&(domain.clone(), spec.clone()));

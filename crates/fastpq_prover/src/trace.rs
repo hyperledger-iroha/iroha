@@ -1945,6 +1945,7 @@ mod tests {
     use fastpq_isi::CANONICAL_PARAMETER_SETS;
     use iroha_crypto::Hash;
     use iroha_data_model::{
+        DomainId,
         asset::id::AssetDefinitionId,
         fastpq::{TRANSFER_TRANSCRIPTS_METADATA_KEY, TransferDeltaTranscript, TransferTranscript},
     };
@@ -2532,7 +2533,7 @@ mod tests {
             from_account: (*ALICE_ID).clone(),
             to_account: (*BOB_ID).clone(),
             asset_definition: AssetDefinitionId::new(
-                "wonderland".parse().unwrap(),
+                DomainId::try_new("wonderland", "universal").unwrap(),
                 "rose".parse().unwrap(),
             ),
             amount: Numeric::from(42u32),

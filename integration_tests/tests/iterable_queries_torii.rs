@@ -43,20 +43,6 @@ fn is_permission_grant_repetition(
     })
 }
 
-fn ensure_alias_domain(client: &iroha::client::Client) -> Result<()> {
-    let alias_domain: DomainId = "aid".parse()?;
-    let alias_exists = client
-        .query(FindDomains::new())
-        .execute_all()?
-        .into_iter()
-        .any(|domain| domain.id() == &alias_domain);
-    if alias_exists {
-        return Ok(());
-    }
-    client.submit_blocking(Register::domain(Domain::new(alias_domain)))?;
-    Ok(())
-}
-
 #[test]
 fn blocks_iterable_start_and_continue() -> Result<()> {
     use iroha::data_model::query::{
@@ -74,15 +60,13 @@ fn blocks_iterable_start_and_continue() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    if let Err(err) = ensure_alias_domain(&client) {
-        eprintln!("Skipping blocks iterable coverage: failed to ensure `aid` domain: {err}");
-        return Ok(());
-    }
 
     // Submit a small transaction to produce at least one more non-empty block.
     client.submit_blocking(Register::asset_definition({
-        let __asset_definition_id =
-            AssetDefinitionId::new("wonderland".parse()?, "blkcheck".parse()?);
+        let __asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "blkcheck".parse()?,
+        );
         AssetDefinition::numeric(__asset_definition_id.clone())
             .with_name(__asset_definition_id.name().to_string())
     }))?;
@@ -171,22 +155,22 @@ fn find_block_headers_descending() -> Result<()> {
         return Ok(());
     };
     let client = network.client();
-    if let Err(err) = ensure_alias_domain(&client) {
-        eprintln!("Skipping block header ordering coverage: failed to ensure `aid` domain: {err}");
-        return Ok(());
-    }
 
     // Submit a couple of extra transactions so we have more than one header
     // even if the block builder batches them together.
     client.submit_blocking(Register::asset_definition({
-        let __asset_definition_id =
-            AssetDefinitionId::new("wonderland".parse()?, "blkcheck2".parse()?);
+        let __asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "blkcheck2".parse()?,
+        );
         AssetDefinition::numeric(__asset_definition_id.clone())
             .with_name(__asset_definition_id.name().to_string())
     }))?;
     client.submit_blocking(Register::asset_definition({
-        let __asset_definition_id =
-            AssetDefinitionId::new("wonderland".parse()?, "blkcheck3".parse()?);
+        let __asset_definition_id = AssetDefinitionId::new(
+            DomainId::try_new("wonderland", "universal")?,
+            "blkcheck3".parse()?,
+        );
         AssetDefinition::numeric(__asset_definition_id.clone())
             .with_name(__asset_definition_id.name().to_string())
     }))?;

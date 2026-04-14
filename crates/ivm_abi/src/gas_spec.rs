@@ -163,6 +163,20 @@ pub static GAS_ASSETS: &[GasAsset] = &[
         group: "syscall",
     },
     GasAsset {
+        key: "G_json_object",
+        asset_id: "asset:gas/G_json_object@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
+        key: "G_json_set",
+        asset_id: "asset:gas/G_json_set@ivm.core/v2",
+        unit: "gas",
+        version: "v1",
+        group: "syscall",
+    },
+    GasAsset {
         key: "G_mint",
         asset_id: "asset:gas/G_mint@ivm.core/v2",
         unit: "gas",
@@ -228,13 +242,6 @@ pub static GAS_ASSETS: &[GasAsset] = &[
     GasAsset {
         key: "G_reg_asset",
         asset_id: "asset:gas/G_reg_asset@ivm.core/v2",
-        unit: "gas",
-        version: "v1",
-        group: "syscall",
-    },
-    GasAsset {
-        key: "G_reg_domain",
-        asset_id: "asset:gas/G_reg_domain@ivm.core/v2",
         unit: "gas",
         version: "v1",
         group: "syscall",
@@ -359,13 +366,6 @@ pub static GAS_ASSETS: &[GasAsset] = &[
         group: "syscall",
     },
     GasAsset {
-        key: "G_unreg_domain",
-        asset_id: "asset:gas/G_unreg_domain@ivm.core/v2",
-        unit: "gas",
-        version: "v1",
-        group: "syscall",
-    },
-    GasAsset {
         key: "G_unreg_peer",
         asset_id: "asset:gas/G_unreg_peer@ivm.core/v2",
         unit: "gas",
@@ -403,13 +403,6 @@ pub static GAS_ASSETS: &[GasAsset] = &[
     GasAsset {
         key: "G_vote_get",
         asset_id: "asset:gas/G_vote_get@ivm.core/v2",
-        unit: "gas",
-        version: "v1",
-        group: "syscall",
-    },
-    GasAsset {
-        key: "G_xfer_domain",
-        asset_id: "asset:gas/G_xfer_domain@ivm.core/v2",
         unit: "gas",
         version: "v1",
         group: "syscall",

@@ -346,7 +346,8 @@ mod tests {
 
     #[test]
     fn valid_snapshot_passes_formal_verification() {
-        let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("valid domain id");
         let keypair = KeyPair::random();
         let account_id = AccountId::new(keypair.public_key().clone());
 
@@ -407,7 +408,8 @@ mod tests {
 
     #[test]
     fn snapshot_with_inconsistencies_reports_violations() {
-        let domain_id: DomainId = "wonderland".parse().expect("valid domain id");
+        let domain_id: DomainId =
+            DomainId::try_new("wonderland", "universal").expect("valid domain id");
         let missing_owner_key = KeyPair::random();
         let missing_owner = AccountId::new(missing_owner_key.public_key().clone());
         let domain = Domain {
@@ -417,7 +419,8 @@ mod tests {
             owned_by: missing_owner.clone(),
         };
 
-        let _foreign_domain: DomainId = "elsewhere".parse().expect("valid domain id");
+        let _foreign_domain: DomainId =
+            DomainId::try_new("elsewhere", "universal").expect("valid domain id");
         let account_key = KeyPair::random();
         let account_id = AccountId::new(account_key.public_key().clone());
         let account = Account {
@@ -478,8 +481,10 @@ mod tests {
 
     #[test]
     fn cross_domain_owners_are_allowed_when_references_exist() {
-        let business_domain: DomainId = "business".parse().expect("valid domain id");
-        let owner_domain: DomainId = "owners".parse().expect("valid domain id");
+        let business_domain: DomainId =
+            DomainId::try_new("business", "universal").expect("valid domain id");
+        let owner_domain: DomainId =
+            DomainId::try_new("owners", "universal").expect("valid domain id");
 
         let owner_keypair = KeyPair::random();
         let owner_account_id = AccountId::new(owner_keypair.public_key().clone());

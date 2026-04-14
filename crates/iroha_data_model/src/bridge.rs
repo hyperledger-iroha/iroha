@@ -386,6 +386,12 @@ pub enum BridgeFinalityVerifyError {
         /// Epoch carried in the proof.
         got: u64,
     },
+    /// Verification attempted without an explicit validator-set hash anchor.
+    #[error("validator set anchor is required before verifying bridge finality proofs")]
+    MissingValidatorSetAnchor,
+    /// Verification attempted without an explicit epoch anchor.
+    #[error("epoch anchor is required before verifying bridge finality proofs")]
+    MissingEpochAnchor,
     /// Proof carries an empty validator set.
     #[error("validator set is empty")]
     EmptyValidatorSet,
@@ -458,8 +464,8 @@ pub enum BridgeFinalityVerifyError {
 /// The verifier enforces the canonical `(block_header, block_hash, commit_qc)` tuple,
 /// binds proofs to a chain id, and checks the commit-certificate aggregate signature against the
 /// advertised validator set with the production quorum rule. It tracks the latest verified height
-/// to reject stale or skipped proofs, can anchor to a trusted validator-set hash, and optionally
-/// fixes the expected epoch to reject replays across topology changes.
+/// to reject stale or skipped proofs, and requires explicit validator-set and
+/// epoch anchors to reject replays across topology changes.
 #[derive(Debug, Clone)]
 pub struct BridgeFinalityVerifier {
     expected_chain_id: ChainId,
@@ -543,9 +549,6 @@ impl BridgeFinalityVerifier {
 
     /// Verify a bridge finality proof against the configured expectations.
     ///
-    /// On success, advances the latest verified height and, when no anchor is set, captures the
-    /// proof's validator-set hash and epoch for replay detection.
-    ///
     /// # Errors
     /// Returns [`BridgeFinalityVerifyError`] when the proof's chain id, height continuity,
     /// hashes, epoch anchor, validator-set hash/version, or commit signatures are invalid.
@@ -596,16 +599,6 @@ impl BridgeFinalityVerifier {
             });
         }
 
-        if let Some(expected_epoch) = self
-            .expected_epoch
-            .filter(|expected| proof.commit_qc.epoch != *expected)
-        {
-            return Err(BridgeFinalityVerifyError::UnexpectedEpoch {
-                expected: expected_epoch,
-                got: proof.commit_qc.epoch,
-            });
-        }
-
         let recorded_version = proof.commit_qc.validator_set_hash_version;
         if recorded_version != self.validator_set_hash_version {
             return Err(
@@ -625,19 +618,6 @@ impl BridgeFinalityVerifier {
             });
         }
 
-        if let Some(expected) = self.expected_validator_set_hash {
-            if recorded_hash != expected {
-                return Err(BridgeFinalityVerifyError::UnexpectedValidatorSet {
-                    expected,
-                    got: recorded_hash,
-                });
-            }
-        } else {
-            // Adopt the recorded validator-set hash as an anchor for future proofs to detect
-            // replay across epochs/rosters unless the caller replaces it explicitly.
-            self.expected_validator_set_hash = Some(recorded_hash);
-        }
-
         let validator_set = &proof.commit_qc.validator_set;
         if validator_set.is_empty() {
             return Err(BridgeFinalityVerifyError::EmptyValidatorSet);
@@ -645,10 +625,27 @@ impl BridgeFinalityVerifier {
 
         Self::validate_commit_qc(&proof.chain_id, &proof.commit_qc, &proof.validator_set_pops)?;
 
-        self.latest_height = Some(proof.height);
-        if self.expected_epoch.is_none() {
-            self.expected_epoch = Some(proof.commit_qc.epoch);
+        let expected_epoch = self
+            .expected_epoch
+            .ok_or(BridgeFinalityVerifyError::MissingEpochAnchor)?;
+        if proof.commit_qc.epoch != expected_epoch {
+            return Err(BridgeFinalityVerifyError::UnexpectedEpoch {
+                expected: expected_epoch,
+                got: proof.commit_qc.epoch,
+            });
         }
+
+        let expected = self
+            .expected_validator_set_hash
+            .ok_or(BridgeFinalityVerifyError::MissingValidatorSetAnchor)?;
+        if recorded_hash != expected {
+            return Err(BridgeFinalityVerifyError::UnexpectedValidatorSet {
+                expected,
+                got: recorded_hash,
+            });
+        }
+
+        self.latest_height = Some(proof.height);
         Ok(())
     }
 
@@ -993,7 +990,12 @@ mod tests {
         let keys: Vec<_> = (0..4)
             .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
             .collect();
-        let mut verifier = BridgeFinalityVerifier::new("chain-a".parse().expect("chain id parses"));
+        let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
+            "chain-a".parse().expect("chain id parses"),
+            HashOf::new(&validator_set_from_keys(&keys)),
+            crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            0,
+        );
 
         let first = make_finality_proof("chain-a", 1, 0, &keys);
         verifier.verify(&first).expect("first proof accepted");
@@ -1027,10 +1029,11 @@ mod tests {
             .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
             .collect();
         let expected_hash = HashOf::new(&validator_set_from_keys(&new_keys));
-        let mut verifier = BridgeFinalityVerifier::with_validator_set(
+        let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
             "chain-a".parse().expect("chain id parses"),
             expected_hash,
             crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            0,
         );
 
         let proof = make_finality_proof("chain-a", 1, 0, &old_keys);
@@ -1089,12 +1092,17 @@ mod tests {
         let epoch1_keys: Vec<_> = (0..3)
             .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
             .collect();
-        let mut verifier = BridgeFinalityVerifier::new("chain-a".parse().expect("chain id parses"));
+        let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
+            "chain-a".parse().expect("chain id parses"),
+            HashOf::new(&validator_set_from_keys(&epoch0_keys)),
+            crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            0,
+        );
 
         let proof_epoch0 = make_finality_proof("chain-a", 1, 0, &epoch0_keys);
         verifier
             .verify(&proof_epoch0)
-            .expect("initial proof should set anchors");
+            .expect("initial anchored proof should verify");
 
         verifier.set_validator_set_and_epoch_anchor(
             HashOf::new(&validator_set_from_keys(&epoch1_keys)),
@@ -1121,7 +1129,12 @@ mod tests {
         let roster_b: Vec<_> = (0..4)
             .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
             .collect();
-        let mut verifier = BridgeFinalityVerifier::new("chain-a".parse().expect("chain id parses"));
+        let mut verifier = BridgeFinalityVerifier::with_validator_set_and_epoch(
+            "chain-a".parse().expect("chain id parses"),
+            HashOf::new(&validator_set_from_keys(&roster_a)),
+            crate::consensus::VALIDATOR_SET_HASH_VERSION_V1,
+            0,
+        );
 
         let proof_a = make_finality_proof("chain-a", 1, 0, &roster_a);
         verifier.verify(&proof_a).expect("first proof accepted");
@@ -1139,5 +1152,31 @@ mod tests {
         );
 
         verifier.verify(&proof_b).expect("anchor swap accepted");
+    }
+
+    #[test]
+    fn verifier_requires_explicit_epoch_and_validator_set_anchors() {
+        let keys: Vec<_> = (0..4)
+            .map(|_| KeyPair::random_with_algorithm(Algorithm::BlsNormal))
+            .collect();
+        let proof = make_finality_proof("chain-a", 1, 0, &keys);
+
+        let mut missing_both =
+            BridgeFinalityVerifier::new("chain-a".parse().expect("chain id parses"));
+        let err = missing_both
+            .verify(&proof)
+            .expect_err("missing anchors should fail");
+        assert!(matches!(err, BridgeFinalityVerifyError::MissingEpochAnchor));
+
+        let mut missing_validator =
+            BridgeFinalityVerifier::new("chain-a".parse().expect("chain id parses"));
+        missing_validator.set_epoch_anchor(0);
+        let err = missing_validator
+            .verify(&proof)
+            .expect_err("missing validator set anchor should fail");
+        assert!(matches!(
+            err,
+            BridgeFinalityVerifyError::MissingValidatorSetAnchor
+        ));
     }
 }

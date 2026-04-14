@@ -91,10 +91,7 @@ mod model {
     /// Builder submitted in a transaction to register a canonical domainless account.
     #[derive(derive_more::Debug, Clone, IdEqOrdHash, Decode, Encode, IntoSchema)]
     #[allow(clippy::multiple_inherent_impl)]
-    #[cfg_attr(
-        feature = "json",
-        derive(crate::DeriveJsonSerialize, crate::DeriveJsonDeserialize)
-    )]
+    #[cfg_attr(feature = "json", derive(crate::DeriveJsonSerialize))]
     #[cfg_attr(feature = "json", norito(no_fast_from_json))]
     #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
     pub struct NewAccount {
@@ -159,6 +156,69 @@ impl norito::json::JsonDeserialize for AccountId {
         AccountId::parse_encoded(&value)
             .map(ParsedAccountId::into_account_id)
             .map_err(|err| norito::json::Error::Message(err.to_string()))
+    }
+}
+
+#[cfg(feature = "json")]
+impl norito::json::JsonDeserialize for NewAccount {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        use norito::json::MapVisitor;
+
+        let mut visitor = MapVisitor::new(parser)?;
+        let mut id: Option<AccountId> = None;
+        let mut metadata: Option<Metadata> = None;
+        let mut label: Option<Option<AccountAlias>> = None;
+        let mut uaid: Option<Option<UniversalAccountId>> = None;
+        let mut opaque_ids: Option<Vec<OpaqueAccountId>> = None;
+
+        while let Some(key) = visitor.next_key()? {
+            match key.as_str() {
+                "id" => {
+                    if id.is_some() {
+                        return Err(norito::json::Error::duplicate_field("id"));
+                    }
+                    id = Some(visitor.parse_value::<AccountId>()?);
+                }
+                "metadata" => {
+                    if metadata.is_some() {
+                        return Err(norito::json::Error::duplicate_field("metadata"));
+                    }
+                    metadata = Some(visitor.parse_value::<Metadata>()?);
+                }
+                "label" => {
+                    if label.is_some() {
+                        return Err(norito::json::Error::duplicate_field("label"));
+                    }
+                    label = Some(visitor.parse_value::<Option<AccountAlias>>()?);
+                }
+                "uaid" => {
+                    if uaid.is_some() {
+                        return Err(norito::json::Error::duplicate_field("uaid"));
+                    }
+                    uaid = Some(visitor.parse_value::<Option<UniversalAccountId>>()?);
+                }
+                "opaque_ids" => {
+                    if opaque_ids.is_some() {
+                        return Err(norito::json::Error::duplicate_field("opaque_ids"));
+                    }
+                    opaque_ids = Some(visitor.parse_value::<Vec<OpaqueAccountId>>()?);
+                }
+                other => return Err(norito::json::Error::unknown_field(other.to_owned())),
+            }
+        }
+        visitor.finish()?;
+
+        let id = id.ok_or_else(|| norito::json::Error::missing_field("id"))?;
+
+        Ok(Self {
+            id,
+            metadata: metadata.unwrap_or_default(),
+            label: label.unwrap_or_default(),
+            uaid: uaid.unwrap_or_default(),
+            opaque_ids: opaque_ids.unwrap_or_default(),
+        })
     }
 }
 
@@ -854,13 +914,13 @@ mod account_id_parsing_tests {
             "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03"
                 .parse()
                 .expect("parse public key literal");
-        let raw = format!("{public_key}@hbl.dataspace");
+        let raw = format!("{public_key}@banka.dataspace");
 
         let err = AccountId::parse_encoded(&raw)
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("public_key@domain literals must be rejected");
         assert!(
-            err.reason().contains("i105"),
+            err.reason().to_ascii_lowercase().contains("i105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -875,7 +935,7 @@ mod account_id_parsing_tests {
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("canonical hex account literals must be rejected");
         assert!(
-            err.reason().contains("i105"),
+            err.reason().to_ascii_lowercase().contains("i105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -884,7 +944,8 @@ mod account_id_parsing_tests {
     #[test]
     fn encoded_literals_with_domain_are_rejected() {
         let _chain_guard = guard_chain_discriminant();
-        let domain: DomainId = "fallback-domain".parse().expect("valid domain");
+        let domain: DomainId =
+            DomainId::try_new("fallback-domain", "universal").expect("valid domain");
         let key_pair = KeyPair::from_seed(vec![0x5A; 32], Algorithm::Ed25519);
         let account = AccountId::new(key_pair.public_key().clone());
         let address = AccountAddress::from_account_id(&account).expect("address encodes");
@@ -901,7 +962,7 @@ mod account_id_parsing_tests {
             let err = AccountId::parse_encoded(&literal)
                 .expect_err("encoded literals with @domain suffix must be rejected");
             assert!(
-                err.reason().contains("i105"),
+                err.reason().to_ascii_lowercase().contains("i105"),
                 "unexpected error: {}",
                 err.reason()
             );
@@ -910,11 +971,11 @@ mod account_id_parsing_tests {
 
     #[test]
     fn from_str_rejects_alias_literals() {
-        let err = AccountId::parse_encoded("blue-alias@hbl.dataspace")
+        let err = AccountId::parse_encoded("blue-alias@banka.dataspace")
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("aliases must be rejected");
         assert!(
-            err.reason().contains("i105"),
+            err.reason().to_ascii_lowercase().contains("i105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -925,13 +986,13 @@ mod account_id_parsing_tests {
         let alias_label = "primary";
         let err = AccountAddress::parse_encoded(alias_label, Some(address::chain_discriminant()))
             .expect_err("alias label should not parse as a valid address");
-        assert_eq!(err.code_str(), "ERR_MISSING_I105_SENTINEL");
+        assert_eq!(err.code_str(), "ERR_UNSUPPORTED_ADDRESS_FORMAT");
 
-        let err = AccountId::parse_encoded("primary@hbl.dataspace")
+        let err = AccountId::parse_encoded("primary@banka.dataspace")
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("aliases must be rejected");
         assert!(
-            err.reason().contains("canonical I105"),
+            err.reason().to_ascii_lowercase().contains("i105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -943,7 +1004,7 @@ mod account_id_parsing_tests {
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("mismatched alias domain must fail");
         assert!(
-            err.reason().contains("i105"),
+            err.reason().to_ascii_lowercase().contains("i105"),
             "unexpected error message: {}",
             err.reason()
         );
@@ -980,11 +1041,11 @@ mod account_id_parsing_tests {
     fn parse_rejects_public_key_source() {
         let _guard = guard_chain_discriminant();
         let public_key = "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
-        let raw = format!("{public_key}@hbl.dataspace");
+        let raw = format!("{public_key}@banka.dataspace");
 
         let err = AccountId::parse_encoded(&raw).expect_err("public key source must be rejected");
         assert!(
-            err.reason().contains("i105"),
+            err.reason().to_ascii_lowercase().contains("i105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -1031,11 +1092,11 @@ mod account_id_parsing_tests {
 
         let previous_chain_discriminant = address::set_chain_discriminant(42);
         let _reset = Reset(previous_chain_discriminant);
-        let err = AccountId::parse_encoded("blue-alias@hbl.dataspace")
+        let err = AccountId::parse_encoded("blue-alias@banka.dataspace")
             .expect_err("alias must be rejected");
 
         assert!(
-            err.reason().contains("i105"),
+            err.reason().to_ascii_lowercase().contains("i105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -1052,7 +1113,7 @@ mod account_id_parsing_tests {
         let err =
             AccountId::canonicalize(&literal).expect_err("canonical hex input must be rejected");
         assert!(
-            err.reason().contains("i105"),
+            err.reason().to_ascii_lowercase().contains("i105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -1106,7 +1167,7 @@ mod account_id_parsing_tests {
     #[test]
     fn from_str_rejects_encoded_address_with_domain_suffix() {
         let _guard = guard_chain_discriminant();
-        let domain: DomainId = "wonderland".parse().expect("valid domain");
+        let domain: DomainId = DomainId::try_new("wonderland", "universal").expect("valid domain");
         let key_pair = KeyPair::from_seed(vec![0xBC; 32], Algorithm::Ed25519);
         let account = AccountId::new(key_pair.public_key().clone());
         let payload =
@@ -1123,7 +1184,7 @@ mod account_id_parsing_tests {
             .map(crate::account::ParsedAccountId::into_account_id)
             .expect_err("encoded address with domain should be rejected");
         assert!(
-            err.reason().contains("i105"),
+            err.reason().to_ascii_lowercase().contains("i105"),
             "unexpected error: {}",
             err.reason()
         );
@@ -1461,7 +1522,10 @@ mod json_tests {
         let err = norito::json::from_json::<AccountId>(&legacy)
             .expect_err("legacy norito account literal must fail");
         let msg = err.to_string();
-        assert!(msg.contains("i105"), "unexpected error: {msg}");
+        assert!(
+            msg.to_ascii_lowercase().contains("i105"),
+            "unexpected error: {msg}"
+        );
     }
 
     #[test]

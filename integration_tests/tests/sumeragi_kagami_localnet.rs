@@ -10,7 +10,7 @@ use std::{
 };
 
 use eyre::{Result, WrapErr, ensure, eyre};
-use integration_tests::sandbox;
+use integration_tests::{kagami::resolve_kagami_bin, sandbox};
 use iroha::{
     client::Client,
     config::{Config, LoadPath},
@@ -222,85 +222,6 @@ fn generate_localnet(out_dir: &Path, base_api_port: u16, base_p2p_port: u16) -> 
         String::from_utf8_lossy(&output.stderr)
     );
     Ok(())
-}
-
-fn resolve_kagami_bin() -> Result<PathBuf> {
-    if let Ok(path) = std::env::var("KAGAMI_BIN") {
-        return Ok(PathBuf::from(path));
-    }
-    if let Ok(path) = std::env::var("CARGO_BIN_EXE_kagami") {
-        return Ok(PathBuf::from(path));
-    }
-
-    let repo = repo_root();
-    let target_dir = resolve_target_dir(&repo);
-    let profile = std::env::var("PROFILE").unwrap_or_else(|_| "debug".to_string());
-    let bin = bin_name("kagami");
-    let mut candidates = vec![
-        target_dir.join(format!("{profile}/{bin}")),
-        target_dir.join(format!("debug/{bin}")),
-        target_dir.join(format!("release/{bin}")),
-        repo.join(format!("target/{profile}/{bin}")),
-        repo.join(format!("target/debug/{bin}")),
-        repo.join(format!("target/release/{bin}")),
-    ];
-
-    if let Some(found) = try_candidates(&candidates) {
-        return Ok(found);
-    }
-
-    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".to_string());
-    let mut command = Command::new(cargo);
-    command
-        .current_dir(&repo)
-        .arg("build")
-        .arg("-p")
-        .arg("iroha_kagami")
-        .arg("--bin")
-        .arg("kagami");
-    if profile != "debug" {
-        command.arg("--profile").arg(&profile);
-    }
-    let output = command.output().wrap_err("build kagami binary")?;
-    ensure!(
-        output.status.success(),
-        "failed to build kagami: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-
-    candidates.insert(0, target_dir.join(format!("{profile}/{bin}")));
-    try_candidates(&candidates).ok_or_else(|| eyre!("kagami binary not found after build"))
-}
-
-fn resolve_target_dir(repo: &Path) -> PathBuf {
-    std::env::var("CARGO_TARGET_DIR").map_or_else(
-        |_| repo.join("target"),
-        |path| {
-            let candidate = PathBuf::from(path);
-            if candidate.is_absolute() {
-                candidate
-            } else {
-                repo.join(candidate)
-            }
-        },
-    )
-}
-
-fn bin_name(raw: &str) -> String {
-    if cfg!(windows) {
-        format!("{raw}.exe")
-    } else {
-        raw.to_owned()
-    }
-}
-
-fn try_candidates(candidates: &[PathBuf]) -> Option<PathBuf> {
-    for candidate in candidates {
-        if let Ok(path) = candidate.canonicalize() {
-            return Some(path);
-        }
-    }
-    None
 }
 
 fn load_localnet_client(out_dir: &Path) -> Result<Client> {

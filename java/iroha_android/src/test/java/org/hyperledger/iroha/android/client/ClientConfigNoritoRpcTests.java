@@ -27,12 +27,12 @@ public final class ClientConfigNoritoRpcTests {
   }
 
   private static void configProducesNoritoRpcClientWithHeadersAndObservers() throws Exception {
-    final RecordingObserver observer = new RecordingObserver("Bearer config");
+    final RecordingObserver observer = new RecordingObserver("X-Test", "config");
     final ClientConfig config =
         ClientConfig.builder()
             .setBaseUri(new URI("http://127.0.0.1:0"))
             .setRequestTimeout(Duration.ofSeconds(2))
-            .putDefaultHeader("Authorization", "Bearer config")
+            .putDefaultHeader("X-Test", "config")
             .addObserver(observer)
             .build();
 
@@ -87,7 +87,7 @@ public final class ClientConfigNoritoRpcTests {
   }
 
   private static void executorReuseSharesObservers() throws Exception {
-    final RecordingObserver observer = new RecordingObserver(null);
+    final RecordingObserver observer = new RecordingObserver(null, null);
     final ClientConfig config =
         ClientConfig.builder()
             .setBaseUri(new URI("http://127.0.0.1:0"))
@@ -108,18 +108,20 @@ public final class ClientConfigNoritoRpcTests {
     private final AtomicInteger requestCount = new AtomicInteger();
     private final AtomicInteger responseCount = new AtomicInteger();
     private final AtomicInteger failureCount = new AtomicInteger();
-    private final String expectedAuthorization;
+    private final String expectedHeaderName;
+    private final String expectedHeaderValue;
 
-    private RecordingObserver(final String expectedAuthorization) {
-      this.expectedAuthorization = expectedAuthorization;
+    private RecordingObserver(final String expectedHeaderName, final String expectedHeaderValue) {
+      this.expectedHeaderName = expectedHeaderName;
+      this.expectedHeaderValue = expectedHeaderValue;
     }
 
     @Override
     public void onRequest(final TransportRequest request) {
       requestCount.incrementAndGet();
-      if (expectedAuthorization != null) {
-        assert request.headers().getOrDefault("Authorization", java.util.List.of())
-            .contains(expectedAuthorization) : "Config headers must be preserved";
+      if (expectedHeaderName != null) {
+        assert request.headers().getOrDefault(expectedHeaderName, java.util.List.of())
+            .contains(expectedHeaderValue) : "Config headers must be preserved";
       }
     }
 

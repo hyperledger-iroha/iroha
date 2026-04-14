@@ -224,7 +224,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         &authority,
         &keypair,
         vec![InstructionBox::from(Register::domain(Domain::new(
-            "gov".parse()?,
+            DomainId::try_new("gov", "universal")?,
         )))],
     );
     let zk_tx = build_tx(
@@ -234,7 +234,7 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         vec![InstructionBox::from(Mint::asset_numeric(
             1_u32,
             AssetId::new(
-                AssetDefinitionId::new("nexus".parse()?, "xor".parse()?),
+                AssetDefinitionId::new(DomainId::try_new("nexus", "universal")?, "xor".parse()?),
                 authority.clone(),
             ),
         ))],
@@ -244,7 +244,10 @@ fn multilane_router_provisions_storage_and_routes_rules() -> Result<()> {
         &authority,
         &keypair,
         vec![InstructionBox::from(Register::asset_definition(
-            AssetDefinition::numeric(AssetDefinitionId::new("nexus".parse()?, "xor".parse()?)),
+            AssetDefinition::numeric(AssetDefinitionId::new(
+                DomainId::try_new("nexus", "universal")?,
+                "xor".parse()?,
+            )),
         ))],
     );
 

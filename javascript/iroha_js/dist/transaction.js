@@ -33,8 +33,6 @@ import {
   buildRegisterKaigiRelayInstruction,
   buildRegisterSmartContractCodeInstruction,
   buildRegisterSmartContractBytesInstruction,
-  buildDeactivateContractInstanceInstruction,
-  buildActivateContractInstanceInstruction,
   buildRemoveSmartContractBytesInstruction,
   buildProposeDeployContractInstruction,
   buildCastZkBallotInstruction,
@@ -126,6 +124,12 @@ function normalizeOptionalPositiveInteger(value, context) {
   });
 }
 
+function u64ToLittleEndianBuffer(value) {
+  const buffer = Buffer.allocUnsafe(8);
+  buffer.writeBigUInt64LE(BigInt(value), 0);
+  return buffer;
+}
+
 /**
  * Compute the canonical transaction hash (blake2b-256) for a signed transaction.
  * @param {ArrayBufferView | ArrayBuffer | Buffer} signedTransaction
@@ -177,6 +181,39 @@ export function encodeSignedTransactionNorito(signedTransaction) {
   }
   const txBuffer = toBuffer(signedTransaction);
   return Buffer.from(native.encodeSignedTransactionNorito(txBuffer));
+}
+
+const FINALIZED_TX_SIGNATURE_PREFIX = Buffer.from(
+  "5002000000000000480200000000000040000000000000000100000000000000",
+  "hex",
+);
+const FINALIZED_TX_SIGNATURE_SLOT_SUFFIX = Buffer.from("0100000000000000", "hex");
+const FINALIZED_TX_SUFFIX = Buffer.from("010000000000000000010000000000000000", "hex");
+
+/**
+ * Assemble a submit-ready Ed25519 signed transaction from unsigned payload bytes and a detached signature.
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} unsignedTxBytes
+ * @param {ArrayBufferView | ArrayBuffer | Buffer} detachedSignature
+ * @returns {Buffer}
+ */
+export function finalizeSignedTransaction(unsignedTxBytes, detachedSignature) {
+  const payloadBuffer = toBuffer(unsignedTxBytes);
+  const signatureBuffer = toBuffer(detachedSignature);
+  if (signatureBuffer.length !== 64) {
+    throw new Error(
+      `detached signature must be a 64-byte Ed25519 signature (received ${signatureBuffer.length})`,
+    );
+  }
+
+  const parts = [FINALIZED_TX_SIGNATURE_PREFIX];
+  for (let index = 0; index < signatureBuffer.length; index += 1) {
+    parts.push(Buffer.from([signatureBuffer[index]]));
+    if (index < signatureBuffer.length - 1) {
+      parts.push(FINALIZED_TX_SIGNATURE_SLOT_SUFFIX);
+    }
+  }
+  parts.push(u64ToLittleEndianBuffer(payloadBuffer.length), payloadBuffer, FINALIZED_TX_SUFFIX);
+  return Buffer.concat(parts);
 }
 
 /**
@@ -2246,70 +2283,6 @@ export function buildRegisterSmartContractBytesTransaction({
   const instruction = buildRegisterSmartContractBytesInstruction({
     codeHash,
     code,
-  });
-  return buildTransaction({
-    chainId,
-    authority,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-  });
-}
-
-/**
- * Build a transaction containing a `DeactivateContractInstance` instruction.
- */
-export function buildDeactivateContractInstanceTransaction({
-  chainId,
-  authority,
-  namespace,
-  contractId,
-  reason = null,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-}) {
-  const instruction = buildDeactivateContractInstanceInstruction({
-    namespace,
-    contractId,
-    reason,
-  });
-  return buildTransaction({
-    chainId,
-    authority,
-    instructions: [instruction],
-    metadata,
-    creationTimeMs,
-    ttlMs,
-    nonce,
-    privateKey,
-  });
-}
-
-/**
- * Build a transaction containing an `ActivateContractInstance` instruction.
- */
-export function buildActivateContractInstanceTransaction({
-  chainId,
-  authority,
-  namespace,
-  contractId,
-  codeHash,
-  metadata = null,
-  creationTimeMs = null,
-  ttlMs = null,
-  nonce = null,
-  privateKey,
-}) {
-  const instruction = buildActivateContractInstanceInstruction({
-    namespace,
-    contractId,
-    codeHash,
   });
   return buildTransaction({
     chainId,

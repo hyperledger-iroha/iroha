@@ -16,14 +16,23 @@ use iroha_core::sumeragi::network_topology::redundant_send_r_from_len;
 use iroha_crypto::{ExposedPrivateKey, KeyPair};
 use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
-    isi::staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+    asset::AssetDefinitionAlias,
+    isi::{
+        RegisterBox, SetAssetDefinitionAlias,
+        staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
+    },
+    nexus::DataSpaceId,
     parameter::system::{
         SumeragiConsensusMode, SumeragiNposParameters, SumeragiParameter, SumeragiParameters,
     },
     peer::PeerId,
     prelude::*,
 };
-use iroha_executor_data_model::permission::governance::CanEnactGovernance;
+use iroha_executor_data_model::permission::{
+    account::{AccountAliasPermissionScope, CanManageAccountAlias},
+    governance::CanEnactGovernance,
+    nexus::CanPublishSpaceDirectoryManifest,
+};
 use iroha_genesis::{
     GenesisBuilder, GenesisTopologyEntry, RawGenesisTransaction, init_instruction_registry,
 };
@@ -66,7 +75,7 @@ pub struct LocalnetOptions {
     pub out_dir: PathBuf,
     /// Additional wonderland accounts to pre-register beyond Alice.
     pub extra_accounts: u16,
-    /// Extra asset specs to register and optionally mint.
+    /// Additional asset specs to register and optionally mint on top of the built-in localnet asset set.
     pub assets: Vec<AssetSpec>,
     /// Optional override for consensus block time (milliseconds).
     /// If unset alongside `commit_time_ms`, a fast localnet pipeline is injected.
@@ -93,6 +102,10 @@ pub struct AssetSpec {
     pub id: String,
     /// Human-readable display name for the asset definition.
     pub name: String,
+    /// Optional leased alias binding to attach after registration.
+    pub alias: Option<String>,
+    /// Account that should own the asset definition after genesis completes.
+    pub owned_by: AccountId,
     /// Account that should receive the minted supply.
     pub mint_to: AccountId,
     /// Quantity to mint for this asset definition.
@@ -420,12 +433,16 @@ const LOCALNET_SORA_MIN_PEERS: u16 = 4;
 const LOCALNET_BLOCK_MAX_TRANSACTIONS: u64 = 10_000;
 /// Default stake bonded per localnet validator (raised to meet min_self_bond).
 const LOCALNET_STAKE_AMOUNT: u64 = 10_000;
-const LOCALNET_NEXUS_DOMAIN: &str = "nexus";
-const LOCALNET_IVM_DOMAIN: &str = "ivm";
-const LOCALNET_UNIVERSAL_DOMAIN: &str = "universal";
+const LOCALNET_NEXUS_DOMAIN: &str = "nexus.universal";
+const LOCALNET_IVM_DOMAIN: &str = "ivm.universal";
+const LOCALNET_UNIVERSAL_DOMAIN: &str = "universal.universal";
 const LOCALNET_STAKE_ASSET_NAME: &str = "xor";
-const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland";
+const LOCALNET_SAMPLE_ASSET_DOMAIN: &str = "wonderland.universal";
 pub(crate) const LOCALNET_SAMPLE_ASSET_NAME: &str = "sample";
+const LOCALNET_OFFLINE_CASH_ASSET_ID: &str = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1";
+const LOCALNET_OFFLINE_CASH_ASSET_NAME: &str = "usd";
+const LOCALNET_OFFLINE_CASH_ASSET_ALIAS: &str = "usd#wonderland";
+const LOCALNET_OFFLINE_CASH_INITIAL_QUANTITY: u64 = 100;
 const LOCALNET_GAS_ACCOUNT_SEED: &[u8] = b"localnet-gas-account";
 /// Default localnet client TTL (ms) to keep stress submissions from expiring prematurely.
 const LOCALNET_CLIENT_TTL_MS: u64 = 600_000;
@@ -454,8 +471,7 @@ fn localnet_dataspace_fault_tolerance(peers: NonZeroU16) -> u32 {
 
 fn canonical_asset_definition_id(domain: &str, name: &str) -> AssetDefinitionId {
     AssetDefinitionId::new(
-        domain
-            .parse()
+        DomainId::parse_fully_qualified(domain)
             .expect("static asset definition domain must remain valid"),
         name.parse()
             .expect("static asset definition name must remain valid"),
@@ -484,6 +500,36 @@ fn localnet_fee_asset_literal() -> String {
 
 fn localnet_sample_asset_literal() -> String {
     canonical_asset_definition_literal(LOCALNET_SAMPLE_ASSET_DOMAIN, LOCALNET_SAMPLE_ASSET_NAME)
+}
+
+fn localnet_offline_cash_asset_literal() -> String {
+    LOCALNET_OFFLINE_CASH_ASSET_ID.to_owned()
+}
+
+fn localnet_offline_cash_asset_spec() -> AssetSpec {
+    let client_account_id = localnet_client_account_id();
+    AssetSpec {
+        id: localnet_offline_cash_asset_literal(),
+        name: LOCALNET_OFFLINE_CASH_ASSET_NAME.to_owned(),
+        alias: Some(LOCALNET_OFFLINE_CASH_ASSET_ALIAS.to_owned()),
+        owned_by: client_account_id.clone(),
+        mint_to: client_account_id,
+        quantity: LOCALNET_OFFLINE_CASH_INITIAL_QUANTITY,
+    }
+}
+
+fn effective_localnet_assets(extra_assets: &[AssetSpec]) -> Vec<AssetSpec> {
+    let mut assets = Vec::with_capacity(extra_assets.len() + 1);
+    let mut seen_asset_ids = BTreeSet::new();
+    let built_in = localnet_offline_cash_asset_spec();
+    seen_asset_ids.insert(built_in.id.clone());
+    assets.push(built_in);
+    for asset in extra_assets {
+        if seen_asset_ids.insert(asset.id.clone()) {
+            assets.push(asset.clone());
+        }
+    }
+    assets
 }
 
 /// Generate a bare-metal local network (no Docker): genesis, per-peer configs, start/stop scripts.
@@ -525,7 +571,8 @@ pub struct Args {
     /// Extra accounts to pre-register (in wonderland).
     #[arg(long, default_value_t = 0)]
     extra_accounts: u16,
-    /// Register a sample asset and mint to the default account.
+    /// Register the optional sample asset and mint to the default account.
+    /// The built-in offline-cash asset is always emitted.
     #[arg(long, default_value_t = false)]
     sample_asset: bool,
     /// Override the consensus block time (milliseconds) in generated manifests/configs.
@@ -591,6 +638,8 @@ impl<T: Write> RunArgs<T> for Args {
                 vec![AssetSpec {
                     id: localnet_sample_asset_literal(),
                     name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
+                    alias: None,
+                    owned_by: ALICE_ID.clone(),
                     mint_to: ALICE_ID.clone(),
                     quantity: 100,
                 }]
@@ -798,6 +847,10 @@ fn account_literal_for_chain_discriminant(raw: &str, chain_discriminant: u16) ->
     account_id_runtime_literal(&account_id, Some(chain_discriminant))
 }
 
+fn localnet_client_account_literal(chain_discriminant: Option<u16>) -> String {
+    account_id_runtime_literal(&localnet_client_account_id(), chain_discriminant)
+}
+
 #[allow(clippy::too_many_lines)]
 fn generate_localnet_with_line<T: Write>(
     opts: &LocalnetOptions,
@@ -866,6 +919,8 @@ fn generate_localnet_with_line<T: Write>(
     let commit_inflight_timeout_ms =
         localnet_commit_inflight_timeout_ms(block_time_ms, commit_time_ms);
     let (genesis_public_key, genesis_private) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
+    let genesis_account_id = AccountId::new(genesis_public_key.clone());
+    let assets = effective_localnet_assets(&opts.assets);
     let gas_account_id = if npos_bootstrap {
         Some(localnet_gas_account_id(&genesis_public_key))
     } else {
@@ -879,8 +934,14 @@ fn generate_localnet_with_line<T: Write>(
         &chain_id,
         build_line,
     )?;
-    if opts.extra_accounts > 0 || !opts.assets.is_empty() {
-        genesis = extend_genesis(genesis, seed_bytes, opts.extra_accounts, &opts.assets)?;
+    if opts.extra_accounts > 0 || !assets.is_empty() {
+        genesis = extend_genesis(
+            genesis,
+            &genesis_account_id,
+            seed_bytes,
+            opts.extra_accounts,
+            &assets,
+        )?;
     }
     genesis = apply_parameter_overrides(
         genesis,
@@ -1007,6 +1068,7 @@ fn generate_localnet_with_line<T: Write>(
         &out_dir,
         &chain_id,
         build_line,
+        opts.seed.as_deref(),
         opts.consensus_mode,
         opts.peers.get(),
         &primary_torii_url,
@@ -1015,6 +1077,7 @@ fn generate_localnet_with_line<T: Write>(
         &client_config_path,
         &start_path,
         &stop_path,
+        &account_id_runtime_literal(&localnet_client_account_id(), chain_discriminant),
     )?;
     tui::success("Localnet ready");
 
@@ -1240,6 +1303,7 @@ fn render_peer_config(
         npos_bootstrap,
         da_rbc_enabled,
     } = features;
+    let localnet_client_account = localnet_client_account_literal(chain_discriminant);
 
     let trusted_list = trusted_peers
         .iter()
@@ -1802,6 +1866,82 @@ fn render_peer_config(
         );
         torii.insert("mcp".into(), Value::Table(mcp));
     }
+    let mut onboarding = Table::new();
+    onboarding.insert("enabled".into(), Value::Boolean(true));
+    onboarding.insert(
+        "authority".into(),
+        Value::String(localnet_client_account.clone()),
+    );
+    onboarding.insert(
+        "private_key".into(),
+        Value::String(CLIENT_ACCOUNT_PRIVATE.to_owned()),
+    );
+    onboarding.insert("allowed_permissions".into(), Value::Array(Vec::new()));
+    torii.insert("onboarding".into(), Value::Table(onboarding));
+
+    let mut offline_lineage_policy = Table::new();
+    offline_lineage_policy.insert(
+        "max_balance".into(),
+        Value::String(
+            iroha_config::parameters::defaults::torii::offline_issuer::RESERVE_MAX_BALANCE
+                .to_owned(),
+        ),
+    );
+    offline_lineage_policy.insert(
+        "max_tx_value".into(),
+        Value::String(
+            iroha_config::parameters::defaults::torii::offline_issuer::RESERVE_MAX_TX_VALUE
+                .to_owned(),
+        ),
+    );
+    offline_lineage_policy.insert(
+        "authorization_ttl_ms".into(),
+        Value::Integer(
+            i64::try_from(
+                iroha_config::parameters::defaults::torii::offline_issuer::RESERVE_AUTHORIZATION_TTL_MS,
+            )
+            .expect("authorization ttl fits i64"),
+        ),
+    );
+    offline_lineage_policy.insert(
+        "authorization_refresh_ms".into(),
+        Value::Integer(
+            i64::try_from(
+                iroha_config::parameters::defaults::torii::offline_issuer::RESERVE_AUTHORIZATION_REFRESH_MS,
+            )
+            .expect("authorization refresh fits i64"),
+        ),
+    );
+    offline_lineage_policy.insert(
+        "revocation_ttl_ms".into(),
+        Value::Integer(
+            i64::try_from(
+                iroha_config::parameters::defaults::torii::offline_issuer::RESERVE_REVOCATION_TTL_MS,
+            )
+            .expect("revocation ttl fits i64"),
+        ),
+    );
+
+    let mut offline_issuer = Table::new();
+    offline_issuer.insert("enabled".into(), Value::Boolean(true));
+    offline_issuer.insert(
+        "operator_authority".into(),
+        Value::String(localnet_client_account.clone()),
+    );
+    offline_issuer.insert(
+        "operator_private_key".into(),
+        Value::String(CLIENT_ACCOUNT_PRIVATE.to_owned()),
+    );
+    offline_issuer.insert(
+        "legacy_operator_private_keys".into(),
+        Value::Array(Vec::new()),
+    );
+    offline_issuer.insert("allowed_controllers".into(), Value::Array(Vec::new()));
+    offline_issuer.insert(
+        "lineage_policy".into(),
+        Value::Table(offline_lineage_policy),
+    );
+    torii.insert("offline_issuer".into(), Value::Table(offline_issuer));
     // torii.transport.norito_rpc
     let mut norito_rpc = Table::new();
     norito_rpc.insert("enabled".into(), Value::Boolean(true));
@@ -1815,6 +1955,21 @@ fn render_peer_config(
     transport.insert("norito_rpc".into(), Value::Table(norito_rpc));
     torii.insert("transport".into(), Value::Table(transport));
     root.insert("torii".into(), Value::Table(torii));
+
+    let mut settlement_offline_escrow_accounts = Table::new();
+    settlement_offline_escrow_accounts.insert(
+        localnet_offline_cash_asset_literal(),
+        Value::String(localnet_client_account),
+    );
+    let mut settlement_offline = Table::new();
+    settlement_offline.insert("skip_platform_attestation".into(), Value::Boolean(true));
+    settlement_offline.insert(
+        "escrow_accounts".into(),
+        Value::Table(settlement_offline_escrow_accounts),
+    );
+    let mut settlement = Table::new();
+    settlement.insert("offline".into(), Value::Table(settlement_offline));
+    root.insert("settlement".into(), Value::Table(settlement));
 
     toml::to_string(&Value::Table(root)).expect("serializing peer config to TOML")
 }
@@ -1846,29 +2001,58 @@ fn generate_raw_genesis(
 
 fn extend_genesis(
     genesis: RawGenesisTransaction,
+    genesis_account_id: &AccountId,
     seed_bytes: Option<&[u8]>,
     extra_accounts: u16,
     assets: &[AssetSpec],
 ) -> Result<RawGenesisTransaction> {
+    let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
     let mut builder = genesis.into_builder().next_transaction();
 
     for idx in 0..extra_accounts {
         let (pk, _) = generate_account_key_pair(seed_bytes, &format!("acct{idx}").into_bytes());
-        builder =
-            builder.append_instruction(Register::account(Account::new(AccountId::new(pk.clone()))));
+        let account_id = AccountId::new(pk.clone());
+        if registrations.accounts.insert(account_id.clone()) {
+            builder = builder.append_instruction(Register::account(Account::new(account_id)));
+        }
     }
 
     for asset in assets {
+        if registrations.accounts.insert(asset.owned_by.clone()) {
+            builder =
+                builder.append_instruction(Register::account(Account::new(asset.owned_by.clone())));
+        }
+        if registrations.accounts.insert(asset.mint_to.clone()) {
+            builder =
+                builder.append_instruction(Register::account(Account::new(asset.mint_to.clone())));
+        }
         let asset_def = AssetDefinitionId::parse_address_literal(&asset.id)
             .wrap_err("invalid asset definition id")?;
         let definition = AssetDefinition::new(asset_def.clone(), NumericSpec::default())
             .with_name(asset.name.clone())
             .with_metadata(Metadata::default());
         builder = builder.append_instruction(Register::asset_definition(definition));
+        if let Some(alias_literal) = asset.alias.as_deref() {
+            let alias = alias_literal
+                .parse::<AssetDefinitionAlias>()
+                .wrap_err("invalid asset definition alias")?;
+            builder = builder.append_instruction(SetAssetDefinitionAlias::bind(
+                asset_def.clone(),
+                alias,
+                None,
+            ));
+        }
         if asset.quantity > 0 {
             builder = builder.append_instruction(Mint::asset_numeric(
                 asset.quantity,
-                AssetId::new(asset_def, asset.mint_to.clone()),
+                AssetId::new(asset_def.clone(), asset.mint_to.clone()),
+            ));
+        }
+        if asset.owned_by != *genesis_account_id {
+            builder = builder.append_instruction(Transfer::asset_definition(
+                genesis_account_id.clone(),
+                asset_def,
+                asset.owned_by.clone(),
             ));
         }
     }
@@ -2081,17 +2265,40 @@ fn append_peer_pop(genesis: RawGenesisTransaction, peers: &[Peer]) -> RawGenesis
 fn append_localnet_contract_permissions(genesis: RawGenesisTransaction) -> RawGenesisTransaction {
     let enact_governance: Permission = CanEnactGovernance.into();
     let manage_offline_escrow = Permission::new("CanManageOfflineEscrow".into(), Json::new(()));
-    genesis
+    let client_account_id = localnet_client_account_id();
+    let manage_account_alias: Permission = CanManageAccountAlias {
+        scope: AccountAliasPermissionScope::Dataspace(DataSpaceId::GLOBAL),
+    }
+    .into();
+    let publish_manifest: Permission = CanPublishSpaceDirectoryManifest {
+        dataspace: DataSpaceId::GLOBAL,
+    }
+    .into();
+    let mut builder = genesis
         .into_builder()
         .append_instruction(Grant::account_permission(
             enact_governance,
             ALICE_ID.clone(),
         ))
         .append_instruction(Grant::account_permission(
-            manage_offline_escrow,
+            manage_offline_escrow.clone(),
             ALICE_ID.clone(),
         ))
-        .build_raw()
+        .append_instruction(Grant::account_permission(
+            manage_account_alias,
+            client_account_id.clone(),
+        ))
+        .append_instruction(Grant::account_permission(
+            publish_manifest,
+            client_account_id.clone(),
+        ));
+    if client_account_id != *ALICE_ID {
+        builder = builder.append_instruction(Grant::account_permission(
+            manage_offline_escrow,
+            client_account_id,
+        ));
+    }
+    builder.build_raw()
 }
 
 struct BootstrapRegistrations {
@@ -2106,19 +2313,20 @@ impl BootstrapRegistrations {
         let mut accounts = BTreeSet::new();
         let mut asset_defs = BTreeSet::new();
         for instruction in manifest.instructions() {
-            if let Some(register) = instruction.as_any().downcast_ref::<Register<Domain>>() {
-                domains.insert(register.object.id.clone());
+            let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
                 continue;
-            }
-            if let Some(register) = instruction.as_any().downcast_ref::<Register<Account>>() {
-                accounts.insert(register.object.id.clone());
-                continue;
-            }
-            if let Some(register) = instruction
-                .as_any()
-                .downcast_ref::<Register<AssetDefinition>>()
-            {
-                asset_defs.insert(register.object.id.clone());
+            };
+            match register {
+                RegisterBox::Domain(register) => {
+                    domains.insert(register.object.id.clone());
+                }
+                RegisterBox::Account(register) => {
+                    accounts.insert(register.object.id.clone());
+                }
+                RegisterBox::AssetDefinition(register) => {
+                    asset_defs.insert(register.object.id.clone());
+                }
+                _ => {}
             }
         }
         Self {
@@ -2135,11 +2343,12 @@ fn append_localnet_npos_bootstrap(
     gas_account_id: &AccountId,
     stake_amount: u64,
 ) -> Result<RawGenesisTransaction> {
-    let nexus_domain: DomainId = LOCALNET_NEXUS_DOMAIN.parse()?;
-    let ivm_domain: DomainId = LOCALNET_IVM_DOMAIN.parse()?;
-    let universal_domain: DomainId = LOCALNET_UNIVERSAL_DOMAIN.parse()?;
+    let nexus_domain = DomainId::parse_fully_qualified(LOCALNET_NEXUS_DOMAIN)?;
+    let ivm_domain = DomainId::parse_fully_qualified(LOCALNET_IVM_DOMAIN)?;
+    let universal_domain = DomainId::parse_fully_qualified(LOCALNET_UNIVERSAL_DOMAIN)?;
     let stake_asset_id = localnet_stake_asset_definition_id();
     let fee_asset_id = localnet_fee_asset_definition_id();
+    let client_account_id = localnet_client_account_id();
     let mut registrations = BootstrapRegistrations::from_manifest(&genesis);
 
     let mut builder = genesis.into_builder().next_transaction();
@@ -2193,12 +2402,15 @@ fn append_localnet_npos_bootstrap(
             AssetId::new(fee_asset_id.clone(), validator_id.clone()),
         ));
     }
-    if registrations.accounts.contains(&ALICE_ID) {
-        builder = builder.append_instruction(Mint::asset_numeric(
-            stake_amount,
-            AssetId::new(fee_asset_id, ALICE_ID.clone()),
-        ));
+    if !registrations.accounts.contains(&client_account_id) {
+        builder =
+            builder.append_instruction(Register::account(Account::new(client_account_id.clone())));
+        registrations.accounts.insert(client_account_id.clone());
     }
+    builder = builder.append_instruction(Mint::asset_numeric(
+        stake_amount,
+        AssetId::new(fee_asset_id, client_account_id),
+    ));
 
     let mut builder = builder.next_transaction();
     for peer in peers {
@@ -2343,8 +2555,30 @@ fn default_irohad_bin_paths() -> (PathBuf, PathBuf) {
 fn write_scripts(out_dir: &Path, peers: u16, build_line: BuildLine, sora_mode: bool) -> Result<()> {
     let start = out_dir.join("start.sh");
     let stop = out_dir.join("stop.sh");
+    write_start_script(&start, peers, build_line, sora_mode)?;
+    write_stop_script(&stop)?;
+
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+
+        fs::set_permissions(&start, PermissionsExt::from_mode(0o755))
+            .wrap_err_with(|| format!("failed to mark {} executable", start.display()))?;
+        fs::set_permissions(&stop, PermissionsExt::from_mode(0o755))
+            .wrap_err_with(|| format!("failed to mark {} executable", stop.display()))?;
+    }
+
+    Ok(())
+}
+
+fn write_start_script(
+    start: &Path,
+    peers: u16,
+    build_line: BuildLine,
+    sora_mode: bool,
+) -> Result<()> {
     let (default_irohad_debug, default_irohad_release) = default_irohad_bin_paths();
-    let mut start_file = BufWriter::new(File::create(&start)?);
+    let mut start_file = BufWriter::new(File::create(start)?);
     let sora_flag = if sora_mode { "--sora " } else { "" };
     writeln!(start_file, "#!/usr/bin/env bash")?;
     writeln!(start_file, "set -euo pipefail")?;
@@ -2390,40 +2624,64 @@ fn write_scripts(out_dir: &Path, peers: u16, build_line: BuildLine, sora_mode: b
         start_file,
         "  SNAPSHOT_STORE_DIR=\"$DIR/storage/peer${{i}}/snapshot\""
     )?;
+    writeln!(start_file, "  PIDFILE=\"$DIR/peer${{i}}.pid\"")?;
+    writeln!(start_file, "  if [ -f \"$PIDFILE\" ]; then")?;
+    writeln!(
+        start_file,
+        "    existing_pid=\"$(cat \"$PIDFILE\" 2>/dev/null || true)\""
+    )?;
+    writeln!(
+        start_file,
+        "    if [ -n \"$existing_pid\" ] && kill -0 \"$existing_pid\" 2>/dev/null; then"
+    )?;
+    writeln!(
+        start_file,
+        "      echo \"peer$i already running with pid $existing_pid\" >&2"
+    )?;
+    writeln!(start_file, "      exit 1")?;
+    writeln!(start_file, "    fi")?;
+    writeln!(start_file, "    rm -f \"$PIDFILE\"")?;
+    writeln!(start_file, "  fi")?;
     writeln!(start_file, "  mkdir -p \"$SNAPSHOT_STORE_DIR\"")?;
     writeln!(
         start_file,
         "  nohup env SNAPSHOT_STORE_DIR=\"$SNAPSHOT_STORE_DIR\" RUST_LOG=${{RUST_LOG:-info}} \"$IROHAD_BIN\" {sora_flag}--config \"$DIR/peer${{i}}.toml\" > \"$DIR/peer${{i}}.log\" 2>&1 &"
     )?;
-    writeln!(start_file, "  echo $! > \"$DIR/peer${{i}}.pid\"")?;
-    writeln!(
-        start_file,
-        "  echo \"peer$i pid $(cat $DIR/peer${{i}}.pid)\""
-    )?;
+    writeln!(start_file, "  echo $! > \"$PIDFILE\"")?;
+    writeln!(start_file, "  echo \"peer$i pid $(cat \"$PIDFILE\")\"")?;
     writeln!(start_file, "done")?;
-    start_file.flush()?;
+    Ok(start_file.flush()?)
+}
 
-    let mut stop_file = BufWriter::new(File::create(&stop)?);
+fn write_stop_script(stop: &Path) -> Result<()> {
+    let mut stop_file = BufWriter::new(File::create(stop)?);
     writeln!(stop_file, "#!/usr/bin/env bash")?;
     writeln!(stop_file, "set -euo pipefail")?;
     writeln!(stop_file, "DIR=$(cd \"$(dirname \"$0\")\" && pwd)")?;
     writeln!(stop_file, "for pidfile in \"$DIR\"/peer*.pid; do")?;
     writeln!(stop_file, "  [ -f \"$pidfile\" ] || continue")?;
-    writeln!(stop_file, "  kill \"$(cat \"$pidfile\")\" || true")?;
+    writeln!(
+        stop_file,
+        "  pid=\"$(cat \"$pidfile\" 2>/dev/null || true)\""
+    )?;
+    writeln!(stop_file, "  if [ -z \"$pid\" ]; then")?;
+    writeln!(stop_file, "    rm -f \"$pidfile\"")?;
+    writeln!(stop_file, "    continue")?;
+    writeln!(stop_file, "  fi")?;
+    writeln!(stop_file, "  kill \"$pid\" 2>/dev/null || true")?;
+    writeln!(stop_file, "  for _ in $(seq 1 40); do")?;
+    writeln!(stop_file, "    if kill -0 \"$pid\" 2>/dev/null; then")?;
+    writeln!(stop_file, "      sleep 0.25")?;
+    writeln!(stop_file, "    else")?;
+    writeln!(stop_file, "      break")?;
+    writeln!(stop_file, "    fi")?;
+    writeln!(stop_file, "  done")?;
+    writeln!(stop_file, "  if kill -0 \"$pid\" 2>/dev/null; then")?;
+    writeln!(stop_file, "    kill -9 \"$pid\" 2>/dev/null || true")?;
+    writeln!(stop_file, "  fi")?;
+    writeln!(stop_file, "  rm -f \"$pidfile\"")?;
     writeln!(stop_file, "done")?;
-    stop_file.flush()?;
-
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-
-        fs::set_permissions(&start, PermissionsExt::from_mode(0o755))
-            .wrap_err_with(|| format!("failed to mark {} executable", start.display()))?;
-        fs::set_permissions(&stop, PermissionsExt::from_mode(0o755))
-            .wrap_err_with(|| format!("failed to mark {} executable", stop.display()))?;
-    }
-
-    Ok(())
+    Ok(stop_file.flush()?)
 }
 
 fn copy_rans_tables(out_dir: &Path) -> Result<()> {
@@ -2452,11 +2710,18 @@ fn copy_rans_tables(out_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-const CLIENT_ACCOUNT_DOMAIN: &str = "wonderland";
+const CLIENT_ACCOUNT_DOMAIN: &str = "wonderland.universal";
 const CLIENT_ACCOUNT_PUBLIC: &str =
     "ed0120CE7FA46C9DCE7EA4B125E2E36BDB63EA33073E7590AC92816AE1E861B7048B03";
 const CLIENT_ACCOUNT_PRIVATE: &str =
     "802620CCF31D85E3B32A4BEA59987CE0C78E3B8E2DB93881468AB2435FE45D5C9DCD53";
+
+fn localnet_client_account_id() -> AccountId {
+    let public_key = CLIENT_ACCOUNT_PUBLIC
+        .parse()
+        .expect("localnet client public key must parse");
+    AccountId::new(public_key)
+}
 
 fn write_client_config(
     out_dir: &Path,
@@ -2505,6 +2770,7 @@ fn write_localnet_readme(
     out_dir: &Path,
     chain_id: &str,
     build_line: BuildLine,
+    seed: Option<&str>,
     consensus_mode: SumeragiConsensusMode,
     peers: u16,
     torii_url: &str,
@@ -2513,19 +2779,29 @@ fn write_localnet_readme(
     client_config_path: &Path,
     start_path: &Path,
     stop_path: &Path,
+    client_account_id: &str,
 ) -> Result<()> {
     let readme_path = out_dir.join("README.md");
+    let seed_line = seed
+        .map(|seed| format!("- Base seed: `{seed}`\n"))
+        .unwrap_or_default();
     let rendered = format!(
         concat!(
             "# Kagami Localnet\n\n",
             "- Chain ID: `{chain_id}`\n",
             "- Build line: `{build_line}`\n",
+            "{seed_line}",
             "- Consensus mode: `{consensus_mode}`\n",
             "- Peer count: `{peers}`\n",
             "- Primary Torii URL: `{torii_url}`\n",
             "- Genesis JSON: `{genesis_json}`\n",
             "- Signed genesis: `{genesis_signed}`\n",
             "- Client config: `{client_config}`\n\n",
+            "## Built-in App API bootstrap\n\n",
+            "- Offline-cash asset definition: `{offline_cash_asset}`\n",
+            "- Offline-cash alias: `{offline_cash_alias}`\n",
+            "- Localnet app authority / escrow account: `{client_account_id}`\n",
+            "- Generated peer configs enable `torii.onboarding`, `torii.offline_issuer`, and local-only `settlement.offline.skip_platform_attestation = true`\n\n",
             "- Start script: `{start_script}`\n",
             "- Stop script: `{stop_script}`\n\n",
             "## Next steps\n\n",
@@ -2539,12 +2815,16 @@ fn write_localnet_readme(
         ),
         chain_id = chain_id,
         build_line = build_line.as_str(),
+        seed_line = seed_line,
         consensus_mode = consensus_mode_label(consensus_mode),
         peers = peers,
         torii_url = torii_url,
         genesis_json = genesis_json_path.display(),
         genesis_signed = genesis_signed_path.display(),
         client_config = client_config_path.display(),
+        offline_cash_asset = LOCALNET_OFFLINE_CASH_ASSET_ID,
+        offline_cash_alias = LOCALNET_OFFLINE_CASH_ASSET_ALIAS,
+        client_account_id = client_account_id,
         start_script = start_path.display(),
         stop_script = stop_path.display(),
         out_dir = out_dir.display(),
@@ -2574,7 +2854,7 @@ mod tests {
     };
     use iroha_data_model::{
         block::{consensus::PROTO_VERSION, decode_framed_signed_block},
-        isi::SetParameter,
+        isi::{GrantBox, MintBox, SetParameter, TransferBox},
         parameter::{
             Parameter,
             system::{
@@ -2622,6 +2902,8 @@ mod tests {
         });
         let requested_stake_amount = perf_spec.map(|spec| spec.stake_amount);
         let (genesis_public_key, _) = generate_genesis_key_pair(seed_bytes, GENESIS_SEED);
+        let genesis_account_id = AccountId::new(genesis_public_key.clone());
+        let assets = effective_localnet_assets(&opts.assets);
         let mut genesis = generate_raw_genesis(
             &genesis_public_key,
             opts.consensus_mode,
@@ -2631,9 +2913,15 @@ mod tests {
             opts.build_line,
         )
         .expect("generate raw genesis");
-        if opts.extra_accounts > 0 || !opts.assets.is_empty() {
-            genesis = extend_genesis(genesis, seed_bytes, opts.extra_accounts, &opts.assets)
-                .expect("extend genesis");
+        if opts.extra_accounts > 0 || !assets.is_empty() {
+            genesis = extend_genesis(
+                genesis,
+                &genesis_account_id,
+                seed_bytes,
+                opts.extra_accounts,
+                &assets,
+            )
+            .expect("extend genesis");
         }
         genesis = apply_parameter_overrides(
             genesis,
@@ -2731,6 +3019,8 @@ mod tests {
             assets: vec![AssetSpec {
                 id: localnet_sample_asset_literal(),
                 name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
+                alias: None,
+                owned_by: ALICE_ID.clone(),
                 mint_to: ALICE_ID.clone(),
                 quantity: 100,
             }],
@@ -2747,6 +3037,221 @@ mod tests {
         let source =
             TomlSource::from_file(temp.path().join("peer0.toml")).expect("read generated config");
         actual::Root::from_toml_source(source).expect("generated config must parse");
+    }
+
+    #[test]
+    fn generated_localnet_bootstraps_builtin_offline_cash_asset_and_permissions() {
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("offline-cash-bootstrap".to_owned()),
+            bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29080,
+            base_p2p_port: 33337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let manifest = localnet_genesis_for_opts(&opts);
+        let offline_asset_id =
+            AssetDefinitionId::parse_address_literal(LOCALNET_OFFLINE_CASH_ASSET_ID)
+                .expect("offline cash asset id");
+        let offline_alias = LOCALNET_OFFLINE_CASH_ASSET_ALIAS
+            .parse::<AssetDefinitionAlias>()
+            .expect("offline cash alias");
+        let client_account_id = localnet_client_account_id();
+        let expected_mint_destination =
+            AssetId::new(offline_asset_id.clone(), client_account_id.clone());
+
+        let has_definition = manifest.instructions().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<RegisterBox>()
+                .is_some_and(|register| {
+                    matches!(
+                        register,
+                        RegisterBox::AssetDefinition(register)
+                            if register.object().id == offline_asset_id
+                    )
+                })
+        });
+        assert!(
+            has_definition,
+            "localnet must register the built-in offline-cash asset"
+        );
+
+        let has_alias_binding = manifest.instructions().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<SetAssetDefinitionAlias>()
+                .is_some_and(|set_alias| {
+                    set_alias.asset_definition_id() == &offline_asset_id
+                        && set_alias.alias().as_ref() == Some(&offline_alias)
+                })
+        });
+        assert!(
+            has_alias_binding,
+            "localnet must bind the built-in offline-cash alias"
+        );
+
+        let has_initial_mint = manifest.instructions().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<MintBox>()
+                .is_some_and(|mint| match mint {
+                    MintBox::Asset(mint_asset) => {
+                        mint_asset.destination() == &expected_mint_destination
+                    }
+                    _ => false,
+                })
+        });
+        assert!(
+            has_initial_mint,
+            "localnet must mint the built-in offline-cash asset to the client signer"
+        );
+
+        let has_owner_transfer = manifest.instructions().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<TransferBox>()
+                .is_some_and(|transfer| match transfer {
+                    TransferBox::AssetDefinition(transfer_asset) => {
+                        transfer_asset.object() == &offline_asset_id
+                            && transfer_asset.destination() == &client_account_id
+                    }
+                    _ => false,
+                })
+        });
+        assert!(
+            has_owner_transfer,
+            "localnet must transfer offline-cash asset ownership to the client signer"
+        );
+
+        let mut has_alias_manage = false;
+        let mut has_manifest_publish = false;
+        let mut manage_offline_escrow_grants = 0usize;
+        for instruction in manifest.instructions() {
+            let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() else {
+                continue;
+            };
+            let GrantBox::Permission(grant_permission) = grant else {
+                continue;
+            };
+            if grant_permission.destination() != &client_account_id {
+                continue;
+            }
+            match grant_permission.object().name().as_ref() {
+                "CanManageAccountAlias" => has_alias_manage = true,
+                "CanManageOfflineEscrow" => {
+                    manage_offline_escrow_grants = manage_offline_escrow_grants.saturating_add(1);
+                }
+                "CanPublishSpaceDirectoryManifest" => has_manifest_publish = true,
+                _ => {}
+            }
+        }
+        assert!(
+            has_alias_manage,
+            "localnet client signer must be able to manage account aliases for onboarding"
+        );
+        assert!(
+            has_manifest_publish,
+            "localnet client signer must be able to publish onboarding manifests"
+        );
+        assert_eq!(
+            manage_offline_escrow_grants, 1,
+            "localnet client signer must receive CanManageOfflineEscrow exactly once"
+        );
+    }
+
+    #[test]
+    fn generated_peer_config_enables_offline_cash_bootstrap_services() {
+        let temp = tempfile::tempdir().expect("make temp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("offline-cash-config".to_owned()),
+            bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29080,
+            base_p2p_port: 33337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("peer0.toml"))
+                .expect("read generated peer config"),
+        )
+        .expect("parse peer config");
+
+        let client_account_id = localnet_client_account_literal(None);
+        let onboarding = peer_cfg
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .and_then(|torii| torii.get("onboarding"))
+            .and_then(toml::Value::as_table)
+            .expect("torii.onboarding table");
+        assert_eq!(
+            onboarding.get("authority").and_then(toml::Value::as_str),
+            Some(client_account_id.as_str())
+        );
+
+        let offline_issuer = peer_cfg
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .and_then(|torii| torii.get("offline_issuer"))
+            .and_then(toml::Value::as_table)
+            .expect("torii.offline_issuer table");
+        assert_eq!(
+            offline_issuer
+                .get("operator_authority")
+                .and_then(toml::Value::as_str),
+            Some(client_account_id.as_str())
+        );
+
+        let settlement_offline = peer_cfg
+            .get("settlement")
+            .and_then(toml::Value::as_table)
+            .and_then(|settlement| settlement.get("offline"))
+            .and_then(toml::Value::as_table)
+            .expect("settlement.offline table");
+        assert_eq!(
+            settlement_offline
+                .get("skip_platform_attestation")
+                .and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        let escrow_accounts = settlement_offline
+            .get("escrow_accounts")
+            .and_then(toml::Value::as_table)
+            .expect("settlement.offline.escrow_accounts table");
+        assert_eq!(
+            escrow_accounts
+                .get(LOCALNET_OFFLINE_CASH_ASSET_ID)
+                .and_then(toml::Value::as_str),
+            Some(client_account_id.as_str())
+        );
     }
 
     #[test]
@@ -3570,6 +4075,8 @@ mod tests {
             assets: vec![AssetSpec {
                 id: localnet_sample_asset_literal(),
                 name: LOCALNET_SAMPLE_ASSET_NAME.to_owned(),
+                alias: None,
+                owned_by: ALICE_ID.clone(),
                 mint_to: ALICE_ID.clone(),
                 quantity: 100,
             }],
@@ -4344,6 +4851,49 @@ mod tests {
     }
 
     #[test]
+    fn generated_nexus_localnet_mints_fee_asset_to_client_signer() {
+        let temp = tempfile::tempdir().expect("make temp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: Some(SoraProfile::Nexus),
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("Iroha".to_owned()),
+            bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29080,
+            base_p2p_port: 33337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet");
+
+        let contents =
+            fs::read_to_string(temp.path().join("genesis.json")).expect("read generated genesis");
+        let client_account_id = account_id_runtime_literal(
+            &localnet_client_account_id(),
+            /* chain_discriminant */ None,
+        );
+        let expected_mint = format!(
+            "\"destination\": \"{}#{}\"",
+            localnet_fee_asset_literal(),
+            client_account_id
+        );
+        assert!(
+            contents.contains(&expected_mint),
+            "generated genesis should fund the client signer fee asset"
+        );
+    }
+
+    #[test]
     fn canonical_host_formats_ipv6_literals_and_urls() {
         let host = CanonicalHost::parse("::1", "--public-host").expect("ipv6 host");
         let literal = host.addr_literal(8080);
@@ -4387,6 +4937,30 @@ mod tests {
         let contents =
             fs::read_to_string(tmp.path().join("client.toml")).expect("read client config");
         assert!(contents.contains("torii_url = \"http://[::1]:8080/\""));
+    }
+
+    #[test]
+    fn localnet_readme_records_base_seed_when_present() {
+        let tmp = tempfile::tempdir().expect("tmp dir");
+        write_localnet_readme(
+            tmp.path(),
+            DEFAULT_CHAIN_ID,
+            BuildLine::Iroha3,
+            Some("Iroha"),
+            SumeragiConsensusMode::Npos,
+            4,
+            "http://127.0.0.1:29080/",
+            &tmp.path().join("genesis.json"),
+            &tmp.path().join("genesis.signed.nrt"),
+            &tmp.path().join("client.toml"),
+            &tmp.path().join("start.sh"),
+            &tmp.path().join("stop.sh"),
+            &localnet_client_account_literal(None),
+        )
+        .expect("write readme");
+        let contents = fs::read_to_string(tmp.path().join("README.md")).expect("read readme");
+        assert!(contents.contains("- Base seed: `Iroha`"));
+        assert!(contents.contains(LOCALNET_OFFLINE_CASH_ASSET_ALIAS));
     }
 
     #[test]
@@ -5208,6 +5782,23 @@ mod tests {
         assert!(
             start_contents.contains("nohup env SNAPSHOT_STORE_DIR="),
             "start script should launch peers under nohup so they survive wrapper exit"
+        );
+        assert!(
+            start_contents.contains("peer$i already running with pid $existing_pid"),
+            "start script should refuse to overwrite live pidfiles"
+        );
+        assert!(
+            start_contents.contains("rm -f \"$PIDFILE\""),
+            "start script should clear stale pidfiles before relaunch"
+        );
+        let stop_contents = fs::read_to_string(&stop_path).expect("read stop script");
+        assert!(
+            stop_contents.contains("kill -9 \"$pid\" 2>/dev/null || true"),
+            "stop script should force-stop stubborn peers"
+        );
+        assert!(
+            stop_contents.contains("rm -f \"$pidfile\""),
+            "stop script should clean pidfiles after shutdown"
         );
     }
 
