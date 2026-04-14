@@ -11961,7 +11961,7 @@ mod multisig_selector_tests {
         .await;
 
         let err = match result {
-            Ok(_) => panic!("partial legacy target must fail"),
+            Ok(_) => panic!("missing canonical contract target must fail"),
             Err(err) => err,
         };
 
