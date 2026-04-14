@@ -39,6 +39,12 @@ pub enum Error {
         /// Version advertised by the proof artifact.
         actual: u16,
     },
+    /// A claimed `PublicIO` field does not match the batch reconstructed by the verifier.
+    #[error("public_io field `{field}` mismatch")]
+    PublicIoMismatch {
+        /// Name of the mismatched field.
+        field: &'static str,
+    },
     /// Ordering hash mismatch detected during verification.
     #[error("ordering hash mismatch")]
     OrderingHashMismatch,

@@ -19,6 +19,7 @@ use iroha_data_model::{
 use iroha_primitives::{json::Json, numeric::Numeric};
 use norito::{
     codec::Encode,
+    core::NoritoSerialize,
     json::{self, Map, Number, Value},
 };
 
@@ -266,6 +267,7 @@ fn run() -> Result<(), String> {
     let keypair = KeyPair::from_seed(seed, Algorithm::Ed25519);
     let (_, public_key_bytes) = keypair.public_key().to_bytes();
     let public_key_hex = hex::encode(public_key_bytes);
+    let signed_schema_hash_hex = hex::encode(<SignedTransaction as NoritoSerialize>::schema_hash());
 
     fs::create_dir_all(&out_dir)
         .map_err(|err| format!("failed to create {}: {err}", out_dir.display()))?;
@@ -371,6 +373,10 @@ fn run() -> Result<(), String> {
     schema.insert(
         "signed".into(),
         Value::String(SIGNED_SCHEMA_NAME.to_string()),
+    );
+    schema.insert(
+        "signed_schema_hash_hex".into(),
+        Value::String(signed_schema_hash_hex),
     );
 
     let mut signing_key = Map::new();

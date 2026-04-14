@@ -96,6 +96,7 @@ fn developer_portal_norito_snippets_run() {
             "register-and-mint" => run_register_and_mint_snippet(&compiler, &path),
             "transfer-asset" => run_transfer_asset_snippet(&compiler, &path),
             "nft-flow" => run_nft_flow_snippet(&compiler, &path),
+            "threshold-escrow" => run_threshold_escrow_snippet(&compiler, &path),
             other => panic!("unexpected snippet {other}"),
         }
     }
@@ -194,6 +195,15 @@ fn run_hajimari_snippet(compiler: &KotodamaCompiler, path: &Path) {
     vm.load_program(&program)
         .expect("load hajimari snippet into IVM");
     vm.run().expect("run hajimari snippet");
+}
+
+fn run_threshold_escrow_snippet(compiler: &KotodamaCompiler, path: &Path) {
+    let program = compile_snippet(compiler, path);
+    let mut vm = IVM::new(u64::MAX);
+    vm.set_host(LoggingCoreHost::new());
+    vm.load_program(&program)
+        .expect("load threshold escrow snippet into IVM");
+    vm.run().expect("run threshold escrow snippet");
 }
 
 fn run_register_and_mint_snippet(compiler: &KotodamaCompiler, path: &Path) {

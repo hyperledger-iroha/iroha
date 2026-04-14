@@ -3,7 +3,12 @@
 // If editing this file, consider updating `iroha_core/src/smartcontracts/isi/triggers/specialized.rs`
 // It mirrors structures from this file.
 
-use std::{cmp, format, string::String, vec::Vec};
+use std::{
+    cmp, format,
+    num::{NonZeroU32, NonZeroU64},
+    string::String,
+    vec::Vec,
+};
 
 #[cfg(feature = "json")]
 use base64::Engine as _;
@@ -231,8 +236,31 @@ pub mod action {
             pub authority: AccountId,
             /// Condition defining which events invoke the executable.
             pub filter: EventFilterBox,
+            /// Optional retry policy for scheduled time triggers.
+            ///
+            /// Retries are opt-in, use a fixed delay based on committed block
+            /// timestamps, and allow only one outstanding retry stream per
+            /// trigger. Exhausting the retry budget unregisters the trigger.
+            pub retry_policy: Option<TimeTriggerRetryPolicy>,
             /// Arbitrary metadata stored for this trigger.
             pub metadata: Metadata,
+        }
+
+        /// Retry policy for scheduled time triggers.
+        ///
+        /// The initial scheduled firing does not count toward
+        /// [`max_retries`](Self::max_retries). Each failed retry attempt is
+        /// delayed by [`retry_after_ms`](Self::retry_after_ms), and when the
+        /// budget is exhausted the trigger is unregistered.
+        #[derive(
+            Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord, Decode, Encode, IntoSchema,
+        )]
+        #[cfg_attr(any(feature = "ffi_export", feature = "ffi_import"), ffi_type)]
+        pub struct TimeTriggerRetryPolicy {
+            /// Maximum number of automatic retries after the initial failed firing.
+            pub max_retries: NonZeroU32,
+            /// Delay in milliseconds before the next retry becomes eligible.
+            pub retry_after_ms: NonZeroU64,
         }
 
         /// Repetition policy for a trigger action.
@@ -272,6 +300,10 @@ pub mod action {
         pub fn filter(&self) -> &EventFilterBox {
             &self.filter
         }
+        /// Optional retry policy for this action.
+        pub fn retry_policy(&self) -> Option<TimeTriggerRetryPolicy> {
+            self.retry_policy
+        }
     }
 
     impl Action {
@@ -293,6 +325,7 @@ pub mod action {
                 repeats: repeats.into(),
                 authority,
                 filter,
+                retry_policy: None,
                 metadata: Metadata::default(),
             };
 
@@ -305,6 +338,25 @@ pub mod action {
             self.metadata = metadata;
             self
         }
+
+        /// Attach a retry policy for scheduled time-trigger execution.
+        ///
+        /// Only scheduled time triggers accept retry policies. Runtime retry
+        /// state is tracked internally; query surfaces continue exposing only
+        /// the configured policy.
+        #[must_use]
+        pub fn with_retry_policy(self, retry_policy: TimeTriggerRetryPolicy) -> Self {
+            candidate::ActionCandidate {
+                executable: self.executable,
+                repeats: self.repeats,
+                authority: self.authority,
+                filter: self.filter,
+                retry_policy: Some(retry_policy),
+                metadata: self.metadata,
+            }
+            .validate()
+            .unwrap()
+        }
     }
 
     #[cfg(test)]
@@ -316,6 +368,7 @@ pub mod action {
         use crate::{
             account::AccountId,
             events::execute_trigger::ExecuteTriggerEventFilter,
+            events::time::{ExecutionTime, Schedule, TimeEventFilter},
             transaction::{Executable, IvmBytecode},
             trigger::TriggerId,
         };
@@ -358,6 +411,94 @@ pub mod action {
                 authority,
                 ExecuteTriggerEventFilter::new().under_authority(other),
             );
+        }
+
+        #[test]
+        fn retry_policy_accepts_scheduled_time_trigger() {
+            let authority = account_in("wonderland");
+            let retry_policy = TimeTriggerRetryPolicy {
+                max_retries: NonZeroU32::new(2).expect("nonzero"),
+                retry_after_ms: NonZeroU64::new(500).expect("nonzero"),
+            };
+            let action = Action::new(
+                sample_executable(),
+                Repeats::Exactly(1),
+                authority,
+                TimeEventFilter::new(ExecutionTime::Schedule(Schedule::starting_at(
+                    std::time::Duration::from_millis(5),
+                ))),
+            )
+            .with_retry_policy(retry_policy);
+
+            assert_eq!(action.retry_policy(), Some(retry_policy));
+        }
+
+        #[test]
+        #[should_panic(
+            expected = "retry policy is only supported for scheduled time-trigger actions"
+        )]
+        fn retry_policy_rejects_non_scheduled_trigger() {
+            let authority = account_in("wonderland");
+            let retry_policy = TimeTriggerRetryPolicy {
+                max_retries: NonZeroU32::new(1).expect("nonzero"),
+                retry_after_ms: NonZeroU64::new(10).expect("nonzero"),
+            };
+            let trigger_id: TriggerId = "test_trigger".parse().unwrap();
+            let action = Action::new(
+                sample_executable(),
+                Repeats::Exactly(1),
+                authority,
+                ExecuteTriggerEventFilter::new().for_trigger(trigger_id),
+            );
+            let _ = action.with_retry_policy(retry_policy);
+        }
+
+        #[test]
+        fn action_with_retry_policy_norito_roundtrip() {
+            let authority = account_in("wonderland");
+            let retry_policy = TimeTriggerRetryPolicy {
+                max_retries: NonZeroU32::new(3).expect("nonzero"),
+                retry_after_ms: NonZeroU64::new(1_000).expect("nonzero"),
+            };
+            let action = Action::new(
+                sample_executable(),
+                Repeats::Exactly(2),
+                authority,
+                TimeEventFilter::new(ExecutionTime::Schedule(
+                    Schedule::starting_at(std::time::Duration::from_secs(1))
+                        .with_period(std::time::Duration::from_secs(5)),
+                )),
+            )
+            .with_retry_policy(retry_policy);
+
+            let bytes = norito::to_bytes(&action).expect("serialize action");
+            let decoded = norito::from_bytes::<Action>(&bytes).expect("decode action bytes");
+            let restored = norito::core::NoritoDeserialize::try_deserialize(decoded)
+                .expect("deserialize action");
+            assert_eq!(restored, action);
+        }
+
+        #[cfg(feature = "json")]
+        #[test]
+        fn action_with_retry_policy_json_roundtrip() {
+            let authority = account_in("wonderland");
+            let retry_policy = TimeTriggerRetryPolicy {
+                max_retries: NonZeroU32::new(2).expect("nonzero"),
+                retry_after_ms: NonZeroU64::new(250).expect("nonzero"),
+            };
+            let action = Action::new(
+                sample_executable(),
+                Repeats::Exactly(1),
+                authority,
+                TimeEventFilter::new(ExecutionTime::Schedule(Schedule::starting_at(
+                    std::time::Duration::from_millis(25),
+                ))),
+            )
+            .with_retry_policy(retry_policy);
+
+            let json = norito::json::to_json(&action).expect("serialize action to json");
+            let restored: Action = norito::json::from_json(&json).expect("deserialize action");
+            assert_eq!(restored, action);
         }
     }
 
@@ -479,6 +620,30 @@ pub mod action {
         }
     }
 
+    #[cfg(feature = "json")]
+    impl JsonSerialize for TimeTriggerRetryPolicy {
+        fn json_serialize(&self, out: &mut String) {
+            let bytes = norito::to_bytes(self)
+                .expect("TimeTriggerRetryPolicy Norito serialization must succeed");
+            let encoded = STANDARD.encode(bytes);
+            json::JsonSerialize::json_serialize(&encoded, out);
+        }
+    }
+
+    #[cfg(feature = "json")]
+    impl JsonDeserialize for TimeTriggerRetryPolicy {
+        fn json_deserialize(parser: &mut json::Parser<'_>) -> Result<Self, json::Error> {
+            let encoded = parser.parse_string()?;
+            let bytes = STANDARD
+                .decode(encoded.as_str())
+                .map_err(|err| json::Error::Message(err.to_string()))?;
+            let archived = norito::from_bytes::<TimeTriggerRetryPolicy>(&bytes)
+                .map_err(|err| json::Error::Message(err.to_string()))?;
+            norito::core::NoritoDeserialize::try_deserialize(archived)
+                .map_err(|err| json::Error::Message(err.to_string()))
+        }
+    }
+
     mod candidate {
         use super::{EnsureTriggerAuthority, *};
 
@@ -488,6 +653,7 @@ pub mod action {
             pub repeats: Repeats,
             pub authority: AccountId,
             pub filter: EventFilterBox,
+            pub retry_policy: Option<TimeTriggerRetryPolicy>,
             pub metadata: Metadata,
         }
 
@@ -497,11 +663,25 @@ pub mod action {
                     return Err("TriggerCompleted cannot be used as filter for triggering actions");
                 }
 
+                if self.retry_policy.is_some()
+                    && !matches!(
+                        self.filter,
+                        EventFilterBox::Time(crate::events::time::TimeEventFilter(
+                            crate::events::time::ExecutionTime::Schedule(_)
+                        ))
+                    )
+                {
+                    return Err(
+                        "retry policy is only supported for scheduled time-trigger actions",
+                    );
+                }
+
                 let Self {
                     executable,
                     repeats,
                     authority,
                     filter,
+                    retry_policy,
                     metadata,
                 } = self;
 
@@ -512,6 +692,7 @@ pub mod action {
                     repeats,
                     authority,
                     filter,
+                    retry_policy,
                     metadata,
                 })
             }
@@ -533,6 +714,7 @@ pub mod action {
                     repeats: self.repeats,
                     authority: self.authority.clone(),
                     filter: self.filter.clone(),
+                    retry_policy: self.retry_policy,
                     metadata: self.metadata.clone(),
                 };
                 norito::core::NoritoSerialize::serialize(&candidate, writer)
@@ -542,7 +724,7 @@ pub mod action {
 
     pub mod prelude {
         //! Re-exports of commonly used types.
-        pub use super::{Action, Repeats};
+        pub use super::{Action, Repeats, TimeTriggerRetryPolicy};
     }
 }
 

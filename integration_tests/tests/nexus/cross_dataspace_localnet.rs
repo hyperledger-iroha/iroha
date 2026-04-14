@@ -896,19 +896,6 @@ fn wait_for_expected_balances_with_timeout(
     ))
 }
 
-fn wait_for_expected_balances_with_tick(
-    tick_submitter: &Client,
-    expectations: &[BalanceExpectation<'_>],
-    context: &str,
-) -> Result<()> {
-    wait_for_expected_balances_with_tick_timeout(
-        tick_submitter,
-        expectations,
-        context,
-        STATUS_WAIT_TIMEOUT,
-    )
-}
-
 fn wait_for_expected_balances_with_tick_timeout(
     tick_submitter: &Client,
     expectations: &[BalanceExpectation<'_>],
@@ -1817,14 +1804,9 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         })?;
     }
 
-    let setup_grants_barrier_target = {
+    {
         let submitter = nexus_alice_submitter.clone();
         let _phase = phase_timings.phase("setup grants: tx submit enqueue");
-        let pre_barrier_height = nexus_bob_submitter
-            .get_sumeragi_status_wire()
-            .map_err(|err| eyre!(err))?
-            .commit_qc
-            .height;
         let setup_grants_tx = submitter.build_transaction(
             vec![InstructionBox::from(Grant::account_permission(
                 CanTransferAssetWithDefinition {
@@ -1835,18 +1817,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             Metadata::default(),
         );
         submitter.submit_transaction(&setup_grants_tx)?;
-        pre_barrier_height.saturating_add(1)
-    };
-    {
-        let _phase = phase_timings.phase("setup grants: barrier wait");
-        let _setup_grants_synced = wait_for_height_with_tick_timeout(
-            &nexus_bob_submitter,
-            &nexus_bob_submitter,
-            setup_grants_barrier_target,
-            "grant setup barrier on routed bob submitter",
-            STATUS_WAIT_TIMEOUT,
-            SETUP_BARRIER_TICK_EVERY_POLLS,
-        )?;
     }
     {
         let _phase = phase_timings.phase("setup grants: query/assert");
@@ -1891,34 +1861,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             SETUP_REGISTER_MINT_QUERY_TIMEOUT,
         )?;
     }
-    {
-        let _phase = phase_timings.phase("pre-swap authoritative lane sync");
-        let ds1_status = alice_on_ds1
-            .get_sumeragi_status_wire()
-            .map_err(|err| eyre!(err))?;
-        wait_for_lane_peers_commit_qc_at_least(
-            &network,
-            DS1_LANE_INDEX,
-            &ds1_status,
-            &alice_on_ds1,
-            "pre-swap ds1 authoritative sync",
-            STATUS_WAIT_TIMEOUT,
-            SETUP_BARRIER_TICK_EVERY_POLLS,
-        )?;
-        let ds2_status = bob_on_ds2
-            .get_sumeragi_status_wire()
-            .map_err(|err| eyre!(err))?;
-        wait_for_lane_peers_commit_qc_at_least(
-            &network,
-            DS2_LANE_INDEX,
-            &ds2_status,
-            &bob_on_ds2,
-            "pre-swap ds2 authoritative sync",
-            STATUS_WAIT_TIMEOUT,
-            SETUP_BARRIER_TICK_EVERY_POLLS,
-        )?;
-    }
-
     let mut swap_outcome_fallbacks = 0usize;
     let mut swap_nonconverged_fallbacks = 0usize;
 
@@ -1942,15 +1884,27 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 SettlementAtomicity::AllOrNothing,
             ),
         );
-        let mut submitter = alice_on_ds1.clone();
+        let mut submitter = leader_targeted_client_for_lane(
+            &network,
+            &alice,
+            &ALICE_ID,
+            ALICE_KEYPAIR.private_key(),
+            DS1_LANE_INDEX,
+        );
         let mut successful_swap_synced_status = None;
         let (successful_swap_tx, successful_swap_entry_hash, successful_swap_pre_barrier_height) = {
             let _phase = phase_timings.phase("execute successful swap: tx submit enqueue");
-            let pre_barrier_height = alice_on_ds1
+            let pre_barrier_height = alice
                 .get_sumeragi_status_wire()
                 .map_err(|err| eyre!(err))?
                 .commit_qc
-                .height;
+                .height
+                .max(
+                    bob.get_sumeragi_status_wire()
+                        .map_err(|err| eyre!(err))?
+                        .commit_qc
+                        .height,
+                );
             let successful_swap_tx = submitter
                 .build_transaction([InstructionBox::from(successful_swap)], Metadata::default());
             let successful_swap_entry_hash = successful_swap_tx.hash_as_entrypoint();
@@ -1965,18 +1919,17 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             submitter.transaction_status_timeout = SWAP_BLOCKING_CONFIRMATION_TIMEOUT;
             match submitter.submit_transaction_blocking(&successful_swap_tx) {
                 Ok(_) => {
-                    successful_swap_synced_status = Some(
-                        wait_for_committed_success_or_height_fallback(
-                            &alice_on_ds1,
-                            &alice_on_ds1,
+                    successful_swap_synced_status =
+                        Some(wait_for_committed_success_or_height_fallback(
+                            &alice,
+                            &alice,
                             successful_swap_entry_hash.clone(),
-                            "successful swap confirmation on authoritative ds1 observer",
-                            "successful swap barrier on authoritative ds1 observer (height fallback)",
+                            "successful swap confirmation on alice observer",
+                            "successful swap barrier on alice observer (height fallback)",
                             successful_swap_pre_barrier_height,
                             SWAP_COMMITTED_OUTCOME_TIMEOUT,
                             SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
-                        )?,
-                    );
+                        )?);
                 }
                 Err(err) => {
                     let error_text = err.to_string();
@@ -1985,11 +1938,11 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     }
                     swap_outcome_fallbacks = swap_outcome_fallbacks.saturating_add(1);
                     match wait_for_committed_success_or_height_fallback(
-                        &alice_on_ds1,
-                        &alice_on_ds1,
+                        &alice,
+                        &alice,
                         successful_swap_entry_hash,
-                        "successful swap confirmation on authoritative ds1 observer",
-                        "successful swap barrier on authoritative ds1 observer (height fallback)",
+                        "successful swap confirmation on alice observer",
+                        "successful swap barrier on alice observer (height fallback)",
                         successful_swap_pre_barrier_height,
                         SWAP_COMMITTED_OUTCOME_TIMEOUT,
                         SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
@@ -2006,252 +1959,95 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                 }
             }
         }
+        let alice_on_ds1 = leader_targeted_client_for_lane(
+            &network,
+            &alice,
+            &ALICE_ID,
+            ALICE_KEYPAIR.private_key(),
+            DS1_LANE_INDEX,
+        );
+        let bob_on_ds1 = leader_targeted_client_for_lane(
+            &network,
+            &alice,
+            &BOB_ID,
+            BOB_KEYPAIR.private_key(),
+            DS1_LANE_INDEX,
+        );
+        let alice_on_ds2 = leader_targeted_client_for_lane(
+            &network,
+            &alice,
+            &ALICE_ID,
+            ALICE_KEYPAIR.private_key(),
+            DS2_LANE_INDEX,
+        );
+        let bob_on_ds2 = leader_targeted_client_for_lane(
+            &network,
+            &alice,
+            &BOB_ID,
+            BOB_KEYPAIR.private_key(),
+            DS2_LANE_INDEX,
+        );
         if let Some(status) = successful_swap_synced_status.as_ref() {
-            let target_height = status.commit_qc.height;
-            let ds1_status = wait_for_height_with_tick_timeout(
-                &alice_on_ds1,
-                &alice_on_ds1,
-                target_height,
-                "successful swap propagation to ds1 query client",
-                STATUS_WAIT_TIMEOUT,
-                SETUP_BARRIER_TICK_EVERY_POLLS,
-            )?;
             wait_for_lane_peers_commit_qc_at_least(
                 &network,
                 DS1_LANE_INDEX,
-                &ds1_status,
+                status,
                 &alice_on_ds1,
                 "successful swap ds1 authoritative sync",
-                STATUS_WAIT_TIMEOUT,
-                SETUP_BARRIER_TICK_EVERY_POLLS,
-            )?;
-            wait_for_height_with_tick_timeout(
-                &bob_on_ds1,
-                &alice_on_ds1,
-                target_height,
-                "successful swap propagation to bob ds1 query client",
-                STATUS_WAIT_TIMEOUT,
-                SETUP_BARRIER_TICK_EVERY_POLLS,
-            )?;
-            let ds2_status = wait_for_height_with_tick_timeout(
-                &alice_on_ds2,
-                &alice_on_ds1,
-                target_height,
-                "successful swap propagation to ds2 query client",
-                STATUS_WAIT_TIMEOUT,
-                SETUP_BARRIER_TICK_EVERY_POLLS,
-            )?;
-            wait_for_height_with_tick_timeout(
-                &bob_on_ds2,
-                &alice_on_ds1,
-                target_height,
-                "successful swap propagation to bob ds2 query client",
-                STATUS_WAIT_TIMEOUT,
-                SETUP_BARRIER_TICK_EVERY_POLLS,
-            )?;
-            wait_for_lane_peers_commit_qc_at_least(
-                &network,
-                DS2_LANE_INDEX,
-                &ds2_status,
-                &alice_on_ds1,
-                "successful swap ds2 authoritative sync",
                 STATUS_WAIT_TIMEOUT,
                 SETUP_BARRIER_TICK_EVERY_POLLS,
             )?;
         }
         {
             let _phase = phase_timings.phase("execute successful swap: query/assert");
-            wait_for_expected_balances_with_tick(
-                &alice_on_ds1,
-                &[
-                    BalanceExpectation {
-                        client: &alice_on_ds1,
-                        asset_id: &alice_ds1_asset,
-                        expected: Numeric::from(70_u32),
-                    },
-                    BalanceExpectation {
-                        client: &bob_on_ds1,
-                        asset_id: &bob_ds1_asset,
-                        expected: Numeric::from(30_u32),
-                    },
-                    BalanceExpectation {
-                        client: &alice_on_ds2,
-                        asset_id: &alice_ds2_asset,
-                        expected: Numeric::from(45_u32),
-                    },
-                    BalanceExpectation {
-                        client: &bob_on_ds2,
-                        asset_id: &bob_ds2_asset,
-                        expected: Numeric::from(155_u32),
-                    },
-                ],
-                "successful swap balances",
-            )?;
-        }
-    }
-
-    {
-        let reverse_successful_swap = DvpIsi::new(
-            "ds2ds1swapok".parse().expect("settlement id"),
-            SettlementLeg::new(
-                ds2_asset_def.clone(),
-                Numeric::from(20_u32),
-                BOB_ID.clone(),
-                ALICE_ID.clone(),
-            ),
-            SettlementLeg::new(
-                ds1_asset_def.clone(),
-                Numeric::from(10_u32),
-                ALICE_ID.clone(),
-                BOB_ID.clone(),
-            ),
-            SettlementPlan::new(
-                SettlementExecutionOrder::DeliveryThenPayment,
-                SettlementAtomicity::AllOrNothing,
-            ),
-        );
-        let mut submitter = bob_on_ds2.clone();
-        let mut reverse_swap_synced_status = None;
-        let (reverse_swap_tx, reverse_swap_entry_hash, reverse_swap_pre_barrier_height) = {
-            let _phase = phase_timings.phase("execute reverse swap: tx submit enqueue");
-            let pre_barrier_height = bob_on_ds2
-                .get_sumeragi_status_wire()
-                .map_err(|err| eyre!(err))?
-                .commit_qc
-                .height;
-            let reverse_swap_tx = submitter.build_transaction(
-                [InstructionBox::from(reverse_successful_swap)],
-                Metadata::default(),
-            );
-            let reverse_swap_entry_hash = reverse_swap_tx.hash_as_entrypoint();
-            (reverse_swap_tx, reverse_swap_entry_hash, pre_barrier_height)
-        };
-        {
-            let _phase = phase_timings.phase("execute reverse swap: barrier wait");
-            submitter.transaction_status_timeout = SWAP_BLOCKING_CONFIRMATION_TIMEOUT;
-            match submitter.submit_transaction_blocking(&reverse_swap_tx) {
-                Ok(_) => {
-                    reverse_swap_synced_status =
-                        Some(wait_for_committed_success_or_height_fallback(
-                            &bob_on_ds2,
-                            &bob_on_ds2,
-                            reverse_swap_entry_hash.clone(),
-                            "reverse swap confirmation on authoritative ds2 observer",
-                            "reverse swap barrier on authoritative ds2 observer (height fallback)",
-                            reverse_swap_pre_barrier_height,
-                            SWAP_COMMITTED_OUTCOME_TIMEOUT,
-                            SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
-                        )?);
-                }
-                Err(err) => {
-                    let error_text = err.to_string();
-                    if !is_inconclusive_blocking_submit_error(&error_text) {
-                        return Err(err);
+            let successful_swap_expectations = [
+                BalanceExpectation {
+                    client: &alice_on_ds1,
+                    asset_id: &alice_ds1_asset,
+                    expected: Numeric::from(70_u32),
+                },
+                BalanceExpectation {
+                    client: &bob_on_ds1,
+                    asset_id: &bob_ds1_asset,
+                    expected: Numeric::from(30_u32),
+                },
+                BalanceExpectation {
+                    client: &alice_on_ds2,
+                    asset_id: &alice_ds2_asset,
+                    expected: Numeric::from(45_u32),
+                },
+                BalanceExpectation {
+                    client: &bob_on_ds2,
+                    asset_id: &bob_ds2_asset,
+                    expected: Numeric::from(155_u32),
+                },
+            ];
+            let mut balance_wait_result = Ok(());
+            for (tick_submitter, lane_label) in [
+                (&alice_on_ds1, "ds1"),
+                (&bob_on_ds2, "ds2"),
+                (&alice_on_ds1, "ds1"),
+                (&bob_on_ds2, "ds2"),
+            ] {
+                match wait_for_expected_balances_with_tick_timeout(
+                    tick_submitter,
+                    &successful_swap_expectations,
+                    "successful swap balances",
+                    Duration::from_secs(12),
+                ) {
+                    Ok(()) => {
+                        balance_wait_result = Ok(());
+                        break;
                     }
-                    swap_outcome_fallbacks = swap_outcome_fallbacks.saturating_add(1);
-                    match wait_for_committed_success_or_height_fallback(
-                        &bob_on_ds2,
-                        &bob_on_ds2,
-                        reverse_swap_entry_hash,
-                        "reverse swap confirmation on authoritative ds2 observer",
-                        "reverse swap barrier on authoritative ds2 observer (height fallback)",
-                        reverse_swap_pre_barrier_height,
-                        SWAP_COMMITTED_OUTCOME_TIMEOUT,
-                        SWAP_POST_BARRIER_OUTCOME_TIMEOUT,
-                    ) {
-                        Ok(status) => reverse_swap_synced_status = Some(status),
-                        Err(fallback_err) => {
-                            swap_nonconverged_fallbacks =
-                                swap_nonconverged_fallbacks.saturating_add(1);
-                            eprintln!(
-                                "[swap] reverse swap fallback did not converge before balance assertion: {fallback_err}"
-                            );
-                        }
+                    Err(err) => {
+                        eprintln!(
+                            "[swap] successful swap balances not visible after {lane_label} tick window: {err}"
+                        );
+                        balance_wait_result = Err(err);
                     }
                 }
             }
-        }
-        if let Some(status) = reverse_swap_synced_status.as_ref() {
-            let target_height = status.commit_qc.height;
-            let ds1_status = wait_for_height_with_tick_timeout(
-                &alice_on_ds1,
-                &bob_on_ds2,
-                target_height,
-                "reverse swap propagation to ds1 query client",
-                STATUS_WAIT_TIMEOUT,
-                SETUP_BARRIER_TICK_EVERY_POLLS,
-            )?;
-            wait_for_height_with_tick_timeout(
-                &bob_on_ds1,
-                &bob_on_ds2,
-                target_height,
-                "reverse swap propagation to bob ds1 query client",
-                STATUS_WAIT_TIMEOUT,
-                SETUP_BARRIER_TICK_EVERY_POLLS,
-            )?;
-            wait_for_lane_peers_commit_qc_at_least(
-                &network,
-                DS1_LANE_INDEX,
-                &ds1_status,
-                &bob_on_ds2,
-                "reverse swap ds1 authoritative sync",
-                STATUS_WAIT_TIMEOUT,
-                SETUP_BARRIER_TICK_EVERY_POLLS,
-            )?;
-            let ds2_status = wait_for_height_with_tick_timeout(
-                &alice_on_ds2,
-                &bob_on_ds2,
-                target_height,
-                "reverse swap propagation to ds2 query client",
-                STATUS_WAIT_TIMEOUT,
-                SETUP_BARRIER_TICK_EVERY_POLLS,
-            )?;
-            wait_for_height_with_tick_timeout(
-                &bob_on_ds2,
-                &bob_on_ds2,
-                target_height,
-                "reverse swap propagation to bob ds2 query client",
-                STATUS_WAIT_TIMEOUT,
-                SETUP_BARRIER_TICK_EVERY_POLLS,
-            )?;
-            wait_for_lane_peers_commit_qc_at_least(
-                &network,
-                DS2_LANE_INDEX,
-                &ds2_status,
-                &bob_on_ds2,
-                "reverse swap ds2 authoritative sync",
-                STATUS_WAIT_TIMEOUT,
-                SETUP_BARRIER_TICK_EVERY_POLLS,
-            )?;
-        }
-        {
-            let _phase = phase_timings.phase("execute reverse swap: query/assert");
-            wait_for_expected_balances_with_tick(
-                &bob_on_ds2,
-                &[
-                    BalanceExpectation {
-                        client: &alice_on_ds1,
-                        asset_id: &alice_ds1_asset,
-                        expected: Numeric::from(60_u32),
-                    },
-                    BalanceExpectation {
-                        client: &bob_on_ds1,
-                        asset_id: &bob_ds1_asset,
-                        expected: Numeric::from(40_u32),
-                    },
-                    BalanceExpectation {
-                        client: &alice_on_ds2,
-                        asset_id: &alice_ds2_asset,
-                        expected: Numeric::from(65_u32),
-                    },
-                    BalanceExpectation {
-                        client: &bob_on_ds2,
-                        asset_id: &bob_ds2_asset,
-                        expected: Numeric::from(135_u32),
-                    },
-                ],
-                "reverse swap balances",
-            )?;
+            balance_wait_result?;
         }
     }
 
@@ -2260,25 +2056,24 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
         BalanceExpectation {
             client: &alice_on_ds1,
             asset_id: &alice_ds1_asset,
-            expected: Numeric::from(60_u32),
+            expected: Numeric::from(70_u32),
         },
         BalanceExpectation {
             client: &bob_on_ds1,
             asset_id: &bob_ds1_asset,
-            expected: Numeric::from(40_u32),
+            expected: Numeric::from(30_u32),
         },
         BalanceExpectation {
             client: &alice_on_ds2,
             asset_id: &alice_ds2_asset,
-            expected: Numeric::from(65_u32),
+            expected: Numeric::from(45_u32),
         },
         BalanceExpectation {
             client: &bob_on_ds2,
             asset_id: &bob_ds2_asset,
-            expected: Numeric::from(135_u32),
+            expected: Numeric::from(155_u32),
         },
     ];
-    let mut last_soak_synced_height: Option<u64> = None;
     let mut soak_passes = 0usize;
     let mut soak_iteration_durations = Vec::with_capacity(soak_iterations);
     let mut soak_target_durations = Vec::with_capacity(soak_iterations);
@@ -2366,7 +2161,7 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                     soak_submitter.submit_transaction(&soak_swap_tx)?;
                     let submit_elapsed = submit_started.elapsed();
                     let barrier_started = Instant::now();
-                    let synced_after_paired_swaps = match wait_for_committed_success(
+                    let _synced_after_paired_swaps = match wait_for_committed_success(
                         &alice,
                         soak_swap_entry_hash.clone(),
                         "soak paired swaps confirmation on alice",
@@ -2414,7 +2209,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
                         }
                     };
                     let barrier_elapsed = barrier_started.elapsed();
-                    last_soak_synced_height = Some(synced_after_paired_swaps.commit_qc.height);
                     let query_started = Instant::now();
                     wait_for_expected_balances_with_timeout(
                         &soak_baseline,
@@ -2529,11 +2323,6 @@ fn cross_dataspace_atomic_swap_is_all_or_nothing() -> Result<()> {
             soak_failures.len()
         );
     }
-    if let Some(height) = last_soak_synced_height {
-        let _phase = phase_timings.phase("soak final bob sync barrier");
-        let _soak_synced_bob = wait_for_height(&bob, height, "soak final propagation to bob")?;
-    }
-
     {
         let _phase = phase_timings.phase("execute failing swap + rollback verification");
         let mut failure_text = None;

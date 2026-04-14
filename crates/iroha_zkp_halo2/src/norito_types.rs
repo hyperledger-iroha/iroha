@@ -145,6 +145,17 @@ pub struct PolyOpenPublic {
     pub p_g: [u8; 32],
 }
 
+/// Optional metadata that can be bound into the IPA opening transcript.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct PolyOpenTranscriptMetadata {
+    /// Optional verifying-key commitment used by the higher-level circuit.
+    pub vk_commitment: Option<[u8; 32]>,
+    /// Optional public-input schema hash advertised by the higher-level caller.
+    pub public_inputs_schema_hash: Option<[u8; 32]>,
+    /// Optional domain tag binding the proof to chain/backend/namespace context.
+    pub domain_tag: Option<[u8; 32]>,
+}
+
 impl PolyOpenPublic {
     /// Encode to bare Norito payload bytes (no outer header). Panics on IO error.
     pub fn encode_bytes(&self) -> Vec<u8> {
@@ -238,4 +249,16 @@ pub struct OpenVerifyEnvelope {
     /// Optional domain tag binding the proof to chain/backend/VK/manifest/namespace/syscall.
     #[norito(default)]
     pub domain_tag: Option<[u8; 32]>,
+}
+
+impl OpenVerifyEnvelope {
+    /// Returns the optional metadata that higher-level callers can bind into the
+    /// Fiat-Shamir transcript when producing or verifying the opening proof.
+    pub const fn transcript_metadata(&self) -> PolyOpenTranscriptMetadata {
+        PolyOpenTranscriptMetadata {
+            vk_commitment: self.vk_commitment,
+            public_inputs_schema_hash: self.public_inputs_schema_hash,
+            domain_tag: self.domain_tag,
+        }
+    }
 }

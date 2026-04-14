@@ -3446,6 +3446,16 @@ fn account_event_summary(event: &AccountEvent) -> (String, String) {
         ),
         AccountEvent::Deleted(id) => ("Account deleted".to_owned(), id.to_string()),
         AccountEvent::Asset(asset_event) => asset_event_summary(asset_event),
+        AccountEvent::ControllerReplaced(change) => (
+            "Account controller replaced".to_owned(),
+            format!(
+                "account={} previous_account={} previous_controller={} new_controller={}",
+                change.account,
+                change.previous_account,
+                change.previous_controller,
+                change.new_controller
+            ),
+        ),
         AccountEvent::PermissionAdded(change) => (
             "Account permission granted".to_owned(),
             format!("{change:?}"),
@@ -3468,8 +3478,87 @@ fn account_event_summary(event: &AccountEvent) -> (String, String) {
             "Account metadata removed".to_owned(),
             format!("account={} key={}", change.target(), change.key()),
         ),
+        AccountEvent::Recovery(recovery_event) => account_recovery_event_summary(recovery_event),
         AccountEvent::Repo(repo_event) => repo_account_event_summary(repo_event),
     }
+}
+
+fn account_recovery_event_summary(event: &AccountRecoveryEvent) -> (String, String) {
+    match event {
+        AccountRecoveryEvent::PolicySet(payload) => (
+            "Account recovery policy set".to_owned(),
+            format!(
+                "account={} alias={} guardians={} quorum={} timelock_ms={}",
+                payload.account,
+                account_alias_detail(&payload.alias),
+                payload.policy.guardians().len(),
+                payload.policy.quorum(),
+                payload.policy.timelock_ms().get()
+            ),
+        ),
+        AccountRecoveryEvent::PolicyCleared(payload) => (
+            "Account recovery policy cleared".to_owned(),
+            format!(
+                "account={} alias={}",
+                payload.account,
+                account_alias_detail(&payload.alias)
+            ),
+        ),
+        AccountRecoveryEvent::Proposed(payload) => (
+            "Account recovery proposed".to_owned(),
+            format!(
+                "account={} alias={} proposed_by={} proposed_controller={} execute_after_ms={} approvals={}",
+                payload.account,
+                account_alias_detail(&payload.alias),
+                payload.request.proposed_by,
+                payload.request.proposed_controller,
+                payload.request.execute_after_ms,
+                payload.request.approvals.len()
+            ),
+        ),
+        AccountRecoveryEvent::Approved(payload) => (
+            "Account recovery approved".to_owned(),
+            format!(
+                "account={} alias={} approver={} approvals={}",
+                payload.account,
+                account_alias_detail(&payload.alias),
+                payload.approver,
+                payload.request.approvals.len()
+            ),
+        ),
+        AccountRecoveryEvent::Cancelled(payload) => (
+            "Account recovery cancelled".to_owned(),
+            format!(
+                "account={} alias={} cancelled_by={} status={:?}",
+                payload.account,
+                account_alias_detail(&payload.alias),
+                payload.cancelled_by,
+                payload.request.status
+            ),
+        ),
+        AccountRecoveryEvent::Finalized(payload) => (
+            "Account recovery finalized".to_owned(),
+            format!(
+                "account={} previous_account={} alias={} status={:?}",
+                payload.account,
+                payload.previous_account,
+                account_alias_detail(&payload.alias),
+                payload.request.status
+            ),
+        ),
+    }
+}
+
+fn account_alias_detail(alias: &iroha_data_model::account::AccountAlias) -> String {
+    let domain = alias
+        .domain
+        .as_ref()
+        .map(ToString::to_string)
+        .unwrap_or_else(|| "-".to_owned());
+    format!(
+        "label={} domain={} dataspace={}",
+        alias.label, domain, alias.dataspace
+    )
 }
 
 fn repo_account_event_summary(event: &RepoAccountEvent) -> (String, String) {
@@ -4461,7 +4550,10 @@ mod tests {
             EventBox, SharedDataEvent,
             data::{
                 DataEvent, offline,
-                prelude::{AccountEvent, PeerEvent},
+                prelude::{
+                    AccountControllerReplaced, AccountEvent, AccountRecoveryEvent,
+                    AccountRecoveryPolicySet, PeerEvent,
+                },
             },
             pipeline::PipelineEventBox,
             stream::EventMessage,
@@ -4479,7 +4571,7 @@ mod tests {
     use iroha_telemetry::metrics::{
         GovernanceStatus, Status as TelemetryStatus, TxGossipSnapshot, Uptime,
     };
-    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, PEER_KEYPAIR};
+    use iroha_test_samples::{ALICE_ID, ALICE_KEYPAIR, BOB_ID, BOB_KEYPAIR, PEER_KEYPAIR};
     use reqwest::{
         StatusCode,
         header::{HeaderMap, HeaderValue},
@@ -8486,6 +8578,76 @@ state_tiered_cold_entries 2
         assert!(
             detail.contains(&alice_literal),
             "detail `{detail}` should mention {alice_literal}"
+        );
+    }
+
+    #[test]
+    fn account_controller_replaced_summary_mentions_old_and_new_controllers() {
+        let event_box = EventBox::Data(
+            DataEvent::from(AccountEvent::ControllerReplaced(
+                AccountControllerReplaced {
+                    account: ALICE_ID.clone(),
+                    previous_account: BOB_ID.clone(),
+                    previous_controller: iroha_data_model::account::AccountController::single(
+                        BOB_KEYPAIR.public_key().clone(),
+                    ),
+                    new_controller: iroha_data_model::account::AccountController::single(
+                        ALICE_KEYPAIR.public_key().clone(),
+                    ),
+                },
+            ))
+            .into(),
+        );
+
+        let summary = EventSummary::from_event(&event_box);
+        assert_eq!(summary.label, "Account controller replaced");
+        let detail = summary.detail.expect("detail");
+        assert!(
+            detail.contains(&ALICE_ID.to_string()) && detail.contains(&BOB_ID.to_string()),
+            "detail `{detail}` should mention both account ids"
+        );
+        assert!(
+            detail.contains("previous_controller=single")
+                && detail.contains("new_controller=single"),
+            "detail `{detail}` should mention both controller summaries"
+        );
+    }
+
+    #[test]
+    fn account_recovery_policy_summary_mentions_alias_and_quorum() {
+        let alias = iroha_data_model::account::AccountAlias::domainless(
+            "primary".parse().expect("valid alias label"),
+            iroha_data_model::nexus::DataSpaceId::new(7),
+        );
+        let policy = iroha_data_model::account::AccountRecoveryPolicy::new(
+            vec![iroha_data_model::account::RecoveryGuardian::new(
+                BOB_ID.clone(),
+                1,
+            )],
+            1,
+            std::num::NonZeroU64::new(60_000).expect("non-zero timelock"),
+        )
+        .expect("valid recovery policy");
+        let event_box = EventBox::Data(
+            DataEvent::from(AccountEvent::Recovery(AccountRecoveryEvent::PolicySet(
+                AccountRecoveryPolicySet {
+                    account: ALICE_ID.clone(),
+                    alias,
+                    policy,
+                },
+            )))
+            .into(),
+        );
+
+        let summary = EventSummary::from_event(&event_box);
+        assert_eq!(summary.label, "Account recovery policy set");
+        let detail = summary.detail.expect("detail");
+        assert!(
+            detail.contains(&ALICE_ID.to_string())
+                && detail.contains("label=primary")
+                && detail.contains("quorum=1")
+                && detail.contains("timelock_ms=60000"),
+            "detail `{detail}` should summarize the recovery policy"
         );
     }
 

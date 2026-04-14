@@ -711,8 +711,8 @@ test("buildRegisterAccountInstruction defaults metadata and validates", () => {
   const decoded = encodeAndDecode(instruction);
   const decodedAccount = decoded.Register.Account;
   assert.equal(decodedAccount.id, ACCOUNT_ID_CANONICAL);
-  assert.equal(decodedAccount.domain, DOMAIN_ID);
   assert.deepEqual(decodedAccount.metadata, {});
+  assert.equal(decodedAccount.domain ?? null, null);
   assert.equal(decodedAccount.label ?? null, null);
   assert.throws(
     () =>
@@ -1046,6 +1046,10 @@ test("buildRegisterKaigiRelayInstruction encodes hpke key", () => {
 test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () => {
   const codeHashBytes = Buffer.alloc(32, 0xaa);
   const abiHashBytes = Buffer.alloc(32, 0xbb);
+  const signer = `ed25519:ed0120${"11".repeat(32)}`;
+  const signature = `ed25519:${"22".repeat(64)}`;
+  const signerCanonical = signer.split(":")[1];
+  const signatureCanonical = signature.split(":")[1].toUpperCase();
   const instruction = buildRegisterSmartContractCodeInstruction({
     manifest: {
       codeHash: codeHashBytes,
@@ -1055,6 +1059,23 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
       accessSetHints: {
         readKeys: ["account:alice", "asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM"],
         writeKeys: ["contract:foo"],
+      },
+      entrypoints: [
+        {
+          name: "upgrade_ledger",
+          kind: "Kaizen",
+          permission: "can_upgrade",
+        },
+      ],
+      kotoba: [
+        {
+          msgId: "contract.title",
+          translations: [{ lang: "en", text: "Ledger Contract" }],
+        },
+      ],
+      provenance: {
+        signer,
+        signature,
       },
     },
   });
@@ -1069,20 +1090,50 @@ test("buildRegisterSmartContractCodeInstruction normalizes manifest fields", () 
           read_keys: ["account:alice", "asset:62Fk4FPcMuLvW5QjDGNF2a4jAmjM"],
           write_keys: ["contract:foo"],
         },
-        entrypoints: null,
+        entrypoints: [
+          {
+            name: "upgrade_ledger",
+            kind: { kind: "Kaizen" },
+            permission: "can_upgrade",
+          },
+        ],
+        kotoba: [
+          {
+            msg_id: "contract.title",
+            translations: [{ lang: "en", text: "Ledger Contract" }],
+          },
+        ],
+        provenance: {
+          signer: signerCanonical,
+          signature: signatureCanonical,
+        },
+      },
+    },
+  };
+  const expectedDecoded = {
+    RegisterSmartContractCode: {
+      manifest: {
+        ...expected.RegisterSmartContractCode.manifest,
+        entrypoints: [
+          {
+            access_hints_complete: null,
+            access_hints_skipped: [],
+            kind: { kind: "Kaizen", value: null },
+            name: "upgrade_ledger",
+            params: [],
+            permission: "can_upgrade",
+            read_keys: [],
+            return_type: null,
+            triggers: [],
+            write_keys: [],
+          },
+        ],
       },
     },
   };
   assert.deepEqual(instruction, expected);
   const decoded = encodeAndDecode(instruction);
-  assert.deepEqual(decoded, {
-    RegisterSmartContractCode: {
-      manifest: {
-        ...expected.RegisterSmartContractCode.manifest,
-        kotoba: null,
-      },
-    },
-  });
+  assert.deepEqual(decoded, expectedDecoded);
 });
 
 test("buildRegisterSmartContractBytesInstruction encodes bytes deterministically", () => {

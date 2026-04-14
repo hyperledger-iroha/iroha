@@ -85,6 +85,7 @@ public final class HttpClientTransportTests {
     identifierPoliciesRequestParsesResponse();
     ramLfeProgramPoliciesRequestParsesResponse();
     identifierResolveRequestParsesResponse();
+    identifierResolveRequestParsesStructuredSignaturePayloadResponse();
     identifierResolveRequestAllowsNotFound();
     identifierClaimLookupAllowsNotFound();
     identifierClaimReceiptUsesAccountPath();
@@ -1185,6 +1186,104 @@ public final class HttpClientTransportTests {
     assert readBody(request)
         .equals("{\"input\":\"+1 (555) 123-4567\",\"policy_id\":\"phone#retail\"}")
         : "Identifier resolve payload mismatch";
+  }
+
+  private static void identifierResolveRequestParsesStructuredSignaturePayloadResponse() {
+    final String accountId =
+        "sorauロ1Npテユヱヌq11pウリ2ア5ヌヲiCJKjRヤzキNMNニケユPCウルFvオE9LBLB";
+    final IdentifierReceiptFixture signed = signedIdentifierReceiptFixture(42L, 142L);
+    final String json =
+        "{"
+            + "\"policy_id\":\"email#retail\","
+            + "\"opaque_id\":\"opaque:"
+            + "11".repeat(32)
+            + "\","
+            + "\"receipt_hash\":\""
+            + "22".repeat(32)
+            + "\","
+            + "\"uaid\":\"uaid:"
+            + "33".repeat(31)
+            + "35\","
+            + "\"account_id\":\""
+            + accountId
+            + "\","
+            + "\"resolved_at_ms\":42,"
+            + "\"expires_at_ms\":142,"
+            + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+            + "\"signature\":\""
+            + signed.signatureHex()
+            + "\","
+            + "\"signature_payload_hex\":\""
+            + signed.signaturePayloadHex()
+            + "\","
+            + "\"signature_payload\":{"
+            + "\"policy_id\":{\"kind\":\"email\",\"business_rule\":\"retail\"},"
+            + "\"execution\":{"
+            + "\"program_id\":{\"name\":\"email_retail\"},"
+            + "\"program_digest\":\"hash:"
+            + "44".repeat(32)
+            + "#3f8a\","
+            + "\"backend\":\"bfv-programmed-sha3-256-v1\","
+            + "\"verification_mode\":{\"mode\":\"Signed\",\"value\":null},"
+            + "\"output_hash\":\"hash:"
+            + "55".repeat(32)
+            + "#3245\","
+            + "\"associated_data_hash\":\"hash:"
+            + "66".repeat(32)
+            + "#0184\","
+            + "\"executed_at_ms\":42,"
+            + "\"expires_at_ms\":142"
+            + "},"
+            + "\"opaque_id\":[\"hash:"
+            + "11".repeat(32)
+            + "#4944\"],"
+            + "\"receipt_hash\":\"hash:"
+            + "22".repeat(32)
+            + "#b7f2\","
+            + "\"uaid\":[\"hash:"
+            + "33".repeat(31)
+            + "35#3153\"],"
+            + "\"account_id\":\""
+            + accountId
+            + "\""
+            + "}"
+            + "}";
+    final StubResponseExecutor executor =
+        new StubResponseExecutor(200, json.getBytes(StandardCharsets.UTF_8));
+    final HttpClientTransport transport =
+        HttpClientTransport.withExecutor(
+            executor,
+            ClientConfig.builder().setBaseUri(URI.create("https://torii.example")).build());
+
+    final Optional<IdentifierResolutionReceipt> response =
+        transport.resolveIdentifier("email#retail", "alice@example.com", null).join();
+    assert response.isPresent() : "Expected structured identifier resolution receipt";
+    final IdentifierResolutionReceipt receipt = response.orElseThrow();
+    assert "email#retail".equals(receipt.policyId()) : "Structured policy id mismatch";
+    assert ("opaque:" + "11".repeat(32)).equals(receipt.opaqueId())
+        : "Structured opaque id mismatch";
+    assert "22".repeat(32).equals(receipt.receiptHash())
+        : "Structured receipt hash mismatch";
+    assert ("uaid:" + "33".repeat(31) + "35").equals(receipt.uaid())
+        : "Structured UAID mismatch";
+    assert accountId.equals(receipt.accountId()) : "Structured account id mismatch";
+    assert receipt.resolvedAtMs() == 42L : "Structured resolved timestamp mismatch";
+    assert Long.valueOf(142L).equals(receipt.expiresAtMs())
+        : "Structured expiry mismatch";
+    final IdentifierPolicySummary policy =
+        new IdentifierPolicySummary(
+            "email#retail",
+            accountId,
+            true,
+            IdentifierNormalization.EMAIL_ADDRESS,
+            signed.resolverPublicKey(),
+            "bfv-programmed-sha3-256-v1",
+            "bfv-v1",
+            null,
+            null,
+            null);
+    assert receipt.verifySignature(policy)
+        : "Structured receipt signature verification must succeed";
   }
 
   private static void identifierResolveRequestAllowsNotFound() {

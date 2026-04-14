@@ -5,6 +5,14 @@ final class TransactionParityFixturesTests: XCTestCase {
     private static var cachedFixtures: TransactionFixtureLoader?
     private static var cachedKeypair: Keypair?
 
+    func testExpectedSignedTransactionSchemaHashMatchesRustManifest() throws {
+        let loader = try Self.fixtures()
+        XCTAssertEqual(
+            ToriiNodeCapabilities.expectedSignedTransactionSchemaHashHex,
+            loader.schema.signedSchemaHashHex
+        )
+    }
+
     func testSwiftTransferAssetFixtureMatchesRustEncoder() throws {
         try ensureBridgeAvailable()
         try assertFixture(named: "swift_transfer_asset_basic") { fixture, keypair in
@@ -186,10 +194,16 @@ private struct TransactionFixtureLoader {
         let signedBase64: String
     }
 
+    struct ManifestSchema: Decodable {
+        let signedSchemaHashHex: String
+    }
+
     struct ManifestFile: Decodable {
+        let schema: ManifestSchema
         let fixtures: [ManifestEntry]
     }
 
+    let schema: ManifestSchema
     let payloads: [String: TransactionPayloadSpec]
     let manifests: [String: ManifestEntry]
 
@@ -211,6 +225,7 @@ private struct TransactionFixtureLoader {
             .appendingPathComponent("swift_parity_manifest.json")
         let manifestData = try Data(contentsOf: manifestURL)
         let manifest = try decoder.decode(ManifestFile.self, from: manifestData)
+        schema = manifest.schema
         var manifestMap: [String: ManifestEntry] = [:]
         for entry in manifest.fixtures {
             manifestMap[entry.name] = entry

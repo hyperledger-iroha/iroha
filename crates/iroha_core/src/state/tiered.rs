@@ -1803,6 +1803,16 @@ impl TieredStateBackend {
             world.account_rekey_records
         );
         collect_map!(
+            TieredSegment::AccountRecoveryPolicies,
+            AccountRecoveryPolicy,
+            world.account_recovery_policies
+        );
+        collect_map!(
+            TieredSegment::AccountRecoveryRequests,
+            AccountRecoveryRequest,
+            world.account_recovery_requests
+        );
+        collect_map!(
             TieredSegment::AssetDefinitions,
             AssetDefinition,
             world.asset_definitions
@@ -2451,8 +2461,9 @@ mod measured_bytes_impls {
     };
     use iroha_data_model::{
         account::{
-            AccountAlias, AccountController, AccountDetails, AccountId, AccountRekeyRecord,
-            MultisigMember, MultisigPolicy, OpaqueAccountId, rekey::AccountAliasDomain,
+            AccountAlias, AccountController, AccountDetails, AccountId, AccountRecoveryPolicy,
+            AccountRecoveryRequest, AccountRecoveryStatus, AccountRekeyRecord, MultisigMember,
+            MultisigPolicy, OpaqueAccountId, RecoveryGuardian, rekey::AccountAliasDomain,
         },
         asset::{
             AssetDefinition, AssetDefinitionId, AssetId,
@@ -2960,6 +2971,41 @@ mod measured_bytes_impls {
             total = total.saturating_add(self.label.measured_bytes_extra());
             total = total.saturating_add(self.active_signatory.measured_bytes_extra());
             total = total.saturating_add(self.previous_signatories.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for RecoveryGuardian {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<RecoveryGuardian>();
+            total = total.saturating_add(self.account.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for AccountRecoveryPolicy {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AccountRecoveryPolicy>();
+            total = total.saturating_add(self.guardians.measured_bytes_extra());
+            total
+        }
+    }
+
+    impl MeasuredBytes for AccountRecoveryStatus {
+        fn measured_bytes(&self) -> usize {
+            size_of::<AccountRecoveryStatus>()
+        }
+    }
+
+    impl MeasuredBytes for AccountRecoveryRequest {
+        fn measured_bytes(&self) -> usize {
+            let mut total = size_of::<AccountRecoveryRequest>();
+            total = total.saturating_add(self.alias.measured_bytes_extra());
+            total = total.saturating_add(self.active_account_id_at_proposal.measured_bytes_extra());
+            total = total.saturating_add(self.proposed_controller.measured_bytes_extra());
+            total = total.saturating_add(self.approvals.measured_bytes_extra());
+            total = total.saturating_add(self.proposed_by.measured_bytes_extra());
+            total = total.saturating_add(self.status.measured_bytes_extra());
             total
         }
     }
@@ -4033,6 +4079,8 @@ enum TieredSegment {
     Domains,
     Accounts,
     AccountRekeyRecords,
+    AccountRecoveryPolicies,
+    AccountRecoveryRequests,
     AssetDefinitions,
     Assets,
     AssetMetadata,
@@ -4074,6 +4122,8 @@ impl TieredSegment {
             TieredSegment::Domains => "domains",
             TieredSegment::Accounts => "accounts",
             TieredSegment::AccountRekeyRecords => "account_rekey_records",
+            TieredSegment::AccountRecoveryPolicies => "account_recovery_policies",
+            TieredSegment::AccountRecoveryRequests => "account_recovery_requests",
             TieredSegment::AssetDefinitions => "asset_definitions",
             TieredSegment::Assets => "assets",
             TieredSegment::AssetMetadata => "asset_metadata",
@@ -4126,6 +4176,8 @@ impl norito::json::JsonDeserialize for TieredSegment {
             "domains" => TieredSegment::Domains,
             "accounts" => TieredSegment::Accounts,
             "account_rekey_records" => TieredSegment::AccountRekeyRecords,
+            "account_recovery_policies" => TieredSegment::AccountRecoveryPolicies,
+            "account_recovery_requests" => TieredSegment::AccountRecoveryRequests,
             "asset_definitions" => TieredSegment::AssetDefinitions,
             "assets" => TieredSegment::Assets,
             "asset_metadata" => TieredSegment::AssetMetadata,
@@ -4321,6 +4373,8 @@ pub(crate) enum TieredKeyHandle {
     Domain(iroha_data_model::domain::DomainId),
     Account(iroha_data_model::account::AccountId),
     AccountRekey(iroha_data_model::account::rekey::AccountAlias),
+    AccountRecoveryPolicy(iroha_data_model::account::AccountAlias),
+    AccountRecoveryRequest(iroha_data_model::account::AccountAlias),
     AssetDefinition(iroha_data_model::asset::AssetDefinitionId),
     Asset(iroha_data_model::asset::AssetId),
     AssetMetadata(iroha_data_model::asset::AssetId),
@@ -4362,6 +4416,8 @@ impl TieredKeyHandle {
             TieredKeyHandle::Domain(_) => TieredSegment::Domains,
             TieredKeyHandle::Account(_) => TieredSegment::Accounts,
             TieredKeyHandle::AccountRekey(_) => TieredSegment::AccountRekeyRecords,
+            TieredKeyHandle::AccountRecoveryPolicy(_) => TieredSegment::AccountRecoveryPolicies,
+            TieredKeyHandle::AccountRecoveryRequest(_) => TieredSegment::AccountRecoveryRequests,
             TieredKeyHandle::AssetDefinition(_) => TieredSegment::AssetDefinitions,
             TieredKeyHandle::Asset(_) => TieredSegment::Assets,
             TieredKeyHandle::AssetMetadata(_) => TieredSegment::AssetMetadata,
@@ -4413,6 +4469,8 @@ impl TieredKeyHandle {
             TieredKeyHandle::Domain(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Account(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AccountRekey(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AccountRecoveryPolicy(key) => Ok(norito::codec::Encode::encode(key)),
+            TieredKeyHandle::AccountRecoveryRequest(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AssetDefinition(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::Asset(key) => Ok(norito::codec::Encode::encode(key)),
             TieredKeyHandle::AssetMetadata(key) => Ok(norito::codec::Encode::encode(key)),
@@ -4479,6 +4537,12 @@ impl TieredKeyHandle {
             TieredKeyHandle::Domain(id) => fetch!(world.domains, id),
             TieredKeyHandle::Account(id) => fetch!(world.accounts, id),
             TieredKeyHandle::AccountRekey(id) => fetch!(world.account_rekey_records, id),
+            TieredKeyHandle::AccountRecoveryPolicy(id) => {
+                fetch!(world.account_recovery_policies, id)
+            }
+            TieredKeyHandle::AccountRecoveryRequest(id) => {
+                fetch!(world.account_recovery_requests, id)
+            }
             TieredKeyHandle::AssetDefinition(id) => fetch!(world.asset_definitions, id),
             TieredKeyHandle::Asset(id) => fetch!(world.assets, id),
             TieredKeyHandle::AssetMetadata(id) => fetch!(world.asset_metadata, id),
@@ -4539,6 +4603,12 @@ impl TieredKeyHandle {
             TieredKeyHandle::Domain(id) => fetch!(world.domains, id),
             TieredKeyHandle::Account(id) => fetch!(world.accounts, id),
             TieredKeyHandle::AccountRekey(id) => fetch!(world.account_rekey_records, id),
+            TieredKeyHandle::AccountRecoveryPolicy(id) => {
+                fetch!(world.account_recovery_policies, id)
+            }
+            TieredKeyHandle::AccountRecoveryRequest(id) => {
+                fetch!(world.account_recovery_requests, id)
+            }
             TieredKeyHandle::AssetDefinition(id) => fetch!(world.asset_definitions, id),
             TieredKeyHandle::Asset(id) => fetch!(world.assets, id),
             TieredKeyHandle::AssetMetadata(id) => fetch!(world.asset_metadata, id),
@@ -4588,6 +4658,12 @@ impl fmt::Display for TieredKeyHandle {
             TieredKeyHandle::Domain(id) => write!(f, "domain:{id}"),
             TieredKeyHandle::Account(id) => write!(f, "account:{id}"),
             TieredKeyHandle::AccountRekey(id) => write!(f, "account_rekey:{id:?}"),
+            TieredKeyHandle::AccountRecoveryPolicy(id) => {
+                write!(f, "account_recovery_policy:{id:?}")
+            }
+            TieredKeyHandle::AccountRecoveryRequest(id) => {
+                write!(f, "account_recovery_request:{id:?}")
+            }
             TieredKeyHandle::AssetDefinition(id) => write!(f, "asset_definition:{id}"),
             TieredKeyHandle::Asset(id) => write!(f, "asset:{id}"),
             TieredKeyHandle::AssetMetadata(id) => write!(f, "asset_metadata:{id}"),

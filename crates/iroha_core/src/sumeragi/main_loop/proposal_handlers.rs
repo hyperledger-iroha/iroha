@@ -24,8 +24,12 @@ fn stale_height(height: u64, committed_height: u64) -> bool {
     height <= committed_height
 }
 
-pub(super) fn allow_stale_block_created(missing_request: bool, retained_match: bool) -> bool {
-    missing_request || retained_match
+pub(super) fn allow_stale_block_created(
+    missing_request: bool,
+    retained_match: bool,
+    recovery_evidence_present: bool,
+) -> bool {
+    missing_request || retained_match || recovery_evidence_present
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1677,7 +1681,7 @@ impl Actor {
         msg: super::message::BlockCreated,
         sender: Option<PeerId>,
     ) -> Result<()> {
-        self.handle_block_created_with_preserve_policy(msg, sender, true, false)
+        self.handle_block_created_with_preserve_policy(msg, sender, true, false, false)
     }
 
     #[allow(clippy::too_many_lines, clippy::needless_pass_by_value)]
@@ -1687,12 +1691,14 @@ impl Actor {
         sender: Option<PeerId>,
         allow_frontier_owner_preserve_on_payload_mismatch: bool,
         allow_authoritative_frontier_owner_supersede: bool,
+        allow_stale_recovery_without_request: bool,
     ) -> Result<()> {
         self.handle_block_created_with_preserve_policy(
             msg,
             sender,
             allow_frontier_owner_preserve_on_payload_mismatch,
             allow_authoritative_frontier_owner_supersede,
+            allow_stale_recovery_without_request,
         )
     }
 
@@ -1726,6 +1732,7 @@ impl Actor {
         sender: Option<PeerId>,
         allow_frontier_owner_preserve_on_payload_mismatch: bool,
         allow_authoritative_frontier_owner_supersede: bool,
+        allow_stale_recovery_without_request: bool,
     ) -> Result<()> {
         if crate::sumeragi::status::local_peer_removed() {
             debug!(
@@ -1861,7 +1868,11 @@ impl Actor {
             );
         }
         if let Some(local_view) = stale_view {
-            if !allow_stale_block_created(missing_request, stale_retired_match) {
+            if !allow_stale_block_created(
+                missing_request,
+                stale_retired_match,
+                allow_stale_recovery_without_request,
+            ) {
                 debug!(
                     height,
                     view,

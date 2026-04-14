@@ -27,7 +27,7 @@ Straightforward asset transfer workflow that mirrors SDK quickstarts and ledger 
 // Transfer example: uses typed pointer constructors and transfer_asset syscall
 
 seiyaku TransferDemo {
-  // Public entrypoint to transfer 10 units of 62Fk4FPcMuLvW5QjDGNF2a4jAmjM from alice to bob
+  // Public entrypoint to transfer 10 units of the canonical Base58 asset definition between canonical I105 accounts
   kotoage fn do_transfer() permission(AssetTransferRole) {
     transfer_asset(
       account!("sorauロ1QG1シタ3vN7ヒzトヘcミLKDCAイ5クエjヤリ2uトユmキユルeJBJW7X2N7"),

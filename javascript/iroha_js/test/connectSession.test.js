@@ -40,9 +40,10 @@ test("createConnectSessionPreview builds URIs and reuses supplied keypair", () =
   assert.equal(preview.appKeyPair.publicKey.equals(Buffer.from(appKeyPair.publicKey)), true);
   assert.equal(preview.appKeyPair.privateKey.equals(Buffer.from(appKeyPair.privateKey)), true);
   assert.match(preview.walletUri, /^iroha:\/\/connect\?/);
-  assert.match(preview.appUri, /^iroha:\/\/connect\/app\?/);
+  assert.match(preview.appUri, /^iroha:\/\/connect\?/);
   assert(preview.walletUri.includes(`chain_id=${encodeURIComponent(chainId)}`));
   assert(preview.walletUri.includes(`node=${encodeURIComponent(node)}`));
+  assert(preview.appUri.includes("role=app"));
 });
 
 test("createConnectSessionPreview generates keypair when omitted", () => {

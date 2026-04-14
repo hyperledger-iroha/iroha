@@ -61,10 +61,7 @@ test("ToriiClient rejects insecure transport when canonicalAuth is present", asy
     fetchImpl: async () => ({ status: 200 }),
   });
   const { publicKey } = generateKeyPair({ seed: Buffer.alloc(32, 0x21) });
-  const accountId = AccountAddress.fromAccount({
-    domain: "wonderland",
-    publicKey,
-  }).toI105();
+  const accountId = AccountAddress.fromAccount({ publicKey }).toI105();
   await assert.rejects(
     () =>
       client._request("GET", "/v1/accounts", {

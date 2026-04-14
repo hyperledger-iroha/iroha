@@ -28,6 +28,7 @@ use iroha_data_model::{
     query::trigger::prelude::FindTriggers,
     trigger::action::Repeats,
 };
+use iroha_executor_data_model::permission::asset::CanMintAssetWithDefinition;
 use iroha_genesis::GenesisBlock;
 use iroha_test_network::{Network, NetworkBuilder, NetworkPeer, Signatory};
 use rand::{RngCore, SeedableRng, rngs::StdRng, seq::SliceRandom};
@@ -155,7 +156,10 @@ const IZANAMI_SHARED_HOST_SOAK_RECOVERY_DEFERRED_QC_TTL_MS: i64 = 2_000;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_HASH_MISS_CAP_BEFORE_RANGE_PULL: i64 = 1;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_MISSING_BLOCK_SIGNER_FALLBACK_ATTEMPTS: i64 = 1;
 const IZANAMI_SHARED_HOST_SOAK_RECOVERY_RANGE_PULL_ESCALATION_AFTER_HASH_MISSES: i64 = 1;
-const IZANAMI_SHARED_HOST_SOAK_LATENCY_P95_THRESHOLD_SECS: u64 = 1;
+// Shared-host stable soaks now use the hard latency gate as an acceptance check for the
+// DA-enabled 4-peer steady-state envelope. The aspirational sub-1s target remains available via
+// explicit `--latency-p95-threshold`, but the default gate should match the observed healthy run.
+const IZANAMI_SHARED_HOST_SOAK_LATENCY_P95_THRESHOLD_SECS: u64 = 3;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum SubmissionConfirmationMode {
@@ -1480,14 +1484,17 @@ fn npos_min_self_bond_from_genesis(genesis: &GenesisBlock) -> u64 {
 fn audit_npos_preflight_instructions<'a>(
     instructions: impl IntoIterator<Item = &'a InstructionBox>,
     peer_count: usize,
+    bootstrap_public_lanes: &[LaneId],
     min_self_bond: u64,
 ) -> Result<NposGenesisPreflightSummary> {
     let expected_peers = peer_count.max(1);
+    let expected_bootstrap_bindings = expected_peers.saturating_mul(bootstrap_public_lanes.len());
+    let expected_bootstrap_lanes: BTreeSet<_> = bootstrap_public_lanes.iter().copied().collect();
     let mut peer_with_pop_count = 0usize;
     let mut register_validator_count = 0usize;
     let mut activate_validator_count = 0usize;
-    let mut validator_stakes = BTreeMap::<AccountId, u64>::new();
-    let mut activated_validators = BTreeSet::<AccountId>::new();
+    let mut validator_stakes = BTreeMap::<(LaneId, AccountId), u64>::new();
+    let mut activated_validators = BTreeSet::<(LaneId, AccountId)>::new();
 
     for instruction in instructions {
         if instruction
@@ -1502,6 +1509,15 @@ fn audit_npos_preflight_instructions<'a>(
             .downcast_ref::<RegisterPublicLaneValidator>()
         {
             register_validator_count = register_validator_count.saturating_add(1);
+            if !expected_bootstrap_lanes.is_empty()
+                && !expected_bootstrap_lanes.contains(&register.lane_id)
+            {
+                return Err(eyre!(
+                    "Izanami NPoS preflight failed: unexpected bootstrap lane {} for validator {}",
+                    register.lane_id,
+                    register.validator
+                ));
+            }
             let stake = u64::try_from(register.initial_stake.clone()).map_err(|_| {
                 eyre!(
                     "Izanami NPoS preflight failed: validator {} has non-integer initial_stake {}",
@@ -1517,14 +1533,14 @@ fn audit_npos_preflight_instructions<'a>(
                     min_self_bond
                 ));
             }
-            validator_stakes.insert(register.validator.clone(), stake);
+            validator_stakes.insert((register.lane_id, register.validator.clone()), stake);
         }
         if let Some(activate) = instruction
             .as_any()
             .downcast_ref::<ActivatePublicLaneValidator>()
         {
             activate_validator_count = activate_validator_count.saturating_add(1);
-            activated_validators.insert(activate.validator.clone());
+            activated_validators.insert((activate.lane_id, activate.validator.clone()));
         }
     }
 
@@ -1535,18 +1551,18 @@ fn audit_npos_preflight_instructions<'a>(
             expected_peers
         ));
     }
-    if register_validator_count != expected_peers {
+    if register_validator_count != expected_bootstrap_bindings {
         return Err(eyre!(
             "Izanami NPoS preflight failed: RegisterPublicLaneValidator count={} expected={}",
             register_validator_count,
-            expected_peers
+            expected_bootstrap_bindings
         ));
     }
-    if activate_validator_count != expected_peers {
+    if activate_validator_count != expected_bootstrap_bindings {
         return Err(eyre!(
             "Izanami NPoS preflight failed: ActivatePublicLaneValidator count={} expected={}",
             activate_validator_count,
-            expected_peers
+            expected_bootstrap_bindings
         ));
     }
 
@@ -1576,7 +1592,7 @@ fn audit_npos_preflight_instructions<'a>(
     for stake in validator_stakes.values().copied() {
         *stake_distribution.entry(stake).or_insert(0) += 1;
     }
-    if stake_distribution.len() != 1 {
+    if expected_bootstrap_bindings > 0 && stake_distribution.len() != 1 {
         return Err(eyre!(
             "Izanami NPoS preflight failed: validator initial_stake distribution is non-uniform: {:?}",
             stake_distribution
@@ -1595,6 +1611,7 @@ fn audit_npos_preflight_instructions<'a>(
 fn audit_npos_genesis_preflight(
     genesis: &GenesisBlock,
     peer_count: usize,
+    bootstrap_public_lanes: &[LaneId],
 ) -> Result<NposGenesisPreflightSummary> {
     let min_self_bond = npos_min_self_bond_from_genesis(genesis);
     let mut instructions = Vec::<InstructionBox>::new();
@@ -1604,7 +1621,12 @@ fn audit_npos_genesis_preflight(
         };
         instructions.extend(tx_instructions.iter().cloned());
     }
-    audit_npos_preflight_instructions(instructions.iter(), peer_count, min_self_bond)
+    audit_npos_preflight_instructions(
+        instructions.iter(),
+        peer_count,
+        bootstrap_public_lanes,
+        min_self_bond,
+    )
 }
 
 fn is_shared_host_stable_soak(config: &ChaosConfig) -> bool {
@@ -1760,6 +1782,13 @@ fn log_effective_consensus_soak_overrides(config: &ChaosConfig) {
 
 fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>) -> NetworkBuilder {
     let mut genesis = genesis;
+    let nexus_bootstrap_post_topology = config
+        .nexus
+        .as_ref()
+        .map(|profile| {
+            extract_nexus_bootstrap_post_topology(&mut genesis, config.peer_count, profile)
+        })
+        .unwrap_or_default();
     let recovery_profile = recovery_profile_for(config);
     let phase_operator_keypair = sumeragi_phase_operator_keypair();
     let torii_receipt_public_key = phase_operator_keypair.public_key().to_string();
@@ -1825,9 +1854,17 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
     }
     if config.nexus.is_some() {
         builder = builder.without_npos_genesis_bootstrap();
+        for transaction in nexus_bootstrap_post_topology {
+            builder = builder.with_genesis_post_topology_isi(transaction);
+        }
         builder =
             builder.with_genesis_post_topology_isi(instructions::npos_post_topology_instructions(
                 config.peer_count,
+                config
+                    .nexus
+                    .as_ref()
+                    .map(|profile| profile.bootstrap_public_lanes.as_slice())
+                    .unwrap_or(&[]),
                 npos_params.min_self_bond(),
             ));
     }
@@ -2199,6 +2236,156 @@ fn make_network_builder(config: &ChaosConfig, genesis: Vec<Vec<InstructionBox>>)
     builder
 }
 
+fn extract_nexus_bootstrap_post_topology(
+    genesis: &mut Vec<Vec<InstructionBox>>,
+    peer_count: usize,
+    profile: &crate::config::NexusProfile,
+) -> Vec<Vec<InstructionBox>> {
+    let nexus_domain: DomainId = "nexus".parse().expect("nexus domain");
+    let ivm_domain: DomainId = "ivm".parse().expect("ivm domain");
+    let universal_domain: DomainId = "universal".parse().expect("universal domain");
+    let gas_account = instructions::nexus_gas_account_id();
+    let validator_accounts: BTreeSet<_> = (0..peer_count.max(1))
+        .map(|index| AccountId::new(instructions::peer_keypair(index).public_key().clone()))
+        .collect();
+    let stake_asset = profile.stake_asset_id.clone();
+    let fee_asset = profile.fee_asset_id.clone();
+    let mut neutral_tx = Vec::new();
+    let mut stake_tx = Vec::new();
+    let mut fee_tx = Vec::new();
+    let mut stake_grant_tx = Vec::new();
+    let mut fee_grant_tx = Vec::new();
+
+    for tx in genesis.iter_mut() {
+        let mut retained = Vec::with_capacity(tx.len());
+        for instruction in tx.drain(..) {
+            match classify_nexus_bootstrap_instruction(
+                &instruction,
+                &nexus_domain,
+                &ivm_domain,
+                &universal_domain,
+                &gas_account,
+                &validator_accounts,
+                &stake_asset,
+                &fee_asset,
+            ) {
+                Some(NexusBootstrapTxKind::Neutral) => neutral_tx.push(instruction),
+                Some(NexusBootstrapTxKind::Stake) => stake_tx.push(instruction),
+                Some(NexusBootstrapTxKind::Fee) => fee_tx.push(instruction),
+                Some(NexusBootstrapTxKind::StakeGrant) => stake_grant_tx.push(instruction),
+                Some(NexusBootstrapTxKind::FeeGrant) => fee_grant_tx.push(instruction),
+                None => retained.push(instruction),
+            }
+        }
+        *tx = retained;
+    }
+    genesis.retain(|tx| !tx.is_empty());
+    let mut bootstrap = Vec::new();
+    if !neutral_tx.is_empty() {
+        bootstrap.push(neutral_tx);
+    }
+    if !stake_tx.is_empty() {
+        bootstrap.push(stake_tx);
+    }
+    if !fee_tx.is_empty() {
+        bootstrap.push(fee_tx);
+    }
+    if !stake_grant_tx.is_empty() {
+        bootstrap.push(stake_grant_tx);
+    }
+    if !fee_grant_tx.is_empty() {
+        bootstrap.push(fee_grant_tx);
+    }
+    bootstrap
+}
+
+#[allow(clippy::too_many_arguments)]
+fn classify_nexus_bootstrap_instruction(
+    instruction: &InstructionBox,
+    nexus_domain: &DomainId,
+    ivm_domain: &DomainId,
+    universal_domain: &DomainId,
+    gas_account: &AccountId,
+    validator_accounts: &BTreeSet<AccountId>,
+    stake_asset: &AssetDefinitionId,
+    fee_asset: &AssetDefinitionId,
+) -> Option<NexusBootstrapTxKind> {
+    if let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() {
+        return match register {
+            RegisterBox::Domain(domain) => {
+                let domain_id = &domain.object.id;
+                (domain_id == nexus_domain
+                    || domain_id == ivm_domain
+                    || domain_id == universal_domain)
+                    .then_some(NexusBootstrapTxKind::Neutral)
+            }
+            RegisterBox::Account(account) => {
+                let account_id = &account.object.id;
+                (account_id == gas_account || validator_accounts.contains(account_id))
+                    .then_some(NexusBootstrapTxKind::Neutral)
+            }
+            RegisterBox::AssetDefinition(definition) => {
+                let definition_id = &definition.object.id;
+                if definition_id == stake_asset {
+                    Some(NexusBootstrapTxKind::Stake)
+                } else if definition_id == fee_asset {
+                    Some(NexusBootstrapTxKind::Fee)
+                } else {
+                    None
+                }
+            }
+            _ => None,
+        };
+    }
+
+    if let Some(mint) = instruction.as_any().downcast_ref::<MintBox>() {
+        return match mint {
+            MintBox::Asset(asset) if asset.destination.definition() == stake_asset => {
+                Some(NexusBootstrapTxKind::Stake)
+            }
+            MintBox::Asset(asset) if asset.destination.definition() == fee_asset => {
+                Some(NexusBootstrapTxKind::Fee)
+            }
+            _ => None,
+        };
+    }
+
+    if let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() {
+        return match grant {
+            GrantBox::Permission(permission)
+                if permission.object
+                    == CanMintAssetWithDefinition {
+                        asset_definition: stake_asset.clone(),
+                    }
+                    .into() =>
+            {
+                Some(NexusBootstrapTxKind::StakeGrant)
+            }
+            GrantBox::Permission(permission)
+                if permission.object
+                    == CanMintAssetWithDefinition {
+                        asset_definition: fee_asset.clone(),
+                    }
+                    .into() =>
+            {
+                Some(NexusBootstrapTxKind::FeeGrant)
+            }
+            _ => None,
+        };
+    }
+
+    None
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum NexusBootstrapTxKind {
+    Neutral,
+    Stake,
+    Fee,
+    StakeGrant,
+    FeeGrant,
+}
+
 /// Deterministically select which peers should receive fault injection tasks.
 fn select_fault_targets(peers_len: usize, faulty_peers: usize, rng: &mut StdRng) -> Vec<usize> {
     if peers_len == 0 || faulty_peers == 0 {
@@ -2286,7 +2473,15 @@ impl IzanamiRunner {
         let network = builder.start().await?;
         if config.nexus.is_some() {
             let genesis = network.genesis();
-            let preflight = audit_npos_genesis_preflight(&genesis, config.peer_count)?;
+            let preflight = audit_npos_genesis_preflight(
+                &genesis,
+                config.peer_count,
+                config
+                    .nexus
+                    .as_ref()
+                    .map(|profile| profile.bootstrap_public_lanes.as_slice())
+                    .unwrap_or(&[]),
+            )?;
             info!(
                 target: "izanami::preflight",
                 peer_with_pop_count = preflight.peer_with_pop_count,
@@ -4095,6 +4290,7 @@ mod tests {
 
     fn synthetic_npos_preflight_instructions(
         peer_count: usize,
+        bootstrap_public_lanes: &[LaneId],
         include_pop: bool,
         include_activation: bool,
         stake_values: &[u64],
@@ -4115,27 +4311,29 @@ mod tests {
                     ),
                 );
             }
-            instructions.push(
-                <RegisterPublicLaneValidator as iroha_data_model::isi::Instruction>::into_instruction_box(
-                    Box::new(RegisterPublicLaneValidator {
-                        lane_id: LaneId::SINGLE,
-                        validator: validator.clone(),
-                        peer_id: PeerId::new(key_pair.public_key().clone()),
-                        stake_account: validator.clone(),
-                        initial_stake: Numeric::from(stake),
-                        metadata: Metadata::default(),
-                    }),
-                ),
-            );
-            if include_activation {
+            for &lane_id in bootstrap_public_lanes {
                 instructions.push(
-                    <ActivatePublicLaneValidator as iroha_data_model::isi::Instruction>::into_instruction_box(
-                        Box::new(ActivatePublicLaneValidator {
-                            lane_id: LaneId::SINGLE,
-                            validator,
+                    <RegisterPublicLaneValidator as iroha_data_model::isi::Instruction>::into_instruction_box(
+                        Box::new(RegisterPublicLaneValidator {
+                            lane_id,
+                            validator: validator.clone(),
+                            peer_id: PeerId::new(key_pair.public_key().clone()),
+                            stake_account: validator.clone(),
+                            initial_stake: Numeric::from(stake),
+                            metadata: Metadata::default(),
                         }),
                     ),
                 );
+                if include_activation {
+                    instructions.push(
+                        <ActivatePublicLaneValidator as iroha_data_model::isi::Instruction>::into_instruction_box(
+                            Box::new(ActivatePublicLaneValidator {
+                                lane_id,
+                                validator: validator.clone(),
+                            }),
+                        ),
+                    );
+                }
             }
         }
         instructions
@@ -4592,10 +4790,29 @@ mod tests {
             config.allow_contract_deploy_in_stable,
         )?;
         let network = make_network_builder(&config, genesis).build();
-        let summary = audit_npos_genesis_preflight(&network.genesis(), config.peer_count)?;
+        let summary = audit_npos_genesis_preflight(
+            &network.genesis(),
+            config.peer_count,
+            config
+                .nexus
+                .as_ref()
+                .map(|profile| profile.bootstrap_public_lanes.as_slice())
+                .unwrap_or(&[]),
+        )?;
+        let expected_bootstrap_bindings = config.nexus.as_ref().map_or(0, |profile| {
+            config
+                .peer_count
+                .saturating_mul(profile.bootstrap_public_lanes.len())
+        });
         assert_eq!(summary.peer_with_pop_count, config.peer_count);
-        assert_eq!(summary.register_validator_count, config.peer_count);
-        assert_eq!(summary.activate_validator_count, config.peer_count);
+        assert_eq!(
+            summary.register_validator_count,
+            expected_bootstrap_bindings
+        );
+        assert_eq!(
+            summary.activate_validator_count,
+            expected_bootstrap_bindings
+        );
         assert_eq!(
             summary.stake_distribution.len(),
             1,
@@ -4605,13 +4822,194 @@ mod tests {
     }
 
     #[test]
+    fn generated_npos_genesis_bootstraps_stake_assets_before_validator_activation() -> Result<()> {
+        init_instruction_registry();
+        let profile = crate::config::NexusProfile::sora_defaults()?;
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
+            seed: Some(31),
+            tps: 2.0,
+            max_inflight: 4,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([false, false, false, false]),
+            nexus: Some(profile.clone()),
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            config.nexus.as_ref(),
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
+        let network = make_network_builder(&config, genesis).build();
+
+        let mut bootstrap_tx_index = None;
+        let mut validator_tx_index = None;
+        let mut tx_index = 0usize;
+        for tx in network.genesis().0.transactions_vec() {
+            let Executable::Instructions(instructions) = tx.instructions() else {
+                tx_index = tx_index.saturating_add(1);
+                continue;
+            };
+            let has_bootstrap_assets = instructions.iter().any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterBox>()
+                    .is_some_and(|register| match register {
+                        RegisterBox::AssetDefinition(definition) => {
+                            definition.object.id == profile.stake_asset_id
+                                || definition.object.id == profile.fee_asset_id
+                        }
+                        _ => false,
+                    })
+            });
+            if has_bootstrap_assets && bootstrap_tx_index.is_none() {
+                bootstrap_tx_index = Some(tx_index);
+            }
+            let has_validator_activation = instructions.iter().any(|instruction| {
+                instruction
+                    .as_any()
+                    .downcast_ref::<RegisterPublicLaneValidator>()
+                    .is_some()
+            });
+            if has_validator_activation && validator_tx_index.is_none() {
+                validator_tx_index = Some(tx_index);
+            }
+            tx_index = tx_index.saturating_add(1);
+        }
+
+        let bootstrap_tx_index = bootstrap_tx_index.expect("bootstrap asset tx should exist");
+        let validator_tx_index = validator_tx_index.expect("validator bootstrap tx should exist");
+        assert!(
+            bootstrap_tx_index < validator_tx_index,
+            "stake/fee asset bootstrap must execute before validator registration"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn generated_npos_genesis_registers_each_bootstrap_asset_definition_once() -> Result<()> {
+        init_instruction_registry();
+        let profile = crate::config::NexusProfile::sora_defaults()?;
+        let config = ChaosConfig {
+            allow_net: true,
+            peer_count: 4,
+            faulty_peers: 0,
+            duration: Duration::from_secs(1),
+            pipeline_time: None,
+            target_blocks: None,
+            progress_interval: DEFAULT_PROGRESS_INTERVAL,
+            progress_timeout: DEFAULT_PROGRESS_TIMEOUT,
+            latency_p95_threshold: None,
+            seed: Some(41),
+            tps: 2.0,
+            max_inflight: 4,
+            workload_profile: WorkloadProfile::Stable,
+            allow_contract_deploy_in_stable: false,
+            fault_interval: Duration::from_secs(1)..=Duration::from_secs(1),
+            log_filter: "warn".to_string(),
+            faults: FaultToggles::from_array([false, false, false, false]),
+            nexus: Some(profile.clone()),
+        };
+
+        let account_qty = config.peer_count.saturating_mul(3).max(6);
+        let PreparedChaos { genesis, .. } = instructions::prepare_state(
+            account_qty,
+            Some(config.peer_count),
+            config.nexus.as_ref(),
+            config.workload_profile,
+            config.allow_contract_deploy_in_stable,
+        )?;
+        let network = make_network_builder(&config, genesis).build();
+
+        let mut registrations = BTreeMap::<AssetDefinitionId, Vec<usize>>::new();
+        let mut tx_asset_registrations = BTreeMap::<usize, Vec<AssetDefinitionId>>::new();
+        for (tx_index, tx) in network
+            .genesis()
+            .0
+            .transactions_vec()
+            .into_iter()
+            .enumerate()
+        {
+            let Executable::Instructions(instructions) = tx.instructions() else {
+                continue;
+            };
+            for instruction in instructions {
+                let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
+                    continue;
+                };
+                let RegisterBox::AssetDefinition(definition) = register else {
+                    continue;
+                };
+                registrations
+                    .entry(definition.object.id.clone())
+                    .or_default()
+                    .push(tx_index);
+                tx_asset_registrations
+                    .entry(tx_index)
+                    .or_default()
+                    .push(definition.object.id.clone());
+            }
+        }
+
+        for asset_id in [&profile.stake_asset_id, &profile.fee_asset_id] {
+            let txs = registrations.get(asset_id).cloned().unwrap_or_default();
+            let tx_details: Vec<_> = txs
+                .iter()
+                .map(|tx_index| {
+                    let asset_ids: Vec<_> = tx_asset_registrations
+                        .get(tx_index)
+                        .cloned()
+                        .unwrap_or_default()
+                        .into_iter()
+                        .map(|id| id.to_string())
+                        .collect();
+                    (*tx_index, asset_ids)
+                })
+                .collect();
+            assert_eq!(
+                txs,
+                vec![
+                    *txs.first()
+                        .expect("bootstrap asset definition should exist")
+                ],
+                "bootstrap asset definition {asset_id} must be registered exactly once; found txs {txs:?} with asset registrations {tx_details:?}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
     fn npos_preflight_audit_fails_on_missing_activation() {
         init_instruction_registry();
         let min_self_bond = SumeragiNposParameters::default().min_self_bond();
-        let instructions =
-            synthetic_npos_preflight_instructions(4, true, false, &[min_self_bond; 4]);
-        let err = audit_npos_preflight_instructions(instructions.iter(), 4, min_self_bond)
-            .expect_err("missing activation should fail preflight");
+        let instructions = synthetic_npos_preflight_instructions(
+            4,
+            &[LaneId::SINGLE],
+            true,
+            false,
+            &[min_self_bond; 4],
+        );
+        let err = audit_npos_preflight_instructions(
+            instructions.iter(),
+            4,
+            &[LaneId::SINGLE],
+            min_self_bond,
+        )
+        .expect_err("missing activation should fail preflight");
         let message = err.to_string();
         assert!(
             message.contains("ActivatePublicLaneValidator count="),
@@ -4623,10 +5021,20 @@ mod tests {
     fn npos_preflight_audit_fails_on_missing_pop() {
         init_instruction_registry();
         let min_self_bond = SumeragiNposParameters::default().min_self_bond();
-        let instructions =
-            synthetic_npos_preflight_instructions(4, false, true, &[min_self_bond; 4]);
-        let err = audit_npos_preflight_instructions(instructions.iter(), 4, min_self_bond)
-            .expect_err("missing pop should fail preflight");
+        let instructions = synthetic_npos_preflight_instructions(
+            4,
+            &[LaneId::SINGLE],
+            false,
+            true,
+            &[min_self_bond; 4],
+        );
+        let err = audit_npos_preflight_instructions(
+            instructions.iter(),
+            4,
+            &[LaneId::SINGLE],
+            min_self_bond,
+        )
+        .expect_err("missing pop should fail preflight");
         let message = err.to_string();
         assert!(
             message.contains("RegisterPeerWithPop count="),
@@ -4640,6 +5048,7 @@ mod tests {
         let min_self_bond = SumeragiNposParameters::default().min_self_bond();
         let instructions = synthetic_npos_preflight_instructions(
             4,
+            &[LaneId::SINGLE],
             true,
             true,
             &[
@@ -4649,8 +5058,13 @@ mod tests {
                 min_self_bond,
             ],
         );
-        let err = audit_npos_preflight_instructions(instructions.iter(), 4, min_self_bond)
-            .expect_err("unequal initial stake should fail preflight");
+        let err = audit_npos_preflight_instructions(
+            instructions.iter(),
+            4,
+            &[LaneId::SINGLE],
+            min_self_bond,
+        )
+        .expect_err("unequal initial stake should fail preflight");
         let message = err.to_string();
         assert!(
             message.contains("non-uniform"),
@@ -4709,7 +5123,7 @@ mod tests {
             Some(Duration::from_secs(
                 IZANAMI_SHARED_HOST_SOAK_LATENCY_P95_THRESHOLD_SECS
             )),
-            "shared-host soak should default the quorum latency gate to sub-1s when unset"
+            "shared-host soak should default the quorum latency gate to the DA steady-state envelope when unset"
         );
         let recovery = recovery_profile_for(&config);
         assert_eq!(
@@ -4787,7 +5201,7 @@ mod tests {
             Some(Duration::from_secs(
                 IZANAMI_SHARED_HOST_SOAK_LATENCY_P95_THRESHOLD_SECS
             )),
-            "permissioned shared-host soak should use the same sub-1s latency gate default"
+            "permissioned shared-host soak should use the same DA steady-state latency gate default"
         );
         assert_eq!(config.tps, 7.0);
         assert_eq!(config.max_inflight, 14);

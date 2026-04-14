@@ -130,6 +130,7 @@ declare_permissions! {
     iroha_executor_data_model::permission::account::{CanRegisterAccount},
     iroha_executor_data_model::permission::account::{CanUnregisterAccount},
     iroha_executor_data_model::permission::account::{CanModifyAccountMetadata},
+    iroha_executor_data_model::permission::account::{CanReplaceAccountController},
     iroha_executor_data_model::permission::account::{CanManageAccountAlias},
     iroha_executor_data_model::permission::account::{CanResolveAccountAlias},
 
@@ -953,7 +954,8 @@ pub mod account {
 
     use iroha_executor_data_model::permission::account::{
         AccountAliasPermissionScope, CanManageAccountAlias, CanModifyAccountMetadata,
-        CanRegisterAccount, CanResolveAccountAlias, CanUnregisterAccount,
+        CanRegisterAccount, CanReplaceAccountController, CanResolveAccountAlias,
+        CanUnregisterAccount,
     };
 
     use super::*;
@@ -1062,6 +1064,20 @@ pub mod account {
         }
     }
 
+    impl ValidateGrantRevoke for CanReplaceAccountController {
+        fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
+            Owner::from(self).validate(authority, host, context)
+        }
+        fn validate_revoke(
+            &self,
+            authority: &AccountId,
+            context: &Context,
+            host: &Iroha,
+        ) -> Result {
+            Owner::from(self).validate(authority, host, context)
+        }
+    }
+
     impl ValidateGrantRevoke for CanResolveAccountAlias {
         fn validate_grant(&self, authority: &AccountId, context: &Context, host: &Iroha) -> Result {
             match &self.scope {
@@ -1116,7 +1132,11 @@ pub mod account {
         };
     }
 
-    impl_froms!(CanUnregisterAccount, CanModifyAccountMetadata,);
+    impl_froms!(
+        CanUnregisterAccount,
+        CanModifyAccountMetadata,
+        CanReplaceAccountController,
+    );
 }
 
 pub mod trigger {

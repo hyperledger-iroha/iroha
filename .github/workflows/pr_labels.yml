@@ -1,7 +1,9 @@
 name: Pull Request Labeler
 
 on:
-  pull_request_target:
+  # Do not use `pull_request_target` here; GitHub disabled the old workflow
+  # because that event is a security risk under active exploitation.
+  pull_request:
 
 jobs:
   labeler:

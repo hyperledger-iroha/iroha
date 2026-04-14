@@ -180,6 +180,7 @@ target-codex-run*/
 /tmp*
 tmp/*
 *.tmp
+security_*
 _apalache-out*
 
 # Root-level scratch artifacts from ad-hoc experiments or local builds

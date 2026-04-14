@@ -24,8 +24,9 @@ public final class ClaimIdentifierWirePayloadEncoder {
   private static final String SCHEMA_PATH = "iroha_data_model::isi::identifier::ClaimIdentifier";
 
   private static final TypeAdapter<byte[]> RAW_BYTE_VEC_ADAPTER = NoritoAdapters.rawByteVecAdapter();
+  private static final TypeAdapter<byte[]> SIGNATURE_BYTE_VEC_ADAPTER = NoritoAdapters.byteVecAdapter();
   private static final TypeAdapter<Optional<byte[]>> OPTIONAL_SIGNATURE_ADAPTER =
-      NoritoAdapters.option(RAW_BYTE_VEC_ADAPTER);
+      NoritoAdapters.option(SIGNATURE_BYTE_VEC_ADAPTER);
   private static final TypeAdapter<Optional<byte[]>> OPTIONAL_PROOF_ADAPTER =
       NoritoAdapters.option(RAW_BYTE_VEC_ADAPTER);
 

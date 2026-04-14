@@ -2238,13 +2238,12 @@ impl Actor {
         }
         let frontier_height = self.committed_height_snapshot().saturating_add(1);
         key.1 <= frontier_height.saturating_add(1)
-            && session.total_chunks() == 1
-            && session.received_chunks() == 0
+            && !self.rbc_session_has_authoritative_payload_for_progress(key, session)
     }
 
-    /// After INIT, try to hydrate from locally available payload bytes and fall back to targeted
-    /// `BlockCreated` recovery only when the RBC session cannot later rebuild the signed block
-    /// from delivered payload bytes plus INIT metadata.
+    /// After INIT, try to hydrate from locally available payload bytes and route contiguous
+    /// frontier payload gaps into exact authoritative body repair instead of waiting for RBC
+    /// chunk delivery to stall.
     fn post_rbc_init_payload_recovery(
         &mut self,
         key: SessionKey,
@@ -2270,11 +2269,7 @@ impl Actor {
                 )
             });
         if force_authoritative_body_fetch {
-            self.request_missing_block_for_pending_rbc(
-                key,
-                "rbc_init_single_chunk_frontier_body",
-                None,
-            );
+            self.request_missing_block_for_pending_rbc(key, "rbc_init_frontier_payload_gap", None);
         } else if needs_missing_payload_recovery
             && self.rbc_session_needs_block_created_recovery(key)
         {

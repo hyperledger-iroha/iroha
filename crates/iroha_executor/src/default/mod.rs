@@ -2,8 +2,11 @@
 
 /// Re-export account visitor helpers used by the default executor.
 pub use account::{
-    visit_register_account, visit_remove_account_key_value, visit_set_account_key_value,
-    visit_unregister_account,
+    visit_approve_account_recovery, visit_cancel_account_recovery,
+    visit_clear_account_recovery_policy, visit_finalize_account_recovery,
+    visit_propose_account_recovery, visit_register_account, visit_remove_account_key_value,
+    visit_replace_account_controller, visit_set_account_key_value,
+    visit_set_account_recovery_policy, visit_unregister_account,
 };
 /// Re-export asset visitor helpers used by the default executor.
 pub use asset::{
@@ -232,6 +235,34 @@ impl InstructionDispatch for InstructionBox {
         }
         if let Some(isi) = any.downcast_ref::<SetKeyValueBox>() {
             executor.visit_set_key_value(isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ReplaceAccountController>() {
+            account::visit_replace_account_controller(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<SetAccountRecoveryPolicy>() {
+            account::visit_set_account_recovery_policy(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ClearAccountRecoveryPolicy>() {
+            account::visit_clear_account_recovery_policy(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ProposeAccountRecovery>() {
+            account::visit_propose_account_recovery(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<ApproveAccountRecovery>() {
+            account::visit_approve_account_recovery(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<CancelAccountRecovery>() {
+            account::visit_cancel_account_recovery(executor, isi);
+            return;
+        }
+        if let Some(isi) = any.downcast_ref::<FinalizeAccountRecovery>() {
+            account::visit_finalize_account_recovery(executor, isi);
             return;
         }
         if let Some(isi) = any.downcast_ref::<SetAssetKeyValue>() {
@@ -908,6 +939,7 @@ pub mod domain {
             AnyPermission::CanUseFeeSponsor(_)
             | AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
+            | AnyPermission::CanReplaceAccountController(_)
             | AnyPermission::CanRegisterTrigger(_)
             | AnyPermission::CanUnregisterTrigger(_)
             | AnyPermission::CanExecuteTrigger(_)
@@ -942,7 +974,7 @@ pub mod domain {
 /// Permission-checked visitors for account management instructions.
 pub mod account {
     use iroha_executor_data_model::permission::account::{
-        CanModifyAccountMetadata, CanUnregisterAccount,
+        CanModifyAccountMetadata, CanReplaceAccountController, CanUnregisterAccount,
     };
 
     use super::*;
@@ -1059,6 +1091,98 @@ pub mod account {
         );
     }
 
+    /// Replaces the controller for an account when the caller owns it or has the replacement permission.
+    pub fn visit_replace_account_controller<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ReplaceAccountController,
+    ) {
+        let account_id = &isi.account;
+
+        if executor.context().curr_block.is_genesis()
+            || is_account_owner(account_id, &executor.context().authority, executor.host())
+            || (CanReplaceAccountController {
+                account: account_id.clone(),
+            })
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(executor, "Can't replace another account controller");
+    }
+
+    /// Sets an account recovery policy when the caller owns the account or has replacement rights.
+    pub fn visit_set_account_recovery_policy<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &SetAccountRecoveryPolicy,
+    ) {
+        let account_id = &isi.account;
+
+        if executor.context().curr_block.is_genesis()
+            || is_account_owner(account_id, &executor.context().authority, executor.host())
+            || (CanReplaceAccountController {
+                account: account_id.clone(),
+            })
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(executor, "Can't set another account recovery policy");
+    }
+
+    /// Clears an account recovery policy when the caller owns the account or has replacement rights.
+    pub fn visit_clear_account_recovery_policy<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ClearAccountRecoveryPolicy,
+    ) {
+        let account_id = &isi.account;
+
+        if executor.context().curr_block.is_genesis()
+            || is_account_owner(account_id, &executor.context().authority, executor.host())
+            || (CanReplaceAccountController {
+                account: account_id.clone(),
+            })
+            .is_owned_by(&executor.context().authority, executor.host())
+        {
+            execute!(executor, isi);
+        }
+
+        deny!(executor, "Can't clear another account recovery policy");
+    }
+
+    /// Delegates proposal authorisation to the core recovery state machine.
+    pub fn visit_propose_account_recovery<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ProposeAccountRecovery,
+    ) {
+        execute!(executor, isi);
+    }
+
+    /// Delegates approval authorisation to the core recovery state machine.
+    pub fn visit_approve_account_recovery<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &ApproveAccountRecovery,
+    ) {
+        execute!(executor, isi);
+    }
+
+    /// Delegates cancellation authorisation to the core recovery state machine.
+    pub fn visit_cancel_account_recovery<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &CancelAccountRecovery,
+    ) {
+        execute!(executor, isi);
+    }
+
+    /// Delegates finalization authorisation to the core recovery state machine.
+    pub fn visit_finalize_account_recovery<V: Execute + Visit + ?Sized>(
+        executor: &mut V,
+        isi: &FinalizeAccountRecovery,
+    ) {
+        execute!(executor, isi);
+    }
+
     pub(crate) fn is_permission_account_associated(
         permission: &Permission,
         account_id: &AccountId,
@@ -1069,6 +1193,9 @@ pub mod account {
         match permission {
             AnyPermission::CanUnregisterAccount(permission) => permission.account == *account_id,
             AnyPermission::CanModifyAccountMetadata(permission) => {
+                permission.account == *account_id
+            }
+            AnyPermission::CanReplaceAccountController(permission) => {
                 permission.account == *account_id
             }
             AnyPermission::CanMintAsset(permission) => permission.asset.account() == account_id,
@@ -1311,6 +1438,7 @@ pub mod asset_definition {
             }
             AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
+            | AnyPermission::CanReplaceAccountController(_)
             | AnyPermission::CanResolveAccountAlias(_)
             | AnyPermission::CanManageAccountAlias(_)
             | AnyPermission::CanRegisterTrigger(_)
@@ -2487,6 +2615,7 @@ pub mod trigger {
             | AnyPermission::CanRegisterAccount(_)
             | AnyPermission::CanUnregisterAccount(_)
             | AnyPermission::CanModifyAccountMetadata(_)
+            | AnyPermission::CanReplaceAccountController(_)
             | AnyPermission::CanResolveAccountAlias(_)
             | AnyPermission::CanManageAccountAlias(_)
             | AnyPermission::CanUnregisterAssetDefinition(_)

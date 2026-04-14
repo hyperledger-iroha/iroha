@@ -252,6 +252,20 @@ pub mod isi {
             }
         }
 
+        if new_trigger.action().retry_policy().is_some()
+            && !matches!(
+                new_trigger.action().filter(),
+                EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(_)))
+            )
+        {
+            return Err(Error::InvalidParameter(
+                InvalidParameterError::SmartContract(
+                    "time-trigger retry policy is only supported for scheduled time triggers"
+                        .into(),
+                ),
+            ));
+        }
+
         // If a time trigger is scheduled at or before the current block creation time,
         // shift its start strictly after the current block to prevent immediate firing.
         if let EventFilterBox::Time(time_filter) = new_trigger.action().filter()
@@ -276,6 +290,7 @@ pub mod isi {
                     filter: EventFilterBox::Time(TimeEventFilter(ExecutionTime::Schedule(
                         schedule,
                     ))),
+                    retry_policy: act.retry_policy,
                     metadata: act.metadata,
                 };
                 new_trigger = Trigger::new(new_trigger.id().clone(), updated);
@@ -1423,6 +1438,52 @@ mod tests {
                 msg,
             )) => assert!(
                 msg.contains("period must be greater than zero"),
+                "unexpected message: {msg}"
+            ),
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn trigger_retry_policy_rejects_non_scheduled_time_trigger_on_registration() {
+        let kura = Kura::blank_kura_for_testing();
+        let query_handle = LiveQueryStore::start_test();
+        let world = World::with(
+            [Domain::new("wonderland".parse().unwrap()).build(&ALICE_ID)],
+            [Account::new(ALICE_ID.clone()).build(&ALICE_ID)],
+            [],
+        );
+        let state = State::new(world, kura, query_handle);
+
+        let block = new_dummy_block();
+        let mut state_block = state.block(block.as_ref().header());
+        let mut stx = state_block.transaction();
+
+        let trig_id: TriggerId = "time_retry_precommit".parse().unwrap();
+        let trigger = Trigger::new(
+            trig_id,
+            Action {
+                executable: Executable::Instructions(Vec::<InstructionBox>::new().into()),
+                repeats: Repeats::Exactly(1),
+                authority: ALICE_ID.clone(),
+                filter: EventFilterBox::Time(TimeEventFilter(ExecutionTime::PreCommit)),
+                retry_policy: Some(TimeTriggerRetryPolicy {
+                    max_retries: std::num::NonZeroU32::new(1).expect("nonzero"),
+                    retry_after_ms: std::num::NonZeroU64::new(5).expect("nonzero"),
+                }),
+                metadata: Metadata::default(),
+            },
+        );
+
+        let err = Register::trigger(trigger)
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("precommit retry policy must be rejected");
+
+        match err {
+            InstructionExecutionError::InvalidParameter(InvalidParameterError::SmartContract(
+                msg,
+            )) => assert!(
+                msg.contains("retry policy is only supported for scheduled time triggers"),
                 "unexpected message: {msg}"
             ),
             other => panic!("unexpected error: {other:?}"),

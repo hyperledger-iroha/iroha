@@ -39,10 +39,14 @@ build is unavailable), run tests with `npm run test:js`, which sets
 `IROHA_JS_DISABLE_NATIVE=1`. The default `npm test` still exercises the native
 binding when present.
 
-In JS-only mode `noritoEncodeInstruction`/`noritoDecodeInstruction` operate on
-plain JSON strings (UTF-8 bytes) instead of the binary Norito codec so tooling
-can keep running without the Rust bridge. For canonical Norito payloads build
-the native module first.
+In JS-only mode `noritoEncodeInstruction`/`noritoDecodeInstruction` still emit
+canonical binary Norito for the current JS builder surface, including the
+mint/burn families, `Register.Domain`, `Register.Account`, the supported
+`Transfer.*` variants, `ExecuteTrigger`, canonical `Custom` payloads plus the
+multisig alias inputs, and the current Kaigi / governance / social /
+smart-contract / zk / RWA direct-instruction helpers. When the native binding
+is present but rejects one of those supported shapes, the SDK now falls back to
+the pure-JS encoder automatically so callers still get canonical Norito bytes.
 
 > **ESM-only:** The package ships as pure ESM. Use dynamic `import()` from
 > CommonJS (`const { ToriiClient } = await import("@iroha/iroha-js/torii");`)
@@ -130,6 +134,21 @@ console.log(address.toI105());
 const formats = address.displayFormats(753);
 console.log(formats.i105);
 console.log(formats.i105Warning);
+```
+
+`secp256k1` account ids are first-class in the JS codec. Optional controller
+families remain opt-in; enable them before encoding or decoding account ids
+that use `ml-dsa`, `gost*`, `sm2`, or feature-gated `bls_*` public keys:
+
+```js
+import { configureCurveSupport } from "@iroha/iroha-js";
+
+configureCurveSupport({
+  allowMlDsa: true,
+  allowGost: true,
+  allowSm2: true,
+  allowBls: true,
+});
 ```
 
 > ℹ️ When showing addresses in wallets, explorers, or SDK samples, follow the
@@ -244,6 +263,58 @@ only need a non-throwing preview for relayer TTL hints.
 > Multisig controllers must never use derived keys. Supply an explicit account id in the
 > signatory domain (random keys are fine; private halves should be discarded). Nodes will reject
 > derived multisig ids at admission.
+
+## ExecuteTrigger and multisig helper builders
+
+```js
+import {
+  buildExecuteTriggerNorito,
+  buildMultisigTriggerArgs,
+  buildProposeMultisigExecuteTriggerInstruction,
+  buildMultisigContractCallProposeRequest,
+} from "@iroha/iroha-js";
+
+const args = buildMultisigTriggerArgs("lifecycle", {
+  action: "create",
+  requestId: "mr1",
+  fiId: "hbl",
+  toAccountId: "sorauロ1PケiコPヨソRhgラ1EコリNソnhレdシユAYGwワテYqケGLニwKヘaQUJKW1",
+  amountI64: 10,
+  createdAtMs: Date.now(),
+  expiresAtMs: Date.now() + 60_000,
+});
+
+// Direct ExecuteTrigger Norito bytes for the canonical multisig-critical path.
+const directNorito = buildExecuteTriggerNorito("staged_mint_request_hbl", args);
+
+// Wrap the same trigger call into a multisig proposal instruction.
+const proposalInstruction = buildProposeMultisigExecuteTriggerInstruction({
+  accountId: "sorauロ1Ni1A1mYイzウレハGニイgオ4ワセメヤzコヘz6タFoVDヌXzケCkル4CQVXL",
+  trigger: "staged_mint_request_hbl",
+  args,
+  spec,
+  signerAccountId: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
+  strictSignerCheck: true,
+  transactionTtlMs: 45_000,
+});
+
+// Build the normalized Torii request body for the multisig contract-call flow.
+const request = buildMultisigContractCallProposeRequest({
+  multisigAccountAlias: "mintops@hbl",
+  signerAccountId: "sorauロ1Nタセhjセ7pZaG9L7エmBnクbヨ9ヰsウ4dqmナコmチホ24CウオEAE9L4",
+  namespace: "apps",
+  contractId: "mint",
+  entrypoint: "execute",
+  trigger: "staged_mint_request_hbl",
+  args,
+  multisigSpec: spec,
+  strictSignerCheck: true,
+});
+```
+
+Use `isMultisigSignerAuthorized(spec, signerAccountId)` when you only need the
+membership check without building a payload, and `buildExecuteTriggerInstruction(...)`
+when you want the JSON form before Norito encoding.
 
 ```js
 import {
@@ -2025,8 +2096,10 @@ const removeBytesTx = buildRemoveSmartContractBytesTransaction({
 ```
 
 `buildRegisterSmartContractCodeInstruction/Transaction` accepts partial manifests
-when governance stages code hashes separately. Bytecode helpers enforce the
-32-byte hash length and accept `Buffer`, typed arrays, or base64 strings.
+when governance stages code hashes separately, and the JS-only Norito path now
+round-trips the full current manifest metadata surface including
+`entrypoints`, `kotoba`, and `provenance`. Bytecode helpers enforce the 32-byte
+hash length and accept `Buffer`, typed arrays, or base64 strings.
 Activation helpers normalise namespace/contract IDs into the canonical
 `ActivateContractInstance` shape so governance workflows can bind a manifest to
 an `{namespace, contract_id}` tuple deterministically.
@@ -2041,7 +2114,8 @@ feedback during rehearsals.
 The recipe mirrors the same validation rules: keys can be supplied as
 `PRIVATE_KEY=ed25519:<hex>` or `PRIVATE_KEY_HEX=<hex>`, namespace/contract ids
 must be non-empty strings, and manifest overrides use camelCase fields so CI
-orchestrators can reuse governance artefacts directly.
+orchestrators can reuse governance artefacts directly, including
+`accessSetHints`, `entrypoints`, `kotoba`, and `provenance`.
 
 ### Contract calls via Torii
 

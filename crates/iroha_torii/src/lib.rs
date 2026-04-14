@@ -17678,6 +17678,61 @@ async fn handler_post_contract_call(
 }
 
 #[cfg(feature = "app_api")]
+async fn handler_post_bridge_proof_submit(
+    State(app): State<SharedAppState>,
+    headers: axum::http::HeaderMap,
+    axum::extract::ConnectInfo(remote): axum::extract::ConnectInfo<std::net::SocketAddr>,
+    request: crate::utils::extractors::JsonOnly<crate::routing::BridgeProofSubmitDto>,
+) -> Result<AxResponse, Error> {
+    let remote_ip = remote.ip();
+    let token_hdr = headers
+        .get("x-api-token")
+        .and_then(|v| v.to_str().ok())
+        .map(ToString::to_string);
+    if app.require_api_token && !app.api_tokens_set.is_empty() {
+        let ok = token_hdr
+            .as_ref()
+            .is_some_and(|t| app.api_tokens_set.contains(t));
+        if !ok {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("bridge_proof"));
+            return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+                iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+            )));
+        }
+    }
+    let key = rate_limit_key(
+        &headers,
+        Some(remote_ip),
+        "v1/bridge/proofs/submit",
+        app.api_token_enforced(),
+    );
+    if !app.deploy_rate_limiter.allow(&key).await {
+        app.telemetry
+            .with_metrics(|tel| tel.inc_torii_contract_throttle("bridge_proof"));
+        return Err(Error::Query(iroha_data_model::ValidationFail::QueryFailed(
+            iroha_data_model::query::error::QueryExecutionFail::CapacityLimit,
+        )));
+    }
+    match crate::routing::handle_post_bridge_proof_submit(
+        app.chain_id.clone(),
+        app.queue.clone(),
+        app.state.clone(),
+        app.telemetry.clone(),
+        request,
+    )
+    .await
+    {
+        Ok(resp) => Ok(resp.into_response()),
+        Err(err) => {
+            app.telemetry
+                .with_metrics(|tel| tel.inc_torii_contract_error("bridge_proof"));
+            Err(err)
+        }
+    }
+}
+
+#[cfg(feature = "app_api")]
 async fn handler_post_contract_view(
     State(app): State<SharedAppState>,
     headers: axum::http::HeaderMap,
@@ -23538,6 +23593,10 @@ impl Torii {
                     post(handler_post_contract_instance_activate),
                 )
                 .route("/v1/contracts/call", post(handler_post_contract_call))
+                .route(
+                    "/v1/bridge/proofs/submit",
+                    post(handler_post_bridge_proof_submit),
+                )
                 .route("/v1/contracts/view", post(handler_post_contract_view))
                 .route(
                     "/v1/contracts/call/multisig/propose",
@@ -29940,6 +29999,11 @@ pub(crate) mod tests_runtime_handlers {
         assert_eq!(
             caps.data_model_version,
             iroha_data_model::DATA_MODEL_VERSION
+        );
+        assert_eq!(caps.signed_transaction_schema_hash_hex.len(), 32);
+        assert_eq!(
+            caps.signed_transaction_schema_hash_hex,
+            hex::encode(<iroha_data_model::transaction::SignedTransaction as norito::core::NoritoSerialize>::schema_hash())
         );
         assert!(caps.crypto.sm.acceleration.scalar);
         assert!(
@@ -37455,18 +37519,11 @@ mod tests {
         let authority_account = Account::new(authority.clone()).build(&authority);
         let account_id = authority.clone();
         let account = Account::new(account_id.account().clone())
-            .with_label(Some(alias_label))
+            .with_label(Some(alias_label.clone()))
             .build(&authority);
         let world = World::with([domain], [authority_account, account], []);
         let app = mk_app_state_for_tests_with_world(world);
         {
-            let alias_label = iroha_data_model::account::rekey::AccountAlias::new(
-                "banking".parse::<Name>().expect("label"),
-                Some(iroha_data_model::account::rekey::AccountAliasDomain::new(
-                    "centralbank".parse::<Name>().expect("domain id"),
-                )),
-                iroha_data_model::nexus::DataSpaceId::GLOBAL,
-            );
             let header = BlockHeader::new(nonzero!(1_u64), None, None, None, 0, 0);
             let mut block = app.state.block(header);
             let mut tx = block.transaction();

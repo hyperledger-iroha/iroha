@@ -15,7 +15,7 @@ use super::prelude::*;
 pub mod isi {
     use iroha_data_model::isi::{
         InstructionType,
-        error::{MintabilityError, RepetitionError},
+        error::{InvalidParameterError, MintabilityError, RepetitionError},
     };
 
     use super::*;
@@ -28,6 +28,100 @@ pub mod isi {
                 permission,
             )
             .is_ok()
+    }
+
+    fn invalid_account_recovery(message: impl Into<std::string::String>) -> Error {
+        Error::InvalidParameter(InvalidParameterError::SmartContract(message.into()))
+    }
+
+    fn stable_recovery_alias(
+        state_transaction: &StateTransaction<'_, '_>,
+        account_id: &AccountId,
+    ) -> Result<AccountAlias, Error> {
+        state_transaction
+            .world
+            .account(account_id)
+            .map_err(Error::from)?
+            .label()
+            .cloned()
+            .ok_or_else(|| {
+                invalid_account_recovery(format!(
+                    "account `{account_id}` must have a stable alias to use social recovery"
+                ))
+            })
+    }
+
+    fn validate_recovery_policy(policy: &AccountRecoveryPolicy) -> Result<(), Error> {
+        AccountRecoveryPolicy::new(policy.guardians.clone(), policy.quorum, policy.timelock_ms)
+            .map(|_| ())
+            .map_err(|err| invalid_account_recovery(err.to_string()))
+    }
+
+    fn active_account_for_alias(
+        state_transaction: &StateTransaction<'_, '_>,
+        alias: &AccountAlias,
+    ) -> Result<AccountId, Error> {
+        state_transaction
+            .world
+            .account_aliases
+            .get(alias)
+            .cloned()
+            .ok_or_else(|| {
+                invalid_account_recovery(format!(
+                    "account alias `{alias:?}` does not resolve to an active account"
+                ))
+            })
+    }
+
+    fn current_account_is_recovery_guardian(
+        policy: &AccountRecoveryPolicy,
+        authority: &AccountId,
+    ) -> bool {
+        policy.contains_guardian(authority)
+    }
+
+    fn ensure_recovery_request_targets_current_lineage(
+        state_transaction: &StateTransaction<'_, '_>,
+        request: &AccountRecoveryRequest,
+        current_account: &AccountId,
+    ) -> Result<(), Error> {
+        let record = state_transaction
+            .world
+            .account_rekey_records
+            .get(&request.alias)
+            .ok_or_else(|| {
+                invalid_account_recovery(format!(
+                    "account recovery alias `{:#?}` no longer has a continuity record",
+                    request.alias
+                ))
+            })?;
+
+        if &record.active_account_id != current_account {
+            return Err(invalid_account_recovery(format!(
+                "account recovery alias `{:#?}` no longer points to the expected active account",
+                request.alias
+            )));
+        }
+
+        if record.active_account_id != request.active_account_id_at_proposal
+            && !record
+                .previous_account_ids
+                .contains(&request.active_account_id_at_proposal)
+        {
+            return Err(invalid_account_recovery(format!(
+                "account recovery request for `{:#?}` no longer matches the active alias lineage",
+                request.alias
+            )));
+        }
+
+        Ok(())
+    }
+
+    fn proposed_account_id(new_controller: &AccountController) -> AccountId {
+        match new_controller {
+            AccountController::Single(signatory) => AccountId::new(signatory.clone()),
+            AccountController::Multisig(policy) => AccountId::new_multisig(policy.clone()),
+        }
     }
 
     impl Execute for Transfer<Account, AssetDefinitionId, Account> {
@@ -155,6 +249,406 @@ pub mod isi {
                     key: self.key().clone(),
                     value,
                 })));
+
+            Ok(())
+        }
+    }
+
+    impl Execute for ReplaceAccountController {
+        #[metrics(+"replace_account_controller")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let ReplaceAccountController {
+                account,
+                new_controller,
+            } = self;
+            let previous_controller = state_transaction
+                .world
+                .account(&account)
+                .map_err(Error::from)?
+                .id()
+                .controller()
+                .clone();
+
+            let new_account = crate::smartcontracts::isi::multisig::replace_account_controller(
+                authority,
+                state_transaction,
+                &account,
+                new_controller.clone(),
+            )?;
+
+            state_transaction
+                .world
+                .emit_events(Some(AccountEvent::ControllerReplaced(
+                    AccountControllerReplaced {
+                        account: new_account,
+                        previous_account: account,
+                        previous_controller,
+                        new_controller,
+                    },
+                )));
+
+            Ok(())
+        }
+    }
+
+    impl Execute for SetAccountRecoveryPolicy {
+        #[metrics(+"set_account_recovery_policy")]
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let SetAccountRecoveryPolicy { account, policy } = self;
+            validate_recovery_policy(&policy)?;
+            let alias = stable_recovery_alias(state_transaction, &account)?;
+
+            state_transaction
+                .world
+                .account_recovery_policies
+                .insert(alias.clone(), policy.clone());
+            state_transaction
+                .world
+                .emit_events(Some(AccountEvent::Recovery(
+                    AccountRecoveryEvent::PolicySet(AccountRecoveryPolicySet {
+                        account,
+                        alias,
+                        policy,
+                    }),
+                )));
+
+            Ok(())
+        }
+    }
+
+    impl Execute for ClearAccountRecoveryPolicy {
+        #[metrics(+"clear_account_recovery_policy")]
+        fn execute(
+            self,
+            _authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let ClearAccountRecoveryPolicy { account } = self;
+            let alias = stable_recovery_alias(state_transaction, &account)?;
+            if state_transaction
+                .world
+                .account_recovery_requests
+                .get(&alias)
+                .is_some_and(AccountRecoveryRequest::is_pending)
+            {
+                return Err(invalid_account_recovery(format!(
+                    "account recovery policy for `{alias:?}` cannot be cleared while a request is pending"
+                )));
+            }
+
+            if state_transaction
+                .world
+                .account_recovery_policies
+                .remove(alias.clone())
+                .is_none()
+            {
+                return Err(invalid_account_recovery(format!(
+                    "account recovery policy for `{alias:?}` does not exist"
+                )));
+            }
+
+            state_transaction
+                .world
+                .emit_events(Some(AccountEvent::Recovery(
+                    AccountRecoveryEvent::PolicyCleared(AccountRecoveryPolicyCleared {
+                        account,
+                        alias,
+                    }),
+                )));
+
+            Ok(())
+        }
+    }
+
+    impl Execute for ProposeAccountRecovery {
+        #[metrics(+"propose_account_recovery")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let ProposeAccountRecovery {
+                alias,
+                new_controller,
+            } = self;
+            let current_account = active_account_for_alias(state_transaction, &alias)?;
+            let policy = state_transaction
+                .world
+                .account_recovery_policies
+                .get(&alias)
+                .cloned()
+                .ok_or_else(|| {
+                    invalid_account_recovery(format!(
+                        "account recovery policy for `{alias:?}` does not exist"
+                    ))
+                })?;
+
+            if authority != &current_account
+                && !current_account_is_recovery_guardian(&policy, authority)
+            {
+                return Err(invalid_account_recovery(format!(
+                    "only the active account or a configured guardian may propose recovery for `{alias:?}`"
+                )));
+            }
+
+            if state_transaction
+                .world
+                .account_recovery_requests
+                .get(&alias)
+                .is_some_and(AccountRecoveryRequest::is_pending)
+            {
+                return Err(invalid_account_recovery(format!(
+                    "account recovery for `{alias:?}` already has a pending request"
+                )));
+            }
+
+            let candidate = proposed_account_id(&new_controller);
+            if candidate == current_account {
+                return Err(invalid_account_recovery(format!(
+                    "replacement controller for `{alias:?}` must change the canonical account id"
+                )));
+            }
+            if state_transaction.world.accounts.get(&candidate).is_some() {
+                return Err(invalid_account_recovery(format!(
+                    "replacement controller for `{alias:?}` resolves to existing account `{candidate}`"
+                )));
+            }
+
+            let execute_after_ms = state_transaction
+                .block_unix_timestamp_ms()
+                .saturating_add(policy.timelock_ms.get());
+            let request = AccountRecoveryRequest::new(
+                alias.clone(),
+                current_account.clone(),
+                new_controller,
+                authority.clone(),
+                execute_after_ms,
+            );
+            state_transaction
+                .world
+                .account_recovery_requests
+                .insert(alias.clone(), request.clone());
+            state_transaction
+                .world
+                .emit_events(Some(AccountEvent::Recovery(
+                    AccountRecoveryEvent::Proposed(AccountRecoveryProposed {
+                        account: current_account,
+                        alias,
+                        request,
+                    }),
+                )));
+
+            Ok(())
+        }
+    }
+
+    impl Execute for ApproveAccountRecovery {
+        #[metrics(+"approve_account_recovery")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let ApproveAccountRecovery { alias } = self;
+            let current_account = active_account_for_alias(state_transaction, &alias)?;
+            let policy = state_transaction
+                .world
+                .account_recovery_policies
+                .get(&alias)
+                .cloned()
+                .ok_or_else(|| {
+                    invalid_account_recovery(format!(
+                        "account recovery policy for `{alias:?}` does not exist"
+                    ))
+                })?;
+            if !current_account_is_recovery_guardian(&policy, authority) {
+                return Err(invalid_account_recovery(format!(
+                    "account `{authority}` is not a guardian for `{alias:?}`"
+                )));
+            }
+            let request = state_transaction
+                .world
+                .account_recovery_requests
+                .get_mut(&alias)
+                .ok_or_else(|| {
+                    invalid_account_recovery(format!(
+                        "account recovery request for `{alias:?}` does not exist"
+                    ))
+                })?;
+            if !request.is_pending() {
+                return Err(invalid_account_recovery(format!(
+                    "account recovery request for `{alias:?}` is not pending"
+                )));
+            }
+            request.approve(authority.clone());
+            let updated_request = request.clone();
+            state_transaction
+                .world
+                .emit_events(Some(AccountEvent::Recovery(
+                    AccountRecoveryEvent::Approved(AccountRecoveryApproved {
+                        account: current_account,
+                        alias,
+                        approver: authority.clone(),
+                        request: updated_request,
+                    }),
+                )));
+
+            Ok(())
+        }
+    }
+
+    impl Execute for CancelAccountRecovery {
+        #[metrics(+"cancel_account_recovery")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let CancelAccountRecovery { alias } = self;
+            let current_account = active_account_for_alias(state_transaction, &alias)?;
+            let policy = state_transaction
+                .world
+                .account_recovery_policies
+                .get(&alias)
+                .cloned()
+                .ok_or_else(|| {
+                    invalid_account_recovery(format!(
+                        "account recovery policy for `{alias:?}` does not exist"
+                    ))
+                })?;
+            let request = state_transaction
+                .world
+                .account_recovery_requests
+                .get_mut(&alias)
+                .ok_or_else(|| {
+                    invalid_account_recovery(format!(
+                        "account recovery request for `{alias:?}` does not exist"
+                    ))
+                })?;
+            if !request.is_pending() {
+                return Err(invalid_account_recovery(format!(
+                    "account recovery request for `{alias:?}` is not pending"
+                )));
+            }
+
+            let owner_can_cancel = authority == &current_account;
+            let guardian_quorum_can_cancel =
+                current_account_is_recovery_guardian(&policy, authority)
+                    && policy.quorum_reached(&request.approvals);
+            if !owner_can_cancel && !guardian_quorum_can_cancel {
+                return Err(invalid_account_recovery(format!(
+                    "account `{authority}` is not allowed to cancel recovery for `{alias:?}`"
+                )));
+            }
+
+            request.cancel();
+            let cancelled = request.clone();
+            state_transaction
+                .world
+                .emit_events(Some(AccountEvent::Recovery(
+                    AccountRecoveryEvent::Cancelled(AccountRecoveryCancelled {
+                        account: current_account,
+                        alias,
+                        cancelled_by: authority.clone(),
+                        request: cancelled,
+                    }),
+                )));
+
+            Ok(())
+        }
+    }
+
+    impl Execute for FinalizeAccountRecovery {
+        #[metrics(+"finalize_account_recovery")]
+        fn execute(
+            self,
+            authority: &AccountId,
+            state_transaction: &mut StateTransaction<'_, '_>,
+        ) -> Result<(), Error> {
+            let FinalizeAccountRecovery { alias } = self;
+            let current_account = active_account_for_alias(state_transaction, &alias)?;
+            let policy = state_transaction
+                .world
+                .account_recovery_policies
+                .get(&alias)
+                .cloned()
+                .ok_or_else(|| {
+                    invalid_account_recovery(format!(
+                        "account recovery policy for `{alias:?}` does not exist"
+                    ))
+                })?;
+
+            let mut request = state_transaction
+                .world
+                .account_recovery_requests
+                .get(&alias)
+                .cloned()
+                .ok_or_else(|| {
+                    invalid_account_recovery(format!(
+                        "account recovery request for `{alias:?}` does not exist"
+                    ))
+                })?;
+            if !request.is_pending() {
+                return Err(invalid_account_recovery(format!(
+                    "account recovery request for `{alias:?}` is not pending"
+                )));
+            }
+            if !policy.quorum_reached(&request.approvals) {
+                return Err(invalid_account_recovery(format!(
+                    "account recovery request for `{alias:?}` has not reached guardian quorum"
+                )));
+            }
+            if state_transaction.block_unix_timestamp_ms() < request.execute_after_ms {
+                return Err(invalid_account_recovery(format!(
+                    "account recovery request for `{alias:?}` is still timelocked"
+                )));
+            }
+
+            ensure_recovery_request_targets_current_lineage(
+                state_transaction,
+                &request,
+                &current_account,
+            )?;
+            let new_account = crate::smartcontracts::isi::multisig::replace_account_controller(
+                authority,
+                state_transaction,
+                &current_account,
+                request.proposed_controller.clone(),
+            )?;
+
+            request.finalize();
+            state_transaction
+                .world
+                .account_recovery_requests
+                .insert(alias.clone(), request.clone());
+            state_transaction
+                .world
+                .emit_events(Some(AccountEvent::ControllerReplaced(
+                    AccountControllerReplaced {
+                        account: new_account.clone(),
+                        previous_account: current_account.clone(),
+                        previous_controller: current_account.controller().clone(),
+                        new_controller: request.proposed_controller.clone(),
+                    },
+                )));
+            state_transaction
+                .world
+                .emit_events(Some(AccountEvent::Recovery(
+                    AccountRecoveryEvent::Finalized(AccountRecoveryFinalized {
+                        account: new_account,
+                        previous_account: current_account,
+                        alias,
+                        request,
+                    }),
+                )));
 
             Ok(())
         }
@@ -1201,10 +1695,36 @@ pub mod query {
         }
     }
 
+    impl ValidSingularQuery for FindAccountRecoveryPolicyByAlias {
+        #[metrics(+"find_account_recovery_policy_by_alias")]
+        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<AccountRecoveryPolicy, Error> {
+            state_ro
+                .world()
+                .account_recovery_policies()
+                .get(self.alias())
+                .cloned()
+                .ok_or(Error::NotFound)
+        }
+    }
+
+    impl ValidSingularQuery for FindAccountRecoveryRequestByAlias {
+        #[metrics(+"find_account_recovery_request_by_alias")]
+        fn execute(&self, state_ro: &impl StateReadOnly) -> Result<AccountRecoveryRequest, Error> {
+            state_ro
+                .world()
+                .account_recovery_requests()
+                .get(self.alias())
+                .cloned()
+                .ok_or(Error::NotFound)
+        }
+    }
+
     #[cfg(test)]
     mod tests {
         use core::num::NonZeroU64;
 
+        use iroha_data_model::isi::error::{InstructionExecutionError, InvalidParameterError};
+        use iroha_executor_data_model::permission::peer::CanManagePeers;
         use iroha_primitives::json::Json;
         use iroha_test_samples::{ALICE_ID, gen_account_in};
 
@@ -1227,6 +1747,84 @@ pub mod query {
             .commit(&topology)
             .unpack(|_| {})
             .unwrap()
+        }
+
+        fn new_block_header(
+            height: u64,
+            creation_time_ms: u64,
+        ) -> iroha_data_model::block::BlockHeader {
+            iroha_data_model::block::BlockHeader::new(
+                NonZeroU64::new(height).expect("non-zero block height"),
+                None,
+                None,
+                None,
+                creation_time_ms,
+                0,
+            )
+        }
+
+        fn new_state_with_authority() -> State {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut world = World::default();
+            seed_authority_account(&mut world, &ALICE_ID);
+            State::new(world, kura, query_handle)
+        }
+
+        fn new_state_with_authority_and_domain_lease(domain_id: &DomainId) -> State {
+            let kura = Kura::blank_kura_for_testing();
+            let query_handle = LiveQueryStore::start_test();
+            let mut world = World::default();
+            seed_authority_account(&mut world, &ALICE_ID);
+            seed_domain_name_lease(&mut world, &ALICE_ID, domain_id);
+            State::new(world, kura, query_handle)
+        }
+
+        fn root_alias(label: &str) -> AccountAlias {
+            AccountAlias::domainless(
+                label.parse().expect("account alias label"),
+                iroha_data_model::nexus::DataSpaceId::GLOBAL,
+            )
+        }
+
+        fn register_labeled_account(
+            state_transaction: &mut crate::state::StateTransaction<'_, '_>,
+            authority: &AccountId,
+            account_id: &AccountId,
+            alias: &AccountAlias,
+        ) {
+            Register::account(Account::new(account_id.clone()))
+                .execute(authority, state_transaction)
+                .expect("register account");
+            state_transaction
+                .world
+                .account_mut(account_id)
+                .expect("registered account")
+                .set_label(Some(alias.clone()));
+            state_transaction
+                .world
+                .insert_account_alias_binding(alias.clone(), account_id.clone());
+            state_transaction.world.account_rekey_records.insert(
+                alias.clone(),
+                iroha_data_model::account::rekey::AccountRekeyRecord::new(
+                    alias.clone(),
+                    account_id.clone(),
+                ),
+            );
+        }
+
+        fn assert_smart_contract_error_contains(err: InstructionExecutionError, fragment: &str) {
+            match err {
+                InstructionExecutionError::InvalidParameter(
+                    InvalidParameterError::SmartContract(message),
+                ) => {
+                    assert!(
+                        message.contains(fragment),
+                        "expected smart-contract error containing `{fragment}`, got `{message}`"
+                    );
+                }
+                other => panic!("unexpected error: {other:?}"),
+            }
         }
 
         #[test]
@@ -1287,6 +1885,313 @@ pub mod query {
                 .map(|a| a.id)
                 .collect();
             assert_eq!(results, vec![acc2]);
+        }
+
+        #[test]
+        fn replace_account_controller_single_to_single_preserves_linked_state() {
+            let domain_id: DomainId = "wonderland".parse().unwrap();
+            let state = new_state_with_authority_and_domain_lease(&domain_id);
+            let mut block = state.block(new_block_header(1, 0));
+            let mut stx = block.transaction();
+
+            Register::domain(Domain::new(domain_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let (account_id, _) = gen_account_in("wonderland");
+            let alias = root_alias("merchant");
+            register_labeled_account(&mut stx, &ALICE_ID, &account_id, &alias);
+
+            let metadata_key: Name = "tier".parse().unwrap();
+            stx.world
+                .account_mut(&account_id)
+                .unwrap()
+                .insert(metadata_key.clone(), Json::new("gold"));
+            stx.world
+                .add_account_permission(&account_id, Permission::from(CanManagePeers));
+
+            let asset_definition_id =
+                iroha_data_model::asset::AssetDefinitionId::new(domain_id, "rose".parse().unwrap());
+            Register::asset_definition({
+                let __asset_definition_id = asset_definition_id.clone();
+                AssetDefinition::numeric(__asset_definition_id.clone())
+                    .with_name(__asset_definition_id.name().to_string())
+            })
+            .execute(&ALICE_ID, &mut stx)
+            .unwrap();
+            let old_asset_id = AssetId::new(asset_definition_id.clone(), account_id.clone());
+            Mint::asset_numeric(5u32, old_asset_id.clone())
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let replacement_key = iroha_crypto::KeyPair::random();
+            let replacement_account = AccountId::new(replacement_key.public_key().clone());
+            ReplaceAccountController {
+                account: account_id.clone(),
+                new_controller: AccountController::single(replacement_key.public_key().clone()),
+            }
+            .execute(&account_id, &mut stx)
+            .expect("replace single-key controller");
+
+            assert!(matches!(
+                stx.world.account(&account_id),
+                Err(FindError::Account(_))
+            ));
+            let replacement = stx.world.account(&replacement_account).unwrap();
+            assert_eq!(replacement.label(), Some(&alias));
+            assert!(replacement.metadata().get(&metadata_key).is_some());
+
+            let permissions = stx
+                .world
+                .account_permissions
+                .get(&replacement_account)
+                .expect("permissions moved to replacement account");
+            assert!(permissions.contains(&Permission::from(CanManagePeers)));
+
+            let new_asset_id =
+                AssetId::new(asset_definition_id.clone(), replacement_account.clone());
+            assert!(stx.world.assets.get(&new_asset_id).is_some());
+            let holders = stx
+                .world
+                .asset_definition_holders
+                .get(&asset_definition_id)
+                .expect("holder index should be present");
+            assert!(holders.contains(&replacement_account));
+            assert!(!holders.contains(&account_id));
+
+            assert_eq!(
+                stx.world.account_aliases.get(&alias),
+                Some(&replacement_account)
+            );
+            assert_eq!(
+                stx.world
+                    .account_rekey_records
+                    .get(&alias)
+                    .expect("rekey record should survive")
+                    .active_account_id,
+                replacement_account
+            );
+        }
+
+        #[test]
+        fn set_account_recovery_policy_rejects_unlabeled_account() {
+            let state = new_state_with_authority();
+            let mut block = state.block(new_block_header(1, 0));
+            let mut stx = block.transaction();
+
+            let (account_id, _) = gen_account_in("wonderland");
+            Register::account(Account::new(account_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            let (guardian_id, _) = gen_account_in("wonderland");
+            Register::account(Account::new(guardian_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let policy = AccountRecoveryPolicy::new(
+                vec![RecoveryGuardian::new(guardian_id, 1)],
+                1,
+                NonZeroU64::new(10).unwrap(),
+            )
+            .unwrap();
+
+            let err = SetAccountRecoveryPolicy {
+                account: account_id,
+                policy,
+            }
+            .execute(&ALICE_ID, &mut stx)
+            .expect_err("unlabeled account should reject recovery policy");
+            assert_smart_contract_error_contains(err, "stable alias");
+        }
+
+        #[test]
+        fn account_recovery_flow_finalizes_after_timelock() {
+            let state = new_state_with_authority();
+
+            let owner_key = iroha_crypto::KeyPair::random();
+            let owner_id = AccountId::new(owner_key.public_key().clone());
+            let guardian_key = iroha_crypto::KeyPair::random();
+            let guardian_id = AccountId::new(guardian_key.public_key().clone());
+            let alias = root_alias("guardianed");
+            let replacement_key = iroha_crypto::KeyPair::random();
+            let replacement_account = AccountId::new(replacement_key.public_key().clone());
+
+            {
+                let mut block = state.block(new_block_header(1, 0));
+                let mut stx = block.transaction();
+
+                register_labeled_account(&mut stx, &ALICE_ID, &owner_id, &alias);
+                Register::account(Account::new(guardian_id.clone()))
+                    .execute(&ALICE_ID, &mut stx)
+                    .unwrap();
+
+                let policy = AccountRecoveryPolicy::new(
+                    vec![RecoveryGuardian::new(guardian_id.clone(), 1)],
+                    1,
+                    NonZeroU64::new(10).unwrap(),
+                )
+                .unwrap();
+
+                SetAccountRecoveryPolicy {
+                    account: owner_id.clone(),
+                    policy: policy.clone(),
+                }
+                .execute(&owner_id, &mut stx)
+                .unwrap();
+
+                ProposeAccountRecovery {
+                    alias: alias.clone(),
+                    new_controller: AccountController::single(replacement_key.public_key().clone()),
+                }
+                .execute(&owner_id, &mut stx)
+                .unwrap();
+
+                ApproveAccountRecovery {
+                    alias: alias.clone(),
+                }
+                .execute(&guardian_id, &mut stx)
+                .unwrap();
+                ApproveAccountRecovery {
+                    alias: alias.clone(),
+                }
+                .execute(&guardian_id, &mut stx)
+                .unwrap();
+
+                let request = stx
+                    .world
+                    .account_recovery_requests
+                    .get(&alias)
+                    .expect("request should be stored");
+                assert_eq!(request.approvals.len(), 1);
+
+                let err = FinalizeAccountRecovery {
+                    alias: alias.clone(),
+                }
+                .execute(&guardian_id, &mut stx)
+                .expect_err("timelock should block immediate finalization");
+                assert_smart_contract_error_contains(err, "timelocked");
+
+                stx.apply();
+                block.commit().unwrap();
+            }
+
+            let mut block = state.block(new_block_header(2, 10));
+            let mut stx = block.transaction();
+            FinalizeAccountRecovery {
+                alias: alias.clone(),
+            }
+            .execute(&guardian_id, &mut stx)
+            .expect("finalize after timelock");
+
+            assert!(matches!(
+                stx.world.account(&owner_id),
+                Err(FindError::Account(_))
+            ));
+            assert!(stx.world.account(&replacement_account).is_ok());
+            assert_eq!(
+                stx.world.account_aliases.get(&alias),
+                Some(&replacement_account)
+            );
+            assert_eq!(
+                stx.world
+                    .account_recovery_requests
+                    .get(&alias)
+                    .expect("request should remain for audit")
+                    .status,
+                AccountRecoveryStatus::Finalized
+            );
+            assert!(
+                stx.world.account_recovery_policies.get(&alias).is_some(),
+                "recovery policy should remain after finalization"
+            );
+
+            let err = FinalizeAccountRecovery {
+                alias: alias.clone(),
+            }
+            .execute(&guardian_id, &mut stx)
+            .expect_err("finalized request must not be replayable");
+            assert_smart_contract_error_contains(err, "is not pending");
+        }
+
+        #[test]
+        fn account_recovery_requires_quorum_and_guardian_quorum_can_cancel() {
+            let state = new_state_with_authority();
+
+            let owner_key = iroha_crypto::KeyPair::random();
+            let owner_id = AccountId::new(owner_key.public_key().clone());
+            let guardian_one_key = iroha_crypto::KeyPair::random();
+            let guardian_one_id = AccountId::new(guardian_one_key.public_key().clone());
+            let guardian_two_key = iroha_crypto::KeyPair::random();
+            let guardian_two_id = AccountId::new(guardian_two_key.public_key().clone());
+            let alias = root_alias("quorum-guarded");
+            let replacement_key = iroha_crypto::KeyPair::random();
+
+            let mut block = state.block(new_block_header(1, 0));
+            let mut stx = block.transaction();
+
+            register_labeled_account(&mut stx, &ALICE_ID, &owner_id, &alias);
+            Register::account(Account::new(guardian_one_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+            Register::account(Account::new(guardian_two_id.clone()))
+                .execute(&ALICE_ID, &mut stx)
+                .unwrap();
+
+            let policy = AccountRecoveryPolicy::new(
+                vec![
+                    RecoveryGuardian::new(guardian_one_id.clone(), 1),
+                    RecoveryGuardian::new(guardian_two_id.clone(), 1),
+                ],
+                2,
+                NonZeroU64::new(10).unwrap(),
+            )
+            .unwrap();
+
+            SetAccountRecoveryPolicy {
+                account: owner_id.clone(),
+                policy,
+            }
+            .execute(&owner_id, &mut stx)
+            .unwrap();
+
+            ProposeAccountRecovery {
+                alias: alias.clone(),
+                new_controller: AccountController::single(replacement_key.public_key().clone()),
+            }
+            .execute(&owner_id, &mut stx)
+            .unwrap();
+
+            ApproveAccountRecovery {
+                alias: alias.clone(),
+            }
+            .execute(&guardian_one_id, &mut stx)
+            .unwrap();
+
+            let err = FinalizeAccountRecovery {
+                alias: alias.clone(),
+            }
+            .execute(&guardian_one_id, &mut stx)
+            .expect_err("finalization must reject before quorum");
+            assert_smart_contract_error_contains(err, "guardian quorum");
+
+            ApproveAccountRecovery {
+                alias: alias.clone(),
+            }
+            .execute(&guardian_two_id, &mut stx)
+            .unwrap();
+
+            CancelAccountRecovery {
+                alias: alias.clone(),
+            }
+            .execute(&guardian_one_id, &mut stx)
+            .expect("guardian quorum should be able to cancel");
+
+            let request = stx
+                .world
+                .account_recovery_requests
+                .get(&alias)
+                .expect("cancelled request should remain queryable");
+            assert_eq!(request.status, AccountRecoveryStatus::Cancelled);
         }
 
         #[test]

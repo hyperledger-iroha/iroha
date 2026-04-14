@@ -8,6 +8,30 @@ Key properties:
 - Rate‑limited and optionally protected by API tokens.
 - On‑disk storage under `./storage/torii` by default.
 
+For a repo-wide view of which surfaces perform real proof verification versus
+decode-only/demo work, see [ZK Audit Matrix](zk_audit_matrix.md).
+
+## Direct verifier convenience endpoints
+
+Torii exposes a small `/v1/zk/*` convenience surface in addition to the
+runtime-critical ledger paths:
+
+- `POST /v1/zk/verify` is decode-only. It accepts Norito or JSON and returns
+  `{ "ok": true|false }` based on payload shape, not on cryptographic proof
+  validity.
+- `POST /v1/zk/submit-proof` is also demo-only. It mirrors the decode check and
+  returns a deterministic body hash as `id`, but it does not verify, persist,
+  or register the proof with the ledger verifier.
+- `POST /v1/zk/verify-batch` (feature `zk-verify-batch`) does perform
+  cryptographic verification, but only for the standalone native IPA
+  `iroha_zkp_halo2::OpenVerifyEnvelope` format. It does not consult the
+  verifying-key registry, does not enforce ledger circuit/schema policy, and is
+  not a substitute for `iroha_core::zk::verify_backend_with_timing_guardrails`.
+
+Runtime-critical surfaces such as governance ballots/tallies, confidential
+assets, `IvmProved`, and registry-backed STARK/Halo2 flows continue to use the
+guarded core verifier path instead.
+
 ## Attachments
 
 Attachments store sanitized artifacts such as proof envelopes or JSON DTOs. Each attachment is addressed by a deterministic id derived from the sanitized bytes.

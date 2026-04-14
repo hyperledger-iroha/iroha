@@ -756,6 +756,41 @@ impl From<crate::isi::domain_link::SetPrimaryAccountAlias> for InstructionBox {
         InstructionBox(Box::new(i))
     }
 }
+impl From<crate::isi::account_recovery::ReplaceAccountController> for InstructionBox {
+    fn from(i: crate::isi::account_recovery::ReplaceAccountController) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::account_recovery::SetAccountRecoveryPolicy> for InstructionBox {
+    fn from(i: crate::isi::account_recovery::SetAccountRecoveryPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::account_recovery::ClearAccountRecoveryPolicy> for InstructionBox {
+    fn from(i: crate::isi::account_recovery::ClearAccountRecoveryPolicy) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::account_recovery::ProposeAccountRecovery> for InstructionBox {
+    fn from(i: crate::isi::account_recovery::ProposeAccountRecovery) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::account_recovery::ApproveAccountRecovery> for InstructionBox {
+    fn from(i: crate::isi::account_recovery::ApproveAccountRecovery) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::account_recovery::CancelAccountRecovery> for InstructionBox {
+    fn from(i: crate::isi::account_recovery::CancelAccountRecovery) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
+impl From<crate::isi::account_recovery::FinalizeAccountRecovery> for InstructionBox {
+    fn from(i: crate::isi::account_recovery::FinalizeAccountRecovery) -> Self {
+        InstructionBox(Box::new(i))
+    }
+}
 impl From<crate::isi::contract_alias::SetContractAlias> for InstructionBox {
     fn from(i: crate::isi::contract_alias::SetContractAlias) -> Self {
         InstructionBox(Box::new(i))
@@ -1900,6 +1935,8 @@ macro_rules! enum_type {
     };
 }
 
+/// Native account controller replacement and social recovery instructions.
+pub mod account_recovery;
 /// Asset-definition alias binding instructions.
 pub mod asset_alias;
 /// Asset-scoped outbound transfer control instructions.
@@ -1963,6 +2000,7 @@ pub mod verifying_keys;
 /// Zero-knowledge instruction wrappers.
 pub mod zk;
 
+pub use account_recovery::*;
 pub use asset_alias::*;
 pub use asset_transfer_control::*;
 pub use confidential::*;
@@ -2740,6 +2778,11 @@ pub mod prelude {
         RollbackOracleChange, SetKeyValue, SetKeyValueBox, SetParameter, SubmitOracleObservation,
         Transfer, TransferAssetBatch, TransferAssetBatchEntry, TransferBox, Unregister,
         UnregisterBox, Upgrade, VoteOracleChangeStage,
+        account_recovery::{
+            ApproveAccountRecovery, CancelAccountRecovery, ClearAccountRecoveryPolicy,
+            FinalizeAccountRecovery, ProposeAccountRecovery, ReplaceAccountController,
+            SetAccountRecoveryPolicy,
+        },
         asset_transfer_control::{
             SetAssetTransferBlacklist, SetAssetTransferControl, SetAssetTransferFreeze,
         },

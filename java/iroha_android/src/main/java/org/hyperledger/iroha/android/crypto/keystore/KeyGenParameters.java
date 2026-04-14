@@ -1,6 +1,7 @@
 package org.hyperledger.iroha.android.crypto.keystore;
 
 import java.time.Duration;
+import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
 
 /**
  * Specification for key generation requests made through {@link KeystoreBackend}.
@@ -53,6 +54,10 @@ public final class KeyGenParameters {
     return algorithm;
   }
 
+  public SigningAlgorithm signingAlgorithm() {
+    return SigningAlgorithm.fromAlgorithmName(algorithm);
+  }
+
   public byte[] attestationChallenge() {
     return attestationChallenge == null ? null : attestationChallenge.clone();
   }
@@ -64,7 +69,7 @@ public final class KeyGenParameters {
         .setAllowStrongBoxFallback(allowStrongBoxFallback)
         .setUserAuthenticationRequired(userAuthenticationRequired)
         .setUserAuthenticationTimeout(userAuthenticationTimeout)
-        .setAlgorithm(algorithm)
+        .setSigningAlgorithm(signingAlgorithm())
         .setAttestationChallenge(attestationChallenge);
   }
 
@@ -119,7 +124,14 @@ public final class KeyGenParameters {
 
     public Builder setAlgorithm(final String algorithm) {
       if (algorithm != null && !algorithm.isBlank()) {
-        this.algorithm = algorithm;
+        this.algorithm = SigningAlgorithm.fromAlgorithmName(algorithm).providerName();
+      }
+      return this;
+    }
+
+    public Builder setSigningAlgorithm(final SigningAlgorithm signingAlgorithm) {
+      if (signingAlgorithm != null) {
+        this.algorithm = signingAlgorithm.providerName();
       }
       return this;
     }

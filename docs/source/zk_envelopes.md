@@ -11,9 +11,9 @@ Scope (current)
   SHA-256 Merkle commitments and a deterministic transcript.
 
 Backends (tags)
-- IPA (Pallas, native): `halo2/ipa-v1/poly-open`
-- IPA (BN254): `halo2/ipa/ipa-v1/poly-open`
-- IPA (Goldilocks): `halo2/goldilocks-ipa-v1/poly-open`
+- Standalone native IPA verifier entrypoint: `halo2/ipa/poly-open`
+  - The envelope selects the concrete curve/backend with `curve_id`
+    (`1 = Pallas`, `2 = Goldilocks`, `20 = BN254`).
 - STARK (native): `stark/fri-v1/<profile>` (e.g., `stark/fri-v1/sha256-goldilocks-v1`)
 
 General notes
@@ -60,9 +60,15 @@ Wire types (as implemented in `crates/iroha_zkp_halo2`)
   - `public: PolyOpenPublic`
   - `proof: IpaProofData`
   - `transcript_label: String` — bound by both prover and verifier
+  - `vk_commitment: Option<[u8; 32]>` — optional outer VK commitment bound into the transcript
+  - `public_inputs_schema_hash: Option<[u8; 32]>` — optional schema hash bound into the transcript
+  - `domain_tag: Option<[u8; 32]>` — optional caller-defined domain separator bound into the transcript
 
 Verifier behavior (native IPA)
 - Re-derives the public vector b = [1, z, z^2, …, z^{n-1}].
+- Binds the claimed statement before the first Fiat-Shamir challenge:
+  `transcript_label`, backend/`n`, `z`, `t`, `p_g`, and any present optional
+  metadata fields (`vk_commitment`, `public_inputs_schema_hash`, `domain_tag`).
 - Replays transcript rounds to fold generators and update Q.
 - Checks the final relation holds with `(a_final, b_final)`.
 - Deterministic transcript over SHA3-256 under crate-defined DST.
@@ -73,14 +79,22 @@ Verifier behavior (native IPA)
 
 Example (Rust)
 ```rust
-use iroha_zkp_halo2::{Params, Polynomial, PrimeField64, Transcript, norito_helpers as nh};
+use iroha_zkp_halo2::{
+    Params, PolyOpenTranscriptMetadata, Polynomial, PrimeField64, Transcript,
+    norito_helpers as nh,
+};
 let n = 8; let params = Params::new(n).unwrap();
 let coeffs = (0..n).map(|i| PrimeField64::from((i+1) as u64)).collect();
 let poly = Polynomial::from_coeffs(coeffs);
 let p_g = poly.commit(&params).unwrap();
 let z = PrimeField64::from(3u64);
 let mut tr = Transcript::new("IROHA-TEST-IPA");
-let (proof, t) = poly.open(&params, &mut tr, z, p_g).unwrap();
+let metadata = PolyOpenTranscriptMetadata {
+    vk_commitment: Some([0x11; 32]),
+    public_inputs_schema_hash: Some([0x22; 32]),
+    domain_tag: Some([0x33; 32]),
+};
+let (proof, t) = poly.open_with_metadata(&params, &mut tr, z, p_g, metadata).unwrap();
 let env = iroha_zkp_halo2::OpenVerifyEnvelope {
     params: nh::params_to_wire(&params),
     public: nh::poly_open_public::<iroha_zkp_halo2::backend::pallas::PallasBackend>(
@@ -91,6 +105,9 @@ let env = iroha_zkp_halo2::OpenVerifyEnvelope {
     ),
     proof: nh::proof_to_wire(&proof),
     transcript_label: "IROHA-TEST-IPA".into(),
+    vk_commitment: metadata.vk_commitment,
+    public_inputs_schema_hash: metadata.public_inputs_schema_hash,
+    domain_tag: metadata.domain_tag,
 };
 let bytes = norito::to_bytes(&env).unwrap();
 ```
@@ -122,7 +139,10 @@ Example (JSON-like, annotated)
     "a_final": "0x...",
     "b_final": "0x..."
   },
-  "transcript_label": "IROHA-TEST-IPA"
+  "transcript_label": "IROHA-TEST-IPA",
+  "vk_commitment": "0x...",             // optional, null when omitted
+  "public_inputs_schema_hash": "0x...", // optional, null when omitted
+  "domain_tag": "0x..."                 // optional, null when omitted
 }
 ```
 

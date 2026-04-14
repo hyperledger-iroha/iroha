@@ -1371,17 +1371,258 @@ impl TokenBucket {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RelayReceiverKind {
+    High,
+    Payload,
+    Chunk,
+    Low,
+}
+
+impl RelayReceiverKind {
+    const fn label(self) -> &'static str {
+        match self {
+            Self::High => "high",
+            Self::Payload => "payload",
+            Self::Chunk => "chunk",
+            Self::Low => "low",
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum RelayBurstRecv<T> {
+    Skip,
+    Message(T),
+    Disconnected,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum RelayIngressLoopExit {
+    ReceiverClosed(RelayReceiverKind),
+    WorkerClosed(RelayReceiverKind),
+}
+
 fn try_recv_after_burst<T>(
     receiver: &mut mpsc::Receiver<T>,
     high_budget: &mut usize,
     high_burst: usize,
-) -> Option<T> {
+) -> RelayBurstRecv<T> {
     if *high_budget != 0 {
-        return None;
+        return RelayBurstRecv::Skip;
     }
-    let msg = receiver.try_recv().ok();
     *high_budget = high_burst;
-    msg
+    match receiver.try_recv() {
+        Ok(msg) => RelayBurstRecv::Message(msg),
+        Err(mpsc::error::TryRecvError::Empty) => RelayBurstRecv::Skip,
+        Err(mpsc::error::TryRecvError::Disconnected) => RelayBurstRecv::Disconnected,
+    }
+}
+
+fn spawn_network_relay_worker(
+    shared: Arc<NetworkRelayShared>,
+    worker_limit: usize,
+    work_high_cap: usize,
+    work_payload_cap: usize,
+    work_chunk_cap: usize,
+    work_low_cap: usize,
+) -> (
+    mpsc::Sender<RelayWorkItem>,
+    mpsc::Sender<RelayWorkItem>,
+    mpsc::Sender<RelayWorkItem>,
+    mpsc::Sender<RelayWorkItem>,
+) {
+    let (work_high_tx, mut work_high_rx) = mpsc::channel::<RelayWorkItem>(work_high_cap);
+    let (work_payload_tx, mut work_payload_rx) = mpsc::channel::<RelayWorkItem>(work_payload_cap);
+    let (work_chunk_tx, mut work_chunk_rx) = mpsc::channel::<RelayWorkItem>(work_chunk_cap);
+    let (work_low_tx, mut work_low_rx) = mpsc::channel::<RelayWorkItem>(work_low_cap);
+    let worker_sem = Arc::new(tokio::sync::Semaphore::new(worker_limit));
+    let shared_for_workers = Arc::clone(&shared);
+    let worker_sem_for_workers = Arc::clone(&worker_sem);
+    tokio::spawn(async move {
+        loop {
+            let msg = tokio::select! {
+                biased;
+                Some(msg) = work_high_rx.recv() => Some(msg),
+                Some(msg) = work_payload_rx.recv() => Some(msg),
+                Some(msg) = work_chunk_rx.recv() => Some(msg),
+                Some(msg) = work_low_rx.recv() => Some(msg),
+                else => None,
+            };
+            let Some(msg) = msg else {
+                break;
+            };
+            let permit = match worker_sem_for_workers.clone().acquire_owned().await {
+                Ok(permit) => permit,
+                Err(_) => break,
+            };
+            let shared = Arc::clone(&shared_for_workers);
+            tokio::spawn(async move {
+                shared
+                    .handle_message(msg.peer, msg.payload, msg.payload_bytes)
+                    .await;
+                drop(permit);
+            });
+        }
+    });
+
+    (work_high_tx, work_payload_tx, work_chunk_tx, work_low_tx)
+}
+
+fn try_enqueue_relay_work(
+    tx: &mpsc::Sender<RelayWorkItem>,
+    msg: RelayWorkItem,
+    kind: RelayReceiverKind,
+    drops: &mut u64,
+) -> Result<(), RelayIngressLoopExit> {
+    match tx.try_send(msg) {
+        Ok(()) => Ok(()),
+        Err(mpsc::error::TrySendError::Full(msg)) => {
+            *drops = drops.saturating_add(1);
+            if *drops == 1 || (*drops).is_multiple_of(1024) {
+                iroha_logger::warn!(
+                    peer = %msg.peer,
+                    topic = ?msg.payload.topic(),
+                    drops = *drops,
+                    queue = kind.label(),
+                    "relay work queue full; dropping message"
+                );
+            }
+            Ok(())
+        }
+        Err(mpsc::error::TrySendError::Closed(_)) => Err(RelayIngressLoopExit::WorkerClosed(kind)),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn drive_network_relay_ingress(
+    mut high_receiver: mpsc::Receiver<RelayWorkItem>,
+    mut payload_receiver: mpsc::Receiver<RelayWorkItem>,
+    mut chunk_receiver: mpsc::Receiver<RelayWorkItem>,
+    mut low_receiver: mpsc::Receiver<RelayWorkItem>,
+    work_high_tx: &mpsc::Sender<RelayWorkItem>,
+    work_payload_tx: &mpsc::Sender<RelayWorkItem>,
+    work_chunk_tx: &mpsc::Sender<RelayWorkItem>,
+    work_low_tx: &mpsc::Sender<RelayWorkItem>,
+) -> RelayIngressLoopExit {
+    let mut high_budget = RELAY_HIGH_BURST;
+    let mut high_drops: u64 = 0;
+    let mut payload_drops: u64 = 0;
+    let mut chunk_drops: u64 = 0;
+    let mut low_drops: u64 = 0;
+
+    loop {
+        match try_recv_after_burst(&mut payload_receiver, &mut high_budget, RELAY_HIGH_BURST) {
+            RelayBurstRecv::Message(msg) => {
+                if let Err(exit) = try_enqueue_relay_work(
+                    work_payload_tx,
+                    msg,
+                    RelayReceiverKind::Payload,
+                    &mut payload_drops,
+                ) {
+                    return exit;
+                }
+                continue;
+            }
+            RelayBurstRecv::Disconnected => {
+                return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Payload);
+            }
+            RelayBurstRecv::Skip => {}
+        }
+        match try_recv_after_burst(&mut chunk_receiver, &mut high_budget, RELAY_HIGH_BURST) {
+            RelayBurstRecv::Message(msg) => {
+                if let Err(exit) = try_enqueue_relay_work(
+                    work_chunk_tx,
+                    msg,
+                    RelayReceiverKind::Chunk,
+                    &mut chunk_drops,
+                ) {
+                    return exit;
+                }
+                continue;
+            }
+            RelayBurstRecv::Disconnected => {
+                return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Chunk);
+            }
+            RelayBurstRecv::Skip => {}
+        }
+        match try_recv_after_burst(&mut low_receiver, &mut high_budget, RELAY_HIGH_BURST) {
+            RelayBurstRecv::Message(msg) => {
+                if let Err(exit) = try_enqueue_relay_work(
+                    work_low_tx,
+                    msg,
+                    RelayReceiverKind::Low,
+                    &mut low_drops,
+                ) {
+                    return exit;
+                }
+                continue;
+            }
+            RelayBurstRecv::Disconnected => {
+                return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Low);
+            }
+            RelayBurstRecv::Skip => {}
+        }
+        tokio::select! {
+            biased;
+            msg = high_receiver.recv() => {
+                let Some(msg) = msg else {
+                    return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::High);
+                };
+                high_budget = high_budget.saturating_sub(1);
+                if let Err(exit) = try_enqueue_relay_work(
+                    work_high_tx,
+                    msg,
+                    RelayReceiverKind::High,
+                    &mut high_drops,
+                ) {
+                    return exit;
+                }
+            }
+            msg = payload_receiver.recv() => {
+                let Some(msg) = msg else {
+                    return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Payload);
+                };
+                high_budget = RELAY_HIGH_BURST;
+                if let Err(exit) = try_enqueue_relay_work(
+                    work_payload_tx,
+                    msg,
+                    RelayReceiverKind::Payload,
+                    &mut payload_drops,
+                ) {
+                    return exit;
+                }
+            }
+            msg = chunk_receiver.recv() => {
+                let Some(msg) = msg else {
+                    return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Chunk);
+                };
+                high_budget = RELAY_HIGH_BURST;
+                if let Err(exit) = try_enqueue_relay_work(
+                    work_chunk_tx,
+                    msg,
+                    RelayReceiverKind::Chunk,
+                    &mut chunk_drops,
+                ) {
+                    return exit;
+                }
+            }
+            msg = low_receiver.recv() => {
+                let Some(msg) = msg else {
+                    return RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Low);
+                };
+                high_budget = RELAY_HIGH_BURST;
+                if let Err(exit) = try_enqueue_relay_work(
+                    work_low_tx,
+                    msg,
+                    RelayReceiverKind::Low,
+                    &mut low_drops,
+                ) {
+                    return exit;
+                }
+            }
+        }
+    }
 }
 
 impl NetworkRelay {
@@ -1411,52 +1652,14 @@ impl NetworkRelay {
         let payload_cap = base_cap.saturating_mul(2).max(base_cap);
         let chunk_cap = base_cap;
         let low_cap = base_cap;
-        let (high_sender, mut high_receiver) = mpsc::channel(high_cap);
-        let (payload_sender, mut payload_receiver) = mpsc::channel(payload_cap);
-        let (chunk_sender, mut chunk_receiver) = mpsc::channel(chunk_cap);
-        let (low_sender, mut low_receiver) = mpsc::channel(low_cap);
         let work_high_cap = high_cap.saturating_mul(2);
         let work_payload_cap = payload_cap.saturating_mul(2);
         let work_chunk_cap = chunk_cap;
         let work_low_cap = low_cap;
-        let (work_high_tx, mut work_high_rx) = mpsc::channel::<RelayWorkItem>(work_high_cap);
-        let (work_payload_tx, mut work_payload_rx) =
-            mpsc::channel::<RelayWorkItem>(work_payload_cap);
-        let (work_chunk_tx, mut work_chunk_rx) = mpsc::channel::<RelayWorkItem>(work_chunk_cap);
-        let (work_low_tx, mut work_low_rx) = mpsc::channel::<RelayWorkItem>(work_low_cap);
         let worker_limit = std::thread::available_parallelism()
             .map(std::num::NonZeroUsize::get)
             .unwrap_or(1)
             .clamp(1, 8);
-        let worker_sem = Arc::new(tokio::sync::Semaphore::new(worker_limit));
-        let shared_for_workers = Arc::clone(&shared);
-        let worker_sem_for_workers = Arc::clone(&worker_sem);
-        tokio::spawn(async move {
-            loop {
-                let msg = tokio::select! {
-                    biased;
-                    Some(msg) = work_high_rx.recv() => Some(msg),
-                    Some(msg) = work_payload_rx.recv() => Some(msg),
-                    Some(msg) = work_chunk_rx.recv() => Some(msg),
-                    Some(msg) = work_low_rx.recv() => Some(msg),
-                    else => None,
-                };
-                let Some(msg) = msg else {
-                    break;
-                };
-                let permit = match worker_sem_for_workers.clone().acquire_owned().await {
-                    Ok(permit) => permit,
-                    Err(_) => break,
-                };
-                let shared = Arc::clone(&shared_for_workers);
-                tokio::spawn(async move {
-                    shared
-                        .handle_message(msg.peer, msg.payload, msg.payload_bytes)
-                        .await;
-                    drop(permit);
-                });
-            }
-        });
 
         let high_filter = SubscriberFilter::topics([Topic::Consensus, Topic::Control]);
         let payload_filter = SubscriberFilter::topics([Topic::ConsensusPayload, Topic::BlockSync]);
@@ -1470,11 +1673,29 @@ impl NetworkRelay {
             Topic::Other,
         ]);
 
-        let mut high_sender = Some(high_sender);
-        let mut payload_sender = Some(payload_sender);
-        let mut chunk_sender = Some(chunk_sender);
-        let mut low_sender = Some(low_sender);
         loop {
+            let (high_sender, high_receiver) = mpsc::channel(high_cap);
+            let (payload_sender, payload_receiver) = mpsc::channel(payload_cap);
+            let (chunk_sender, chunk_receiver) = mpsc::channel(chunk_cap);
+            let (low_sender, low_receiver) = mpsc::channel(low_cap);
+            let (
+                work_high_tx,
+                work_payload_tx,
+                work_chunk_tx,
+                work_low_tx,
+            ) = spawn_network_relay_worker(
+                Arc::clone(&shared),
+                worker_limit,
+                work_high_cap,
+                work_payload_cap,
+                work_chunk_cap,
+                work_low_cap,
+            );
+
+            let mut high_sender = Some(high_sender);
+            let mut payload_sender = Some(payload_sender);
+            let mut chunk_sender = Some(chunk_sender);
+            let mut low_sender = Some(low_sender);
             if let Some(sender) = high_sender.take() {
                 match shared
                     .network
@@ -1540,158 +1761,36 @@ impl NetworkRelay {
                 && chunk_sender.is_none()
                 && low_sender.is_none()
             {
-                break;
+                let exit = drive_network_relay_ingress(
+                    high_receiver,
+                    payload_receiver,
+                    chunk_receiver,
+                    low_receiver,
+                    &work_high_tx,
+                    &work_payload_tx,
+                    &work_chunk_tx,
+                    &work_low_tx,
+                )
+                .await;
+                match exit {
+                    RelayIngressLoopExit::ReceiverClosed(kind) => {
+                        iroha_logger::warn!(
+                            receiver = kind.label(),
+                            "relay subscriber channel closed; restarting subscriptions"
+                        );
+                    }
+                    RelayIngressLoopExit::WorkerClosed(kind) => {
+                        iroha_logger::warn!(
+                            queue = kind.label(),
+                            "relay worker queue closed; restarting dispatcher"
+                        );
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(50)).await;
+                continue;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-
-        // Ensure payload, chunk, and low-priority queues make progress without stalling consensus traffic.
-        let mut high_budget = RELAY_HIGH_BURST;
-        let mut high_drops: u64 = 0;
-        let mut payload_drops: u64 = 0;
-        let mut chunk_drops: u64 = 0;
-        let mut low_drops: u64 = 0;
-        loop {
-            if let Some(msg) =
-                try_recv_after_burst(&mut payload_receiver, &mut high_budget, RELAY_HIGH_BURST)
-            {
-                match work_payload_tx.try_send(msg) {
-                    Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Full(msg)) => {
-                        payload_drops = payload_drops.saturating_add(1);
-                        if payload_drops == 1 || payload_drops.is_multiple_of(1024) {
-                            iroha_logger::warn!(
-                                peer = %msg.peer,
-                                topic = ?msg.payload.topic(),
-                                drops = payload_drops,
-                                "relay work queue full; dropping payload message"
-                            );
-                        }
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => break,
-                }
-                continue;
-            }
-            if let Some(msg) =
-                try_recv_after_burst(&mut chunk_receiver, &mut high_budget, RELAY_HIGH_BURST)
-            {
-                match work_chunk_tx.try_send(msg) {
-                    Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Full(msg)) => {
-                        chunk_drops = chunk_drops.saturating_add(1);
-                        if chunk_drops == 1 || chunk_drops.is_multiple_of(1024) {
-                            iroha_logger::warn!(
-                                peer = %msg.peer,
-                                topic = ?msg.payload.topic(),
-                                drops = chunk_drops,
-                                "relay work queue full; dropping chunk message"
-                            );
-                        }
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => break,
-                }
-                continue;
-            }
-            if let Some(msg) =
-                try_recv_after_burst(&mut low_receiver, &mut high_budget, RELAY_HIGH_BURST)
-            {
-                match work_low_tx.try_send(msg) {
-                    Ok(()) => {}
-                    Err(mpsc::error::TrySendError::Full(msg)) => {
-                        low_drops = low_drops.saturating_add(1);
-                        if low_drops == 1 || low_drops.is_multiple_of(1024) {
-                            iroha_logger::warn!(
-                                peer = %msg.peer,
-                                topic = ?msg.payload.topic(),
-                                drops = low_drops,
-                                "relay work queue full; dropping low-priority message"
-                            );
-                        }
-                    }
-                    Err(mpsc::error::TrySendError::Closed(_)) => break,
-                }
-                continue;
-            }
-            tokio::select! {
-                biased;
-                Some(msg) = high_receiver.recv() => {
-                    high_budget = high_budget.saturating_sub(1);
-                    match work_high_tx.try_send(msg) {
-                        Ok(()) => {}
-                        Err(mpsc::error::TrySendError::Full(msg)) => {
-                            high_drops = high_drops.saturating_add(1);
-                            if high_drops == 1 || high_drops.is_multiple_of(1024) {
-                                iroha_logger::warn!(
-                                    peer = %msg.peer,
-                                    topic = ?msg.payload.topic(),
-                                    drops = high_drops,
-                                    "relay work queue full; dropping high-priority message"
-                                );
-                            }
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => break,
-                    }
-                }
-                Some(msg) = payload_receiver.recv() => {
-                    high_budget = RELAY_HIGH_BURST;
-                    match work_payload_tx.try_send(msg) {
-                        Ok(()) => {}
-                        Err(mpsc::error::TrySendError::Full(msg)) => {
-                            payload_drops = payload_drops.saturating_add(1);
-                            if payload_drops == 1 || payload_drops.is_multiple_of(1024) {
-                                iroha_logger::warn!(
-                                    peer = %msg.peer,
-                                    topic = ?msg.payload.topic(),
-                                    drops = payload_drops,
-                                    "relay work queue full; dropping payload message"
-                                );
-                            }
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => break,
-                    }
-                }
-                Some(msg) = chunk_receiver.recv() => {
-                    high_budget = RELAY_HIGH_BURST;
-                    match work_chunk_tx.try_send(msg) {
-                        Ok(()) => {}
-                        Err(mpsc::error::TrySendError::Full(msg)) => {
-                            chunk_drops = chunk_drops.saturating_add(1);
-                            if chunk_drops == 1 || chunk_drops.is_multiple_of(1024) {
-                                iroha_logger::warn!(
-                                    peer = %msg.peer,
-                                    topic = ?msg.payload.topic(),
-                                    drops = chunk_drops,
-                                    "relay work queue full; dropping chunk message"
-                                );
-                            }
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => break,
-                    }
-                }
-                Some(msg) = low_receiver.recv() => {
-                    high_budget = RELAY_HIGH_BURST;
-                    match work_low_tx.try_send(msg) {
-                        Ok(()) => {}
-                        Err(mpsc::error::TrySendError::Full(msg)) => {
-                            low_drops = low_drops.saturating_add(1);
-                            if low_drops == 1 || low_drops.is_multiple_of(1024) {
-                                iroha_logger::warn!(
-                                    peer = %msg.peer,
-                                    topic = ?msg.payload.topic(),
-                                    drops = low_drops,
-                                    "relay work queue full; dropping low-priority message"
-                                );
-                            }
-                        }
-                        Err(mpsc::error::TrySendError::Closed(_)) => break,
-                    }
-                }
-                else => {
-                    break;
-                }
-            }
-        }
-        iroha_logger::debug!("Exiting the network relay");
     }
 }
 
@@ -8954,7 +9053,7 @@ mod tests {
 
             let msg = try_recv_after_burst(&mut rx, &mut budget, 4);
 
-            assert!(msg.is_none());
+            assert_eq!(msg, RelayBurstRecv::Skip);
             assert_eq!(budget, 1);
             assert!(matches!(rx.try_recv(), Ok(7)));
         }
@@ -8967,7 +9066,7 @@ mod tests {
 
             let msg = try_recv_after_burst(&mut rx, &mut budget, 4);
 
-            assert!(matches!(msg, Some(9)));
+            assert!(matches!(msg, RelayBurstRecv::Message(9)));
             assert_eq!(budget, 4);
             assert!(matches!(rx.try_recv(), Err(TryRecvError::Empty)));
         }
@@ -8979,8 +9078,57 @@ mod tests {
 
             let msg = try_recv_after_burst(&mut rx, &mut budget, 4);
 
-            assert!(msg.is_none());
+            assert_eq!(msg, RelayBurstRecv::Skip);
             assert_eq!(budget, 4);
+        }
+
+        #[test]
+        fn try_recv_after_burst_reports_disconnected_receiver() {
+            let (tx, mut rx) = mpsc::channel::<u8>(1);
+            drop(tx);
+            let mut budget = 0;
+
+            let msg = try_recv_after_burst(&mut rx, &mut budget, 4);
+
+            assert_eq!(msg, RelayBurstRecv::Disconnected);
+            assert_eq!(budget, 4);
+        }
+
+        #[tokio::test]
+        async fn relay_ingress_requests_restart_when_receiver_closes() {
+            let (_high_tx, high_rx) = mpsc::channel(1);
+            let (payload_tx, payload_rx) = mpsc::channel(1);
+            let (chunk_tx, chunk_rx) = mpsc::channel(1);
+            let (low_tx, low_rx) = mpsc::channel(1);
+            let (work_high_tx, _work_high_rx) = mpsc::channel(1);
+            let (work_payload_tx, _work_payload_rx) = mpsc::channel(1);
+            let (work_chunk_tx, _work_chunk_rx) = mpsc::channel(1);
+            let (work_low_tx, _work_low_rx) = mpsc::channel(1);
+
+            drop(payload_tx);
+            let exit = tokio::time::timeout(
+                Duration::from_millis(100),
+                drive_network_relay_ingress(
+                    high_rx,
+                    payload_rx,
+                    chunk_rx,
+                    low_rx,
+                    &work_high_tx,
+                    &work_payload_tx,
+                    &work_chunk_tx,
+                    &work_low_tx,
+                ),
+            )
+            .await
+            .expect("relay ingress should notice closed receiver");
+
+            assert_eq!(
+                exit,
+                RelayIngressLoopExit::ReceiverClosed(RelayReceiverKind::Payload)
+            );
+
+            drop(chunk_tx);
+            drop(low_tx);
         }
     }
 

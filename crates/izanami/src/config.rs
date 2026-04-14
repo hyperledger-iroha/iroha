@@ -12,11 +12,14 @@ use iroha_config::{
         toml::{TomlSource, Writer as TomlWriter},
     },
     parameters::actual::{
-        Commit, ConsensusMode, Da, Fusion, LaneRoutingPolicy, LaneRoutingRule,
+        Commit, ConsensusMode, Da, Fusion, LaneRoutingPolicy, LaneRoutingRule, LaneValidatorMode,
         Nexus as ActualNexus, Sumeragi as ActualSumeragi,
     },
 };
-use iroha_data_model::nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog};
+use iroha_data_model::{
+    asset::AssetDefinitionId,
+    nexus::{DataSpaceCatalog, DataSpaceId, LaneCatalog, LaneId},
+};
 use iroha_primitives::addr::SocketAddr as IrohaSocketAddr;
 use toml::{Table, Value};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -413,6 +416,9 @@ impl IzanamiArgs {
 pub struct NexusProfile {
     pub lane_catalog: LaneCatalog,
     pub dataspace_catalog: DataSpaceCatalog,
+    pub bootstrap_public_lanes: Vec<LaneId>,
+    pub stake_asset_id: AssetDefinitionId,
+    pub fee_asset_id: AssetDefinitionId,
     pub routing_policy: LaneRoutingPolicy,
     pub fusion: Fusion,
     pub commit: Commit,
@@ -492,11 +498,25 @@ impl NexusProfile {
 
         let nexus = actual.nexus.clone();
         let sumeragi = actual.sumeragi;
+        let bootstrap_public_lanes = derive_bootstrap_public_lanes(&nexus);
         let config_layer = build_nexus_layer(&nexus, &sumeragi);
+        let stake_asset_id = nexus
+            .staking
+            .stake_asset_id
+            .parse()
+            .map_err(|err| eyre!("failed to parse embedded nexus stake asset id: {err}"))?;
+        let fee_asset_id = nexus
+            .fees
+            .fee_asset_id
+            .parse()
+            .map_err(|err| eyre!("failed to parse embedded nexus fee asset id: {err}"))?;
 
         Ok(Self {
             lane_catalog: nexus.lane_catalog,
             dataspace_catalog: nexus.dataspace_catalog,
+            bootstrap_public_lanes,
+            stake_asset_id,
+            fee_asset_id,
             routing_policy: nexus.routing_policy,
             fusion: nexus.fusion,
             commit: nexus.commit,
@@ -505,6 +525,29 @@ impl NexusProfile {
             config_layer,
         })
     }
+}
+
+fn derive_bootstrap_public_lanes(nexus: &ActualNexus) -> Vec<LaneId> {
+    let lanes: Vec<LaneId> = if nexus.lane_catalog.lanes().is_empty() {
+        vec![LaneId::SINGLE]
+    } else {
+        nexus
+            .lane_catalog
+            .lanes()
+            .iter()
+            .map(|lane| lane.id)
+            .collect()
+    };
+
+    lanes
+        .into_iter()
+        .filter(|lane| {
+            matches!(
+                nexus.staking.validator_mode(*lane, &nexus.lane_catalog),
+                LaneValidatorMode::StakeElected
+            )
+        })
+        .collect()
 }
 
 fn normalize_lane_metadata(raw: &mut Table) {
@@ -624,6 +667,14 @@ fn build_nexus_layer(nexus: &ActualNexus, sumeragi: &ActualSumeragi) -> Table {
     TomlWriter::new(&mut layer).write(
         ["nexus", "routing_policy", "rules"],
         Value::Array(rule_values),
+    );
+    TomlWriter::new(&mut layer).write(
+        ["nexus", "fees", "fee_asset_id"],
+        nexus.fees.fee_asset_id.clone(),
+    );
+    TomlWriter::new(&mut layer).write(
+        ["nexus", "staking", "stake_asset_id"],
+        nexus.staking.stake_asset_id.clone(),
     );
 
     TomlWriter::new(&mut layer).write(
@@ -936,6 +987,41 @@ mod tests {
             Some("npos"),
             "nexus profile must force consensus_mode=npos"
         );
+    }
+
+    #[test]
+    fn nexus_profile_derives_bootstrap_public_lanes() {
+        let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
+        assert_eq!(
+            profile.bootstrap_public_lanes,
+            vec![LaneId::new(0), LaneId::new(1), LaneId::new(2)],
+            "embedded nexus profile should expose every stake-elected bootstrap lane"
+        );
+    }
+
+    #[test]
+    fn nexus_profile_preserves_effective_bootstrap_asset_ids() {
+        let profile = NexusProfile::sora_defaults().expect("nexus profile should load");
+        let expected_fee_asset = profile.fee_asset_id.to_string();
+        let expected_stake_asset = profile.stake_asset_id.to_string();
+        let fee_asset = profile
+            .config_layer
+            .get("nexus")
+            .and_then(Value::as_table)
+            .and_then(|nexus| nexus.get("fees"))
+            .and_then(Value::as_table)
+            .and_then(|fees| fees.get("fee_asset_id"))
+            .and_then(Value::as_str);
+        let stake_asset = profile
+            .config_layer
+            .get("nexus")
+            .and_then(Value::as_table)
+            .and_then(|nexus| nexus.get("staking"))
+            .and_then(Value::as_table)
+            .and_then(|staking| staking.get("stake_asset_id"))
+            .and_then(Value::as_str);
+        assert_eq!(fee_asset, Some(expected_fee_asset.as_str()));
+        assert_eq!(stake_asset, Some(expected_stake_asset.as_str()));
     }
 
     #[test]

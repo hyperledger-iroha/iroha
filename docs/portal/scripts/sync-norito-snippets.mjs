@@ -15,7 +15,7 @@ const outputDocsDir = path.resolve(portalRoot, 'docs', 'norito', 'examples');
 const staticDir = path.resolve(portalRoot, 'static', 'norito-snippets');
 const manifestPath = path.resolve(portalRoot, '.docusaurus', 'norito-snippets-manifest.json');
 const marker = SNIPPET_MARKER;
-const MANIFEST_VERSION = 1;
+const MANIFEST_VERSION = 2;
 const TEMPLATE_REVISION = 3;
 
 function formatDoc(snippet, code) {
@@ -201,6 +201,10 @@ function createManifestEntries(descriptors) {
     source: snippet.source,
     title: snippet.title,
     description: snippet.description,
+    renderConfigDigest: JSON.stringify({
+      ledgerWalkthrough: snippet.ledgerWalkthrough ?? [],
+      sdkGuides: snippet.sdkGuides ?? []
+    }),
     size: stats.size,
     mtimeMs: stats.mtimeMs,
     templateRevision: TEMPLATE_REVISION
@@ -239,6 +243,7 @@ function manifestEntriesEqual(previousEntry, nextEntry) {
     previousEntry.source === nextEntry.source &&
     previousEntry.title === nextEntry.title &&
     previousEntry.description === nextEntry.description &&
+    previousEntry.renderConfigDigest === nextEntry.renderConfigDigest &&
     previousEntry.size === nextEntry.size &&
     previousEntry.mtimeMs === nextEntry.mtimeMs &&
     previousEntry.templateRevision === nextEntry.templateRevision

@@ -5027,13 +5027,17 @@ public struct ToriiConfidentialAssetPolicy: Decodable, Sendable {
 public struct ToriiNodeCapabilities: Decodable, Sendable {
     /// Must match `iroha_data_model::DATA_MODEL_VERSION` on the node.
     public static let expectedDataModelVersion = 1
+    /// Must match `<SignedTransaction as NoritoSerialize>::schema_hash()` on the node.
+    public static let expectedSignedTransactionSchemaHashHex = "7ad1ae306dffd89a7ad1ae306dffd89a"
     public let abiVersion: Int
     public let dataModelVersion: Int?
+    public let signedTransactionSchemaHashHex: String?
     public let crypto: ToriiNodeCryptoCapabilities?
 
     private enum CodingKeys: String, CodingKey {
         case abiVersion = "abi_version"
         case dataModelVersion = "data_model_version"
+        case signedTransactionSchemaHashHex = "signed_transaction_schema_hash_hex"
         case crypto
     }
 }
@@ -8267,8 +8271,9 @@ struct ToriiStatusState {
 
 private enum ToriiDataModelCompatibility {
     case unknown
-    case compatible(version: Int)
+    case compatible(version: Int, schemaHash: String)
     case incompatible(expected: Int, actual: Int?)
+    case schemaIncompatible(expected: String, actual: String?)
 }
 
 public struct ToriiGovernanceInstruction: Codable, Sendable {
@@ -9613,6 +9618,7 @@ public enum ToriiClientError: Error, Sendable {
     case decoding(Swift.Error)
     case invalidPayload(String)
     case incompatibleDataModel(expected: Int, actual: Int?)
+    case incompatibleTransactionSchema(expected: String, actual: String?)
 }
 
 extension ToriiClientError: LocalizedError {
@@ -9641,6 +9647,11 @@ extension ToriiClientError: LocalizedError {
                 return "Torii data model version mismatch (expected \(expected), got \(actual))."
             }
             return "Torii data model version mismatch (expected \(expected), missing on node)."
+        case let .incompatibleTransactionSchema(expected, actual):
+            if let actual {
+                return "Torii signed transaction schema hash mismatch (expected \(expected), got \(actual))."
+            }
+            return "Torii signed transaction schema hash mismatch (expected \(expected), missing on node)."
         }
     }
 }
@@ -12338,6 +12349,19 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         return try decodeJSON(ToriiNodeCapabilities.self, from: data)
     }
 
+    private func getNodeCapabilitiesForSubmitCompatibility() async throws -> ToriiNodeCapabilities? {
+        let request = try makeRequest(path: "/v1/node/capabilities")
+        let (data, response) = try await send(request)
+        if response.statusCode == 404 || response.statusCode == 429 || (500..<600).contains(response.statusCode) {
+            return nil
+        }
+        try ensureStatus(response, equals: 200, responseBody: data)
+        if data.isEmpty {
+            throw ToriiClientError.emptyBody
+        }
+        return try decodeJSON(ToriiNodeCapabilities.self, from: data)
+    }
+
     public func getRuntimeMetrics() async throws -> ToriiRuntimeMetrics {
         let request = try makeRequest(path: "/v1/runtime/metrics")
         let data = try await data(for: request)
@@ -12952,28 +12976,59 @@ public final class ToriiClient: ToriiTransactionSubmitting, @unchecked Sendable 
         }
     }
 
+    private static func isCanonicalSignedTransactionSchemaHashHex(_ value: String) -> Bool {
+        value.count == 32 && value == value.lowercased() && Data(hexString: value) != nil
+    }
+
     private func ensureDataModelCompatibility() async throws {
-        let expected = ToriiNodeCapabilities.expectedDataModelVersion
+        let expectedVersion = ToriiNodeCapabilities.expectedDataModelVersion
+        let expectedSchemaHash = ToriiNodeCapabilities.expectedSignedTransactionSchemaHashHex
         let cached = dataModelQueue.sync { dataModelCompatibility }
         switch cached {
         case .compatible:
             return
         case let .incompatible(expected, actual):
             throw ToriiClientError.incompatibleDataModel(expected: expected, actual: actual)
+        case let .schemaIncompatible(expected, actual):
+            throw ToriiClientError.incompatibleTransactionSchema(expected: expected, actual: actual)
         case .unknown:
             break
         }
 
-        let capabilities = try await getNodeCapabilities()
-        let actual = capabilities.dataModelVersion
-        guard actual == expected else {
+        guard let capabilities = try await getNodeCapabilitiesForSubmitCompatibility() else {
+            return
+        }
+
+        let actualVersion = capabilities.dataModelVersion
+        guard actualVersion == expectedVersion else {
             dataModelQueue.sync {
-                dataModelCompatibility = .incompatible(expected: expected, actual: actual)
+                dataModelCompatibility = .incompatible(expected: expectedVersion, actual: actualVersion)
             }
-            throw ToriiClientError.incompatibleDataModel(expected: expected, actual: actual)
+            throw ToriiClientError.incompatibleDataModel(expected: expectedVersion, actual: actualVersion)
+        }
+
+        let rawSchemaHash = capabilities.signedTransactionSchemaHashHex?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let actualSchemaHash = rawSchemaHash, !actualSchemaHash.isEmpty else {
+            dataModelQueue.sync {
+                dataModelCompatibility = .schemaIncompatible(expected: expectedSchemaHash, actual: nil)
+            }
+            throw ToriiClientError.incompatibleTransactionSchema(expected: expectedSchemaHash, actual: nil)
+        }
+        guard Self.isCanonicalSignedTransactionSchemaHashHex(actualSchemaHash) else {
+            dataModelQueue.sync {
+                dataModelCompatibility = .schemaIncompatible(expected: expectedSchemaHash, actual: actualSchemaHash)
+            }
+            throw ToriiClientError.incompatibleTransactionSchema(expected: expectedSchemaHash, actual: actualSchemaHash)
+        }
+        guard actualSchemaHash == expectedSchemaHash else {
+            dataModelQueue.sync {
+                dataModelCompatibility = .schemaIncompatible(expected: expectedSchemaHash, actual: actualSchemaHash)
+            }
+            throw ToriiClientError.incompatibleTransactionSchema(expected: expectedSchemaHash, actual: actualSchemaHash)
         }
         dataModelQueue.sync {
-            dataModelCompatibility = .compatible(version: expected)
+            dataModelCompatibility = .compatible(version: expectedVersion, schemaHash: expectedSchemaHash)
         }
     }
 

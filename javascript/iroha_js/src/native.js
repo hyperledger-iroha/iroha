@@ -71,15 +71,6 @@ function formatForceNativeVerificationError(verification, paths) {
 export function getNativeBinding() {
   const paths = resolveNativePaths();
   const forceNative = isNativeForced();
-  if (cachedBindingPath !== paths.bindingPath) {
-    cachedBinding = undefined;
-  }
-  if (cachedBinding !== undefined && !(forceNative && cachedBinding === null)) {
-    return cachedBinding;
-  }
-  if (forceNative && cachedBinding === null) {
-    cachedBinding = undefined;
-  }
   if (isNativeDisabled()) {
     if (forceNative) {
       throw new Error(
@@ -94,6 +85,15 @@ export function getNativeBinding() {
     cachedBindingPath = paths.bindingPath;
     cachedBinding = null;
     return cachedBinding;
+  }
+  if (cachedBindingPath !== paths.bindingPath) {
+    cachedBinding = undefined;
+  }
+  if (cachedBinding !== undefined && !(forceNative && cachedBinding === null)) {
+    return cachedBinding;
+  }
+  if (forceNative && cachedBinding === null) {
+    cachedBinding = undefined;
   }
 
   const verification = verifyNativeBinding(paths.bindingPath, {

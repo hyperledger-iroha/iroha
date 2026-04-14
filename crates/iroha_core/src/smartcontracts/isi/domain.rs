@@ -104,6 +104,39 @@ pub mod isi {
         }
     }
 
+    fn ensure_alias_can_change_recovery_binding(
+        state_transaction: &StateTransaction<'_, '_>,
+        label: &AccountAlias,
+    ) -> Result<(), InstructionExecutionError> {
+        if state_transaction
+            .world
+            .account_recovery_requests
+            .get(label)
+            .is_some_and(|request| request.is_pending())
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "cannot change primary account alias {label:?}: a recovery request is pending"
+                )
+                .into(),
+            ));
+        }
+        if state_transaction
+            .world
+            .account_recovery_policies
+            .get(label)
+            .is_some()
+        {
+            return Err(InstructionExecutionError::InvariantViolation(
+                format!(
+                    "cannot change primary account alias {label:?}: clear the account recovery policy first"
+                )
+                .into(),
+            ));
+        }
+        Ok(())
+    }
+
     fn ensure_active_account_alias_lease(
         state_transaction: &StateTransaction<'_, '_>,
         label: &AccountAlias,
@@ -899,6 +932,10 @@ pub mod isi {
             state_transaction: &mut StateTransaction<'_, '_>,
         ) -> Result<(), Error> {
             let account_id = self.object().clone();
+
+            if let Some(primary_label) = state_transaction.world.account(&account_id)?.label() {
+                ensure_alias_can_change_recovery_binding(state_transaction, primary_label)?;
+            }
 
             if let Some((owned_domain_id, _)) = state_transaction
                 .world
@@ -2620,6 +2657,7 @@ pub mod isi {
                     .into());
                 }
                 if let Some(previous_label) = existing_label.as_ref() {
+                    ensure_alias_can_change_recovery_binding(state_transaction, previous_label)?;
                     state_transaction
                         .world
                         .remove_account_alias_binding(previous_label);
@@ -2687,6 +2725,9 @@ pub mod isi {
             }
 
             if let Some(previous_label) = existing_label.as_ref() {
+                if previous_label != &alias {
+                    ensure_alias_can_change_recovery_binding(state_transaction, previous_label)?;
+                }
                 state_transaction
                     .world
                     .remove_account_alias_binding(previous_label);

@@ -5754,7 +5754,6 @@ impl NetworkPeer {
                 async move {
                     if let Err(err) = peer_exit.monitor(shutdown_rx).await {
                         error!("something went very bad during peer exit monitoring: {err}");
-                        panic!()
                     }
                 }
                 .instrument(span.clone()),
@@ -7414,6 +7413,40 @@ mod shutdown_tests {
     }
 
     #[tokio::test]
+    async fn shutdown_treats_already_exited_child_as_graceful_completion() {
+        let mut cmd = Command::new("sh");
+        cmd.arg("-c").arg("exit 0");
+        cmd.stdout(Stdio::null()).stderr(Stdio::null());
+        let child = cmd.spawn().expect("spawn short-lived child");
+
+        let (events, _rx) = broadcast::channel(4);
+        let (block_height, _rx) = watch::channel(None);
+        let (_fatal_tx, fatal_rx) = watch::channel(false);
+        let mut peer_exit = PeerExit {
+            child,
+            span: tracing::Span::none(),
+            is_running: Arc::new(AtomicBool::new(true)),
+            is_normal_shutdown_started: Arc::new(AtomicBool::new(false)),
+            events,
+            block_height,
+            fatal_rx,
+            stderr_log_ready: Arc::new(Notify::new()),
+            stderr_live: Arc::new(StdMutex::new(LiveStderrState::default())),
+        };
+
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let status = peer_exit
+            .shutdown_or_kill()
+            .await
+            .expect("already-exited child should be handled cleanly");
+
+        assert!(
+            status.success(),
+            "expected successful exit status, got {status:?}"
+        );
+    }
+
+    #[tokio::test]
     async fn log_drain_exits_on_shutdown_notify() {
         let dir = tempdir().expect("tempdir");
         let log_path = dir.path().join("stdout.log");
@@ -7741,9 +7774,16 @@ impl PeerExit {
         self.is_normal_shutdown_started
             .store(true, Ordering::Relaxed);
 
+        if self.child.id().is_none() {
+            self.span.in_scope(|| {
+                info!("child already exited before shutdown signal could be delivered")
+            });
+            return self.child.wait().await.wrap_err("wait failure");
+        }
+
         self.span.in_scope(|| info!("sending SIGTERM"));
         signal::kill(
-            Pid::from_raw(self.child.id().ok_or(eyre!("race condition"))? as i32),
+            Pid::from_raw(self.child.id().expect("checked child id above") as i32),
             signal::Signal::SIGTERM,
         )
         .wrap_err("failed to send SIGTERM")?;

@@ -13,6 +13,10 @@ import java.util.concurrent.ConcurrentMap;
 import org.hyperledger.iroha.android.KeyManagementException;
 import org.hyperledger.iroha.android.crypto.KeyProviderMetadata;
 import org.hyperledger.iroha.android.crypto.IrohaHash;
+import org.hyperledger.iroha.android.crypto.MlDsaPrivateKey;
+import org.hyperledger.iroha.android.crypto.MlDsaPublicKey;
+import org.hyperledger.iroha.android.crypto.NativeSignerBridge;
+import org.hyperledger.iroha.android.crypto.SigningAlgorithm;
 import org.hyperledger.iroha.android.crypto.Signer;
 import org.hyperledger.iroha.android.crypto.SoftwareKeyProvider;
 import org.hyperledger.iroha.android.crypto.keystore.KeyAttestation;
@@ -80,6 +84,8 @@ public final class IrohaKeyManagerTests {
     shouldVerifyAttestationViaManager();
     shouldGenerateAttestationViaManager();
     shouldSignPayloadViaAlias();
+    shouldGenerateMlDsaKeysWhenConfigured();
+    shouldRejectMlDsaHardwarePreferences();
     System.out.println("[IrohaAndroid] Key manager smoke tests passed.");
   }
 
@@ -301,6 +307,52 @@ public final class IrohaKeyManagerTests {
     verifier.initVerify(keyPair.getPublic());
     verifier.update(IrohaHash.prehash(message));
     assert verifier.verify(signature) : "Generated signature must verify with stored public key";
+  }
+
+  private static void shouldGenerateMlDsaKeysWhenConfigured() throws Exception {
+    if (!NativeSignerBridge.isNativeAvailable()) {
+      System.out.println(
+          "[IrohaAndroid] Skipping ML-DSA key manager test (native bridge unavailable).");
+      return;
+    }
+    final IrohaKeyManager manager = IrohaKeyManager.withSoftwareFallback(SigningAlgorithm.ML_DSA);
+    final KeyPair keyPair =
+        manager.generateOrLoad("ml-dsa-alias", IrohaKeyManager.KeySecurityPreference.SOFTWARE_ONLY);
+    assert manager.signingAlgorithm() == SigningAlgorithm.ML_DSA
+        : "Manager should expose ML-DSA when configured";
+    assert keyPair.getPrivate() instanceof MlDsaPrivateKey
+        : "ML-DSA manager must return ML-DSA private keys";
+    assert keyPair.getPublic() instanceof MlDsaPublicKey
+        : "ML-DSA manager must return ML-DSA public keys";
+
+    final Signer signer =
+        manager.signerForAlias("ml-dsa-alias", IrohaKeyManager.KeySecurityPreference.SOFTWARE_ONLY);
+    final byte[] message = "hello-ml-dsa".getBytes();
+    final byte[] signature = signer.sign(message);
+    final boolean verified =
+        NativeSignerBridge.verifyDetached(
+            SigningAlgorithm.ML_DSA,
+            signer.publicKey(),
+            IrohaHash.prehash(message),
+            signature);
+    assert verified : "Generated ML-DSA signature must verify via the native bridge";
+  }
+
+  private static void shouldRejectMlDsaHardwarePreferences() throws Exception {
+    if (!NativeSignerBridge.isNativeAvailable()) {
+      System.out.println(
+          "[IrohaAndroid] Skipping ML-DSA hardware preference test (native bridge unavailable).");
+      return;
+    }
+    final IrohaKeyManager manager = IrohaKeyManager.withDefaultProviders(SigningAlgorithm.ML_DSA);
+    boolean threw = false;
+    try {
+      manager.generateOrLoad(
+          "ml-dsa-hardware", IrohaKeyManager.KeySecurityPreference.HARDWARE_PREFERRED);
+    } catch (final KeyManagementException expected) {
+      threw = true;
+    }
+    assert threw : "ML-DSA managers must fail fast for hardware preferences";
   }
 
   private static byte[] decodeBase64(final String value) {

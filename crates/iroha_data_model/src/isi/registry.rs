@@ -2,10 +2,10 @@
 use crate::isi::governance;
 use crate::{
     isi::{
-        InstructionRegistry, RegisterPeerWithPop, asset_alias, asset_transfer_control, bridge,
-        consensus_keys, contract_alias, domain_link, endorsement, identifier, kaigi, nexus,
-        offline, oracle, ram_lfe, repo, runtime_upgrade, rwa, settlement, smart_contract_code,
-        social, soracloud, sorafs, space_directory,
+        InstructionRegistry, RegisterPeerWithPop, account_recovery, asset_alias,
+        asset_transfer_control, bridge, consensus_keys, contract_alias, domain_link, endorsement,
+        identifier, kaigi, nexus, offline, oracle, ram_lfe, repo, runtime_upgrade, rwa, settlement,
+        smart_contract_code, social, soracloud, sorafs, space_directory,
         transparent::{
             AddSignatory, InvalidInstruction, RemoveAssetKeyValue, RemoveSignatory,
             SetAccountQuorum, SetAssetKeyValue,
@@ -174,6 +174,13 @@ const ALL_REGISTRARS: &[Registrar] = &[
     InstructionRegistry::register::<endorsement::SubmitDomainEndorsement>,
     InstructionRegistry::register::<domain_link::SetAccountAliasBinding>,
     InstructionRegistry::register::<domain_link::SetPrimaryAccountAlias>,
+    InstructionRegistry::register::<account_recovery::ReplaceAccountController>,
+    InstructionRegistry::register::<account_recovery::SetAccountRecoveryPolicy>,
+    InstructionRegistry::register::<account_recovery::ClearAccountRecoveryPolicy>,
+    InstructionRegistry::register::<account_recovery::ProposeAccountRecovery>,
+    InstructionRegistry::register::<account_recovery::ApproveAccountRecovery>,
+    InstructionRegistry::register::<account_recovery::CancelAccountRecovery>,
+    InstructionRegistry::register::<account_recovery::FinalizeAccountRecovery>,
     InstructionRegistry::register::<contract_alias::SetContractAlias>,
     InstructionRegistry::register::<ram_lfe::RegisterRamLfeProgramPolicy>,
     InstructionRegistry::register::<ram_lfe::ActivateRamLfeProgramPolicy>,
@@ -465,6 +472,27 @@ fn with_consensus_stable_ids(mut registry: InstructionRegistry) -> InstructionRe
     );
     registry = registry.register_with_id::<domain_link::SetPrimaryAccountAlias>(
         "identity::SetPrimaryAccountAlias",
+    );
+    registry = registry.register_with_id::<account_recovery::ReplaceAccountController>(
+        account_recovery::ReplaceAccountController::WIRE_ID,
+    );
+    registry = registry.register_with_id::<account_recovery::SetAccountRecoveryPolicy>(
+        account_recovery::SetAccountRecoveryPolicy::WIRE_ID,
+    );
+    registry = registry.register_with_id::<account_recovery::ClearAccountRecoveryPolicy>(
+        account_recovery::ClearAccountRecoveryPolicy::WIRE_ID,
+    );
+    registry = registry.register_with_id::<account_recovery::ProposeAccountRecovery>(
+        account_recovery::ProposeAccountRecovery::WIRE_ID,
+    );
+    registry = registry.register_with_id::<account_recovery::ApproveAccountRecovery>(
+        account_recovery::ApproveAccountRecovery::WIRE_ID,
+    );
+    registry = registry.register_with_id::<account_recovery::CancelAccountRecovery>(
+        account_recovery::CancelAccountRecovery::WIRE_ID,
+    );
+    registry = registry.register_with_id::<account_recovery::FinalizeAccountRecovery>(
+        account_recovery::FinalizeAccountRecovery::WIRE_ID,
     );
     registry
 }

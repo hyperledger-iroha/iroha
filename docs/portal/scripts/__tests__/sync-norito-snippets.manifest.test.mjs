@@ -15,6 +15,12 @@ function entry(overrides = {}) {
     source: overrides.source ?? 'crates/demo.ko',
     title: overrides.title ?? 'Demo',
     description: overrides.description ?? 'Example snippet',
+    renderConfigDigest:
+      overrides.renderConfigDigest ??
+      JSON.stringify({
+        ledgerWalkthrough: ['Compile contract'],
+        sdkGuides: [{label: 'Rust SDK quickstart', permalink: '/sdks/rust'}]
+      }),
     size: overrides.size ?? 64,
     mtimeMs: overrides.mtimeMs ?? 1_700_000_000_000,
     templateRevision: overrides.templateRevision ?? TEMPLATE_REVISION
@@ -60,6 +66,19 @@ test('manifestNeedsUpdate ignores entry order', () => {
 test('manifestNeedsUpdate detects metadata changes', () => {
   const previous = {version: MANIFEST_VERSION, entries: [entry()]};
   const nextEntries = [entry({description: 'Updated'})];
+  assert.strictEqual(manifestNeedsUpdate(previous, nextEntries), true);
+});
+
+test('manifestNeedsUpdate detects walkthrough changes', () => {
+  const previous = {version: MANIFEST_VERSION, entries: [entry()]};
+  const nextEntries = [
+    entry({
+      renderConfigDigest: JSON.stringify({
+        ledgerWalkthrough: ['Compile contract', 'Call deposit(amount)'],
+        sdkGuides: [{label: 'Rust SDK quickstart', permalink: '/sdks/rust'}]
+      })
+    })
+  ];
   assert.strictEqual(manifestNeedsUpdate(previous, nextEntries), true);
 });
 

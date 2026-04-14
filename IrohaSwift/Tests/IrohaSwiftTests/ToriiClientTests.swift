@@ -540,11 +540,17 @@ final class ToriiClientTests: XCTestCase {
         return ToriiClient(baseURL: baseURL, session: session)
     }
 
-    private func nodeCapabilitiesBody(dataModelVersion: Int = ToriiNodeCapabilities.expectedDataModelVersion) -> Data {
-        let payload: [String: Any] = [
+    private func nodeCapabilitiesBody(
+        dataModelVersion: Int = ToriiNodeCapabilities.expectedDataModelVersion,
+        signedTransactionSchemaHashHex: String? = ToriiNodeCapabilities.expectedSignedTransactionSchemaHashHex
+    ) -> Data {
+        var payload: [String: Any] = [
             "abi_version": 1,
             "data_model_version": dataModelVersion
         ]
+        if let signedTransactionSchemaHashHex {
+            payload["signed_transaction_schema_hash_hex"] = signedTransactionSchemaHashHex
+        }
         return (try? JSONSerialization.data(withJSONObject: payload)) ?? Data()
     }
 
@@ -1731,6 +1737,223 @@ final class ToriiClientTests: XCTestCase {
         } catch {
             XCTFail("unexpected error: \(error)")
         }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitTransactionRejectsMissingSignedTransactionSchemaHash() async throws {
+        StubURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/node/capabilities":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, self.nodeCapabilitiesBody(signedTransactionSchemaHashHex: nil))
+            case "/transaction":
+                XCTFail("transaction submitted with missing schema hash")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            default:
+                XCTFail("unexpected request: \(request.url?.path ?? "")")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            }
+        }
+
+        do {
+            _ = try await makeClient().submitTransaction(data: Data([0x03]))
+            XCTFail("expected schema mismatch")
+        } catch let error as ToriiClientError {
+            guard case let .incompatibleTransactionSchema(expected, actual) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(expected, ToriiNodeCapabilities.expectedSignedTransactionSchemaHashHex)
+            XCTAssertNil(actual)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitTransactionRejectsInvalidSignedTransactionSchemaHash() async throws {
+        StubURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/node/capabilities":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, self.nodeCapabilitiesBody(signedTransactionSchemaHashHex: "ABC123"))
+            case "/transaction":
+                XCTFail("transaction submitted with invalid schema hash")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            default:
+                XCTFail("unexpected request: \(request.url?.path ?? "")")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            }
+        }
+
+        do {
+            _ = try await makeClient().submitTransaction(data: Data([0x04]))
+            XCTFail("expected schema mismatch")
+        } catch let error as ToriiClientError {
+            guard case let .incompatibleTransactionSchema(expected, actual) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(expected, ToriiNodeCapabilities.expectedSignedTransactionSchemaHashHex)
+            XCTAssertEqual(actual, "ABC123")
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitTransactionRejectsMismatchedSignedTransactionSchemaHash() async throws {
+        let mismatchedHash = "00000000000000000000000000000000"
+        StubURLProtocol.handler = { request in
+            switch request.url?.path {
+            case "/v1/node/capabilities":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 200,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                return (response, self.nodeCapabilitiesBody(signedTransactionSchemaHashHex: mismatchedHash))
+            case "/transaction":
+                XCTFail("transaction submitted with incompatible schema hash")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 500, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            default:
+                XCTFail("unexpected request: \(request.url?.path ?? "")")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            }
+        }
+
+        do {
+            _ = try await makeClient().submitTransaction(data: Data([0x05]))
+            XCTFail("expected schema mismatch")
+        } catch let error as ToriiClientError {
+            guard case let .incompatibleTransactionSchema(expected, actual) = error else {
+                return XCTFail("unexpected error: \(error)")
+            }
+            XCTAssertEqual(expected, ToriiNodeCapabilities.expectedSignedTransactionSchemaHashHex)
+            XCTAssertEqual(actual, mismatchedHash)
+        } catch {
+            XCTFail("unexpected error: \(error)")
+        }
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitTransactionAllowsMissingCapabilitiesProbe() async throws {
+        let lock = NSLock()
+        var paths: [String] = []
+        StubURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            lock.lock()
+            paths.append(path)
+            lock.unlock()
+            switch path {
+            case "/v1/node/capabilities":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 404,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "text/plain"])!
+                return (response, Data("missing".utf8))
+            case "/transaction":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 202,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let body = """
+                {"payload":{"tx_hash":"abc404","submitted_at_ms":1,"submitted_at_height":2,"signer":"signer"},"signature":"deadbeef"}
+                """.data(using: .utf8)!
+                return (response, body)
+            default:
+                XCTFail("unexpected request: \(path)")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            }
+        }
+
+        let payload = try await makeClient().submitTransaction(data: Data([0x06]))
+        XCTAssertEqual(payload?.hash, "abc404")
+        XCTAssertEqual(paths, ["/v1/node/capabilities", "/transaction"])
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitTransactionAllowsRateLimitedCapabilitiesProbe() async throws {
+        let lock = NSLock()
+        var paths: [String] = []
+        StubURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            lock.lock()
+            paths.append(path)
+            lock.unlock()
+            switch path {
+            case "/v1/node/capabilities":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 429,
+                                               httpVersion: nil,
+                                               headerFields: ["Retry-After": "1"])!
+                return (response, Data("rate limited".utf8))
+            case "/transaction":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 202,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let body = """
+                {"payload":{"tx_hash":"abc429","submitted_at_ms":1,"submitted_at_height":2,"signer":"signer"},"signature":"deadbeef"}
+                """.data(using: .utf8)!
+                return (response, body)
+            default:
+                XCTFail("unexpected request: \(path)")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            }
+        }
+
+        let payload = try await makeClient().submitTransaction(data: Data([0x07]))
+        XCTAssertEqual(payload?.hash, "abc429")
+        XCTAssertEqual(paths, ["/v1/node/capabilities", "/transaction"])
+    }
+
+    @available(iOS 15.0, macOS 12.0, *)
+    func testSubmitTransactionAllowsServerErrorCapabilitiesProbe() async throws {
+        let lock = NSLock()
+        var paths: [String] = []
+        StubURLProtocol.handler = { request in
+            let path = request.url?.path ?? ""
+            lock.lock()
+            paths.append(path)
+            lock.unlock()
+            switch path {
+            case "/v1/node/capabilities":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 502,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "text/plain"])!
+                return (response, Data("bad gateway".utf8))
+            case "/transaction":
+                let response = HTTPURLResponse(url: request.url!,
+                                               statusCode: 202,
+                                               httpVersion: nil,
+                                               headerFields: ["Content-Type": "application/json"])!
+                let body = """
+                {"payload":{"tx_hash":"abc502","submitted_at_ms":1,"submitted_at_height":2,"signer":"signer"},"signature":"deadbeef"}
+                """.data(using: .utf8)!
+                return (response, body)
+            default:
+                XCTFail("unexpected request: \(path)")
+                let response = HTTPURLResponse(url: request.url!, statusCode: 404, httpVersion: nil, headerFields: nil)!
+                return (response, Data())
+            }
+        }
+
+        let payload = try await makeClient().submitTransaction(data: Data([0x08]))
+        XCTAssertEqual(payload?.hash, "abc502")
+        XCTAssertEqual(paths, ["/v1/node/capabilities", "/transaction"])
     }
 
     @available(iOS 15.0, macOS 12.0, *)

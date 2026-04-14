@@ -1626,6 +1626,7 @@ impl Actor {
                 sender.clone(),
                 incoming_qc.is_none() && validator_checkpoint.is_none(),
                 incoming_qc.is_some() || validator_checkpoint.is_some(),
+                has_commit_votes || incoming_qc.is_some() || validator_checkpoint.is_some(),
             );
             let payload_materialized = result.is_ok()
                 && self.materialize_frontier_block_sync_payload_for_qc_recovery(
@@ -2026,6 +2027,13 @@ impl Actor {
         let (commit_votes_processed, commit_votes_dropped) = process_commit_votes(self);
         let commit_votes_pre_ms =
             u64::try_from(commit_votes_start.elapsed().as_millis()).unwrap_or(u64::MAX);
+        // Commit votes can arm missing-block recovery before we reach the roster/payload path.
+        // Keep the local gate in sync with the tracked request state so vote-backed stale-view
+        // recovery does not get dropped as if no recovery request existed.
+        requested_missing_block |= self
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash);
         let vote_only_known_block_fast_path = block_known
             && has_commit_votes
             && incoming_qc.is_none()
@@ -2545,6 +2553,7 @@ impl Actor {
                             created,
                             sender.clone(),
                             true,
+                            false,
                             false,
                         );
                         return Ok(());
@@ -3124,11 +3133,23 @@ impl Actor {
             incoming_qc_signers,
             "applying block sync update"
         );
-
+        let quorum_only_same_height_frontier_conflict = block_quorum_met
+            && !incoming_qc_usable
+            && !commit_cert_present
+            && !checkpoint_present
+            && self
+                .local_conflicting_frontier_vote(block_height, block_hash)
+                .is_some();
+        // Raw block-signature quorum is enough to hydrate the payload locally and keep stale-view
+        // catch-up moving, but it is not authoritative enough to steal same-height frontier
+        // ownership from a branch that this validator already voted on. Only certified evidence
+        // may bypass the passive retained branch path in that exact conflict case.
         let allow_frontier_owner_preserve_on_payload_mismatch =
-            !incoming_qc_usable && !block_quorum_met && !commit_cert_present && !checkpoint_present;
-        let allow_authoritative_frontier_owner_supersede =
-            incoming_qc_usable || block_quorum_met || commit_cert_present || checkpoint_present;
+            !incoming_qc_usable && !commit_cert_present && !checkpoint_present;
+        let allow_authoritative_frontier_owner_supersede = incoming_qc_usable
+            || commit_cert_present
+            || checkpoint_present
+            || (block_quorum_met && !quorum_only_same_height_frontier_conflict);
         let created = super::message::BlockCreated {
             block,
             frontier: None,
@@ -3139,6 +3160,7 @@ impl Actor {
             sender.clone(),
             allow_frontier_owner_preserve_on_payload_mismatch,
             allow_authoritative_frontier_owner_supersede,
+            has_commit_votes || incoming_qc_usable || commit_cert_present || checkpoint_present,
         );
         let block_apply_ms =
             u64::try_from(block_apply_start.elapsed().as_millis()).unwrap_or(u64::MAX);

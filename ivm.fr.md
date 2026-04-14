@@ -1,18 +1,38 @@
-<!-- Auto-generated stub for French (fr) translation. Replace this content with the full translation. -->
-
 ---
 lang: fr
 direction: ltr
 source: ivm.md
-status: needs-translation
+status: complete
 generator: scripts/sync_docs_i18n.py
 source_hash: c07499edafa5f9d743fbb4b1bbd169725674dca7760d3912b0acb40c7c00fdf3
 source_last_modified: "2026-02-08T10:32:13.839888+00:00"
-translation_last_reviewed: null
+translation_last_reviewed: 2026-04-02
 ---
 
-# Traduction en cours
+# Référence IVM
 
-Ce fichier sert de modèle pour la traduction française du document anglais. Une fois la traduction terminée, mettez à jour le champ `status` dans les métadonnées ci-dessus.
+Ce fichier est le point d’entrée situé à la racine du workspace pour les notes sur l’architecture et l’ABI d’IVM.
+La documentation détaillée se trouve dans `docs/source/` et `crates/ivm/docs/`.
 
-Ce brouillon est en attente de traduction. Remplacez ce texte par le contenu traduit et passez l’état à `complete` lorsque le travail est terminé. Vérifiez également que `translation_last_reviewed` correspond à la dernière vérification par rapport à la version anglaise.
+Documents associés :
+- `docs/source/ivm_architecture_plan.md`
+- `docs/source/ivm_syscalls.md`
+- `crates/ivm/docs/pointer_abi.md`
+
+<!-- BEGIN GENERATED POINTER TYPES -->
+| ID | Name | ABI v1 |
+|---|---|---|
+| 0x0001 | AccountId | OK |
+| 0x0002 | AssetDefinitionId | OK |
+| 0x0003 | Name | OK |
+| 0x0004 | Json | OK |
+| 0x0005 | NftId | OK |
+| 0x0006 | Blob | OK |
+| 0x0007 | AssetId | OK |
+| 0x0008 | DomainId | OK |
+| 0x0009 | NoritoBytes | OK |
+| 0x000A | DataSpaceId | OK |
+| 0x000B | AxtDescriptor | OK |
+| 0x000C | AssetHandle | OK |
+| 0x000D | ProofBlob | OK |
+<!-- END GENERATED POINTER TYPES -->

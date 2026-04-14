@@ -47,6 +47,57 @@ seiyaku TransferDemo {
 Mapping (pointer‑ABI):
 - `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`, then `SCALL 0x24`
 
+## Threshold Escrow
+
+Source: `crates/kotodama_lang/src/samples/threshold_escrow.ko`
+
+```
+seiyaku ThresholdEscrow {
+  state AccountId payer_account;
+  state AccountId recipient_account;
+  state AccountId escrow_account_id;
+  state AssetDefinitionId escrow_asset_definition;
+  state int target_amount_value;
+  state int funded_amount_value;
+  state bool is_open;
+  state bool is_released;
+  state bool is_refunded;
+
+  kotoage fn open_escrow(recipient: AccountId,
+                         escrow_account: AccountId,
+                         asset_definition: AssetDefinitionId,
+                         target_amount: int) permission(Admin) {
+    payer_account = authority();
+    recipient_account = recipient;
+    escrow_account_id = escrow_account;
+    escrow_asset_definition = asset_definition;
+    target_amount_value = target_amount;
+    funded_amount_value = 0;
+    is_open = true;
+  }
+
+  kotoage fn deposit(amount: int) permission(Admin) {
+    transfer_asset(payer_account, escrow_account_id, escrow_asset_definition, amount);
+    funded_amount_value = funded_amount_value + amount;
+  }
+}
+```
+
+This sample models one escrow per deployed contract instance. `open_escrow`
+binds the payer to `authority()`, stores the payer/recipient/escrow/asset
+configuration in durable state, and opens the escrow with an exact target
+amount. `deposit` only accepts positive payer top-ups and rejects deposits that
+would exceed the target. `release_if_ready` transfers the full funded amount
+from the escrow account to the recipient once
+`funded_amount_value == target_amount_value`,
+and `refund` returns the funded amount to the payer while the escrow is still
+open.
+
+Mapping (pointer‑ABI):
+- `authority()` → `SCALL 0xA4` (host writes `&AccountId` into `r10`)
+- `transfer_asset(from, to, def, amt)` → `r10=&AccountId(from)`, `r11=&AccountId(to)`, `r12=&AssetDefinitionId(def)`, `r13=amount`, then `SCALL 0x24`
+- Declared durable state is persisted under logical paths such as `payer_account`, `recipient_account`, `escrow_account_id`, `escrow_asset_definition`, `target_amount_value`, `funded_amount_value`, `is_open`, `is_released`, and `is_refunded`, which Torii exposes through `GET /v1/contracts/state?...&decode=json`
+
 ## NFT Create + Transfer
 
 Source: `examples/nft/nft.ko`

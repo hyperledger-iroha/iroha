@@ -1253,6 +1253,65 @@ fn parse_optional_string(value: Option<&JsonValue>, context: &str) -> Result<Opt
     }
 }
 
+fn signed_transaction_schema_hash_hex() -> String {
+    hex::encode(<SignedTransaction as norito::core::NoritoSerialize>::schema_hash())
+}
+
+fn parse_signed_transaction_schema_hash_hex(
+    capabilities: &JsonValue,
+) -> core::result::Result<String, TransactionSchemaCompatibilityError> {
+    let expected = signed_transaction_schema_hash_hex();
+    let field = "node capabilities signed_transaction_schema_hash_hex";
+    let advertised = match parse_optional_string(
+        capabilities.get("signed_transaction_schema_hash_hex"),
+        field,
+    ) {
+        Ok(Some(value)) => value,
+        Ok(None) => {
+            return Err(TransactionSchemaCompatibilityError::Missing { expected });
+        }
+        Err(err) => {
+            return Err(TransactionSchemaCompatibilityError::Invalid {
+                expected,
+                actual: None,
+                details: err.to_string(),
+            });
+        }
+    };
+
+    if advertised.len() != 32 {
+        return Err(TransactionSchemaCompatibilityError::Invalid {
+            expected,
+            actual: Some(advertised),
+            details: "signed_transaction_schema_hash_hex must be 32 lowercase hex chars"
+                .to_string(),
+        });
+    }
+    if !advertised.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return Err(TransactionSchemaCompatibilityError::Invalid {
+            expected,
+            actual: Some(advertised),
+            details: "signed_transaction_schema_hash_hex must contain only hex digits".to_string(),
+        });
+    }
+    if advertised.bytes().any(|byte| byte.is_ascii_uppercase()) {
+        return Err(TransactionSchemaCompatibilityError::Invalid {
+            expected,
+            actual: Some(advertised),
+            details: "signed_transaction_schema_hash_hex must be lowercase hex".to_string(),
+        });
+    }
+
+    if advertised == expected {
+        Ok(advertised)
+    } else {
+        Err(TransactionSchemaCompatibilityError::Mismatch {
+            expected,
+            actual: advertised,
+        })
+    }
+}
+
 fn parse_required_u64(value: Option<&JsonValue>, context: &str) -> Result<u64> {
     let Some(raw) = value else {
         return Err(eyre!("{context} is missing"));
@@ -1426,15 +1485,52 @@ pub enum DataModelCompatibilityError {
     },
 }
 
-/// Cached data model compatibility state for the Torii node.
+/// Errors raised when the Torii node's signed-transaction schema hash is incompatible.
+#[derive(Debug, Error, Clone)]
+pub enum TransactionSchemaCompatibilityError {
+    /// Node capabilities did not include `signed_transaction_schema_hash_hex`.
+    #[error("Torii node did not advertise signed_transaction_schema_hash_hex; expected {expected}")]
+    Missing {
+        /// The client `SignedTransaction` schema hash.
+        expected: String,
+    },
+    /// Node signed transaction schema hash does not match the client's.
+    #[error(
+        "Torii node signed_transaction_schema_hash_hex {actual} does not match client schema {expected}"
+    )]
+    Mismatch {
+        /// The client `SignedTransaction` schema hash.
+        expected: String,
+        /// The node `SignedTransaction` schema hash.
+        actual: String,
+    },
+    /// Node signed transaction schema hash payload could not be parsed.
+    #[error(
+        "Torii node signed_transaction_schema_hash_hex is invalid ({details}); expected {expected}"
+    )]
+    Invalid {
+        /// The client `SignedTransaction` schema hash.
+        expected: String,
+        /// The node-advertised value when present.
+        actual: Option<String>,
+        /// Details about the invalid payload.
+        details: String,
+    },
+}
+
+/// Cached compatibility state for the Torii node.
 #[derive(Debug, Clone)]
 pub enum DataModelCompatibility {
     /// Compatibility check has not been performed yet.
     Unchecked,
     /// Node data model version matches the client.
     Compatible,
+    /// Node data model version and signed transaction schema hash both match the client.
+    SubmitCompatible,
     /// Node data model version is incompatible.
     Incompatible(DataModelCompatibilityError),
+    /// Node signed transaction schema hash is incompatible for submissions.
+    SchemaIncompatible(TransactionSchemaCompatibilityError),
 }
 
 type DataModelCompatibilityState = Arc<Mutex<DataModelCompatibility>>;
@@ -3396,6 +3492,29 @@ fn default_alias_policy() -> sorafs_manifest::alias_cache::AliasCachePolicy {
 }
 
 #[cfg(test)]
+fn capabilities_body_with(
+    data_model_version: Option<u32>,
+    signed_transaction_schema_hash_hex: Option<&str>,
+) -> String {
+    let mut fields = Vec::new();
+    if let Some(version) = data_model_version {
+        fields.push(format!(r#""data_model_version":{version}"#));
+    }
+    if let Some(hash) = signed_transaction_schema_hash_hex {
+        fields.push(format!(r#""signed_transaction_schema_hash_hex":"{hash}""#));
+    }
+    format!("{{{}}}", fields.join(","))
+}
+
+#[cfg(test)]
+fn compatible_capabilities_body() -> String {
+    capabilities_body_with(
+        Some(DATA_MODEL_VERSION),
+        Some(&signed_transaction_schema_hash_hex()),
+    )
+}
+
+#[cfg(test)]
 mod evidence_http_tests {
     use std::{
         collections::HashMap,
@@ -3455,7 +3574,7 @@ mod evidence_http_tests {
         *client
             .data_model_compatibility
             .lock()
-            .expect("data model compatibility lock") = DataModelCompatibility::Compatible;
+            .expect("data model compatibility lock") = DataModelCompatibility::SubmitCompatible;
     }
 
     pub(super) fn base_url() -> Url {
@@ -5184,7 +5303,7 @@ pub struct Client {
     pub default_anonymity_policy: AnonymityPolicy,
     /// Rollout phase controlling the default anonymity policy.
     pub rollout_phase: SorafsRolloutPhase,
-    /// Cached data model compatibility for Torii submissions.
+    /// Cached Torii compatibility state for queries and transaction submissions.
     pub data_model_compatibility: Arc<Mutex<DataModelCompatibility>>,
 }
 
@@ -5667,7 +5786,9 @@ impl Client {
         match cached.clone() {
             DataModelCompatibility::Unchecked => {}
             DataModelCompatibility::Compatible => return Ok(()),
+            DataModelCompatibility::SubmitCompatible => return Ok(()),
             DataModelCompatibility::Incompatible(err) => return Err(err.into()),
+            DataModelCompatibility::SchemaIncompatible(_) => return Ok(()),
         }
 
         let Some(capabilities) = self.get_node_capabilities_json_for_compatibility()? else {
@@ -5722,10 +5843,92 @@ impl Client {
 
         match outcome {
             DataModelCompatibility::Compatible => Ok(()),
+            DataModelCompatibility::SubmitCompatible => Ok(()),
             DataModelCompatibility::Incompatible(err) => Err(err.into()),
+            DataModelCompatibility::SchemaIncompatible(_) => {
+                unreachable!("data model compatibility evaluation cannot produce schema errors")
+            }
             DataModelCompatibility::Unchecked => {
                 unreachable!("data model compatibility cannot remain unchecked after evaluation")
             }
+        }
+    }
+
+    fn ensure_transaction_submit_compatibility(&self) -> Result<()> {
+        let mut cached = self
+            .data_model_compatibility
+            .lock()
+            .expect("data model compatibility lock");
+        match cached.clone() {
+            DataModelCompatibility::Unchecked | DataModelCompatibility::Compatible => {}
+            DataModelCompatibility::SubmitCompatible => return Ok(()),
+            DataModelCompatibility::Incompatible(err) => return Err(err.into()),
+            DataModelCompatibility::SchemaIncompatible(err) => return Err(err.into()),
+        }
+
+        let Some(capabilities) = self.get_node_capabilities_json_for_compatibility()? else {
+            return Ok(());
+        };
+        let outcome = match parse_optional_u64(
+            capabilities.get("data_model_version"),
+            "node capabilities data_model_version",
+        ) {
+            Ok(None) => {
+                DataModelCompatibility::Incompatible(DataModelCompatibilityError::Missing {
+                    expected: DATA_MODEL_VERSION,
+                })
+            }
+            Ok(Some(raw)) => {
+                let parsed = match u32::try_from(raw) {
+                    Ok(value) if value > 0 => Ok(value),
+                    Ok(_) => Err(DataModelCompatibilityError::Invalid {
+                        expected: DATA_MODEL_VERSION,
+                        details: "data_model_version must be >= 1".to_string(),
+                    }),
+                    Err(_) => Err(DataModelCompatibilityError::Invalid {
+                        expected: DATA_MODEL_VERSION,
+                        details: format!("data_model_version {raw} is out of range"),
+                    }),
+                };
+                match parsed {
+                    Ok(actual) => {
+                        if actual != DATA_MODEL_VERSION {
+                            DataModelCompatibility::Incompatible(
+                                DataModelCompatibilityError::Mismatch {
+                                    expected: DATA_MODEL_VERSION,
+                                    actual,
+                                },
+                            )
+                        } else {
+                            match parse_signed_transaction_schema_hash_hex(&capabilities) {
+                                Ok(_) => DataModelCompatibility::SubmitCompatible,
+                                Err(err) => DataModelCompatibility::SchemaIncompatible(err),
+                            }
+                        }
+                    }
+                    Err(err) => DataModelCompatibility::Incompatible(err),
+                }
+            }
+            Err(err) => {
+                DataModelCompatibility::Incompatible(DataModelCompatibilityError::Invalid {
+                    expected: DATA_MODEL_VERSION,
+                    details: err.to_string(),
+                })
+            }
+        };
+
+        *cached = outcome.clone();
+
+        match outcome {
+            DataModelCompatibility::SubmitCompatible => Ok(()),
+            DataModelCompatibility::Compatible => {
+                unreachable!("submit compatibility evaluation must not stop at data model only")
+            }
+            DataModelCompatibility::Incompatible(err) => Err(err.into()),
+            DataModelCompatibility::SchemaIncompatible(err) => Err(err.into()),
+            DataModelCompatibility::Unchecked => unreachable!(
+                "transaction submit compatibility cannot remain unchecked after evaluation"
+            ),
         }
     }
 
@@ -5734,14 +5937,15 @@ impl Client {
     ///
     /// # Errors
     /// Fails if sending transaction to peer fails, if it response with error, or if the node
-    /// data model version is missing or incompatible. If `/v1/node/capabilities` responds with
-    /// HTTP 429 or transient 5xx statuses, the compatibility probe is treated as transient and
-    /// deferred.
+    /// submit compatibility advert is missing or incompatible. On HTTP 200, the node must
+    /// advertise both `data_model_version` and `signed_transaction_schema_hash_hex`. If
+    /// `/v1/node/capabilities` responds with HTTP 404, HTTP 429, or transient 5xx statuses, the
+    /// compatibility probe is treated as transient and deferred.
     pub fn submit_transaction(
         &self,
         transaction: &SignedTransaction,
     ) -> Result<HashOf<SignedTransaction>> {
-        self.ensure_data_model_compatibility()?;
+        self.ensure_transaction_submit_compatibility()?;
         iroha_logger::trace!(tx=?transaction, "Submitting");
         let (req, hash) = self.prepare_transaction_request::<DefaultRequestBuilder>(transaction);
         let response = req
@@ -9270,7 +9474,7 @@ impl Client {
     }
 
     /// GET `/v1/node/capabilities`
-    /// Returns `{ supported_abi_versions: [..], default_compile_target: n, data_model_version: n, crypto: { ... } }`.
+    /// Returns `{ abi_version: n, data_model_version: n, signed_transaction_schema_hash_hex: "...", crypto: { ... } }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     fn get_node_capabilities_json_for_compatibility(&self) -> Result<Option<norito::json::Value>> {
@@ -9283,19 +9487,19 @@ impl Client {
                 .and_then(|value| value.to_str().ok())
                 .unwrap_or("unknown");
             warn!(
-                "node capabilities probe was rate-limited (retry-after: {retry_after}); deferring data model compatibility check"
+                "node capabilities probe was rate-limited (retry-after: {retry_after}); deferring compatibility check"
             );
             return Ok(None);
         }
         if resp.status().is_server_error() {
             warn!(
-                "node capabilities probe returned transient server error status={}; deferring data model compatibility check",
+                "node capabilities probe returned transient server error status={}; deferring compatibility check",
                 resp.status()
             );
             return Ok(None);
         }
         if resp.status() == StatusCode::NOT_FOUND {
-            warn!("node capabilities probe returned 404; deferring data model compatibility check");
+            warn!("node capabilities probe returned 404; deferring compatibility check");
             return Ok(None);
         }
         if resp.status() != StatusCode::OK {
@@ -9309,7 +9513,7 @@ impl Client {
     }
 
     /// GET `/v1/node/capabilities`
-    /// Returns `{ supported_abi_versions: [..], default_compile_target: n, data_model_version: n, crypto: { ... } }`.
+    /// Returns `{ abi_version: n, data_model_version: n, signed_transaction_schema_hash_hex: "...", crypto: { ... } }`.
     /// # Errors
     /// Returns an error if the HTTP request fails, the response is non-OK, or JSON deserialization fails.
     pub fn get_node_capabilities_json(&self) -> Result<norito::json::Value> {
@@ -14134,7 +14338,7 @@ mod tests {
     #[test]
     fn submit_transaction_uses_norito_content_type_header_and_signed_transaction_payload() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let capabilities_body = format!(r#"{{"data_model_version":{DATA_MODEL_VERSION}}}"#);
+        let capabilities_body = compatible_capabilities_body();
         let responder = {
             let store = Arc::clone(&store);
             move |snapshot: RequestSnapshot| {
@@ -14202,7 +14406,10 @@ mod tests {
     fn submit_transaction_rejects_mismatched_data_model_version() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let mismatched = DATA_MODEL_VERSION + 1;
-        let capabilities_body = format!(r#"{{"data_model_version":{mismatched}}}"#);
+        let capabilities_body = capabilities_body_with(
+            Some(mismatched),
+            Some(&signed_transaction_schema_hash_hex()),
+        );
         let responder = {
             let store = Arc::clone(&store);
             move |snapshot| {
@@ -14276,6 +14483,132 @@ mod tests {
     }
 
     #[test]
+    fn submit_transaction_rejects_missing_signed_transaction_schema_hash() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = respond_with(
+            &store,
+            json_response(
+                StatusCode::OK,
+                &capabilities_body_with(Some(DATA_MODEL_VERSION), None),
+            ),
+        );
+
+        with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            let tx = client.build_transaction(Vec::<InstructionBox>::new(), Metadata::default());
+            let err = client
+                .submit_transaction(&tx)
+                .expect_err("transaction submission should fail");
+            let err = err
+                .downcast_ref::<TransactionSchemaCompatibilityError>()
+                .expect("schema compatibility error");
+            assert!(
+                matches!(
+                    err,
+                    TransactionSchemaCompatibilityError::Missing { expected }
+                    if *expected == signed_transaction_schema_hash_hex()
+                ),
+                "unexpected error: {err:?}"
+            );
+        });
+
+        let store_guard = store.lock().expect("snapshot lock");
+        assert_eq!(
+            store_guard.len(),
+            1,
+            "only node capabilities should be fetched"
+        );
+        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
+    }
+
+    #[test]
+    fn submit_transaction_rejects_invalid_signed_transaction_schema_hash() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = respond_with(
+            &store,
+            json_response(
+                StatusCode::OK,
+                &capabilities_body_with(Some(DATA_MODEL_VERSION), Some("ABC123")),
+            ),
+        );
+
+        with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            let tx = client.build_transaction(Vec::<InstructionBox>::new(), Metadata::default());
+            let err = client
+                .submit_transaction(&tx)
+                .expect_err("transaction submission should fail");
+            let err = err
+                .downcast_ref::<TransactionSchemaCompatibilityError>()
+                .expect("schema compatibility error");
+            assert!(
+                matches!(
+                    err,
+                    TransactionSchemaCompatibilityError::Invalid {
+                        expected,
+                        actual,
+                        details,
+                    } if *expected == signed_transaction_schema_hash_hex()
+                        && actual.as_deref() == Some("ABC123")
+                        && details.contains("32 lowercase hex chars")
+                ),
+                "unexpected error: {err:?}"
+            );
+        });
+
+        let store_guard = store.lock().expect("snapshot lock");
+        assert_eq!(
+            store_guard.len(),
+            1,
+            "only node capabilities should be fetched"
+        );
+        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
+    }
+
+    #[test]
+    fn submit_transaction_rejects_mismatched_signed_transaction_schema_hash() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = respond_with(
+            &store,
+            json_response(
+                StatusCode::OK,
+                &capabilities_body_with(
+                    Some(DATA_MODEL_VERSION),
+                    Some("00000000000000000000000000000000"),
+                ),
+            ),
+        );
+
+        with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            let tx = client.build_transaction(Vec::<InstructionBox>::new(), Metadata::default());
+            let err = client
+                .submit_transaction(&tx)
+                .expect_err("transaction submission should fail");
+            let err = err
+                .downcast_ref::<TransactionSchemaCompatibilityError>()
+                .expect("schema compatibility error");
+            assert!(
+                matches!(
+                    err,
+                    TransactionSchemaCompatibilityError::Mismatch { expected, actual }
+                    if *expected == signed_transaction_schema_hash_hex()
+                        && actual == "00000000000000000000000000000000"
+                ),
+                "unexpected error: {err:?}"
+            );
+        });
+
+        let store_guard = store.lock().expect("snapshot lock");
+        assert_eq!(
+            store_guard.len(),
+            1,
+            "only node capabilities should be fetched"
+        );
+        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
+    }
+
+    #[test]
     fn submit_transaction_tolerates_rate_limited_capabilities_probe() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
         let responder = {
@@ -14312,6 +14645,56 @@ mod tests {
             assert!(
                 matches!(cached, DataModelCompatibility::Unchecked),
                 "rate-limited probe must not mark compatibility state as checked"
+            );
+        });
+
+        let store_guard = store.lock().expect("snapshot lock");
+        assert_eq!(
+            store_guard.len(),
+            2,
+            "expected node capabilities + transaction requests"
+        );
+        assert_eq!(store_guard[0].url.path(), "/v1/node/capabilities");
+        assert_eq!(store_guard[1].url.path(), torii_uri::TRANSACTION);
+    }
+
+    #[test]
+    fn submit_transaction_tolerates_missing_capabilities_probe() {
+        let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
+        let responder = {
+            let store = Arc::clone(&store);
+            move |snapshot: RequestSnapshot| {
+                let path = snapshot.url.path().to_string();
+                store.lock().expect("snapshot lock").push(snapshot);
+                let response = if path == "/v1/node/capabilities" {
+                    HttpResponse::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body(b"not found".to_vec())
+                        .expect("response build")
+                } else {
+                    HttpResponse::builder()
+                        .status(StatusCode::OK)
+                        .body(Vec::new())
+                        .expect("response build")
+                };
+                Ok(response)
+            }
+        };
+
+        with_mock_http(responder, || {
+            let client = client_with_base_url(base_url());
+            let tx = client.build_transaction(Vec::<InstructionBox>::new(), Metadata::default());
+            client.submit_transaction(&tx).expect(
+                "transaction submission should proceed when the capability advert is unavailable",
+            );
+            let cached = client
+                .data_model_compatibility
+                .lock()
+                .expect("data model compatibility lock")
+                .clone();
+            assert!(
+                matches!(cached, DataModelCompatibility::Unchecked),
+                "404 probe must not mark compatibility state as checked"
             );
         });
 
@@ -14378,7 +14761,7 @@ mod tests {
     #[test]
     fn submit_transaction_reuses_compatibility_cache_across_equivalent_clients() {
         let store: SnapshotStore = Arc::new(Mutex::new(Vec::new()));
-        let capabilities_body = format!(r#"{{"data_model_version":{DATA_MODEL_VERSION}}}"#);
+        let capabilities_body = compatible_capabilities_body();
         let responder = {
             let store = Arc::clone(&store);
             move |snapshot: RequestSnapshot| {
