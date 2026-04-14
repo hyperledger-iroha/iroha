@@ -294,8 +294,10 @@ cargo xtask soracloud-inrou-smoke mixed-host --inventory ./fixtures/soracloud/in
 ```
 
 PortableVm stays unprivileged and requires only native-ISA QEMU, `qemu-img`,
-`virtiofsd` (or `qemu-virtiofsd`), and `tar`. The Firecracker/KVM path keeps
-the Linux host prerequisites for tap networking and the NFS transport adapter:
+and `tar`. Shared non-root lease volumes are attached as persistent block
+devices that the guest formats and mounts on first boot. The Firecracker/KVM
+path keeps the Linux host prerequisites for tap networking and the NFS
+transport adapter:
 
 - host OS is Linux
 - the caller is root
@@ -310,6 +312,7 @@ Portable smoke expects:
 - `IROHA_INROU_PORTABLE_KERNEL_IMAGE`
 - `IROHA_INROU_PORTABLE_ROOTFS_IMAGE`
 - optional `IROHA_INROU_PORTABLE_INITRD_IMAGE`
+- optional `IROHA_INROU_PORTABLE_ACCEL` (`auto`, `tcg`, `kvm`, `hvf`, `whpx`)
 
 Firecracker smoke expects:
 
@@ -319,19 +322,20 @@ Firecracker smoke expects:
 
 Focused validation now covers both shared-storage transports:
 
-- `build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay`
+- `build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay`
+- `ensure_inrou_portable_lease_disks_create_reusable_raw_images`
 - `ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file`
 - `build_inrou_user_data_projects_mounts_overlay_and_replica_env`
 - `write_inrou_firecracker_config_serializes_boot_source_drives_and_network`
 - `ensure_inrou_root_disk_copies_once_and_reuses_existing_rootfs`
 - `planned_inrou_tap_firewall_rules_keep_isolated_policy_private`
 
-The portable path mounts shared lease storage through `virtio-fs`. The
-Firecracker fast path keeps the backend-private NFS adapter, but both backends
-now expose the same guest-visible lease semantics through the LeaseFs
-authority. Mixed-host acceptance is expected to cover one Linux/KVM
-Firecracker validator, one non-Linux PortableVm validator, and one proxy-only
-validator that publishes zero hosted capacity.
+The portable path mounts shared lease storage through attached virtio block
+devices. The Firecracker fast path keeps the backend-private NFS adapter, but
+both backends now expose the same guest-visible lease semantics. Mixed-host
+acceptance is expected to cover one Linux/KVM Firecracker validator, one
+non-Linux PortableVm validator, and one proxy-only validator that publishes
+zero hosted capacity.
 
 ## Recommended Hosted-Service Workflow
 

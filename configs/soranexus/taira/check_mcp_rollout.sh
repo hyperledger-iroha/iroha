@@ -35,6 +35,8 @@ The check fails unless:
   - POST /v1/mcp notifications/initialized returns HTTP 202 with an empty body
   - POST /v1/mcp tools/list returns HTTP 200
   - the tool list includes curated iroha.* names, including write-ready aliases
+  - every advertised MCP tool publishes an OpenAI-compatible top-level
+    `inputSchema` object (no top-level anyOf/oneOf/allOf/enum/not)
   - the tool list does not expose raw torii.* names
   - GET /status returns healthy Torii/Sumeragi counters
   - /status reports at least 4 validators in the commit QC set
@@ -293,6 +295,43 @@ if raw:
 PY
 }
 
+check_tool_input_schemas() {
+  local label="$1"
+  python3 - "$label" "$last_body" <<'PY'
+import json
+import sys
+
+label = sys.argv[1]
+path = sys.argv[2]
+with open(path, "r", encoding="utf-8") as handle:
+    payload = json.load(handle)
+
+tools = payload.get("result", {}).get("tools", [])
+invalid = []
+for entry in tools:
+    if not isinstance(entry, dict):
+        continue
+    name = entry.get("name", "<unnamed>")
+    schema = entry.get("inputSchema")
+    if not isinstance(schema, dict):
+        invalid.append(f"{name}: inputSchema is not an object")
+        continue
+    if schema.get("type") != "object":
+        invalid.append(f"{name}: top-level type is {schema.get('type')!r}, expected 'object'")
+    disallowed = [key for key in ("anyOf", "oneOf", "allOf", "enum", "not") if key in schema]
+    if disallowed:
+        invalid.append(f"{name}: top-level disallowed keywords present: {', '.join(disallowed)}")
+
+if invalid:
+    print(f"{label}: tools/list exposed OpenAI-incompatible MCP schemas:", file=sys.stderr)
+    for item in invalid[:10]:
+        print(f"  - {item}", file=sys.stderr)
+    if len(invalid) > 10:
+        print(f"  - ... and {len(invalid) - 10} more", file=sys.stderr)
+    sys.exit(1)
+PY
+}
+
 check_route_status() {
   local label="$1"
   local method="$2"
@@ -483,6 +522,7 @@ check_endpoint() {
     exit 1
   fi
   check_required_tools "$label"
+  check_tool_input_schemas "$label"
 
   root_url="$(mcp_root_from_url "$url")"
   CHECKED_LABELS+=("$label")

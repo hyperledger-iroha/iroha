@@ -31622,6 +31622,7 @@ mod tx_query_integration_smoke {
     };
     use iroha_crypto::KeyPair;
     use iroha_data_model::prelude as dm;
+    use iroha_primitives::const_vec::ConstVec;
 
     use super::*;
     // use tower::ServiceExt; // not needed in this module
@@ -31679,6 +31680,12 @@ mod tx_query_integration_smoke {
 
     fn log_instruction() -> dm::InstructionBox {
         dm::Log::new(dm::Level::INFO, "test".to_string()).into()
+    }
+
+    fn account_with_key() -> (dm::AccountId, KeyPair) {
+        let kp = KeyPair::random();
+        let account = dm::AccountId::new(kp.public_key().clone());
+        (account, kp)
     }
 
     #[tokio::test]

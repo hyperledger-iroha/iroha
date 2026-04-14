@@ -12,16 +12,6 @@ require_cmd() {
   fi
 }
 
-require_one_of() {
-  for cmd in "$@"; do
-    if command -v "$cmd" >/dev/null 2>&1; then
-      return 0
-    fi
-  done
-  echo "ERROR: required command not found; expected one of: $*" >&2
-  exit 1
-}
-
 require_env_file() {
   local name="$1"
   local value="${!name:-}"
@@ -51,7 +41,6 @@ esac
 
 require_cmd cargo
 require_cmd qemu-img
-require_one_of virtiofsd qemu-virtiofsd
 require_cmd tar
 
 require_env_file IROHA_INROU_PORTABLE_KERNEL_IMAGE
@@ -68,8 +57,8 @@ export CARGO_TARGET_DIR
 
 cd "$ROOT_DIR"
 
-echo "+ cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay -- --nocapture"
-cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay -- --nocapture
+echo "+ cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay -- --nocapture"
+cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_portable_block_mounts_and_allowlist_overlay -- --nocapture
 
 echo "+ cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file -- --nocapture"
 cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file -- --nocapture
