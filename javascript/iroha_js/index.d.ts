@@ -8155,6 +8155,18 @@ export declare class ToriiClient {
   getOfflineRevocationBundle(
     options?: { signal?: AbortSignal },
   ): Promise<ToriiOfflineRevocationBundle>;
+  listOfflineAllowances(
+    options?: OfflineAllowanceListOptions,
+  ): Promise<ToriiOfflineAllowanceListResponse>;
+  queryOfflineAllowances(
+    options?: IterableQueryOptions,
+  ): Promise<ToriiOfflineAllowanceListResponse>;
+  iterateOfflineAllowances(
+    options?: PaginationIteratorOptions,
+  ): AsyncGenerator<ToriiOfflineAllowanceItem, void, unknown>;
+  iterateOfflineAllowancesQuery(
+    options?: PaginationIteratorOptions,
+  ): AsyncGenerator<ToriiOfflineAllowanceItem, void, unknown>;
   listOfflineTransfers(
     options?: OfflineTransferListOptions,
   ): Promise<ToriiOfflineTransferListResponse>;

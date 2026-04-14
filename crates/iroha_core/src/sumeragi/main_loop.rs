@@ -21845,6 +21845,12 @@ impl Actor {
             .max(LOCK_LAG_PRUNE_COOLDOWN_FLOOR)
     }
 
+    fn lock_lag_prune_cooldown_active_for_height(&self, height: u64, now: Instant) -> bool {
+        self.lock_lag_prune_cooldown.is_some_and(|cooldown| {
+            cooldown.catchup_frontier_height == height && now < cooldown.expires_at
+        })
+    }
+
     fn lock_lag_frontier_stall_timings(&self) -> (Duration, Duration) {
         let ttl = self
             .recovery_missing_block_height_ttl()
@@ -30675,6 +30681,21 @@ impl Actor {
             self.maybe_reset_stalled_frontier_state(committed_height, now);
         let pruned_lock_lag_future_state =
             self.prune_lock_lag_future_consensus_state(now, "idle_missing_qc");
+        let lock_lag_prune_cooldown_active = height == contiguous_frontier_height
+            && self.lock_lag_prune_cooldown_active_for_height(height, now);
+        if height == contiguous_frontier_height
+            && (pruned_lock_lag_future_state || lock_lag_prune_cooldown_active)
+        {
+            debug!(
+                height,
+                view = current_view,
+                committed_height,
+                pruned_lock_lag_future_state,
+                lock_lag_prune_cooldown_active,
+                "deferred contiguous-frontier idle view-change after lock-lag catch-up pruning"
+            );
+            return false;
+        }
         let stale_margin = self.recovery_missing_request_stale_height_margin();
         if height.saturating_add(stale_margin) < committed_height {
             // Invariant C: stale missing-height state must not spin endless MissingQc rotations.

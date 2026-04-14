@@ -7618,6 +7618,66 @@ export class ToriiClient {
   }
 
   /**
+   * List offline allowances (`GET /v1/offline/allowances`).
+   * Accepts the standard iterable options plus convenience fields such as
+   * `assetId`, `certificateExpiresBeforeMs`, `certificateExpiresAfterMs`, `policyExpiresBeforeMs`,
+   * `policyExpiresAfterMs`, `verdictIdHex`, `requireVerdict`, and `onlyMissingVerdict`.
+   * @param {IterableListOptions} [options]
+   * @returns {Promise<ToriiOfflineAllowanceListResponse>}
+   */
+  async listOfflineAllowances(options = {}) {
+    if (options && isPlainObject(options.filter)) {
+      ToriiClient._validateOfflineAllowanceFilter(options.filter, "options.filter");
+    }
+    return this._listIterable(
+      "/v1/offline/allowances",
+      options,
+      (payload) =>
+        normalizeOfflineAllowanceListResponse(payload, "offline allowances response"),
+      OFFLINE_ITERABLE_OPTION_KEYS,
+    );
+  }
+
+  /**
+   * Query offline allowances (`POST /v1/offline/allowances/query`).
+   * @param {IterableQueryOptions} [options]
+   * @returns {Promise<ToriiOfflineAllowanceListResponse>}
+   */
+  async queryOfflineAllowances(options = {}) {
+    return this._queryIterable(
+      "/v1/offline/allowances/query",
+      options,
+      (payload) =>
+        normalizeOfflineAllowanceListResponse(payload, "offline allowances query response"),
+      (envelope) => {
+        if (envelope && envelope.filter && isPlainObject(envelope.filter)) {
+          ToriiClient._validateOfflineAllowanceFilter(envelope.filter, "filter");
+        }
+      },
+      OFFLINE_ITERABLE_OPTION_KEYS,
+      true,
+    );
+  }
+
+  /**
+   * Iterate offline allowances with automatic pagination.
+   * @param {PaginationIteratorOptions} [options]
+   * @returns {AsyncGenerator<ToriiOfflineAllowanceItem, void, unknown>}
+   */
+  iterateOfflineAllowances(options = {}) {
+    return this._iterateIterable(this.listOfflineAllowances, options);
+  }
+
+  /**
+   * Iterate offline allowances via the structured query endpoint.
+   * @param {PaginationIteratorOptions} [options]
+   * @returns {AsyncGenerator<ToriiOfflineAllowanceItem, void, unknown>}
+   */
+  iterateOfflineAllowancesQuery(options = {}) {
+    return this._iterateIterable(this.queryOfflineAllowances, options);
+  }
+
+  /**
    * List offline transfers (`GET /v1/offline/transfers`).
    * @param {IterableListOptions} [options]
    * @returns {Promise<ToriiOfflineTransferListResponse>}

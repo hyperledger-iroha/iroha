@@ -18,7 +18,7 @@ use iroha_data_model::{
     account::address::ChainDiscriminantGuard,
     asset::AssetDefinitionAlias,
     isi::{
-        SetAssetDefinitionAlias,
+        RegisterBox, SetAssetDefinitionAlias,
         staking::{ActivatePublicLaneValidator, RegisterPublicLaneValidator},
     },
     nexus::DataSpaceId,
@@ -2307,18 +2307,20 @@ impl BootstrapRegistrations {
         let mut accounts = BTreeSet::new();
         let mut asset_defs = BTreeSet::new();
         for instruction in manifest.instructions() {
-            if let Some(register) = instruction.as_any().downcast_ref::<Register<Domain>>() {
-                domains.insert(register.object.id.clone());
+            let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() else {
                 continue;
-            }
-            if let Some(register) = instruction.as_any().downcast_ref::<Register<Account>>() {
-                accounts.insert(register.object.id.clone());
-                continue;
-            }
-            if let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() {
-                if let RegisterBox::AssetDefinition(register) = register {
+            };
+            match register {
+                RegisterBox::Domain(register) => {
+                    domains.insert(register.object.id.clone());
+                }
+                RegisterBox::Account(register) => {
+                    accounts.insert(register.object.id.clone());
+                }
+                RegisterBox::AssetDefinition(register) => {
                     asset_defs.insert(register.object.id.clone());
                 }
+                _ => {}
             }
         }
         Self {
@@ -3069,11 +3071,12 @@ mod tests {
             instruction
                 .as_any()
                 .downcast_ref::<RegisterBox>()
-                .is_some_and(|register| match register {
-                    RegisterBox::AssetDefinition(register) => {
-                        register.object().id == offline_asset_id
-                    }
-                    _ => false,
+                .is_some_and(|register| {
+                    matches!(
+                        register,
+                        RegisterBox::AssetDefinition(register)
+                            if register.object().id == offline_asset_id
+                    )
                 })
         });
         assert!(
@@ -3130,6 +3133,7 @@ mod tests {
 
         let mut has_alias_manage = false;
         let mut has_manifest_publish = false;
+        let mut manage_offline_escrow_grants = 0usize;
         for instruction in manifest.instructions() {
             let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() else {
                 continue;
@@ -3142,6 +3146,9 @@ mod tests {
             }
             match grant_permission.object().name().as_ref() {
                 "CanManageAccountAlias" => has_alias_manage = true,
+                "CanManageOfflineEscrow" => {
+                    manage_offline_escrow_grants = manage_offline_escrow_grants.saturating_add(1);
+                }
                 "CanPublishSpaceDirectoryManifest" => has_manifest_publish = true,
                 _ => {}
             }
@@ -3153,6 +3160,10 @@ mod tests {
         assert!(
             has_manifest_publish,
             "localnet client signer must be able to publish onboarding manifests"
+        );
+        assert_eq!(
+            manage_offline_escrow_grants, 1,
+            "localnet client signer must receive CanManageOfflineEscrow exactly once"
         );
     }
 

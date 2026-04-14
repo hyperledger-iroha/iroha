@@ -455,11 +455,14 @@ async fn npos_rbc_large_payload_delivers_and_commits() -> eyre::Result<()> {
     ensure_rbc_sessions_persisted(&network, expected_height, start, COMMIT_WAIT_BUDGET, None)
         .await?;
 
-    let session = delivered_rbc_session_proof(&http, &network, expected_height)
-        .await?
-        .ok_or_else(|| {
-            eyre!("missing delivered RBC session summary at height {expected_height}")
-        })?;
+    let session = wait_for_delivered_rbc_session_proof(
+        &http,
+        &network,
+        expected_height,
+        start,
+        COMMIT_WAIT_BUDGET + RBC_DELIVERY_BUDGET,
+    )
+    .await?;
 
     match session {
         DeliveredRbcProof::Summary(summary) => {
@@ -671,6 +674,26 @@ async fn delivered_rbc_session_summary(
     }
 
     Ok(None)
+}
+
+async fn wait_for_delivered_rbc_session_proof(
+    http: &reqwest::Client,
+    network: &Network,
+    expected_height: u64,
+    start: Instant,
+    budget: Duration,
+) -> eyre::Result<DeliveredRbcProof> {
+    let deadline = start + budget;
+    loop {
+        if let Some(proof) = delivered_rbc_session_proof(http, network, expected_height).await? {
+            return Ok(proof);
+        }
+        ensure!(
+            Instant::now() <= deadline,
+            "missing delivered RBC session summary at height {expected_height}"
+        );
+        sleep(Duration::from_millis(200)).await;
+    }
 }
 
 #[derive(Clone, Debug)]

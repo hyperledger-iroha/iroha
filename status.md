@@ -46,6 +46,36 @@ Last updated: 2026-04-14
   - `POST https://taira.sora.org/v1/mcp` with `tools/list` -> `200`
   - `GET https://taira-explorer.sora.org/v1/mcp` -> `200`
 
+## 2026-04-14 Follow-up: localnet bootstrap and Sumeragi lock-lag catch-up regressions are green
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_kagami/src/localnet.rs`
+  now avoids emitting a duplicate `CanManageOfflineEscrow` grant when the
+  generated localnet client signer is Alice, keeping Kagami/Taira generated
+  genesis transactions from failing on repeated permissions. The bootstrap
+  registration scanner now reads the `RegisterBox` wrapper emitted by current
+  genesis manifests, and the localnet unit test asserts the offline-cash grant
+  is emitted exactly once.
+- `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`
+  now defers contiguous-frontier idle view-change while the lock-lag
+  future-state prune cooldown is still active for that frontier, giving the
+  committed-anchor range-pull response a bounded turn before a restarted peer
+  can propose an alternate catch-up block. The new Sumeragi unit test covers
+  both the prune tick and the next idle tick during that cooldown.
+- `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_adversarial.rs`
+  and
+  `/Users/takemiyamakoto/soramitsudev/iroha/integration_tests/tests/sumeragi_npos_happy_path.rs`
+  now tolerate expected localnet observation skew by waiting on cluster commit
+  height after delivered partial-erasure recovery and polling for the delivered
+  RBC session proof before failing the large-payload assertion.
+- Focused validation for this unblocker:
+  - `cargo fmt --all`
+  - `cargo test -p iroha_kagami generated_localnet_bootstraps_builtin_offline_cash_asset_and_permissions -- --nocapture`
+  - `cargo test -p iroha_core force_view_change_if_idle_defers_contiguous_frontier_after_lock_lag_prune -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_adversarial::sumeragi_adversarial_partial_chunk_withholding_stalls_delivery -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_kagami_localnet::kagami_localnet_bootstrap_produces_blocks -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da sumeragi_npos_happy_path::npos_rbc_large_payload_delivers_and_commits -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da taira_public_localnet::taira_localnet_bootstrap_validators -- --nocapture`
+  - `cargo test -p integration_tests --test consensus_and_da zk_confidential_localnet::confidential_combined_peer_downtime_and_timeout_pressure_localnet -- --nocapture`
+
 ## 2026-04-14 Follow-up: offline-cash localnet bootstrap and Swift E2E are reproducible after merged `#5570`
 - `/Users/takemiyamakoto/dev/iroha/crates/iroha_kagami/src/localnet.rs`
   now makes the default generated 4-peer dev localnet offline-cash-ready:
@@ -135,7 +165,7 @@ Last updated: 2026-04-14
     for the portable virtio-fs/allowlist rendering path, qcow2 root overlays,
     and the ignored PortableVm guest smoke, with the portable smoke scaffolding
     now compiling on Linux, macOS, and Windows hosts instead of only Unix
-    shells; 
+    shells;
   - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs`
     for the authoritative hosted-HTTP topology counters;
   - `/Users/takemiyamakoto/dev/iroha/scripts/ci/run_inrou_portable_smoke.sh`,

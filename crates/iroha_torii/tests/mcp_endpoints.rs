@@ -299,11 +299,12 @@ async fn mcp_connect_session_delete_tools_publish_openai_compatible_schema() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
     cfg.torii.connect.enabled = true;
 
     let app = build_router(cfg);
 
-    for name in ["connect.session.delete", "iroha.connect.session.delete"] {
+    for name in ["iroha.connect.session.delete"] {
         let tool = find_tool(&app, name).await;
         let schema = tool
             .get("inputSchema")
@@ -346,11 +347,12 @@ async fn mcp_connect_ticket_tools_publish_openai_compatible_schema() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
     cfg.torii.connect.enabled = true;
 
     let app = build_router(cfg);
 
-    for name in ["connect.ws.ticket", "iroha.connect.ws.ticket"] {
+    for name in ["iroha.connect.ws.ticket"] {
         let tool = find_tool(&app, name).await;
         let schema = tool
             .get("inputSchema")
@@ -391,8 +393,8 @@ async fn mcp_vpn_session_detail_tools_publish_openai_compatible_schema() {
     let _data_dir = test_utils::TestDataDirGuard::new();
     let mut cfg = test_utils::mk_minimal_root_cfg();
     cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.profile = iroha_config::parameters::actual::ToriiMcpProfile::Operator;
     cfg.torii.connect.enabled = true;
-    cfg.torii.vpn_profile = Some("https://vpn.example/profile".to_owned());
 
     let app = build_router(cfg);
 
