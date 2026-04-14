@@ -2274,7 +2274,7 @@ fn append_localnet_contract_permissions(genesis: RawGenesisTransaction) -> RawGe
         dataspace: DataSpaceId::GLOBAL,
     }
     .into();
-    genesis
+    let mut builder = genesis
         .into_builder()
         .append_instruction(Grant::account_permission(
             enact_governance,
@@ -2285,18 +2285,20 @@ fn append_localnet_contract_permissions(genesis: RawGenesisTransaction) -> RawGe
             ALICE_ID.clone(),
         ))
         .append_instruction(Grant::account_permission(
-            Permission::new("CanManageOfflineEscrow".into(), Json::new(())),
-            client_account_id.clone(),
-        ))
-        .append_instruction(Grant::account_permission(
             manage_account_alias,
             client_account_id.clone(),
         ))
         .append_instruction(Grant::account_permission(
             publish_manifest,
+            client_account_id.clone(),
+        ));
+    if client_account_id != *ALICE_ID {
+        builder = builder.append_instruction(Grant::account_permission(
+            Permission::new("CanManageOfflineEscrow".into(), Json::new(())),
             client_account_id,
-        ))
-        .build_raw()
+        ));
+    }
+    builder.build_raw()
 }
 
 struct BootstrapRegistrations {
@@ -2319,11 +2321,10 @@ impl BootstrapRegistrations {
                 accounts.insert(register.object.id.clone());
                 continue;
             }
-            if let Some(register) = instruction
-                .as_any()
-                .downcast_ref::<Register<AssetDefinition>>()
-            {
-                asset_defs.insert(register.object.id.clone());
+            if let Some(register) = instruction.as_any().downcast_ref::<RegisterBox>() {
+                if let RegisterBox::AssetDefinition(register) = register {
+                    asset_defs.insert(register.object.id.clone());
+                }
             }
         }
         Self {
@@ -3073,8 +3074,13 @@ mod tests {
         let has_definition = manifest.instructions().any(|instruction| {
             instruction
                 .as_any()
-                .downcast_ref::<Register<AssetDefinition>>()
-                .is_some_and(|register| register.object().id == offline_asset_id)
+                .downcast_ref::<RegisterBox>()
+                .is_some_and(|register| match register {
+                    RegisterBox::AssetDefinition(register) => {
+                        register.object().id == offline_asset_id
+                    }
+                    _ => false,
+                })
         });
         assert!(
             has_definition,

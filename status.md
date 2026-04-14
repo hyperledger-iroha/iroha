@@ -2,6 +2,44 @@
 
 Last updated: 2026-04-14
 
+## 2026-04-14 Follow-up: offline-cash localnet bootstrap and Swift E2E are reproducible after merged `#5570`
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_kagami/src/localnet.rs`
+  now makes the default generated 4-peer dev localnet offline-cash-ready:
+  it seeds the built-in `usd` asset
+  (`7EAD8EFYUx1aVKZPUU1fyKvr8dF1`), binds the leased alias
+  `usd#wonderland`, enables Torii onboarding and offline-issuer signing from
+  the generated localnet client account, enables local-only
+  `settlement.offline.skip_platform_attestation`, and writes the matching
+  offline escrow binding directly into generated peer configs.
+- `/Users/takemiyamakoto/dev/iroha/scripts/deploy_localnet.sh` now matches that
+  bootstrap contract instead of trying to repair it after startup: the Cargo
+  build invocation is valid again, the script exposes `--asset-alias`, and a
+  successful run now leaves a Swift-E2E-capable localnet without any manual
+  `/tmp` config edits or CLI alias-registration steps.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/offline_lineage.rs`
+  now closes the remaining live mutation wait gaps:
+  committed transactions satisfy the offline-cash approval wait immediately;
+  when consensus timing is published, the wait budget follows the live commit
+  quorum timeout plus one proposal/commit slack window; and when debug
+  localnets do not expose a trustworthy live timing signal, Torii falls back
+  to a conservative 12-second budget instead of failing at the old fixed
+  5-second window.
+- `/Users/takemiyamakoto/dev/iroha/IrohaSwift/Tests/IrohaSwiftTests/OfflinePaymentE2ETest.swift`
+  now resolves the leased alias at runtime, funds by canonical asset definition
+  id, fails on real onboarding/mint errors, and passes against the freshly
+  generated localnet with no manual bootstrap steps.
+- Focused validation for this follow-up:
+  - `cargo fmt --all`
+  - `CARGO_TARGET_DIR=/tmp/iroha_codex_localnet_fix cargo test -p iroha_torii offline_cash_wait_timeout_allows_one_proposal_window_after_quorum_timeout -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_codex_localnet_fix cargo test -p iroha_torii offline_cash_wait_timeout_uses_conservative_fallback_without_live_signal -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_codex_localnet_fix cargo test -p iroha_torii transaction_approval_accepts_committed_state_without_pipeline_event -- --nocapture`
+  - `CARGO_TARGET_DIR=/tmp/iroha_codex_localnet_fix cargo build --bin kagami --bin irohad --bin iroha`
+  - `./scripts/deploy_localnet.sh --target-dir /tmp/iroha_codex_localnet_fix --out-dir /tmp/iroha-localnet-codex-e2e --force --timeout 60 --no-build`
+  - `cd IrohaSwift && IROHA_NODE_URL=http://127.0.0.1:29080 IROHA_CLI_PATH=/tmp/iroha_codex_localnet_fix/debug/iroha IROHA_CLIENT_CONFIG=/tmp/iroha-localnet-codex-e2e/client.toml swift test --skip-build --filter OfflinePaymentE2ETest/testOfflinePayment_aliceSendsToBob_balancesUpdate`
+  - the live Swift E2E now passes end-to-end on the generated localnet:
+    Alice setup `0`, load `2`, load `5`, sync `1`; Bob setup `0`, load `50`,
+    sync `54`.
+
 ## 2026-04-14 Follow-up: SCCP destination rollout JSON derives are green again
 - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_sccp/src/lib.rs`
   now implements `norito::json::FastJsonWrite` for
@@ -60,13 +98,15 @@ Last updated: 2026-04-14
 - Focused validation status for this slice:
   - `cargo fmt --all`
   - `CARGO_TARGET_DIR=/tmp/iroha-portable-check cargo check -p irohad --bin irohad --message-format short`
+  - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test --no-run -p irohad --features embedded-soracloud-runtime --bin irohad`
   - fresh-target exact-test builds completed successfully for:
     - `CARGO_TARGET_DIR=/tmp/iroha-verify-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay -- --exact`
     - `CARGO_TARGET_DIR=/tmp/iroha-verify-torii cargo test -p iroha_torii soracloud_hosted_http_topology_section_reports_authoritative_counts -- --exact`
-  - `CARGO_TARGET_DIR=/tmp/iroha-inrou-strict-check cargo check -p irohad --features embedded-soracloud-runtime --bin irohad --message-format short`
-    reached the Inrou runtime codepath and then stopped in an unrelated
-    existing `iroha_sccp` trait-derive failure, so full compile closure is
-    still blocked outside the touched hosted-runtime slice.
+  - focused PortableVm runtime tests now pass directly:
+    - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud_runtime::tests::build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay -- --exact --nocapture`
+    - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud_runtime::tests::ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file -- --exact --nocapture`
+  - the remaining open validation gap is no longer compile closure; it is the
+    real mixed-host acceptance run on publish-grade hosts and guest assets.
 
 ## 2026-04-14 Follow-up: same-height known-block missing-commit-QC stalls now hand off to canonical passive catch-up
 - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`

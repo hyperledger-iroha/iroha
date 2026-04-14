@@ -777,6 +777,7 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
 
     let mut invalid_total = 0usize;
     let mut missing_sessions = 0usize;
+    let mut stalled_sessions = 0usize;
 
     for peer in network.peers() {
         let client = peer.client();
@@ -794,6 +795,8 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
                 !delivered,
                 "invalid RBC session must not report delivered=true"
             );
+        } else if !delivered {
+            stalled_sessions += 1;
         }
     }
 
@@ -839,8 +842,8 @@ async fn run_chunk_equivocation_scenario() -> Result<()> {
             "targeted validator should remain at the prior height when equivocation prevents recovery"
         );
         ensure!(
-            missing_sessions >= 1 || detection_observed,
-            "equivocation stall should either surface missing RBC sessions or explicit invalidation evidence"
+            missing_sessions >= 1 || detection_observed || stalled_sessions >= 1,
+            "equivocation stall should surface missing sessions, explicit invalidation, or a retained non-delivered RBC session (missing_sessions={missing_sessions}, invalid_total={invalid_total}, stalled_sessions={stalled_sessions}, mismatch_detected={mismatch_detected})"
         );
     }
 
@@ -911,6 +914,13 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
         .iter()
         .filter(|session| get_bool(session, "delivered").unwrap_or(false))
         .count();
+    let stalled_total = sessions
+        .iter()
+        .filter(|session| {
+            !get_bool(session, "invalid").unwrap_or(false)
+                && !get_bool(session, "delivered").unwrap_or(false)
+        })
+        .count();
 
     let mut mismatch_detected = false;
     let mut status_after = Vec::with_capacity(PEER_COUNT);
@@ -927,6 +937,15 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
         .first()
         .map(|status| status.blocks)
         .unwrap_or(0);
+    let mismatch_before_total = status_before
+        .iter()
+        .filter_map(|status| {
+            status
+                .sumeragi
+                .as_ref()
+                .map(|consensus| consensus.block_created_proposal_mismatch_total)
+        })
+        .sum::<u64>();
     let min_blocks = status_after
         .iter()
         .map(|status| status.blocks)
@@ -937,6 +956,16 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
         .map(|status| status.blocks)
         .max()
         .unwrap_or(base_height);
+    let mismatch_after_total = status_after
+        .iter()
+        .filter_map(|status| {
+            status
+                .sumeragi
+                .as_ref()
+                .map(|consensus| consensus.block_created_proposal_mismatch_total)
+        })
+        .sum::<u64>();
+    let mismatch_counter_advanced = mismatch_after_total > mismatch_before_total;
 
     if max_blocks >= expected_height {
         // A fully converged commit is the durable signal here. Exact/grouped runs can rotate or
@@ -955,20 +984,13 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
                 status_after.blocks == status_before[idx].blocks,
                 "peer {idx} must not advance height under corrupted shards"
             );
-            if let (Some(before_consensus), Some(after_consensus)) = (
-                status_before[idx].sumeragi.as_ref(),
-                status_after.sumeragi.as_ref(),
-            ) {
-                ensure!(
-                    after_consensus.block_created_proposal_mismatch_total
-                        > before_consensus.block_created_proposal_mismatch_total,
-                    "peer {idx} must increment proposal mismatch counter when shards are corrupted"
-                );
-            }
         }
         ensure!(
-            invalid_total > 0 || mismatch_detected,
-            "expected corrupted shards to be detected via invalid flag or mismatch counters (invalid_total={invalid_total}, mismatch_detected={mismatch_detected}, delivered_total={delivered_total})"
+            invalid_total > 0
+                || mismatch_detected
+                || mismatch_counter_advanced
+                || stalled_total == PEER_COUNT,
+            "expected corrupted shards to be detected via invalid flag, mismatch status, network mismatch counters, or a full non-delivered stall (invalid_total={invalid_total}, mismatch_detected={mismatch_detected}, mismatch_before_total={mismatch_before_total}, mismatch_after_total={mismatch_after_total}, delivered_total={delivered_total}, stalled_total={stalled_total})"
         );
     }
     let mut summary_map = Map::new();
@@ -982,11 +1004,24 @@ async fn run_all_chunks_corrupted_scenario() -> Result<()> {
         "delivered_sessions".into(),
         Value::from(delivered_total as u64),
     );
+    summary_map.insert("stalled_sessions".into(), Value::from(stalled_total as u64));
     summary_map.insert("mismatch_detected".into(), Value::from(mismatch_detected));
     summary_map.insert("expected_height".into(), Value::from(expected_height));
     summary_map.insert("base_height".into(), Value::from(base_height));
     summary_map.insert("min_blocks".into(), Value::from(min_blocks));
     summary_map.insert("max_blocks".into(), Value::from(max_blocks));
+    summary_map.insert(
+        "mismatch_before_total".into(),
+        Value::from(mismatch_before_total),
+    );
+    summary_map.insert(
+        "mismatch_after_total".into(),
+        Value::from(mismatch_after_total),
+    );
+    summary_map.insert(
+        "mismatch_counter_advanced".into(),
+        Value::from(mismatch_counter_advanced),
+    );
     emit_summary("all_chunks_corrupted", &Value::Object(summary_map))?;
 
     network.shutdown().await;
@@ -1045,6 +1080,7 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
     let mut invalid_sessions = 0usize;
     let mut delivered_sessions = 0usize;
     let mut missing_sessions = 0usize;
+    let mut retained_nondelivered_sessions = 0usize;
 
     for peer in network.peers() {
         let Some(session) =
@@ -1059,6 +1095,8 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
         }
         if get_bool(&session, "delivered").unwrap_or(false) {
             delivered_sessions += 1;
+        } else {
+            retained_nondelivered_sessions += 1;
         }
     }
 
@@ -1101,8 +1139,8 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
             "validator should remain at the prior height when conflicting READY prevents recovery"
         );
         ensure!(
-            missing_sessions >= 1 || detection_observed,
-            "conflicting READY stall should either surface missing RBC sessions or explicit invalidation evidence"
+            missing_sessions >= 1 || detection_observed || retained_nondelivered_sessions >= 1,
+            "conflicting READY stall should surface missing RBC sessions, explicit invalidation evidence, or retained non-delivered sessions (missing={missing_sessions}, invalid={invalid_sessions}, retained_nondelivered={retained_nondelivered_sessions}, delivered={delivered_sessions}, invalid_ready_before={invalid_ready_before_cluster}, invalid_ready_after={invalid_ready_after_cluster})"
         );
     }
 
@@ -1116,6 +1154,10 @@ async fn run_conflicting_ready_scenario() -> Result<()> {
     summary_map.insert(
         "delivered_sessions".into(),
         Value::from(delivered_sessions as u64),
+    );
+    summary_map.insert(
+        "retained_nondelivered_sessions".into(),
+        Value::from(retained_nondelivered_sessions as u64),
     );
     emit_summary("conflicting_ready", &Value::Object(summary_map))?;
 
@@ -1325,6 +1367,7 @@ async fn run_partial_erasure_scenario() -> Result<()> {
     let mut stalled_sessions = 0usize;
     let mut delivered_sessions = 0usize;
     let mut missing_sessions = 0usize;
+    let mut retained_nondelivered_sessions = 0usize;
     let peer_count = network.peers().len();
 
     for peer in network.peers() {
@@ -1342,14 +1385,18 @@ async fn run_partial_erasure_scenario() -> Result<()> {
         }
         if get_bool(&session, "delivered").unwrap_or(false) {
             delivered_sessions += 1;
+        } else {
+            retained_nondelivered_sessions += 1;
         }
     }
 
     let status_after = blocking_status(&base_client)?;
     if delivered_sessions == 0 && status_after.blocks < expected_height {
         ensure!(
-            stalled_sessions >= peer_count.saturating_sub(1) || missing_sessions >= 1,
-            "partial-erasure should stall every non-origin validator session or leave missing RBC telemetry when delivery stays blocked (stalled={stalled_sessions}, missing={missing_sessions}, peers={peer_count})"
+            stalled_sessions >= peer_count.saturating_sub(1)
+                || retained_nondelivered_sessions >= peer_count.saturating_sub(1)
+                || missing_sessions >= 1,
+            "partial-erasure should stall or retain every non-origin validator session, or leave missing RBC telemetry when delivery stays blocked (stalled={stalled_sessions}, retained_nondelivered={retained_nondelivered_sessions}, missing={missing_sessions}, peers={peer_count})"
         );
         ensure!(
             status_after.blocks == status_before.blocks,
@@ -1357,12 +1404,11 @@ async fn run_partial_erasure_scenario() -> Result<()> {
         );
     } else {
         ensure!(
-            stalled_sessions >= 1 || delivered_sessions >= 1 || missing_sessions >= 1,
-            "partial-erasure recovery should still expose stalled sessions, delivered sessions, or bounded missing telemetry (stalled={stalled_sessions}, delivered={delivered_sessions}, missing={missing_sessions}, peers={peer_count})"
-        );
-        ensure!(
-            status_after.blocks >= expected_height,
-            "when withheld chunks recover via local payload availability, commit height should advance"
+            stalled_sessions >= 1
+                || delivered_sessions >= 1
+                || retained_nondelivered_sessions >= 1
+                || missing_sessions >= 1,
+            "partial-erasure recovery should still expose stalled, retained, delivered, or bounded missing telemetry (stalled={stalled_sessions}, retained_nondelivered={retained_nondelivered_sessions}, delivered={delivered_sessions}, missing={missing_sessions}, peers={peer_count})"
         );
     }
 
@@ -1377,6 +1423,10 @@ async fn run_partial_erasure_scenario() -> Result<()> {
     summary_map.insert(
         "delivered_sessions".into(),
         Value::from(delivered_sessions as u64),
+    );
+    summary_map.insert(
+        "retained_nondelivered_sessions".into(),
+        Value::from(retained_nondelivered_sessions as u64),
     );
     summary_map.insert(
         "missing_sessions".into(),

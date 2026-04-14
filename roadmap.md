@@ -120,13 +120,13 @@ clearing unrelated compile blockers outside the hosted-runtime slice.
 - verification status for the closing slice:
   - `npm run test:unit -- tests/soracloudTonIndexerManifest.test.ts tests/soracloudTonIndexerBundle.test.ts`
   - `CARGO_TARGET_DIR=/tmp/iroha-portable-check cargo check -p irohad --bin irohad --message-format short`
+  - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test --no-run -p irohad --features embedded-soracloud-runtime --bin irohad`
   - fresh-target exact-test builds completed for:
     - `CARGO_TARGET_DIR=/tmp/iroha-verify-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay -- --exact`
     - `CARGO_TARGET_DIR=/tmp/iroha-verify-torii cargo test -p iroha_torii soracloud_hosted_http_topology_section_reports_authoritative_counts -- --exact`
-  - `CARGO_TARGET_DIR=/tmp/iroha-inrou-strict-check cargo check -p irohad --features embedded-soracloud-runtime --bin irohad --message-format short`
-    now reaches the new hosted-runtime path and then stops in an unrelated
-    existing `iroha_sccp` derive failure, so final compile closure is still
-    blocked outside the Inrou slice
+  - focused PortableVm runtime tests now pass directly:
+    - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud_runtime::tests::build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay -- --exact --nocapture`
+    - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud_runtime::tests::ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file -- --exact --nocapture`
 - open work after this slice:
   - execute `cargo xtask soracloud-inrou-smoke portable` on a real non-Linux
     validator host with publish-grade guest assets;

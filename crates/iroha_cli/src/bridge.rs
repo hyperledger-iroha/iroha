@@ -271,9 +271,10 @@ fn render_sccp_artifact_summary(
         ),
         None => format!(" proof_bytes_len={}", artifact.proof_bytes.len()),
     };
-    let open_verify_summary = iroha_sccp::summarize_sccp_message_transparent_open_verify_proof_from_artifact(artifact)
-        .map(render_sccp_open_verify_summary)
-        .unwrap_or_default();
+    let open_verify_summary =
+        iroha_sccp::summarize_sccp_message_transparent_open_verify_proof_from_artifact(artifact)
+            .map(render_sccp_open_verify_summary)
+            .unwrap_or_default();
     format!(
         "sccp artifact: message_id={} payload={} chain={}({}) backend={} verifier_backend={} security={:?} anchors={:?} binding={} proof_family={} finality_height={} commitment_root={}{}{}{} package={}/{}",
         hex::encode(artifact.public_inputs.message_id),
@@ -323,9 +324,7 @@ fn render_sccp_job_summary(job: &iroha_sccp::SccpCounterpartyProofJobV1) -> Stri
     )
 }
 
-fn render_sccp_open_verify_summary(
-    summary: iroha_sccp::SccpOpenVerifyEnvelopeSummaryV1,
-) -> String {
+fn render_sccp_open_verify_summary(summary: iroha_sccp::SccpOpenVerifyEnvelopeSummaryV1) -> String {
     format!(
         " open_verify={}/{} vk_hash={} schema_hash={} columns={} words={} backend_proof_len={} aux_len={}",
         summary.backend,
@@ -759,10 +758,9 @@ mod tests {
             SccpMerkleProofV1, SccpPayloadV1, SccpPlatformSubmissionPayloadV1,
             SccpTonInternalMessageSubmissionPayloadV1, TransferPayloadV1,
             canonical_nexus_sccp_message_bundle_bytes,
-            canonical_sccp_message_transparent_public_inputs_bytes,
-            canonical_sccp_payload_bytes, merkle_root_from_commitment, payload_hash,
-            sccp_message_id, sccp_message_transparent_public_inputs,
-            sccp_proof_manifest_for_domain,
+            canonical_sccp_message_transparent_public_inputs_bytes, canonical_sccp_payload_bytes,
+            merkle_root_from_commitment, payload_hash, sccp_message_id,
+            sccp_message_transparent_public_inputs, sccp_proof_manifest_for_domain,
         };
 
         let payload = SccpPayloadV1::Transfer(TransferPayloadV1 {
@@ -822,8 +820,8 @@ mod tests {
             payload,
             finality_proof: norito::to_bytes(&finality_proof).expect("encode finality proof"),
         };
-        let manifest = sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON)
-            .expect("ton manifest");
+        let manifest =
+            sccp_proof_manifest_for_domain(iroha_sccp::SCCP_DOMAIN_TON).expect("ton manifest");
         let public_inputs =
             sccp_message_transparent_public_inputs(&bundle).expect("message public inputs");
         let open = iroha::data_model::zk::StarkFriOpenProofV1 {
@@ -840,15 +838,15 @@ mod tests {
             aux: vec![0xDE, 0xAD],
         })
         .expect("encode open verify envelope");
-        let platform_payload =
-            SccpPlatformSubmissionPayloadV1::TonInternalMessage(
-                SccpTonInternalMessageSubmissionPayloadV1 {
-                    proof_cell: proof_bytes.clone(),
-                    public_inputs_cell:
-                        canonical_sccp_message_transparent_public_inputs_bytes(&public_inputs),
-                    bundle_cell: canonical_nexus_sccp_message_bundle_bytes(&bundle),
-                },
-            );
+        let platform_payload = SccpPlatformSubmissionPayloadV1::TonInternalMessage(
+            SccpTonInternalMessageSubmissionPayloadV1 {
+                proof_cell: proof_bytes.clone(),
+                public_inputs_cell: canonical_sccp_message_transparent_public_inputs_bytes(
+                    &public_inputs,
+                ),
+                bundle_cell: canonical_nexus_sccp_message_bundle_bytes(&bundle),
+            },
+        );
         NexusSccpMessageTransparentProofV1 {
             version: 1,
             local_domain: manifest.local_domain,
