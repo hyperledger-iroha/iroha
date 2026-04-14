@@ -2,6 +2,28 @@
 
 Last updated: 2026-04-14
 
+Latest sync (2026-04-14 SCCP destination rollout JSON derive unblocker):
+the temporary SCCP JSON derive regression is closed on the current tree.
+`crates/iroha_sccp/src/lib.rs` now exposes
+`SccpDestinationVerifierPlanV1` through `norito::json::FastJsonWrite`, which
+matches what Norito's derive-generated struct writers require while preserving
+the existing string JSON representation. A direct enum JSON roundtrip test now
+locks that shape in next to the existing rollout roundtrip.
+
+- shipped in:
+  - `/Users/takemiyamakoto/soramitsudev/iroha/crates/iroha_sccp/src/lib.rs`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/status.md`
+  - `/Users/takemiyamakoto/soramitsudev/iroha/roadmap.md`
+- verified in this slice:
+  - `cargo fmt --all`
+  - `cargo check -p iroha_sccp --features serde --message-format short`
+  - `cargo test -p iroha_sccp destination_ -- --nocapture`
+- open work after this slice:
+  - keep the SCCP roadmap on immutable destination-chain recursive verifiers
+    and governed anchor rotation rather than local-only summary surfaces; and
+  - rerun any broader workspace compile/test sweep only if wider signoff is
+    needed beyond this focused unblocker.
+
 Latest sync (2026-04-14 same-height known-block missing-commit-QC stalls now hand off to passive canonical catch-up):
 the restarted-peer confidential localnet regression is fixed on the current
 tree. `crates/iroha_core/src/sumeragi/main_loop.rs` now treats stale
