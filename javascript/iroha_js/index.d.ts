@@ -810,6 +810,16 @@ export interface AccountTransactionListOptions extends IterableListOptions {
   assetId?: string;
 }
 
+export interface ContractActivityListOptions extends IterableListOptions {
+  authority?: string;
+  contractAddress?: string;
+  contractAlias?: string;
+  contractEntrypoint?: string;
+  sinceTimestampMs?: NumericLike;
+  untilTimestampMs?: NumericLike;
+  resultOk?: boolean;
+}
+
 export interface AssetHolderListOptions extends IterableListOptions {
   assetId?: string;
 }
@@ -1204,6 +1214,20 @@ export interface ToriiAccountTransactionItem {
   timestamp_ms?: number;
   entrypoint_hash: string;
   result_ok: boolean;
+}
+
+export interface ToriiContractActivityItem {
+  authority?: string;
+  timestamp_ms?: number;
+  entrypoint_hash: string;
+  result_ok: boolean;
+  contract_address: string;
+  contract_alias?: string;
+  contract_entrypoint?: string;
+  contract_payload?: JsonValue;
+  gas_asset_id?: string;
+  fee_sponsor?: string;
+  gas_limit?: number;
 }
 
 export interface ToriiProverReport {
@@ -7326,6 +7350,9 @@ export declare class ToriiClient {
   listAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,
     options?: AccountTransactionListOptions,
+  ): Promise<ToriiIterableListResponse<T>>;
+  listContractActivity<T = ToriiContractActivityItem>(
+    options?: ContractActivityListOptions,
   ): Promise<ToriiIterableListResponse<T>>;
   queryAccountTransactions<T = ToriiAccountTransactionItem>(
     accountId: string,

@@ -4,7 +4,7 @@
 use std::{net::SocketAddr, num::NonZeroU32, sync::Arc};
 
 use axum::{
-    body::Body,
+    body::{Body, Bytes},
     http::{Request, StatusCode, header},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD as B64};
@@ -71,6 +71,15 @@ async fn read_json_body(response: axum::response::Response) -> Value {
     })
 }
 
+async fn read_body_bytes(response: axum::response::Response) -> Bytes {
+    response
+        .into_body()
+        .collect()
+        .await
+        .expect("response body")
+        .to_bytes()
+}
+
 async fn call_app(app: &axum::Router, request: Request<Body>) -> axum::response::Response {
     let service = app
         .clone()
@@ -94,6 +103,22 @@ async fn post_mcp(app: &axum::Router, payload: Value) -> (StatusCode, Value) {
     let response = call_app(app, request).await;
     let status = response.status();
     let body = read_json_body(response).await;
+    (status, body)
+}
+
+async fn post_mcp_bytes(app: &axum::Router, payload: Value) -> (StatusCode, Bytes) {
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/mcp")
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            norito::json::to_vec(&payload).expect("serialize payload"),
+        ))
+        .expect("valid request");
+
+    let response = call_app(app, request).await;
+    let status = response.status();
+    let body = read_body_bytes(response).await;
     (status, body)
 }
 
@@ -167,6 +192,52 @@ async fn list_all_tool_names(app: &axum::Router) -> Vec<String> {
     names
 }
 
+async fn find_tool(app: &axum::Router, target_name: &str) -> Value {
+    let mut cursor: Option<String> = None;
+
+    loop {
+        let payload = if let Some(cursor_value) = cursor.clone() {
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": "tools-page",
+                "method": "tools/list",
+                "params": {
+                    "cursor": cursor_value
+                }
+            })
+        } else {
+            norito::json!({
+                "jsonrpc": "2.0",
+                "id": "tools-page",
+                "method": "tools/list"
+            })
+        };
+
+        let (status, body) = post_mcp(app, payload).await;
+        assert_eq!(status, StatusCode::OK);
+        let result = body.get("result").expect("tools/list result");
+        let page = result
+            .get("tools")
+            .and_then(Value::as_array)
+            .expect("tools array");
+        for tool in page {
+            if tool.get("name").and_then(Value::as_str) == Some(target_name) {
+                return tool.clone();
+            }
+        }
+
+        cursor = result
+            .get("nextCursor")
+            .and_then(Value::as_str)
+            .map(str::to_owned);
+        if cursor.is_none() {
+            break;
+        }
+    }
+
+    panic!("tool {target_name} not found in tools/list");
+}
+
 fn structured_content(response: &Value) -> &norito::json::Map {
     response
         .get("result")
@@ -221,6 +292,142 @@ async fn mcp_capabilities_endpoint_exposes_server_metadata() {
             .is_some_and(|count| count > 0),
         "tool count should be present and positive"
     );
+}
+
+#[tokio::test]
+async fn mcp_connect_session_delete_tools_publish_openai_compatible_schema() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.connect.enabled = true;
+
+    let app = build_router(cfg);
+
+    for name in ["connect.session.delete", "iroha.connect.session.delete"] {
+        let tool = find_tool(&app, name).await;
+        let schema = tool
+            .get("inputSchema")
+            .and_then(Value::as_object)
+            .expect("inputSchema object");
+        assert_eq!(schema.get("type").and_then(Value::as_str), Some("object"));
+        assert!(
+            !schema.contains_key("anyOf"),
+            "{name} schema should not use top-level anyOf"
+        );
+        assert!(
+            !schema.contains_key("oneOf"),
+            "{name} schema should not use top-level oneOf"
+        );
+        assert!(
+            !schema.contains_key("allOf"),
+            "{name} schema should not use top-level allOf"
+        );
+        assert!(
+            !schema.contains_key("not"),
+            "{name} schema should not use top-level not"
+        );
+
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("properties object");
+        assert!(properties.contains_key("sid"));
+        assert!(properties.contains_key("session_id"));
+        let path = properties
+            .get("path")
+            .and_then(Value::as_object)
+            .expect("path object");
+        assert_eq!(path.get("type").and_then(Value::as_str), Some("object"));
+    }
+}
+
+#[tokio::test]
+async fn mcp_connect_ticket_tools_publish_openai_compatible_schema() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.connect.enabled = true;
+
+    let app = build_router(cfg);
+
+    for name in ["connect.ws.ticket", "iroha.connect.ws.ticket"] {
+        let tool = find_tool(&app, name).await;
+        let schema = tool
+            .get("inputSchema")
+            .and_then(Value::as_object)
+            .expect("inputSchema object");
+        assert_eq!(schema.get("type").and_then(Value::as_str), Some("object"));
+        assert!(
+            !schema.contains_key("anyOf"),
+            "{name} schema should not use top-level anyOf"
+        );
+        assert!(
+            !schema.contains_key("oneOf"),
+            "{name} schema should not use top-level oneOf"
+        );
+        assert!(
+            !schema.contains_key("allOf"),
+            "{name} schema should not use top-level allOf"
+        );
+        assert!(
+            !schema.contains_key("not"),
+            "{name} schema should not use top-level not"
+        );
+        assert_eq!(
+            schema
+                .get("required")
+                .and_then(Value::as_array)
+                .map(|required| required
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()),
+            Some(vec!["role"])
+        );
+    }
+}
+
+#[tokio::test]
+async fn mcp_vpn_session_detail_tools_publish_openai_compatible_schema() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.connect.enabled = true;
+    cfg.torii.vpn_profile = Some("https://vpn.example/profile".to_owned());
+
+    let app = build_router(cfg);
+
+    for name in ["iroha.vpn.sessions.get", "iroha.vpn.sessions.delete"] {
+        let tool = find_tool(&app, name).await;
+        let schema = tool
+            .get("inputSchema")
+            .and_then(Value::as_object)
+            .expect("inputSchema object");
+        assert_eq!(schema.get("type").and_then(Value::as_str), Some("object"));
+        assert!(
+            !schema.contains_key("anyOf"),
+            "{name} schema should not use top-level anyOf"
+        );
+        assert!(
+            !schema.contains_key("oneOf"),
+            "{name} schema should not use top-level oneOf"
+        );
+        assert!(
+            !schema.contains_key("allOf"),
+            "{name} schema should not use top-level allOf"
+        );
+        assert!(
+            !schema.contains_key("not"),
+            "{name} schema should not use top-level not"
+        );
+
+        let properties = schema
+            .get("properties")
+            .and_then(Value::as_object)
+            .expect("properties object");
+        assert!(properties.contains_key("session_id"));
+        assert!(properties.contains_key("id"));
+        assert!(properties.contains_key("path"));
+    }
 }
 
 #[tokio::test]
@@ -344,6 +551,70 @@ async fn mcp_jsonrpc_initialize_list_and_call_connect_ticket() {
             .and_then(Value::as_str),
         Some("iroha-connect.token.v1.c2VjcmV0LXRva2Vu")
     );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_initialized_notification_returns_accepted_without_body() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(10_000).expect("nonzero rate"));
+    cfg.torii.mcp.burst = Some(NonZeroU32::new(10_000).expect("nonzero burst"));
+
+    let app = build_router(cfg);
+
+    let (status, initialize) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        initialize.get("result").is_some(),
+        "initialize should succeed before the client sends initialized"
+    );
+
+    let (status, body) = post_mcp_bytes(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "method": "notifications/initialized"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    assert!(
+        body.is_empty(),
+        "initialized notification should return 202 with no response body"
+    );
+}
+
+#[tokio::test]
+async fn mcp_jsonrpc_ping_returns_empty_result_object() {
+    let _data_dir = test_utils::TestDataDirGuard::new();
+    let mut cfg = test_utils::mk_minimal_root_cfg();
+    cfg.torii.mcp.enabled = true;
+    cfg.torii.mcp.rate_per_minute = Some(NonZeroU32::new(10_000).expect("nonzero rate"));
+    cfg.torii.mcp.burst = Some(NonZeroU32::new(10_000).expect("nonzero burst"));
+
+    let app = build_router(cfg);
+
+    let (status, ping) = post_mcp(
+        &app,
+        norito::json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "ping"
+        }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(ping.get("id").and_then(Value::as_u64), Some(7));
+    assert_eq!(ping.get("result"), Some(&norito::json!({})));
 }
 
 #[tokio::test]

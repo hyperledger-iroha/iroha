@@ -106,7 +106,14 @@ binary_dir="${REPO_ROOT}/target/${PROFILE}"
 mkdir -p "$bundle_dir/bin" "$bundle_dir/configs/soranexus" "$bundle_dir/scripts"
 
 if [[ $SKIP_BUILD -ne 1 ]]; then
-  core_build_args=(build -p irohad -p iroha_cli --bin irohad --bin iroha)
+  core_build_args=(
+    build
+    -p irohad
+    -p iroha_cli
+    --bin irohad
+    --bin iroha
+    --features embedded-soracloud-runtime
+  )
   sorafs_build_args=(build -p sorafs_car --features cli --bin sorafs_manifest_stub --bin sorafs_tx_stdin_builder)
   if [[ "$PROFILE" == "release" ]]; then
     core_build_args+=(--release)
@@ -160,6 +167,9 @@ payload = {
     "git_tree_clean": os.environ["GIT_TREE_CLEAN"] == "true",
     "git_status_lines": [line for line in status.splitlines() if line],
     "cargo_profile": os.environ["PROFILE_NAME"],
+    "irohad_features": [
+        "embedded-soracloud-runtime",
+    ],
     "bundle_name": os.environ["BUNDLE_NAME"],
     "binaries": [
         "bin/irohad",

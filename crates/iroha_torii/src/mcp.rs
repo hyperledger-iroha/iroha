@@ -510,6 +510,7 @@ pub(crate) async fn handle_jsonrpc_request(
             let visible_tools = visible_tools_for_policy(&app.mcp, app.mcp_tools.as_slice());
             jsonrpc_result_response(id, capabilities_payload(&visible_tools))
         }
+        "ping" => jsonrpc_result_response(id, Value::Object(Map::new())),
         "tools/list" => handle_tools_list(id, &app, &params),
         "tools/call_batch" => handle_tools_call_batch(id, app, inbound_headers, &params).await,
         "tools/call_async" => handle_tools_call_async(id, app, inbound_headers, &params).await,
@@ -522,6 +523,23 @@ pub(crate) async fn handle_jsonrpc_request(
             Some(norito::json!({ "method": method })),
         ),
     }
+}
+
+/// Return true when the payload is the MCP post-initialize notification.
+pub(crate) fn is_initialized_notification(request: &Value) -> bool {
+    let Some(req_obj) = request.as_object() else {
+        return false;
+    };
+    if req_obj
+        .get("jsonrpc")
+        .and_then(Value::as_str)
+        .is_some_and(|version| version != JSONRPC_VERSION)
+    {
+        return false;
+    }
+
+    req_obj.get("id").is_none()
+        && req_obj.get("method").and_then(Value::as_str) == Some("notifications/initialized")
 }
 
 fn handle_tools_list(id: Option<Value>, app: &SharedAppState, params: &Map) -> Value {
@@ -7624,10 +7642,6 @@ fn connect_ws_ticket_tool() -> ToolSpec {
             "type": "object",
             "additionalProperties": false,
             "required": ["role"],
-            "anyOf": [
-                { "required": ["sid"] },
-                { "required": ["session_id"] }
-            ],
             "properties": {
                 "sid": { "type": "string" },
                 "session_id": {
@@ -7648,7 +7662,8 @@ fn connect_ws_ticket_tool() -> ToolSpec {
                     "description": "Token alias used when `role=wallet` and `token` is omitted."
                 },
                 "node_url": { "type": "string", "description": "Optional node URL; defaults to Host/X-Forwarded-Proto from the MCP request." }
-            }
+            },
+            "description": "Provide `role` plus one of `sid` or `session_id`."
         }),
     }
 }
@@ -7754,11 +7769,6 @@ fn connect_session_delete_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "anyOf": [
-                { "required": ["sid"] },
-                { "required": ["session_id"] },
-                { "required": ["path"] }
-            ],
             "properties": {
                 "sid": { "type": "string" },
                 "session_id": {
@@ -7768,10 +7778,7 @@ fn connect_session_delete_tool() -> ToolSpec {
                 "path": {
                     "type": "object",
                     "additionalProperties": false,
-                    "anyOf": [
-                        { "required": ["sid"] },
-                        { "required": ["session_id"] }
-                    ],
+                    "description": "Optional path-style argument wrapper. Provide either `path.sid` or `path.session_id`.",
                     "properties": {
                         "sid": { "type": "string" },
                         "session_id": {
@@ -7785,7 +7792,8 @@ fn connect_session_delete_tool() -> ToolSpec {
                     "additionalProperties": { "type": "string" }
                 },
                 "accept": { "type": "string" }
-            }
+            },
+            "description": "Provide one of `sid`, `session_id`, `path.sid`, or `path.session_id`."
         }),
     }
 }
@@ -7904,11 +7912,6 @@ fn iroha_vpn_sessions_get_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "anyOf": [
-                { "required": ["session_id"] },
-                { "required": ["id"] },
-                { "required": ["path"] }
-            ],
             "properties": {
                 "session_id": { "type": "string" },
                 "id": {
@@ -7935,7 +7938,8 @@ fn iroha_vpn_sessions_get_tool() -> ToolSpec {
                     "additionalProperties": { "type": "string" }
                 },
                 "accept": { "type": "string" }
-            }
+            },
+            "description": "Provide one of `session_id`, `id`, `path.session_id`, or `path.id`."
         }),
     }
 }
@@ -7950,11 +7954,6 @@ fn iroha_vpn_sessions_delete_tool() -> ToolSpec {
         input_schema: norito::json!({
             "type": "object",
             "additionalProperties": false,
-            "anyOf": [
-                { "required": ["session_id"] },
-                { "required": ["id"] },
-                { "required": ["path"] }
-            ],
             "properties": {
                 "session_id": { "type": "string" },
                 "id": {
@@ -7981,7 +7980,8 @@ fn iroha_vpn_sessions_delete_tool() -> ToolSpec {
                     "additionalProperties": { "type": "string" }
                 },
                 "accept": { "type": "string" }
-            }
+            },
+            "description": "Provide one of `session_id`, `id`, `path.session_id`, or `path.id`."
         }),
     }
 }

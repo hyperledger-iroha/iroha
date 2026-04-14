@@ -109,6 +109,7 @@ documentation examples tied to real secrets.
 
 ### HTTP Status Behavior
 - `200 OK`: JSON-RPC responses (including JSON-RPC-level errors).
+- `202 Accepted`: accepted MCP notifications such as `notifications/initialized` (no response body).
 - `400 Bad Request`: invalid JSON payload.
 - `403 Forbidden`: API-token middleware rejected request before JSON-RPC handling.
 - `413 Payload Too Large`: request exceeds `max_request_bytes`.
@@ -118,6 +119,8 @@ documentation examples tied to real secrets.
 
 ## Supported JSON-RPC Methods
 - `initialize`
+- `notifications/initialized` (accepted as a notification; returns `202 Accepted` with an empty body)
+- `ping`
 - `tools/list`
 - `tools/call`
 - `tools/call_batch`
@@ -133,6 +136,23 @@ Result shape:
 - `protocolVersion` (currently `2025-06-18`)
 - `serverInfo` (`name`, `version`)
 - `capabilities.tools` (`count`, `listChanged`, `toolsetVersion`)
+
+### `notifications/initialized`
+Marks the client ready for normal MCP operations after a successful `initialize`
+response.
+
+HTTP behavior:
+- `202 Accepted`
+- empty response body
+
+Torii accepts the notification when:
+- `method == "notifications/initialized"`
+- `id` is omitted
+- `jsonrpc` is either omitted or `"2.0"`
+
+### `ping`
+Returns an empty result object so MCP clients can use the standard lifecycle
+ping before or after initialization.
 
 ### `tools/list`
 Returns paginated tool descriptors.

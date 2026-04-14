@@ -357,6 +357,16 @@ const ASSET_ID_LIST_OPTION_KEYS = new Set([
   ...ITERABLE_LIST_OPTION_KEYS,
   "assetId",
 ]);
+const CONTRACT_ACTIVITY_LIST_OPTION_KEYS = new Set([
+  ...ITERABLE_LIST_OPTION_KEYS,
+  "authority",
+  "contractAddress",
+  "contractAlias",
+  "contractEntrypoint",
+  "sinceTimestampMs",
+  "untilTimestampMs",
+  "resultOk",
+]);
 const OFFLINE_ITERABLE_OPTION_KEYS = new Set([
   ...ITERABLE_LIST_OPTION_KEYS,
   "controllerId",
@@ -1742,6 +1752,20 @@ export class ToriiClient {
     return this._iterateIterable(
       this.queryAccountTransactions.bind(this, normalizedId),
       options,
+    );
+  }
+
+  /**
+   * List committed contract-call activity (`GET /v1/contracts/activity`).
+   * @param {ContractActivityListOptions} [options]
+   * @returns {Promise<{items: Array<object>, total: number}>}
+   */
+  async listContractActivity(options = {}) {
+    return this._listIterable(
+      "/v1/contracts/activity",
+      options,
+      normalizeContractActivityListResponse,
+      CONTRACT_ACTIVITY_LIST_OPTION_KEYS,
     );
   }
 
@@ -9131,7 +9155,7 @@ export class ToriiClient {
     );
     const canonicalAuth = ToriiClient._normalizeCanonicalAuth(normalizedOptions.canonicalAuth);
     const { signal, canonicalAuth: _ignoredCanonical, ...rest } = normalizedOptions;
-    const params = ToriiClient._encodeIterableListParams(rest, optionContext);
+    const params = ToriiClient._encodeIterableListParams(rest, optionContext, allowedKeys);
     const response = await this._request("GET", path, {
       params: params ?? undefined,
       headers: { Accept: "application/json" },
@@ -9996,9 +10020,17 @@ export class ToriiClient {
     };
   }
 
-  static _encodeIterableListParams(options = {}, context = "iterable list options") {
+  static _encodeIterableListParams(
+    options = {},
+    context = "iterable list options",
+    allowedKeys = ITERABLE_LIST_OPTION_KEYS,
+  ) {
     const optionPath = context ?? "options";
-    const normalizedOptions = ToriiClient._normalizeIterableOptions(options, context);
+    const normalizedOptions = ToriiClient._normalizeIterableOptions(
+      options,
+      context,
+      allowedKeys,
+    );
     const params = {};
     if (normalizedOptions.limit !== undefined && normalizedOptions.limit !== null) {
       params.limit = ToriiClient._normalizeUnsignedInteger(normalizedOptions.limit, "limit", {
@@ -10039,6 +10071,59 @@ export class ToriiClient {
     }
     if (normalizedOptions.assetId !== undefined && normalizedOptions.assetId !== null) {
       params.asset_id = ToriiClient._normalizeAssetId(normalizedOptions.assetId, "assetId");
+    }
+    if (normalizedOptions.authority !== undefined && normalizedOptions.authority !== null) {
+      params.authority = ToriiClient._normalizeAccountId(
+        normalizedOptions.authority,
+        "authority",
+      );
+    }
+    if (
+      normalizedOptions.contractAddress !== undefined &&
+      normalizedOptions.contractAddress !== null
+    ) {
+      params.contract_address = requireNonEmptyString(
+        normalizedOptions.contractAddress,
+        "contractAddress",
+      );
+    }
+    if (normalizedOptions.contractAlias !== undefined && normalizedOptions.contractAlias !== null) {
+      params.contract_alias = requireNonEmptyString(
+        normalizedOptions.contractAlias,
+        "contractAlias",
+      );
+    }
+    if (
+      normalizedOptions.contractEntrypoint !== undefined &&
+      normalizedOptions.contractEntrypoint !== null
+    ) {
+      params.contract_entrypoint = requireNonEmptyString(
+        normalizedOptions.contractEntrypoint,
+        "contractEntrypoint",
+      );
+    }
+    if (
+      normalizedOptions.sinceTimestampMs !== undefined &&
+      normalizedOptions.sinceTimestampMs !== null
+    ) {
+      params.since_timestamp_ms = ToriiClient._normalizeUnsignedInteger(
+        normalizedOptions.sinceTimestampMs,
+        "sinceTimestampMs",
+        { allowZero: true },
+      );
+    }
+    if (
+      normalizedOptions.untilTimestampMs !== undefined &&
+      normalizedOptions.untilTimestampMs !== null
+    ) {
+      params.until_timestamp_ms = ToriiClient._normalizeUnsignedInteger(
+        normalizedOptions.untilTimestampMs,
+        "untilTimestampMs",
+        { allowZero: true },
+      );
+    }
+    if (normalizedOptions.resultOk !== undefined && normalizedOptions.resultOk !== null) {
+      params.result_ok = requireBooleanLike(normalizedOptions.resultOk, "resultOk");
     }
     if (
       normalizedOptions.certificateExpiresBeforeMs !== undefined &&
@@ -23668,6 +23753,14 @@ function normalizeAccountTransactionListResponse(payload) {
   );
 }
 
+function normalizeContractActivityListResponse(payload) {
+  return normalizeIterableItems(
+    payload,
+    "contract activity list response",
+    normalizeContractActivityListItem,
+  );
+}
+
 function normalizeAssetHolderListResponse(payload) {
   return normalizeIterableItems(
     payload,
@@ -24604,6 +24697,105 @@ function normalizeAccountTransactionListItem(value, context) {
     normalized.timestamp_ms = timestampValue;
   } else {
     delete normalized.timestamp_ms;
+  }
+  return normalized;
+}
+
+function normalizeContractActivityListItem(value, context) {
+  const record = ensureRecord(value, context);
+  rejectAliasField(record, context, "entrypointHash", "entrypoint_hash");
+  rejectAliasField(record, context, "resultOk", "result_ok");
+  rejectAliasField(record, context, "timestampMs", "timestamp_ms");
+  rejectAliasField(record, context, "contractAddress", "contract_address");
+  rejectAliasField(record, context, "contractAlias", "contract_alias");
+  rejectAliasField(record, context, "contractEntrypoint", "contract_entrypoint");
+  rejectAliasField(record, context, "contractPayload", "contract_payload");
+  rejectAliasField(record, context, "gasAssetId", "gas_asset_id");
+  rejectAliasField(record, context, "feeSponsor", "fee_sponsor");
+  rejectAliasField(record, context, "gasLimit", "gas_limit");
+  const entrypointHash = requireNonEmptyString(
+    record.entrypoint_hash,
+    `${context}.entrypoint_hash`,
+  );
+  const resultOk = requireBooleanLike(record.result_ok, `${context}.result_ok`);
+  const contractAddress = requireNonEmptyString(
+    record.contract_address,
+    `${context}.contract_address`,
+  );
+  let authorityValue = record.authority;
+  if (authorityValue !== undefined && authorityValue !== null) {
+    authorityValue = requireNonEmptyString(authorityValue, `${context}.authority`);
+  }
+  let timestampValue = record.timestamp_ms;
+  if (timestampValue !== undefined && timestampValue !== null) {
+    timestampValue = ToriiClient._normalizeUnsignedInteger(
+      timestampValue,
+      `${context}.timestamp_ms`,
+      { allowZero: true },
+    );
+  } else {
+    timestampValue = undefined;
+  }
+  const contractAlias =
+    record.contract_alias === undefined || record.contract_alias === null
+      ? undefined
+      : requireNonEmptyString(record.contract_alias, `${context}.contract_alias`);
+  const contractEntrypoint =
+    record.contract_entrypoint === undefined || record.contract_entrypoint === null
+      ? undefined
+      : requireNonEmptyString(
+          record.contract_entrypoint,
+          `${context}.contract_entrypoint`,
+        );
+  const contractPayload =
+    record.contract_payload === undefined
+      ? undefined
+      : cloneJsonValue(record.contract_payload, `${context}.contract_payload`);
+  const gasAssetId =
+    record.gas_asset_id === undefined || record.gas_asset_id === null
+      ? undefined
+      : requireNonEmptyString(record.gas_asset_id, `${context}.gas_asset_id`);
+  const feeSponsor =
+    record.fee_sponsor === undefined || record.fee_sponsor === null
+      ? undefined
+      : requireNonEmptyString(record.fee_sponsor, `${context}.fee_sponsor`);
+  const gasLimit =
+    record.gas_limit === undefined || record.gas_limit === null
+      ? undefined
+      : ToriiClient._normalizeUnsignedInteger(record.gas_limit, `${context}.gas_limit`, {
+          allowZero: true,
+        });
+  const normalized = {
+    ...record,
+    entrypoint_hash: entrypointHash,
+    result_ok: resultOk,
+    contract_address: contractAddress,
+  };
+  if (authorityValue !== undefined) {
+    normalized.authority = authorityValue;
+  }
+  if (timestampValue !== undefined) {
+    normalized.timestamp_ms = timestampValue;
+  } else {
+    delete normalized.timestamp_ms;
+  }
+  if (contractAlias !== undefined) {
+    normalized.contract_alias = contractAlias;
+  }
+  if (contractEntrypoint !== undefined) {
+    normalized.contract_entrypoint = contractEntrypoint;
+  }
+  if (contractPayload !== undefined) {
+    normalized.contract_payload = contractPayload;
+  }
+  if (gasAssetId !== undefined) {
+    normalized.gas_asset_id = gasAssetId;
+  }
+  if (feeSponsor !== undefined) {
+    normalized.fee_sponsor = feeSponsor;
+  }
+  if (gasLimit !== undefined) {
+    normalized.gas_limit = gasLimit;
   }
   return normalized;
 }

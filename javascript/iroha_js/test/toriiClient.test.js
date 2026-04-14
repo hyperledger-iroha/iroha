@@ -13594,6 +13594,81 @@ test("listAccountTransactions rejects camelCase entrypointHash fields", async ()
   );
 });
 
+test("listContractActivity encodes contract activity filters", async () => {
+  let capturedUrl;
+  const fetchImpl = async (url) => {
+    capturedUrl = url;
+    return createResponse({
+      status: 200,
+      jsonData: {
+        items: [
+          {
+            authority: FIXTURE_ALICE_ID,
+            entrypoint_hash: "abc",
+            result_ok: true,
+            timestamp_ms: 123,
+            contract_address: "tairac1router",
+            contract_alias: "dlmm_router",
+            contract_entrypoint: "route_swap",
+            contract_payload: { amount_in: 100, min_out: 95 },
+            gas_asset_id: "xor#universal",
+            fee_sponsor: FIXTURE_ALICE_ID,
+            gas_limit: 100000,
+          },
+        ],
+        total: 1,
+      },
+      headers: { "content-type": "application/json" },
+    });
+  };
+  const client = new ToriiClient(BASE_URL, { fetchImpl });
+  const payload = await client.listContractActivity({
+    authority: FIXTURE_ALICE_ID,
+    contractAlias: "dlmm_router",
+    contractEntrypoint: "route_swap",
+    resultOk: true,
+    sinceTimestampMs: 100,
+    untilTimestampMs: 200,
+    limit: 5,
+    offset: 1,
+  });
+  const parsed = new URL(capturedUrl);
+  assert.equal(parsed.pathname, "/v1/contracts/activity");
+  assert.equal(parsed.searchParams.get("authority"), FIXTURE_ALICE_ID);
+  assert.equal(parsed.searchParams.get("contract_alias"), "dlmm_router");
+  assert.equal(parsed.searchParams.get("contract_entrypoint"), "route_swap");
+  assert.equal(parsed.searchParams.get("result_ok"), "true");
+  assert.equal(parsed.searchParams.get("since_timestamp_ms"), "100");
+  assert.equal(parsed.searchParams.get("until_timestamp_ms"), "200");
+  assert.equal(payload.items[0].contract_payload.amount_in, 100);
+  assert.equal(payload.items[0].gas_limit, 100000);
+});
+
+test("listContractActivity rejects camelCase payload aliases", async () => {
+  const client = new ToriiClient(BASE_URL, {
+    fetchImpl: async () =>
+      createResponse({
+        status: 200,
+        jsonData: {
+          items: [
+            {
+              entrypoint_hash: "tx1",
+              result_ok: true,
+              contract_address: "tairac1router",
+              contractPayload: {},
+            },
+          ],
+          total: 1,
+        },
+        headers: { "content-type": "application/json" },
+      }),
+  });
+  await assert.rejects(
+    () => client.listContractActivity(),
+    /contract activity list response\.items\[0]\.contractPayload is not supported/,
+  );
+});
+
 test("queryAccountTransactions posts structured envelope", async () => {
   let capturedBody;
   const fetchImpl = async (_url, init) => {

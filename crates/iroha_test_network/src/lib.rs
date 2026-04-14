@@ -2037,6 +2037,7 @@ pub struct Network {
     block_time: Duration,
     commit_time: Duration,
     block_sync_gossip_period: Duration,
+    sync_timeout_override: Option<Duration>,
     peer_startup_timeout_override: Option<Duration>,
     consensus_profile: ConsensusBootstrapProfile,
     genesis_key_pair: KeyPair,
@@ -2624,7 +2625,7 @@ impl Network {
     }
 
     pub fn sync_timeout(&self) -> Duration {
-        sync_timeout_env()
+        self.sync_timeout_override.unwrap_or_else(sync_timeout_env)
     }
 
     pub fn peer_startup_timeout(&self) -> Duration {
@@ -3486,6 +3487,7 @@ pub struct NetworkBuilder {
     n_peers: usize,
     config_layers: Vec<Table>,
     pipeline_time: Option<Duration>,
+    sync_timeout: Option<Duration>,
     peer_startup_timeout: Option<Duration>,
     ivm_fuel: IvmFuelConfig,
     genesis_isi: Vec<Vec<InstructionBox>>,
@@ -4423,6 +4425,7 @@ impl NetworkBuilder {
             n_peers: 1,
             config_layers: vec![],
             pipeline_time: Some(LOCALNET_PIPELINE_TIME),
+            sync_timeout: None,
             peer_startup_timeout: None,
             ivm_fuel: IvmFuelConfig::Auto,
             genesis_isi: vec![vec![]],
@@ -4494,6 +4497,16 @@ impl NetworkBuilder {
     pub fn with_peer_startup_timeout(mut self, timeout: Duration) -> Self {
         assert!(timeout > Duration::ZERO, "startup timeout must be positive");
         self.peer_startup_timeout = Some(timeout);
+        self
+    }
+
+    /// Override the block-sync / height-convergence timeout for this network instance.
+    ///
+    /// Use this for heavier fixtures whose end-to-end block convergence may exceed the
+    /// environment-level default. The timeout must be strictly positive.
+    pub fn with_sync_timeout(mut self, timeout: Duration) -> Self {
+        assert!(timeout > Duration::ZERO, "sync timeout must be positive");
+        self.sync_timeout = Some(timeout);
         self
     }
 
@@ -4756,6 +4769,7 @@ impl NetworkBuilder {
             n_peers,
             mut config_layers,
             pipeline_time,
+            sync_timeout,
             peer_startup_timeout,
             ivm_fuel,
             mut genesis_isi,
@@ -5481,6 +5495,7 @@ impl NetworkBuilder {
             block_time,
             commit_time,
             block_sync_gossip_period,
+            sync_timeout_override: sync_timeout,
             peer_startup_timeout_override: peer_startup_timeout,
             consensus_profile,
             genesis_key_pair,
@@ -8555,6 +8570,19 @@ mod tests {
                 .with_peer_startup_timeout(Duration::from_secs(300)),
         );
         assert_eq!(network.peer_startup_timeout(), Duration::from_secs(300));
+    }
+
+    #[test]
+    fn sync_timeout_override_is_applied() {
+        if skip_network_tests("sync_timeout_override_is_applied") {
+            return;
+        }
+        let network = build_with_isolated_permit(
+            NetworkBuilder::new()
+                .with_min_peers(4)
+                .with_sync_timeout(Duration::from_secs(300)),
+        );
+        assert_eq!(network.sync_timeout(), Duration::from_secs(300));
     }
 
     #[test]

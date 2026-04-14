@@ -2274,29 +2274,23 @@ fn append_localnet_contract_permissions(genesis: RawGenesisTransaction) -> RawGe
         dataspace: DataSpaceId::GLOBAL,
     }
     .into();
-    let mut builder = genesis
-        .into_builder()
-        .append_instruction(Grant::account_permission(
-            enact_governance,
-            ALICE_ID.clone(),
-        ))
-        .append_instruction(Grant::account_permission(
-            manage_offline_escrow,
-            ALICE_ID.clone(),
-        ))
-        .append_instruction(Grant::account_permission(
-            manage_account_alias,
-            client_account_id.clone(),
-        ))
-        .append_instruction(Grant::account_permission(
-            publish_manifest,
-            client_account_id.clone(),
-        ));
-    if client_account_id != *ALICE_ID {
-        builder = builder.append_instruction(Grant::account_permission(
-            Permission::new("CanManageOfflineEscrow".into(), Json::new(())),
-            client_account_id,
-        ));
+    let mut seen = BTreeSet::new();
+    let mut grants = Vec::new();
+    let mut push_unique = |permission: Permission, destination: AccountId| {
+        if seen.insert((destination.clone(), permission.clone())) {
+            grants.push((permission, destination));
+        }
+    };
+
+    push_unique(enact_governance, ALICE_ID.clone());
+    push_unique(manage_offline_escrow.clone(), ALICE_ID.clone());
+    push_unique(manage_account_alias, client_account_id.clone());
+    push_unique(publish_manifest, client_account_id.clone());
+    push_unique(manage_offline_escrow, client_account_id);
+
+    let mut builder = genesis.into_builder();
+    for (permission, destination) in grants {
+        builder = builder.append_instruction(Grant::account_permission(permission, destination));
     }
     builder.build_raw()
 }
@@ -3159,6 +3153,48 @@ mod tests {
         assert!(
             has_manifest_publish,
             "localnet client signer must be able to publish onboarding manifests"
+        );
+    }
+
+    #[test]
+    fn permissioned_localnet_genesis_deduplicates_offline_escrow_grant() {
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("permissioned-offline-escrow-dedup".to_owned()),
+            bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29080,
+            base_p2p_port: 33337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Permissioned,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let manifest = localnet_genesis_for_opts(&opts);
+        let client_account_id = localnet_client_account_id();
+        let offline_escrow_grants = manifest
+            .instructions()
+            .filter_map(|instruction| instruction.as_any().downcast_ref::<GrantBox>())
+            .filter_map(|grant| match grant {
+                GrantBox::Permission(grant_permission) => Some(grant_permission),
+                _ => None,
+            })
+            .filter(|grant_permission| grant_permission.destination() == &client_account_id)
+            .filter(|grant_permission| grant_permission.object().name() == "CanManageOfflineEscrow")
+            .count();
+
+        assert_eq!(
+            offline_escrow_grants, 1,
+            "permissioned localnet genesis must not duplicate the offline escrow manager grant for the client signer"
         );
     }
 

@@ -2,6 +2,50 @@
 
 Last updated: 2026-04-14
 
+## 2026-04-14 Follow-up: Torii MCP now completes the standard post-initialize handshake
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs` now treats
+  the MCP `notifications/initialized` payload as a real notification instead of
+  routing it through JSON-RPC method lookup: accepted initialized notifications
+  return `HTTP 202 Accepted` with an empty body, which is what Codex and other
+  streamable-HTTP MCP clients expect after `initialize`.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/mcp.rs` now also
+  answers `ping` with an empty result object so the Torii MCP surface matches
+  the standard lifecycle utility request instead of returning
+  `method_not_found`.
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/tests/mcp_endpoints.rs`
+  now locks both behaviors in: initialize -> initialized returns `202` with no
+  body, and `ping` returns `{}`.
+- `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/check_mcp_rollout.sh`,
+  `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/README.md`, and
+  `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/docs/mcp_api.md` now
+  probe and document the full handshake instead of only `GET /v1/mcp` plus
+  `tools/list`.
+- Live read-only smoke against `https://taira.sora.org` currently still fails
+  the new check on the deployed build:
+  - `POST /v1/mcp initialize` -> `200`
+  - `POST /v1/mcp notifications/initialized` -> `200` JSON-RPC
+    `method_not_found` (should be `202` empty)
+  - so the public Taira Torii endpoint still needs a redeploy with this patch
+    before Codex MCP startup will succeed there.
+
+## 2026-04-14 Follow-up: Taira shared-edge MCP ingress survives a dead validator
+- `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/taira-explorer.nginx.conf`
+  now defines a shared `taira_public_edge_upstream` for `taira.sora.org` and
+  the explorer's `/status` plus `/v1/*` pass-through routes instead of
+  pinning those public hostnames to validator 1. The shared public routes now
+  also opt into `proxy_next_upstream ... non_idempotent` so MCP `initialize`
+  and other POST tool calls can fail over when one validator listener is down.
+- `/Users/takemiyamakoto/dev/iroha/configs/soranexus/taira/README.md` now
+  documents that the convenience/explorer public hostnames must use that
+  multi-validator upstream and keep the non-idempotent retry policy, otherwise
+  one dead validator turns public MCP ingress into `502 Bad Gateway`.
+- Live shared-edge validation on `taira.sora.org` after reloading the Homebrew
+  nginx host:
+  - `GET https://taira.sora.org/v1/mcp` -> `200`
+  - `POST https://taira.sora.org/v1/mcp` with JSON-RPC `initialize` -> `200`
+  - `POST https://taira.sora.org/v1/mcp` with `tools/list` -> `200`
+  - `GET https://taira-explorer.sora.org/v1/mcp` -> `200`
+
 ## 2026-04-14 Follow-up: offline-cash localnet bootstrap and Swift E2E are reproducible after merged `#5570`
 - `/Users/takemiyamakoto/dev/iroha/crates/iroha_kagami/src/localnet.rs`
   now makes the default generated 4-peer dev localnet offline-cash-ready:
@@ -82,6 +126,10 @@ Last updated: 2026-04-14
   active Inrou capability adverts, placed host count, hosted replica count,
   proxy-only validator count, and backend mix (`portable_vm` /
   `firecracker_kvm`).
+- `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/routing.rs` also
+  drops an unnecessary `Debug` derive from `ContractActivityIndex`, which was
+  blocking the grouped `integration_tests` / `core_api` build path on the
+  current tree without changing runtime behavior.
 - Regression coverage and smoke entrypoints added in:
   - `/Users/takemiyamakoto/dev/iroha/crates/irohad/src/soracloud_runtime.rs`
     for the portable virtio-fs/allowlist rendering path, qcow2 root overlays,
@@ -105,6 +153,13 @@ Last updated: 2026-04-14
   - focused PortableVm runtime tests now pass directly:
     - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud_runtime::tests::build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay -- --exact --nocapture`
     - `CARGO_TARGET_DIR=/tmp/iroha-inrou-portable-tests cargo test -p irohad --features embedded-soracloud-runtime --bin irohad soracloud_runtime::tests::ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file -- --exact --nocapture`
+  - grouped integration coverage is now buildable again, and the lightweight
+    Soracloud CLI guardrail slice passes against the grouped `core_api` target:
+    - `CARGO_TARGET_DIR=/tmp/iroha-integration-tests cargo test --no-run -p integration_tests --message-format short`
+    - `CARGO_TARGET_DIR=/tmp/iroha-core-api-soracloud cargo test --no-run -p integration_tests --test core_api --message-format short`
+    - `CARGO_TARGET_DIR=/tmp/iroha-core-api-soracloud cargo build -p iroha_cli --bin iroha --message-format short`
+    - `IROHA_TEST_SKIP_BUILD=1 TEST_NETWORK_BIN_IROHA=/tmp/iroha-core-api-soracloud/debug/iroha /tmp/iroha-core-api-soracloud/debug/deps/core_api-40a16870990ea459 require_torii_url --nocapture`
+      -> `4 passed; 0 failed`
   - the remaining open validation gap is no longer compile closure; it is the
     real mixed-host acceptance run on publish-grade hosts and guest assets.
 

@@ -25933,6 +25933,421 @@ struct TxProjection {
 }
 
 #[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Default)]
+struct ContractActivityProjection {
+    authority: Option<String>,
+    timestamp_ms: Option<u64>,
+    entrypoint_hash: String,
+    result_ok: bool,
+    contract_address: String,
+    contract_alias: Option<String>,
+    contract_entrypoint: Option<String>,
+    contract_payload: Option<norito::json::Value>,
+    gas_asset_id: Option<String>,
+    fee_sponsor: Option<String>,
+    gas_limit: Option<u64>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ContractActivityIndexCacheKey {
+    committed_height: usize,
+    tip_block_hash: Option<String>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(Default, Clone)]
+struct ContractActivityIndex {
+    cache_key: ContractActivityIndexCacheKey,
+    items: Vec<ContractActivityProjection>,
+    by_authority: std::collections::HashMap<String, Vec<usize>>,
+    by_contract_address: std::collections::HashMap<String, Vec<usize>>,
+    by_contract_alias: std::collections::HashMap<String, Vec<usize>>,
+    by_contract_entrypoint: std::collections::HashMap<String, Vec<usize>>,
+    ok_positions: Vec<usize>,
+    error_positions: Vec<usize>,
+}
+
+#[cfg(feature = "app_api")]
+static CONTRACT_ACTIVITY_INDEX: LazyLock<RwLock<Option<Arc<ContractActivityIndex>>>> =
+    LazyLock::new(|| RwLock::new(None));
+
+#[cfg(feature = "app_api")]
+#[derive(Debug)]
+enum ContractActivityCandidatePositions<'a> {
+    All,
+    Indexed(std::borrow::Cow<'a, [usize]>),
+    Empty,
+}
+
+#[cfg(feature = "app_api")]
+fn contract_activity_index_cache_key(state: &CoreState) -> ContractActivityIndexCacheKey {
+    let committed_height = state.committed_height();
+    let tip_block_hash = std::num::NonZeroUsize::new(committed_height)
+        .and_then(|height| state.block_by_height(height))
+        .map(|block| format!("{}", block.hash()));
+    ContractActivityIndexCacheKey {
+        committed_height,
+        tip_block_hash,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn contract_activity_insert_index(
+    index: &mut std::collections::HashMap<String, Vec<usize>>,
+    key: &str,
+    position: usize,
+) {
+    index.entry(key.to_owned()).or_default().push(position);
+}
+
+#[cfg(feature = "app_api")]
+fn append_contract_activity_projection(
+    index: &mut ContractActivityIndex,
+    projection: ContractActivityProjection,
+) {
+    let position = index.items.len();
+    if let Some(authority) = projection.authority.as_deref() {
+        contract_activity_insert_index(&mut index.by_authority, authority, position);
+    }
+    contract_activity_insert_index(
+        &mut index.by_contract_address,
+        &projection.contract_address,
+        position,
+    );
+    if let Some(alias) = projection.contract_alias.as_deref() {
+        contract_activity_insert_index(&mut index.by_contract_alias, alias, position);
+    }
+    if let Some(entrypoint) = projection.contract_entrypoint.as_deref() {
+        contract_activity_insert_index(&mut index.by_contract_entrypoint, entrypoint, position);
+    }
+    if projection.result_ok {
+        index.ok_positions.push(position);
+    } else {
+        index.error_positions.push(position);
+    }
+    index.items.push(projection);
+}
+
+#[cfg(feature = "app_api")]
+fn contract_activity_projections_for_height_range(
+    state: &CoreState,
+    start_height: usize,
+    end_height: usize,
+) -> Vec<ContractActivityProjection> {
+    if start_height == 0 || start_height > end_height {
+        return Vec::new();
+    }
+
+    let mut projections = Vec::new();
+    for height in start_height..=end_height {
+        let Some(height_nz) = std::num::NonZeroUsize::new(height) else {
+            continue;
+        };
+        let Some(block) = state.block_by_height(height_nz) else {
+            iroha_logger::warn!(
+                height,
+                "missing block in Kura while extending contract activity index"
+            );
+            continue;
+        };
+        let block_hash = block.hash();
+        let entrypoint_hashes = block.entrypoint_hashes();
+        let entrypoint_proofs = block.entrypoint_proofs();
+        let entrypoints = block.entrypoints_cloned();
+        let result_hashes = block.result_hashes();
+        let result_proofs = block.result_proofs();
+        let results = block.results().cloned();
+
+        projections.extend(
+            entrypoint_hashes
+                .zip(entrypoint_proofs)
+                .zip(entrypoints)
+                .zip(result_hashes)
+                .zip(result_proofs)
+                .zip(results)
+                .filter_map(
+                    |(
+                        (
+                            (((entrypoint_hash, entrypoint_proof), entrypoint), result_hash),
+                            result_proof,
+                        ),
+                        result,
+                    )| {
+                        let tx = iroha_data_model::query::CommittedTransaction {
+                            block_hash,
+                            entrypoint_hash,
+                            entrypoint_proof,
+                            entrypoint,
+                            result_hash,
+                            result_proof,
+                            result,
+                        };
+                        contract_activity_projection_from_tx(&tx)
+                    },
+                ),
+        );
+    }
+    projections
+}
+
+#[cfg(feature = "app_api")]
+fn build_contract_activity_index(
+    state: &CoreState,
+    cache_key: ContractActivityIndexCacheKey,
+) -> ContractActivityIndex {
+    let mut index = ContractActivityIndex {
+        cache_key: cache_key.clone(),
+        ..ContractActivityIndex::default()
+    };
+    for projection in
+        contract_activity_projections_for_height_range(state, 1, cache_key.committed_height)
+    {
+        append_contract_activity_projection(&mut index, projection);
+    }
+    index
+}
+
+#[cfg(feature = "app_api")]
+fn contract_activity_cache_extends_append_only(
+    existing: &ContractActivityIndex,
+    state: &CoreState,
+    next_key: &ContractActivityIndexCacheKey,
+) -> bool {
+    if next_key.committed_height < existing.cache_key.committed_height {
+        return false;
+    }
+    if next_key.committed_height == existing.cache_key.committed_height {
+        return existing.cache_key == *next_key;
+    }
+    if existing.cache_key.committed_height == 0 {
+        return true;
+    }
+    let Some(height_nz) = std::num::NonZeroUsize::new(existing.cache_key.committed_height) else {
+        return false;
+    };
+    let Some(block) = state.block_by_height(height_nz) else {
+        return false;
+    };
+    Some(format!("{}", block.hash())) == existing.cache_key.tip_block_hash
+}
+
+#[cfg(feature = "app_api")]
+fn extend_contract_activity_index(
+    existing: &ContractActivityIndex,
+    state: &CoreState,
+    next_key: ContractActivityIndexCacheKey,
+) -> ContractActivityIndex {
+    let mut index = existing.clone();
+    let start_height = existing.cache_key.committed_height.saturating_add(1);
+    for projection in contract_activity_projections_for_height_range(
+        state,
+        start_height,
+        next_key.committed_height,
+    ) {
+        append_contract_activity_projection(&mut index, projection);
+    }
+    index.cache_key = next_key;
+    index
+}
+
+#[cfg(feature = "app_api")]
+fn contract_activity_index_snapshot(state: &CoreState) -> Arc<ContractActivityIndex> {
+    let cache_key = contract_activity_index_cache_key(state);
+    if let Some(existing) = CONTRACT_ACTIVITY_INDEX
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone())
+    {
+        if existing.cache_key == cache_key {
+            return existing;
+        }
+    }
+
+    let rebuilt = if let Some(existing) = CONTRACT_ACTIVITY_INDEX
+        .read()
+        .ok()
+        .and_then(|guard| guard.clone())
+    {
+        if contract_activity_cache_extends_append_only(existing.as_ref(), state, &cache_key) {
+            Arc::new(extend_contract_activity_index(
+                existing.as_ref(),
+                state,
+                cache_key.clone(),
+            ))
+        } else {
+            Arc::new(build_contract_activity_index(state, cache_key.clone()))
+        }
+    } else {
+        Arc::new(build_contract_activity_index(state, cache_key.clone()))
+    };
+    if let Ok(mut guard) = CONTRACT_ACTIVITY_INDEX.write() {
+        if let Some(existing) = guard.as_ref() {
+            if existing.cache_key == cache_key {
+                return Arc::clone(existing);
+            }
+        }
+        *guard = Some(Arc::clone(&rebuilt));
+    }
+    rebuilt
+}
+
+#[cfg(feature = "app_api")]
+fn intersect_contract_activity_positions(left: &[usize], right: &[usize]) -> Vec<usize> {
+    let mut merged = Vec::with_capacity(left.len().min(right.len()));
+    let mut left_index = 0usize;
+    let mut right_index = 0usize;
+
+    while left_index < left.len() && right_index < right.len() {
+        match left[left_index].cmp(&right[right_index]) {
+            std::cmp::Ordering::Less => left_index += 1,
+            std::cmp::Ordering::Greater => right_index += 1,
+            std::cmp::Ordering::Equal => {
+                merged.push(left[left_index]);
+                left_index += 1;
+                right_index += 1;
+            }
+        }
+    }
+
+    merged
+}
+
+#[cfg(feature = "app_api")]
+fn contract_activity_candidate_positions<'a>(
+    index: &'a ContractActivityIndex,
+    params: &ContractActivityGetParams,
+) -> ContractActivityCandidatePositions<'a> {
+    let mut exact_candidates = Vec::new();
+    let mut consider =
+        |candidate: Option<&'a Vec<usize>>| -> Option<ContractActivityCandidatePositions<'a>> {
+            let positions = match candidate {
+                Some(positions) => positions.as_slice(),
+                None => return Some(ContractActivityCandidatePositions::Empty),
+            };
+            exact_candidates.push(positions);
+            None
+        };
+
+    if let Some(authority) = params.authority.as_deref() {
+        if let Some(empty) = consider(index.by_authority.get(authority)) {
+            return empty;
+        }
+    }
+    if let Some(contract_address) = params.contract_address.as_deref() {
+        if let Some(empty) = consider(index.by_contract_address.get(contract_address)) {
+            return empty;
+        }
+    }
+    if let Some(contract_alias) = params.contract_alias.as_deref() {
+        if let Some(empty) = consider(index.by_contract_alias.get(contract_alias)) {
+            return empty;
+        }
+    }
+    if let Some(contract_entrypoint) = params.contract_entrypoint.as_deref() {
+        if let Some(empty) = consider(index.by_contract_entrypoint.get(contract_entrypoint)) {
+            return empty;
+        }
+    }
+    if let Some(result_ok) = params.result_ok {
+        let positions = if result_ok {
+            index.ok_positions.as_slice()
+        } else {
+            index.error_positions.as_slice()
+        };
+        if positions.is_empty() {
+            return ContractActivityCandidatePositions::Empty;
+        }
+        exact_candidates.push(positions);
+    }
+
+    if exact_candidates.is_empty() {
+        return ContractActivityCandidatePositions::All;
+    }
+
+    exact_candidates.sort_by_key(|positions| positions.len());
+    let mut merged = std::borrow::Cow::Borrowed(exact_candidates[0]);
+    for candidate in exact_candidates.into_iter().skip(1) {
+        let intersection = intersect_contract_activity_positions(merged.as_ref(), candidate);
+        if intersection.is_empty() {
+            return ContractActivityCandidatePositions::Empty;
+        }
+        merged = std::borrow::Cow::Owned(intersection);
+    }
+
+    ContractActivityCandidatePositions::Indexed(merged)
+}
+
+#[cfg(feature = "app_api")]
+fn collect_contract_activity_page(
+    index: &ContractActivityIndex,
+    params: &ContractActivityGetParams,
+    pagination: EffectivePagination,
+    fetch_cap: Option<u64>,
+) -> (Vec<ContractActivityProjection>, usize) {
+    let offset_usize = if pagination.offset > usize::MAX as u64 {
+        usize::MAX
+    } else {
+        pagination.offset as usize
+    };
+    let limit_usize = pagination
+        .limit
+        .filter(|&lim| lim > 0)
+        .map(|lim| lim.min(usize::MAX as u64) as usize);
+    let fetch_cap_usize = fetch_cap
+        .filter(|&cap| cap > 0)
+        .map(|cap| cap.min(usize::MAX as u64) as usize);
+
+    let mut matched: usize = 0;
+    let mut items = Vec::new();
+    let mut additional_after_fill: usize = 0;
+
+    let mut visit = |projection: &ContractActivityProjection| {
+        if !contract_activity_matches(projection, params) {
+            return false;
+        }
+        matched = matched.saturating_add(1);
+        let within_page =
+            matched > offset_usize && limit_usize.map(|lim| items.len() < lim).unwrap_or(true);
+        if within_page {
+            items.push(projection.clone());
+            return false;
+        }
+        if limit_usize.map(|lim| items.len() >= lim).unwrap_or(false) {
+            if let Some(cap) = fetch_cap_usize {
+                additional_after_fill = additional_after_fill.saturating_add(1);
+                if additional_after_fill >= cap {
+                    return true;
+                }
+            }
+        }
+        false
+    };
+
+    match contract_activity_candidate_positions(index, params) {
+        ContractActivityCandidatePositions::All => {
+            for projection in index.items.iter().rev() {
+                if visit(projection) {
+                    break;
+                }
+            }
+        }
+        ContractActivityCandidatePositions::Indexed(positions) => {
+            for position in positions.iter().rev() {
+                if let Some(projection) = index.items.get(*position) {
+                    if visit(projection) {
+                        break;
+                    }
+                }
+            }
+        }
+        ContractActivityCandidatePositions::Empty => {}
+    }
+
+    (items, matched)
+}
+
+#[cfg(feature = "app_api")]
 fn tx_field_value(
     tx: &iroha_data_model::query::CommittedTransaction,
     field: &str,
@@ -25994,6 +26409,53 @@ fn tx_field_value(
                 _ => None,
             }
         }
+        _ => None,
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn tx_metadata_json_value(
+    tx: &iroha_data_model::query::CommittedTransaction,
+    key: &str,
+) -> Option<norito::json::Value> {
+    let name: iroha_data_model::prelude::Name = key.parse().ok()?;
+    let raw = match &tx.entrypoint() {
+        iroha_data_model::transaction::signed::TransactionEntrypoint::External(signed) => {
+            signed.metadata().get(&name).map(|json| json.get().clone())
+        }
+        iroha_data_model::transaction::signed::TransactionEntrypoint::PrivateKaigi(tx) => {
+            tx.metadata.get(&name).map(|json| json.get().clone())
+        }
+        _ => None,
+    }?;
+    norito::json::from_str(&raw).ok()
+}
+
+#[cfg(feature = "app_api")]
+fn tx_metadata_string(
+    tx: &iroha_data_model::query::CommittedTransaction,
+    key: &str,
+) -> Option<String> {
+    match tx_metadata_json_value(tx, key)? {
+        norito::json::Value::Null => None,
+        norito::json::Value::String(value) => Some(value),
+        norito::json::Value::Bool(value) => Some(value.to_string()),
+        norito::json::Value::Number(value) => Some(match value {
+            norito::json::native::Number::I64(value) => value.to_string(),
+            norito::json::native::Number::U64(value) => value.to_string(),
+            norito::json::native::Number::F64(value) => value.to_string(),
+        }),
+        value => norito::json::to_json(&value).ok(),
+    }
+}
+
+#[cfg(feature = "app_api")]
+fn tx_metadata_u64(tx: &iroha_data_model::query::CommittedTransaction, key: &str) -> Option<u64> {
+    match tx_metadata_json_value(tx, key)? {
+        norito::json::Value::Number(value) => value
+            .as_u64()
+            .or_else(|| value.as_i64().and_then(|v| u64::try_from(v).ok())),
+        norito::json::Value::String(value) => value.parse::<u64>().ok(),
         _ => None,
     }
 }
@@ -27228,6 +27690,78 @@ fn project_tx(
 }
 
 #[cfg(feature = "app_api")]
+fn contract_activity_projection_from_tx(
+    tx: &iroha_data_model::query::CommittedTransaction,
+) -> Option<ContractActivityProjection> {
+    let base = project_tx(tx, &None);
+    let contract_address = tx_metadata_string(tx, "contract_address")?;
+    Some(ContractActivityProjection {
+        authority: base.authority,
+        timestamp_ms: base.timestamp_ms,
+        entrypoint_hash: base.entrypoint_hash,
+        result_ok: base.result_ok,
+        contract_address,
+        contract_alias: tx_metadata_string(tx, "contract_alias"),
+        contract_entrypoint: tx_metadata_string(tx, "contract_entrypoint"),
+        contract_payload: tx_metadata_json_value(tx, "contract_payload"),
+        gas_asset_id: tx_metadata_string(tx, "gas_asset_id"),
+        fee_sponsor: tx_metadata_string(tx, "fee_sponsor"),
+        gas_limit: tx_metadata_u64(tx, "gas_limit"),
+    })
+}
+
+#[cfg(feature = "app_api")]
+fn contract_activity_matches(
+    projection: &ContractActivityProjection,
+    params: &ContractActivityGetParams,
+) -> bool {
+    if let Some(expected) = params.authority.as_deref() {
+        if projection.authority.as_deref() != Some(expected) {
+            return false;
+        }
+    }
+    if let Some(expected) = params.contract_address.as_deref() {
+        if projection.contract_address != expected {
+            return false;
+        }
+    }
+    if let Some(expected) = params.contract_alias.as_deref() {
+        if projection.contract_alias.as_deref() != Some(expected) {
+            return false;
+        }
+    }
+    if let Some(expected) = params.contract_entrypoint.as_deref() {
+        if projection.contract_entrypoint.as_deref() != Some(expected) {
+            return false;
+        }
+    }
+    if let Some(min_ts) = params.since_timestamp_ms {
+        if projection
+            .timestamp_ms
+            .map(|ts| ts < min_ts)
+            .unwrap_or(true)
+        {
+            return false;
+        }
+    }
+    if let Some(max_ts) = params.until_timestamp_ms {
+        if projection
+            .timestamp_ms
+            .map(|ts| ts > max_ts)
+            .unwrap_or(true)
+        {
+            return false;
+        }
+    }
+    if let Some(result_ok) = params.result_ok {
+        if projection.result_ok != result_ok {
+            return false;
+        }
+    }
+    true
+}
+
+#[cfg(feature = "app_api")]
 fn tx_predicate_from_filter(
     expr: &FilterExpr,
 ) -> iroha_data_model::query::dsl::CompoundPredicate<iroha_data_model::query::CommittedTransaction>
@@ -27563,6 +28097,8 @@ pub const ENDPOINT_ACCOUNTS_TRANSACTIONS_QUERY: &str =
     "/v1/accounts/{account_id}/transactions/query";
 #[cfg(feature = "app_api")]
 pub const ENDPOINT_ACCOUNTS_TRANSACTIONS: &str = "/v1/accounts/{account_id}/transactions";
+#[cfg(feature = "app_api")]
+pub const ENDPOINT_CONTRACTS_ACTIVITY: &str = "/v1/contracts/activity";
 #[cfg(feature = "app_api")]
 const ENDPOINT_ACCOUNTS_PERMISSIONS: &str = "/v1/accounts/{account_id}/permissions";
 #[cfg(feature = "app_api")]
@@ -29116,6 +29652,78 @@ pub async fn handle_v1_transactions_history_get(
     }
 
     let items_json = tx_projections_to_json(&items);
+    let mut top = norito::json::Map::new();
+    top.insert("items".into(), norito::json::Value::Array(items_json));
+    top.insert("total".into(), norito::json::Value::from(total as u64));
+    let body = norito::json::to_json_pretty(&top).map_err(|e| {
+        Error::Query(iroha_data_model::ValidationFail::InternalError(
+            e.to_string(),
+        ))
+    })?;
+    let mut resp = axum::response::Response::new(axum::body::Body::from(body));
+    resp.headers_mut().insert(
+        axum::http::header::CONTENT_TYPE,
+        axum::http::HeaderValue::from_static("application/json"),
+    );
+    Ok(resp)
+}
+
+/// GET `/v1/contracts/activity` — contract-call activity feed derived from committed transaction metadata.
+#[iroha_futures::telemetry_future]
+#[cfg(feature = "app_api")]
+pub async fn handle_v1_contracts_activity_get(
+    state: Arc<CoreState>,
+    crate::NoritoQuery(params): crate::NoritoQuery<ContractActivityGetParams>,
+    telemetry: MaybeTelemetry,
+) -> Result<impl IntoResponse> {
+    #[cfg(feature = "telemetry")]
+    use std::time::Instant;
+    #[cfg(not(feature = "telemetry"))]
+    let _ = &telemetry;
+
+    #[cfg(feature = "telemetry")]
+    let start = Instant::now();
+    let cap = app_query_page_cap(&state);
+    let (items, total) = {
+        let limits = app_query_limits();
+        let index = contract_activity_index_snapshot(state.as_ref());
+        let pagination = enforce_app_pagination(
+            params.limit,
+            params.offset,
+            cap,
+            ENDPOINT_CONTRACTS_ACTIVITY,
+        )?;
+        let fetch_cap = limits
+            .clamp_fetch_size(None)?
+            .map(|value| value.min(pagination.cap));
+        collect_contract_activity_page(index.as_ref(), &params, pagination, fetch_cap)
+    };
+    #[cfg(feature = "telemetry")]
+    let item_count = items.len();
+
+    #[cfg(feature = "telemetry")]
+    if telemetry.is_enabled() {
+        let metrics = telemetry.metrics().await;
+        metrics
+            .torii_filter_depth
+            .with_label_values(&[ENDPOINT_CONTRACTS_ACTIVITY])
+            .observe(0.0);
+        metrics
+            .torii_filter_match_count
+            .with_label_values(&[ENDPOINT_CONTRACTS_ACTIVITY])
+            .observe(total as f64);
+        let elapsed_ms = start.elapsed().as_secs_f64() * 1000.0;
+        metrics
+            .torii_scan_ms
+            .with_label_values(&[ENDPOINT_CONTRACTS_ACTIVITY])
+            .observe(elapsed_ms);
+        metrics
+            .torii_stream_rows
+            .with_label_values(&[ENDPOINT_CONTRACTS_ACTIVITY])
+            .observe(item_count as f64);
+    }
+
+    let items_json = contract_activity_projections_to_json(&items);
     let mut top = norito::json::Map::new();
     top.insert("items".into(), norito::json::Value::Array(items_json));
     top.insert("total".into(), norito::json::Value::from(total as u64));
@@ -31485,6 +32093,122 @@ mod tx_query_integration_smoke {
             items[0]["entrypoint_hash"].as_str(),
             Some(entry_hash.as_str())
         );
+    }
+
+    #[tokio::test]
+    async fn handle_v1_contracts_activity_returns_contract_call_metadata() {
+        use iroha_crypto::Algorithm;
+
+        let kura = Kura::blank_kura_for_testing();
+        let query = LiveQueryStore::start_test();
+        let state = Arc::new(State::new_for_testing(
+            World::default(),
+            kura.clone(),
+            query,
+        ));
+
+        let leader0 = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topo0 = Topology::new(vec![dm::PeerId::new(leader0.public_key().clone())]);
+        let unverified0 = BlockBuilder::new(vec![dummy_accepted_transaction()])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader0.private_key())
+            .unpack(|_| {});
+        let mut st_block0 = state.block(unverified0.header());
+        let valid0 = unverified0
+            .clone()
+            .validate_and_record_transactions(&mut st_block0)
+            .unpack(|_| {});
+        let committed0 = valid0.commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block0, committed0);
+
+        let (authority, keypair) = account_with_key();
+        let chain_id: dm::ChainId = "00000000-0000-0000-0000-000000000000".parse().unwrap();
+        let mut metadata = dm::Metadata::default();
+        metadata.insert(
+            "contract_address".parse().unwrap(),
+            dm::Json::new("tairac1fixturedlmmrouter"),
+        );
+        metadata.insert(
+            "contract_alias".parse().unwrap(),
+            dm::Json::new("dlmm_router"),
+        );
+        metadata.insert(
+            "contract_entrypoint".parse().unwrap(),
+            dm::Json::new("route_swap"),
+        );
+        metadata.insert(
+            "contract_payload".parse().unwrap(),
+            dm::Json::new(norito::json!({
+                "amount_in": 100,
+                "min_out": 95
+            })),
+        );
+        metadata.insert(
+            "gas_asset_id".parse().unwrap(),
+            dm::Json::new("xor#universal"),
+        );
+        metadata.insert(
+            "fee_sponsor".parse().unwrap(),
+            dm::Json::new(authority.to_string()),
+        );
+        metadata.insert("gas_limit".parse().unwrap(), dm::Json::new(100_000_u64));
+
+        let mut tx_builder = dm::TransactionBuilder::new(chain_id, authority.clone());
+        tx_builder.set_creation_time(core::time::Duration::from_millis(1_710_000_000_000));
+        let signed = tx_builder
+            .with_metadata(metadata)
+            .with_executable(dm::Executable::Instructions(ConstVec::from(Vec::new())))
+            .sign(keypair.private_key());
+        let entry_hash = format!("{}", signed.hash_as_entrypoint());
+        let tx = AcceptedTransaction::new_unchecked(Cow::Owned(signed));
+
+        let leader = KeyPair::random_with_algorithm(Algorithm::BlsNormal);
+        let _topo = Topology::new(vec![dm::PeerId::new(leader.public_key().clone())]);
+        let unverified = BlockBuilder::new(vec![tx])
+            .chain(0, state.view().latest_block().as_deref())
+            .sign(leader.private_key())
+            .unpack(|_| {});
+        let mut st_block = state.block(unverified.header());
+        let valid = unverified
+            .validate_and_record_transactions(&mut st_block)
+            .unpack(|_| {});
+        let committed = valid.commit_unchecked().unpack(|_| {});
+        crate::test_utils::finalize_committed_block(&state, st_block, committed);
+
+        let resp = handle_v1_contracts_activity_get(
+            state,
+            crate::NoritoQuery(ContractActivityGetParams {
+                limit: Some(10),
+                offset: 0,
+                authority: Some(authority.to_string()),
+                contract_alias: Some("dlmm_router".into()),
+                contract_entrypoint: Some("route_swap".into()),
+                result_ok: Some(true),
+                ..Default::default()
+            }),
+            crate::routing::MaybeTelemetry::for_tests(),
+        )
+        .await
+        .expect("handler ok")
+        .into_response();
+
+        assert_eq!(resp.status(), StatusCode::OK);
+        let body = resp.into_body().collect().await.unwrap().to_bytes();
+        let parsed: norito::json::Value = norito::json::from_slice(&body).unwrap();
+        let items = parsed["items"].as_array().unwrap();
+        assert_eq!(parsed["total"].as_u64(), Some(1));
+        assert_eq!(
+            items[0]["entrypoint_hash"].as_str(),
+            Some(entry_hash.as_str())
+        );
+        assert_eq!(items[0]["contract_alias"].as_str(), Some("dlmm_router"));
+        assert_eq!(items[0]["contract_entrypoint"].as_str(), Some("route_swap"));
+        assert_eq!(
+            items[0]["contract_payload"]["amount_in"].as_u64(),
+            Some(100)
+        );
+        assert_eq!(items[0]["gas_asset_id"].as_str(), Some("xor#universal"));
+        assert_eq!(items[0]["gas_limit"].as_u64(), Some(100_000));
     }
 
     #[tokio::test]
@@ -43510,6 +44234,37 @@ pub struct AccountTransactionsGetParams {
     Debug,
     Clone,
 )]
+pub struct ContractActivityGetParams {
+    /// Optional limit for pagination.
+    pub limit: Option<u64>,
+    /// Offset for pagination (default 0).
+    #[norito(default)]
+    pub offset: u64,
+    /// Filter by canonical I105 authority.
+    pub authority: Option<String>,
+    /// Filter by contract address.
+    pub contract_address: Option<String>,
+    /// Filter by deployed contract alias.
+    pub contract_alias: Option<String>,
+    /// Filter by contract entrypoint name.
+    pub contract_entrypoint: Option<String>,
+    /// Filter items whose timestamp is greater than or equal to this value.
+    pub since_timestamp_ms: Option<u64>,
+    /// Filter items whose timestamp is less than or equal to this value.
+    pub until_timestamp_ms: Option<u64>,
+    /// Filter items by execution outcome.
+    pub result_ok: Option<bool>,
+}
+
+#[cfg(feature = "app_api")]
+#[derive(
+    crate::json_macros::JsonSerialize,
+    crate::json_macros::JsonDeserialize,
+    norito::derive::NoritoDeserialize,
+    Default,
+    Debug,
+    Clone,
+)]
 pub struct AssetHolderGetParams {
     /// Optional limit for pagination.
     pub limit: Option<u64>,
@@ -43878,6 +44633,69 @@ fn tx_projections_to_json(items: &[TxProjection]) -> Vec<norito::json::Value> {
         .collect()
 }
 
+#[cfg(feature = "app_api")]
+fn contract_activity_projections_to_json(
+    items: &[ContractActivityProjection],
+) -> Vec<norito::json::Value> {
+    items
+        .iter()
+        .map(|it| {
+            let mut m = norito::json::Map::new();
+            if let Some(ref authority_literal) = it.authority {
+                if let Some(display) =
+                    crate::account_literal::display_from_literal(authority_literal)
+                {
+                    m.insert("authority".into(), norito::json::Value::from(display));
+                }
+            }
+            if let Some(ts) = it.timestamp_ms {
+                m.insert("timestamp_ms".into(), norito::json::Value::from(ts));
+            }
+            m.insert(
+                "entrypoint_hash".into(),
+                norito::json::Value::from(it.entrypoint_hash.clone()),
+            );
+            m.insert("result_ok".into(), norito::json::Value::from(it.result_ok));
+            m.insert(
+                "contract_address".into(),
+                norito::json::Value::from(it.contract_address.clone()),
+            );
+            if let Some(alias) = it.contract_alias.as_ref() {
+                m.insert(
+                    "contract_alias".into(),
+                    norito::json::Value::from(alias.clone()),
+                );
+            }
+            if let Some(entrypoint) = it.contract_entrypoint.as_ref() {
+                m.insert(
+                    "contract_entrypoint".into(),
+                    norito::json::Value::from(entrypoint.clone()),
+                );
+            }
+            if let Some(payload) = it.contract_payload.as_ref() {
+                m.insert("contract_payload".into(), payload.clone());
+            }
+            if let Some(gas_asset_id) = it.gas_asset_id.as_ref() {
+                m.insert(
+                    "gas_asset_id".into(),
+                    norito::json::Value::from(gas_asset_id.clone()),
+                );
+            }
+            if let Some(fee_sponsor_literal) = it.fee_sponsor.as_ref() {
+                if let Some(display) =
+                    crate::account_literal::display_from_literal(fee_sponsor_literal)
+                {
+                    m.insert("fee_sponsor".into(), norito::json::Value::from(display));
+                }
+            }
+            if let Some(gas_limit) = it.gas_limit {
+                m.insert("gas_limit".into(), norito::json::Value::from(gas_limit));
+            }
+            norito::json::Value::Object(m)
+        })
+        .collect()
+}
+
 #[cfg(all(test, feature = "app_api"))]
 mod tx_projection_display_tests {
     use iroha_data_model::account::AccountId;
@@ -43940,6 +44758,163 @@ mod tx_projection_display_tests {
             items[0].get("authority").is_none(),
             "invalid non-i105 authority literals must not leak into explorer output"
         );
+    }
+
+    #[test]
+    fn contract_activity_projection_json_preserves_payload_and_fee_fields() {
+        let account: AccountId = ALICE_ID.clone();
+        let projection = ContractActivityProjection {
+            authority: Some(account.to_string()),
+            timestamp_ms: Some(456),
+            entrypoint_hash: "feedface".into(),
+            result_ok: true,
+            contract_address: "tairac1router".into(),
+            contract_alias: Some("dlmm_router".into()),
+            contract_entrypoint: Some("route_swap".into()),
+            contract_payload: Some(norito::json!({
+                "amount_in": 10,
+                "min_out": 9
+            })),
+            gas_asset_id: Some("xor#universal".into()),
+            fee_sponsor: Some(account.to_string()),
+            gas_limit: Some(100_000),
+        };
+
+        let items = contract_activity_projections_to_json(&[projection]);
+        assert_eq!(items[0]["contract_entrypoint"].as_str(), Some("route_swap"));
+        assert_eq!(items[0]["gas_limit"].as_u64(), Some(100_000));
+        assert_eq!(items[0]["contract_payload"]["amount_in"].as_u64(), Some(10));
+        assert!(items[0].get("fee_sponsor").is_some());
+    }
+
+    fn sample_contract_activity_index() -> ContractActivityIndex {
+        let alice: AccountId = ALICE_ID.clone();
+        let bob: AccountId = BOB_ID.clone();
+        let items = vec![
+            ContractActivityProjection {
+                authority: Some(alice.to_string()),
+                timestamp_ms: Some(100),
+                entrypoint_hash: "hash-1".into(),
+                result_ok: true,
+                contract_address: "router-a".into(),
+                contract_alias: Some("dlmm_router".into()),
+                contract_entrypoint: Some("route_swap".into()),
+                contract_payload: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+            },
+            ContractActivityProjection {
+                authority: Some(alice.to_string()),
+                timestamp_ms: Some(200),
+                entrypoint_hash: "hash-2".into(),
+                result_ok: false,
+                contract_address: "router-a".into(),
+                contract_alias: Some("dlmm_router".into()),
+                contract_entrypoint: Some("cancel_swap".into()),
+                contract_payload: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+            },
+            ContractActivityProjection {
+                authority: Some(bob.to_string()),
+                timestamp_ms: Some(300),
+                entrypoint_hash: "hash-3".into(),
+                result_ok: true,
+                contract_address: "router-b".into(),
+                contract_alias: Some("other_router".into()),
+                contract_entrypoint: Some("route_swap".into()),
+                contract_payload: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+            },
+            ContractActivityProjection {
+                authority: Some(alice.to_string()),
+                timestamp_ms: Some(400),
+                entrypoint_hash: "hash-4".into(),
+                result_ok: true,
+                contract_address: "router-a".into(),
+                contract_alias: Some("dlmm_router".into()),
+                contract_entrypoint: Some("route_swap".into()),
+                contract_payload: None,
+                gas_asset_id: None,
+                fee_sponsor: None,
+                gas_limit: None,
+            },
+        ];
+        let mut index = ContractActivityIndex::default();
+        for projection in items {
+            append_contract_activity_projection(&mut index, projection);
+        }
+        index
+    }
+
+    #[test]
+    fn contract_activity_index_prefers_smallest_exact_match_set() {
+        let index = sample_contract_activity_index();
+        let params = ContractActivityGetParams {
+            authority: Some(ALICE_ID.to_string()),
+            contract_address: Some("router-a".into()),
+            contract_alias: Some("dlmm_router".into()),
+            contract_entrypoint: Some("cancel_swap".into()),
+            result_ok: Some(false),
+            ..Default::default()
+        };
+
+        match contract_activity_candidate_positions(&index, &params) {
+            ContractActivityCandidatePositions::Indexed(positions) => {
+                assert_eq!(positions.as_ref(), &[1]);
+            }
+            other => panic!("expected indexed candidate set, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn contract_activity_index_intersects_exact_match_sets() {
+        let index = sample_contract_activity_index();
+        let params = ContractActivityGetParams {
+            authority: Some(ALICE_ID.to_string()),
+            contract_entrypoint: Some("route_swap".into()),
+            result_ok: Some(true),
+            ..Default::default()
+        };
+
+        match contract_activity_candidate_positions(&index, &params) {
+            ContractActivityCandidatePositions::Indexed(positions) => {
+                assert_eq!(positions.as_ref(), &[0, 3]);
+            }
+            other => panic!("expected indexed candidate set, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn contract_activity_indexed_pager_respects_filters_and_offset() {
+        let index = sample_contract_activity_index();
+        let params = ContractActivityGetParams {
+            authority: Some(ALICE_ID.to_string()),
+            contract_address: Some("router-a".into()),
+            contract_alias: Some("dlmm_router".into()),
+            contract_entrypoint: Some("route_swap".into()),
+            result_ok: Some(true),
+            ..Default::default()
+        };
+
+        let (items, total) = collect_contract_activity_page(
+            &index,
+            &params,
+            EffectivePagination {
+                limit: Some(1),
+                offset: 1,
+                cap: 100,
+            },
+            None,
+        );
+
+        assert_eq!(total, 2);
+        assert_eq!(items.len(), 1);
+        assert_eq!(items[0].entrypoint_hash, "hash-1");
     }
 }
 

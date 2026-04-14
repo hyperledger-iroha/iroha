@@ -31,6 +31,8 @@ Usage: check_mcp_rollout.sh [--local-root URL] [--public-root URL] [--local-url 
 Verify that Taira's native Torii MCP endpoint is live locally and/or publicly.
 The check fails unless:
   - GET /v1/mcp returns HTTP 200 with a capabilities payload
+  - POST /v1/mcp initialize returns HTTP 200
+  - POST /v1/mcp notifications/initialized returns HTTP 202 with an empty body
   - POST /v1/mcp tools/list returns HTTP 200
   - the tool list includes curated iroha.* names, including write-ready aliases
   - the tool list does not expose raw torii.* names
@@ -162,6 +164,8 @@ if [[ -z "$IROHA_BIN" ]]; then
 fi
 
 JSONRPC_TOOLS_LIST='{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}'
+JSONRPC_INITIALIZE='{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"taira-rollout-smoke","version":"1"}}}'
+JSONRPC_INITIALIZED='{"jsonrpc":"2.0","method":"notifications/initialized"}'
 REQUIRED_TOOL_NAMES=(
   "iroha.status"
   "iroha.sumeragi.status"
@@ -435,6 +439,33 @@ check_endpoint() {
   fi
   if ! grep -q '"capabilities"' "$last_body"; then
     echo "${label}: GET response did not look like MCP capabilities payload" >&2
+    sed -n '1,40p' "$last_body" >&2 || true
+    exit 1
+  fi
+
+  echo "==> ${label}: POST initialize ${url}"
+  http_request POST "$url" "$JSONRPC_INITIALIZE"
+  if [[ "$last_status" != "200" ]]; then
+    echo "${label}: initialize failed with HTTP ${last_status}" >&2
+    sed -n '1,20p' "$last_headers" >&2 || true
+    exit 1
+  fi
+  if ! grep -q '"protocolVersion"' "$last_body"; then
+    echo "${label}: initialize response did not advertise protocolVersion" >&2
+    sed -n '1,80p' "$last_body" >&2 || true
+    exit 1
+  fi
+
+  echo "==> ${label}: POST notifications/initialized ${url}"
+  http_request POST "$url" "$JSONRPC_INITIALIZED"
+  if [[ "$last_status" != "202" ]]; then
+    echo "${label}: initialized notification failed with HTTP ${last_status}" >&2
+    sed -n '1,20p' "$last_headers" >&2 || true
+    sed -n '1,40p' "$last_body" >&2 || true
+    exit 1
+  fi
+  if [[ -s "$last_body" ]]; then
+    echo "${label}: initialized notification should return an empty body" >&2
     sed -n '1,40p' "$last_body" >&2 || true
     exit 1
   fi

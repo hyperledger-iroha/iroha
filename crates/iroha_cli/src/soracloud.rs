@@ -26,7 +26,7 @@ use blake2::{
     Blake2bVar,
     digest::{Update as _, VariableOutput as _},
 };
-use eyre::{Result, WrapErr, eyre};
+use eyre::{Report, Result, WrapErr, eyre};
 use iroha::{
     client::Client,
     config::Config as ClientConfig,
@@ -297,10 +297,18 @@ pub enum AppCommand {
     Init(AppInitArgs),
     /// Validate a mixed app manifest and print the local split-plane route/runtime plan.
     LocalPlan(AppLocalPlanArgs),
+    /// Fail-closed validation for a scaffolded app workspace before release.
+    Doctor(AppDoctorArgs),
     /// Run the manifest-adjacent local dev entrypoint for a scaffolded app workspace.
     LocalDev(AppLocalDevArgs),
     /// Run the manifest-adjacent app build and manifest-sync entrypoint.
     BuildAndSync(AppBuildAndSyncArgs),
+    /// Run the manifest-adjacent doctor entrypoint for a scaffolded app workspace.
+    DoctorWorkspace(AppDoctorWorkspaceArgs),
+    /// Build, sync, and then deploy or upgrade every service referenced by an app manifest.
+    Release(AppReleaseArgs),
+    /// Run the manifest-adjacent release entrypoint for a scaffolded app workspace.
+    ReleaseWorkspace(AppReleaseWorkspaceArgs),
     /// Run the manifest-adjacent deploy entrypoint for a scaffolded app workspace.
     DeployWorkspace(AppWorkspaceMutationArgs),
     /// Run the manifest-adjacent upgrade entrypoint for a scaffolded app workspace.
@@ -318,8 +326,15 @@ impl AppCommand {
         match self {
             Self::Init(args) => context.print_data(&args.run()?),
             Self::LocalPlan(args) => context.print_data(&args.run()?),
+            Self::Doctor(args) => context.print_data(&args.run()?),
             Self::LocalDev(args) => context.print_data(&args.run()?),
             Self::BuildAndSync(args) => context.print_data(&args.run()?),
+            Self::DoctorWorkspace(args) => context.print_data(&args.run()?),
+            Self::Release(args) => {
+                let output = args.run(&context.config().account, &context.config().key_pair)?;
+                context.print_data(&output)
+            }
+            Self::ReleaseWorkspace(args) => context.print_data(&args.run()?),
             Self::DeployWorkspace(args) => context.print_data(&args.run(MutationMode::Deploy)?),
             Self::UpgradeWorkspace(args) => context.print_data(&args.run(MutationMode::Upgrade)?),
             Self::Deploy(args) => {
@@ -1199,6 +1214,7 @@ enum AppInitTemplate {
     #[default]
     SingleApi,
     /// Generate a split app with a static frontend, an Inrou live API, and an IVM vault API.
+    #[value(alias = "nexus-split-app")]
     SplitApp,
 }
 
@@ -1834,6 +1850,415 @@ impl AppLocalPlanArgs {
     }
 }
 
+/// Arguments for `app soracloud app doctor`.
+#[derive(clap::Args, Debug)]
+pub struct AppDoctorArgs {
+    /// Path to a `SoracloudAppManifestV1` JSON document.
+    #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
+    manifest: PathBuf,
+}
+
+impl AppDoctorArgs {
+    fn run(self) -> Result<AppDoctorOutput> {
+        let manifest_path = self.manifest.clone();
+        let manifest_dir = manifest_path
+            .parent()
+            .unwrap_or_else(|| Path::new("."))
+            .to_path_buf();
+        let manifest: SoracloudAppManifestV1 = load_json(&manifest_path)?;
+        manifest.validate()?;
+        let plan = build_app_local_plan_output(manifest_path.as_path())?;
+        let mut checks = Vec::new();
+        let mut failing_checks = Vec::new();
+
+        let mut push_check = |name: &str, passed: bool, detail: String| {
+            if !passed {
+                failing_checks.push(name.to_owned());
+            }
+            checks.push(AppDoctorCheckOutput {
+                name: name.to_owned(),
+                status: if passed { "pass" } else { "fail" }.to_owned(),
+                detail,
+            });
+        };
+
+        push_check(
+            "root_scripts",
+            plan.workspace_scripts.local_dev.is_some()
+                && plan.workspace_scripts.build_and_sync.is_some()
+                && plan.workspace_scripts.doctor.is_some()
+                && plan.workspace_scripts.release.is_some()
+                && plan.workspace_scripts.deploy.is_some()
+                && plan.workspace_scripts.upgrade.is_some(),
+            format!(
+                "root scripts local_dev={} build_and_sync={} doctor={} release={} deploy={} upgrade={}",
+                plan.workspace_scripts.local_dev.is_some(),
+                plan.workspace_scripts.build_and_sync.is_some(),
+                plan.workspace_scripts.doctor.is_some(),
+                plan.workspace_scripts.release.is_some(),
+                plan.workspace_scripts.deploy.is_some(),
+                plan.workspace_scripts.upgrade.is_some()
+            ),
+        );
+
+        let static_site = manifest.static_site.as_ref();
+        push_check(
+            "frontend_publish_mode",
+            static_site.is_some_and(|site| {
+                site.publish_mode == APP_STATIC_SITE_PUBLISH_MODE_CID_ONLY
+                    && site.mount_path == "/"
+                    && site.api_base_path.as_deref() == Some("/api")
+            }),
+            match static_site {
+                Some(site) => format!(
+                    "publish_mode={} mount_path={} api_base_path={}",
+                    site.publish_mode,
+                    site.mount_path,
+                    site.api_base_path.as_deref().unwrap_or("<none>")
+                ),
+                None => "app manifest has no static_site section".to_owned(),
+            },
+        );
+
+        let hosted_services = plan
+            .services
+            .iter()
+            .filter(|service| {
+                service.execution_plane == "HttpService" && service.runtime == "Inrou"
+            })
+            .collect::<Vec<_>>();
+        let deterministic_services = plan
+            .services
+            .iter()
+            .filter(|service| {
+                service.execution_plane == "DeterministicService" && service.runtime == "Ivm"
+            })
+            .collect::<Vec<_>>();
+        push_check(
+            "split_plane_services",
+            !hosted_services.is_empty() && !deterministic_services.is_empty(),
+            format!(
+                "hosted_http_services={} deterministic_services={}",
+                hosted_services.len(),
+                deterministic_services.len()
+            ),
+        );
+
+        let live_prefix_ok = hosted_services
+            .iter()
+            .all(|service| service.route_path_prefix.as_deref() == Some("/api/v1"));
+        push_check(
+            "live_route_prefix",
+            !hosted_services.is_empty() && live_prefix_ok,
+            if hosted_services.is_empty() {
+                "no hosted HttpService + Inrou services declared".to_owned()
+            } else {
+                hosted_services
+                    .iter()
+                    .map(|service| {
+                        format!(
+                            "{}:{}",
+                            service.service_name,
+                            service.route_path_prefix.as_deref().unwrap_or("<none>")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            },
+        );
+
+        let mut service_manifest_summaries = Vec::new();
+        for service_ref in &manifest.services {
+            let container_path =
+                resolve_manifest_path(&manifest_dir, &service_ref.container_manifest);
+            let service_path =
+                resolve_manifest_path(&manifest_dir, &service_ref.service_manifest);
+            let container: SoraContainerManifestV1 = load_json(&container_path)?;
+            let service: SoraServiceManifestV1 = load_json(&service_path)?;
+            let bundle_exists = service_ref
+                .bundle_file
+                .as_deref()
+                .map(|path| resolve_manifest_path(&manifest_dir, path))
+                .is_some_and(|path| path.is_file());
+            push_check(
+                &format!("bundle_file:{}", service_ref.service_name),
+                bundle_exists,
+                service_ref
+                    .bundle_file
+                    .as_deref()
+                    .map(|path| resolve_manifest_path(&manifest_dir, path).display().to_string())
+                    .unwrap_or_else(|| "<none>".to_owned()),
+            );
+
+            let child_scripts_ok = if container.runtime == SoraContainerRuntimeV1::Inrou {
+                let scripts = app_service_workspace_scripts(
+                    app_service_workspace_dir(&container_path, &service_path).as_deref(),
+                );
+                scripts.dev.is_some() && scripts.build.is_some()
+            } else {
+                let scripts = app_service_workspace_scripts(
+                    app_service_workspace_dir(&container_path, &service_path).as_deref(),
+                );
+                scripts.dev.is_some() && scripts.build.is_some() && scripts.verify_build.is_some()
+            };
+            push_check(
+                &format!("workspace_scripts:{}", service_ref.service_name),
+                child_scripts_ok,
+                format!(
+                    "service={} runtime={:?}",
+                    service_ref.service_name, container.runtime
+                ),
+            );
+
+            service_manifest_summaries.push((service_ref.service_name.clone(), container, service));
+        }
+
+        let live_storage_ok = service_manifest_summaries.iter().all(|(_service_name, container, service)| {
+            if service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
+                && container.runtime == SoraContainerRuntimeV1::Inrou
+            {
+                !service.lease_volumes.is_empty() && service.state_bindings.is_empty()
+            } else {
+                true
+            }
+        });
+        push_check(
+            "live_storage_plane",
+            live_storage_ok,
+            service_manifest_summaries
+                .iter()
+                .filter(|(_, container, service)| {
+                    service.execution_plane == SoraServiceExecutionPlaneV1::HttpService
+                        && container.runtime == SoraContainerRuntimeV1::Inrou
+                })
+                .map(|(service_name, _, service)| {
+                    format!(
+                        "{}: lease_volumes={} state_bindings={}",
+                        service_name,
+                        service.lease_volumes.len(),
+                        service.state_bindings.len()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+
+        let vault_routes_ok = service_manifest_summaries.iter().all(|(_service_name, container, service)| {
+            if service.execution_plane == SoraServiceExecutionPlaneV1::DeterministicService
+                && container.runtime == SoraContainerRuntimeV1::Ivm
+            {
+                service.lease_volumes.is_empty()
+                    && service.handlers.iter().all(|handler| {
+                        handler.route_path.as_deref().is_some_and(|path| {
+                            path.starts_with("/auth/")
+                                || path == "/auth/me"
+                                || path.starts_with("/v1/user/")
+                        })
+                    })
+                    && service.state_bindings.iter().all(|binding| {
+                        matches!(
+                            binding.binding_name.as_ref(),
+                            "auth_challenges"
+                                | "auth_sessions"
+                                | "user_preferences"
+                                | "user_saved_searches"
+                        )
+                    })
+            } else {
+                true
+            }
+        });
+        push_check(
+            "vault_surface",
+            vault_routes_ok,
+            service_manifest_summaries
+                .iter()
+                .filter(|(_, container, service)| {
+                    service.execution_plane == SoraServiceExecutionPlaneV1::DeterministicService
+                        && container.runtime == SoraContainerRuntimeV1::Ivm
+                })
+                .map(|(service_name, _, service)| {
+                    format!(
+                        "{}: handlers={} bindings={} lease_volumes={}",
+                        service_name,
+                        service.handlers.len(),
+                        service.state_bindings.len(),
+                        service.lease_volumes.len()
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", "),
+        );
+
+        let mut duplicate_routes = BTreeMap::<(String, String), BTreeSet<String>>::new();
+        for route in &plan.routes {
+            duplicate_routes
+                .entry((route.host.clone(), route.path.clone()))
+                .or_default()
+                .insert(route.service_name.clone());
+        }
+        let conflicting_routes = duplicate_routes
+            .into_iter()
+            .filter(|(_, services)| services.len() > 1)
+            .collect::<Vec<_>>();
+        push_check(
+            "route_collisions",
+            conflicting_routes.is_empty(),
+            if conflicting_routes.is_empty() {
+                "no exact host/path collisions across app routes".to_owned()
+            } else {
+                conflicting_routes
+                    .iter()
+                    .map(|((host, path), services)| {
+                        format!(
+                            "{host}{path} => {}",
+                            services.iter().map(String::as_str).collect::<Vec<_>>().join(",")
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("; ")
+            },
+        );
+
+        let ok = failing_checks.is_empty();
+        let mut notes = plan.notes.clone();
+        if ok {
+            notes.push(
+                "doctor validated the app workspace against the manifest-backed split-plane release contract"
+                    .to_owned(),
+            );
+        } else {
+            notes.push(format!(
+                "doctor found failing checks: {}",
+                failing_checks.join(", ")
+            ));
+        }
+
+        Ok(AppDoctorOutput {
+            app_name: plan.app_name,
+            manifest_path: plan.manifest_path,
+            public_url: plan.public_url,
+            hostname: plan.hostname,
+            workspace_dir: plan.workspace_dir,
+            workspace_scripts: plan.workspace_scripts,
+            ok,
+            has_mixed_planes: plan.has_mixed_planes,
+            hosted_http_service_count: plan.hosted_http_service_count,
+            deterministic_service_count: plan.deterministic_service_count,
+            frontend: plan.frontend,
+            services: plan.services,
+            routes: plan.routes,
+            checks,
+            notes,
+        })
+    }
+}
+
+/// Arguments for `app soracloud app release`.
+#[derive(clap::Args, Debug)]
+pub struct AppReleaseArgs {
+    /// Path to a `SoracloudAppManifestV1` JSON document.
+    #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
+    manifest: PathBuf,
+    /// Torii base URL to execute deploy/upgrade against authoritative control-plane APIs.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token sent as `x-api-token` when mutating live control-plane APIs.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout for Torii mutation requests.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+    /// Skip the manifest-adjacent root build-and-sync step.
+    #[arg(long, default_value_t = false)]
+    skip_build: bool,
+    /// Print the resolved release plan without executing it.
+    #[arg(long, default_value_t = false)]
+    dry_run: bool,
+}
+
+impl AppReleaseArgs {
+    fn run(self, authority: &AccountId, key_pair: &KeyPair) -> Result<AppReleaseOutput> {
+        let plan = build_app_local_plan_output(self.manifest.as_path())?;
+        let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
+        let uses_api_token = self.api_token.is_some();
+        let mut notes = plan.notes.clone();
+        notes.push(
+            "release composes the manifest-adjacent build-and-sync path with deploy-then-upgrade-on-conflict semantics"
+                .to_owned(),
+        );
+        if uses_api_token {
+            notes.push("API token will be forwarded to the Torii control plane".to_owned());
+        }
+
+        let build_and_sync = if self.skip_build {
+            notes.push("release skipped the root build-and-sync step".to_owned());
+            None
+        } else {
+            Some(
+                AppBuildAndSyncArgs {
+                    manifest: self.manifest.clone(),
+                    dry_run: self.dry_run,
+                }
+                .run()?,
+            )
+        };
+
+        if self.dry_run {
+            return Ok(AppReleaseOutput {
+                mode: "dry_run".to_owned(),
+                release_mode: "deploy_or_upgrade_on_conflict".to_owned(),
+                torii_url,
+                uses_api_token,
+                skip_build: self.skip_build,
+                plan,
+                build_and_sync,
+                release_response: None,
+                notes,
+            });
+        }
+
+        let deploy_args = AppDeployArgs {
+            manifest: self.manifest.clone(),
+            torii_url: Some(torii_url.clone()),
+            api_token: self.api_token.clone(),
+            timeout_secs: self.timeout_secs,
+        };
+        let (release_mode, release_response) =
+            match deploy_args.run(MutationMode::Deploy, authority, key_pair) {
+                Ok(output) => ("Deploy".to_owned(), output),
+                Err(error) if should_retry_app_deploy_as_upgrade(&error) => {
+                    notes.push(
+                        "release detected an already-deployed app and retried with upgrade"
+                            .to_owned(),
+                    );
+                    let output = AppDeployArgs {
+                        manifest: self.manifest.clone(),
+                        torii_url: Some(torii_url.clone()),
+                        api_token: self.api_token.clone(),
+                        timeout_secs: self.timeout_secs,
+                    }
+                    .run(MutationMode::Upgrade, authority, key_pair)?;
+                    ("Upgrade".to_owned(), output)
+                }
+                Err(error) => return Err(error),
+            };
+
+        notes.extend(release_response.notes.iter().cloned());
+        Ok(AppReleaseOutput {
+            mode: "completed".to_owned(),
+            release_mode,
+            torii_url,
+            uses_api_token,
+            skip_build: self.skip_build,
+            plan,
+            build_and_sync,
+            release_response: Some(release_response),
+            notes,
+        })
+    }
+}
+
 /// Arguments for `app soracloud app local-dev`.
 #[derive(clap::Args, Debug)]
 pub struct AppLocalDevArgs {
@@ -2039,6 +2464,102 @@ impl AppBuildAndSyncArgs {
     }
 }
 
+/// Arguments for `app soracloud app doctor-workspace`.
+#[derive(clap::Args, Debug)]
+pub struct AppDoctorWorkspaceArgs {
+    /// Path to a `SoracloudAppManifestV1` JSON document.
+    #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
+    manifest: PathBuf,
+    /// Print the resolved doctor command plan without executing it.
+    #[arg(long, default_value_t = false)]
+    dry_run: bool,
+}
+
+impl AppDoctorWorkspaceArgs {
+    fn run(self) -> Result<AppDoctorWorkspaceOutput> {
+        let plan = build_app_local_plan_output(self.manifest.as_path())?;
+        let script_path = resolve_app_root_script(self.manifest.as_path(), "doctor.sh")?;
+        let working_dir = script_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let command = vec!["./doctor.sh".to_owned()];
+
+        if self.dry_run {
+            let mut notes = plan.notes.clone();
+            notes.push(
+                "doctor-workspace will run the manifest-adjacent root doctor script".to_owned(),
+            );
+            return Ok(AppDoctorWorkspaceOutput {
+                app_name: plan.app_name,
+                public_url: plan.public_url,
+                hostname: plan.hostname.clone(),
+                manifest_path: self.manifest.to_string_lossy().into_owned(),
+                workspace_dir: plan.workspace_dir.clone(),
+                workspace_scripts: plan.workspace_scripts.clone(),
+                working_dir: working_dir.to_string_lossy().into_owned(),
+                script_path: script_path.to_string_lossy().into_owned(),
+                script_name: "doctor.sh".to_owned(),
+                mode: "dry_run".to_owned(),
+                has_mixed_planes: plan.has_mixed_planes,
+                hosted_http_service_count: plan.hosted_http_service_count,
+                deterministic_service_count: plan.deterministic_service_count,
+                frontend: plan.frontend.clone(),
+                services: plan.services.clone(),
+                routes: plan.routes.clone(),
+                command,
+                exit_status: None,
+                notes,
+            });
+        }
+
+        let status = ProcessCommand::new(&script_path)
+            .current_dir(&working_dir)
+            .status()
+            .wrap_err_with(|| {
+                format!(
+                    "failed to run doctor script `{}` resolved from `{}`",
+                    script_path.display(),
+                    self.manifest.display()
+                )
+            })?;
+        let exit_status = status.code();
+        if !status.success() {
+            let rendered_status = exit_status
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "terminated by signal".to_owned());
+            return Err(eyre!(
+                "doctor script `{}` exited with status {rendered_status}",
+                script_path.display()
+            ));
+        }
+
+        let mut notes = plan.notes;
+        notes.push("doctor-workspace completed through the manifest-adjacent root script".to_owned());
+        Ok(AppDoctorWorkspaceOutput {
+            app_name: plan.app_name,
+            public_url: plan.public_url,
+            hostname: plan.hostname.clone(),
+            manifest_path: self.manifest.to_string_lossy().into_owned(),
+            workspace_dir: plan.workspace_dir.clone(),
+            workspace_scripts: plan.workspace_scripts.clone(),
+            working_dir: working_dir.to_string_lossy().into_owned(),
+            script_path: script_path.to_string_lossy().into_owned(),
+            script_name: "doctor.sh".to_owned(),
+            mode: "completed".to_owned(),
+            has_mixed_planes: plan.has_mixed_planes,
+            hosted_http_service_count: plan.hosted_http_service_count,
+            deterministic_service_count: plan.deterministic_service_count,
+            frontend: plan.frontend.clone(),
+            services: plan.services.clone(),
+            routes: plan.routes.clone(),
+            command,
+            exit_status,
+            notes,
+        })
+    }
+}
+
 /// Arguments for `app soracloud app deploy-workspace` and `app soracloud app upgrade-workspace`.
 #[derive(clap::Args, Debug)]
 pub struct AppWorkspaceMutationArgs {
@@ -2152,6 +2673,129 @@ impl AppWorkspaceMutationArgs {
             working_dir: working_dir.to_string_lossy().into_owned(),
             script_path: script_path.to_string_lossy().into_owned(),
             script_name: script_name.to_owned(),
+            mode: "completed".to_owned(),
+            torii_url,
+            uses_api_token: self.api_token.is_some(),
+            has_mixed_planes: plan.has_mixed_planes,
+            hosted_http_service_count: plan.hosted_http_service_count,
+            deterministic_service_count: plan.deterministic_service_count,
+            frontend: plan.frontend.clone(),
+            services: plan.services.clone(),
+            routes: plan.routes.clone(),
+            command,
+            exit_status,
+            notes,
+        })
+    }
+}
+
+/// Arguments for `app soracloud app release-workspace`.
+#[derive(clap::Args, Debug)]
+pub struct AppReleaseWorkspaceArgs {
+    /// Path to a `SoracloudAppManifestV1` JSON document.
+    #[arg(long, value_name = "PATH", default_value = "app_manifest.json")]
+    manifest: PathBuf,
+    /// Torii base URL forwarded to the workspace entrypoint through `TORII_URL`.
+    #[arg(long, value_name = "URL")]
+    torii_url: Option<String>,
+    /// Optional API token forwarded to the workspace entrypoint through `API_TOKEN`.
+    #[arg(long, value_name = "TOKEN")]
+    api_token: Option<String>,
+    /// HTTP timeout forwarded to the underlying release command.
+    #[arg(long, value_name = "SECS", default_value_t = 10)]
+    timeout_secs: u64,
+    /// Print the resolved release command plan without executing it.
+    #[arg(long, default_value_t = false)]
+    dry_run: bool,
+}
+
+impl AppReleaseWorkspaceArgs {
+    fn run(self) -> Result<AppWorkspaceMutationScriptOutput> {
+        let plan = build_app_local_plan_output(self.manifest.as_path())?;
+        let script_path = resolve_app_root_script(self.manifest.as_path(), "release.sh")?;
+        let working_dir = script_path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let torii_url = require_torii_url(self.torii_url.as_deref())?.to_owned();
+        let command = build_app_workspace_mutation_command("release.sh", self.timeout_secs);
+        let mut notes = plan.notes;
+        notes.push(
+            "release-workspace will run through the manifest-adjacent root script after exporting TORII_URL"
+                .to_owned(),
+        );
+        if self.api_token.is_some() {
+            notes.push(
+                "API token will be forwarded through API_TOKEN instead of the command line"
+                    .to_owned(),
+            );
+        }
+
+        if self.dry_run {
+            return Ok(AppWorkspaceMutationScriptOutput {
+                app_name: plan.app_name,
+                public_url: plan.public_url,
+                hostname: plan.hostname.clone(),
+                manifest_path: self.manifest.to_string_lossy().into_owned(),
+                workspace_dir: plan.workspace_dir.clone(),
+                workspace_scripts: plan.workspace_scripts.clone(),
+                working_dir: working_dir.to_string_lossy().into_owned(),
+                script_path: script_path.to_string_lossy().into_owned(),
+                script_name: "release.sh".to_owned(),
+                mode: "dry_run".to_owned(),
+                torii_url,
+                uses_api_token: self.api_token.is_some(),
+                has_mixed_planes: plan.has_mixed_planes,
+                hosted_http_service_count: plan.hosted_http_service_count,
+                deterministic_service_count: plan.deterministic_service_count,
+                frontend: plan.frontend.clone(),
+                services: plan.services.clone(),
+                routes: plan.routes.clone(),
+                command,
+                exit_status: None,
+                notes,
+            });
+        }
+
+        let mut process = ProcessCommand::new(&script_path);
+        process
+            .current_dir(&working_dir)
+            .env("TORII_URL", &torii_url);
+        if let Some(api_token) = self.api_token.as_deref() {
+            process.env("API_TOKEN", api_token);
+        }
+        process
+            .arg("--timeout-secs")
+            .arg(self.timeout_secs.to_string());
+        let status = process.status().wrap_err_with(|| {
+            format!(
+                "failed to run release script `{}` resolved from `{}`",
+                script_path.display(),
+                self.manifest.display()
+            )
+        })?;
+        let exit_status = status.code();
+        if !status.success() {
+            let rendered_status = exit_status
+                .map(|code| code.to_string())
+                .unwrap_or_else(|| "terminated by signal".to_owned());
+            return Err(eyre!(
+                "release script `{}` exited with status {rendered_status}",
+                script_path.display()
+            ));
+        }
+
+        notes.push("release-workspace completed through the manifest-adjacent root script".to_owned());
+        Ok(AppWorkspaceMutationScriptOutput {
+            app_name: plan.app_name,
+            public_url: plan.public_url,
+            hostname: plan.hostname.clone(),
+            manifest_path: self.manifest.to_string_lossy().into_owned(),
+            workspace_dir: plan.workspace_dir.clone(),
+            workspace_scripts: plan.workspace_scripts.clone(),
+            working_dir: working_dir.to_string_lossy().into_owned(),
+            script_path: script_path.to_string_lossy().into_owned(),
+            script_name: "release.sh".to_owned(),
             mode: "completed".to_owned(),
             torii_url,
             uses_api_token: self.api_token.is_some(),
@@ -2666,6 +3310,8 @@ fn build_app_root_projection(manifest_path: &Path, public_url: &str) -> Result<A
         workspace_scripts: AppLocalWorkspaceScriptsOutput {
             local_dev: workspace_script_path_if_exists(&manifest_dir, "local-dev.sh"),
             build_and_sync: workspace_script_path_if_exists(&manifest_dir, "build-and-sync.sh"),
+            doctor: workspace_script_path_if_exists(&manifest_dir, "doctor.sh"),
+            release: workspace_script_path_if_exists(&manifest_dir, "release.sh"),
             deploy: workspace_script_path_if_exists(&manifest_dir, "deploy.sh"),
             upgrade: workspace_script_path_if_exists(&manifest_dir, "upgrade.sh"),
         },
@@ -6098,6 +6744,11 @@ impl MutationMode {
     }
 }
 
+fn should_retry_app_deploy_as_upgrade(error: &Report) -> bool {
+    let detail = format!("{error:#}").to_ascii_lowercase();
+    detail.contains("already deployed") || detail.contains("already exists")
+}
+
 #[derive(clap::ValueEnum, Clone, Copy, Debug, PartialEq, Eq, Default)]
 enum HfStorageClassArg {
     Hot,
@@ -6758,6 +7409,54 @@ struct AppStatusOutput {
 }
 
 #[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AppDoctorCheckOutput {
+    name: String,
+    status: String,
+    detail: String,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AppDoctorOutput {
+    app_name: String,
+    manifest_path: String,
+    public_url: String,
+    hostname: String,
+    workspace_dir: String,
+    workspace_scripts: AppLocalWorkspaceScriptsOutput,
+    ok: bool,
+    has_mixed_planes: bool,
+    hosted_http_service_count: u32,
+    deterministic_service_count: u32,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    frontend: Option<AppLocalFrontendPlanOutput>,
+    services: Vec<AppLocalServicePlanOutput>,
+    #[norito(default)]
+    routes: Vec<AppLocalRoutePlanOutput>,
+    checks: Vec<AppDoctorCheckOutput>,
+    #[norito(default)]
+    notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AppReleaseOutput {
+    mode: String,
+    release_mode: String,
+    torii_url: String,
+    uses_api_token: bool,
+    skip_build: bool,
+    plan: AppLocalPlanOutput,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    build_and_sync: Option<AppBuildAndSyncOutput>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    release_response: Option<AppMutationOutput>,
+    #[norito(default)]
+    notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
 struct AppServiceStatusOutput {
     service_name: String,
     container_manifest_path: String,
@@ -6813,6 +7512,12 @@ struct AppLocalWorkspaceScriptsOutput {
     build_and_sync: Option<String>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
+    doctor: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    release: Option<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
     deploy: Option<String>,
     #[norito(default)]
     #[norito(skip_serializing_if = "Option::is_none")]
@@ -6858,6 +7563,36 @@ struct AppBuildAndSyncOutput {
     workspace_scripts: AppLocalWorkspaceScriptsOutput,
     working_dir: String,
     script_path: String,
+    mode: String,
+    has_mixed_planes: bool,
+    hosted_http_service_count: u32,
+    deterministic_service_count: u32,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    frontend: Option<AppLocalFrontendPlanOutput>,
+    #[norito(default)]
+    services: Vec<AppLocalServicePlanOutput>,
+    #[norito(default)]
+    routes: Vec<AppLocalRoutePlanOutput>,
+    command: Vec<String>,
+    #[norito(default)]
+    #[norito(skip_serializing_if = "Option::is_none")]
+    exit_status: Option<i32>,
+    #[norito(default)]
+    notes: Vec<String>,
+}
+
+#[derive(Clone, Debug, JsonSerialize, JsonDeserialize)]
+struct AppDoctorWorkspaceOutput {
+    app_name: String,
+    public_url: String,
+    hostname: String,
+    manifest_path: String,
+    workspace_dir: String,
+    workspace_scripts: AppLocalWorkspaceScriptsOutput,
+    working_dir: String,
+    script_path: String,
+    script_name: String,
     mode: String,
     has_mixed_planes: bool,
     hosted_http_service_count: u32,
@@ -15114,6 +15849,8 @@ fn scaffold_split_app_template(
             output_dir.join("build-and-sync.sh"),
             split_app_build_and_sync_sh(),
         ),
+        (output_dir.join("doctor.sh"), split_app_doctor_sh()),
+        (output_dir.join("release.sh"), split_app_release_sh()),
         (output_dir.join("deploy.sh"), split_app_deploy_sh()),
         (output_dir.join("upgrade.sh"), split_app_upgrade_sh()),
         (
@@ -17237,7 +17974,7 @@ fn single_api_api_build_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 OUTPUT_DIR="$SCRIPT_DIR/build"
 SOURCE_FILE="$SCRIPT_DIR/contract/api_service.ko"
 BYTECODE_FILE="$OUTPUT_DIR/api-service.to"
@@ -17301,7 +18038,7 @@ fn single_api_api_dev_sh() -> &'static str {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 
 export PORT="${PORT:-${SORACLOUD_HTTP_PORT:-8787}}"
 exec node "$SCRIPT_DIR/dev-server.mjs"
@@ -17351,7 +18088,7 @@ fn single_api_api_verify_build_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 BYTECODE_FILE="$SCRIPT_DIR/build/api-service.to"
 MANIFEST_FILE="$SCRIPT_DIR/build/api-service.contract_manifest.json"
 TMP_DIR="$(mktemp -d)"
@@ -17404,7 +18141,7 @@ fn hayahi_app_build_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 OUTPUT_DIR="$SCRIPT_DIR/build"
 SOURCE_FILE="$SCRIPT_DIR/contract/hayahi_api.ko"
 BYTECODE_FILE="$OUTPUT_DIR/hayahi-app-api.to"
@@ -17493,7 +18230,7 @@ fn http_service_dev_sh() -> &'static str {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 
 export PORT="${PORT:-${SORACLOUD_HTTP_PORT:-8787}}"
 exec node "$SCRIPT_DIR/app/server.mjs"
@@ -17504,40 +18241,85 @@ fn http_service_local_dev_sh() -> &'static str {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 
 cd "$SCRIPT_DIR/http-service"
 exec ./dev.sh
 "#
 }
 
+fn iroha_shell_command_prelude() -> &'static str {
+    r#"IROHA_CARGO=(cargo)
+if [[ -n "${IROHA_CARGO_BIN:-}" ]]; then
+  IROHA_CARGO=("${IROHA_CARGO_BIN}")
+fi
+
+IROHA_CARGO_ENV=()
+if [[ -n "${IROHA_CARGO_HOME:-}" ]]; then
+  IROHA_CARGO_ENV+=("CARGO_HOME=${IROHA_CARGO_HOME}")
+fi
+if [[ -n "${IROHA_CARGO_TARGET_DIR:-}" ]]; then
+  IROHA_CARGO_ENV+=("CARGO_TARGET_DIR=${IROHA_CARGO_TARGET_DIR}")
+fi
+if [[ -n "${IROHA_CARGO_NET_OFFLINE:-}" ]]; then
+  IROHA_CARGO_ENV+=("CARGO_NET_OFFLINE=${IROHA_CARGO_NET_OFFLINE}")
+fi
+if [[ -n "${IROHA_CARGO_BUILD_JOBS:-}" ]]; then
+  IROHA_CARGO_ENV+=("CARGO_BUILD_JOBS=${IROHA_CARGO_BUILD_JOBS}")
+fi
+
+if [[ -n "${IROHA_CLI_BIN:-}" ]]; then
+  IROHA_CMD=("${IROHA_CLI_BIN}")
+elif [[ -n "${IROHA_BIN:-}" ]]; then
+  IROHA_CMD=("${IROHA_BIN}")
+elif [[ -n "${IROHA_CARGO_TARGET_DIR:-}" && -x "${IROHA_CARGO_TARGET_DIR}/debug/iroha" ]]; then
+  IROHA_CMD=("${IROHA_CARGO_TARGET_DIR}/debug/iroha")
+elif [[ -n "${IROHA_CARGO_TARGET_DIR:-}" && -x "${IROHA_CARGO_TARGET_DIR}/release/iroha" ]]; then
+  IROHA_CMD=("${IROHA_CARGO_TARGET_DIR}/release/iroha")
+elif [[ -n "${CARGO_TARGET_DIR:-}" && -x "${CARGO_TARGET_DIR}/debug/iroha" ]]; then
+  IROHA_CMD=("${CARGO_TARGET_DIR}/debug/iroha")
+elif [[ -n "${CARGO_TARGET_DIR:-}" && -x "${CARGO_TARGET_DIR}/release/iroha" ]]; then
+  IROHA_CMD=("${CARGO_TARGET_DIR}/release/iroha")
+elif [[ -n "${IROHA_MANIFEST_PATH:-}" && -f "${IROHA_MANIFEST_PATH}" ]]; then
+  IROHA_CMD=(env "${IROHA_CARGO_ENV[@]}" "${IROHA_CARGO[@]}" run --manifest-path "${IROHA_MANIFEST_PATH}" -p iroha_cli --bin iroha --)
+elif command -v iroha >/dev/null 2>&1; then
+  IROHA_CMD=("$(command -v iroha)")
+else
+  IROHA_CMD=(iroha)
+fi
+"#
+}
+
 fn http_service_build_and_sync_sh(bundle_name: &str) -> String {
+    let prelude = iroha_shell_command_prelude();
     format!(
         r#"#!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
-IROHA_BIN="${{IROHA_BIN:-iroha}}"
+{prelude}
 
 (
   cd "$SCRIPT_DIR/http-service"
   ./build.sh
 )
 
-"$IROHA_BIN" app soracloud sync-manifests \
+"${{IROHA_CMD[@]}}" app soracloud sync-manifests \
   --container "$SCRIPT_DIR/container_manifest.json" \
   --service "$SCRIPT_DIR/service_manifest.json" \
   --bundle-file "$SCRIPT_DIR/http-service/build/{bundle_name}"
-"#
+"#,
+        prelude = prelude,
     )
 }
 
 fn http_service_deploy_sh() -> String {
+    let prelude = iroha_shell_command_prelude();
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IROHA_BIN="${IROHA_BIN:-iroha}"
+{prelude}
 
 : "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
 
@@ -17554,17 +18336,18 @@ if [[ -n "${API_TOKEN:-}" ]]; then
   args+=(--api-token "$API_TOKEN")
 fi
 
-exec "$IROHA_BIN" "${args[@]}" "$@"
+exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
 "#
-    .to_owned()
+    .replace("{prelude}", prelude)
 }
 
 fn http_service_upgrade_sh() -> String {
+    let prelude = iroha_shell_command_prelude();
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IROHA_BIN="${IROHA_BIN:-iroha}"
+{prelude}
 
 : "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
 
@@ -17581,9 +18364,9 @@ if [[ -n "${API_TOKEN:-}" ]]; then
   args+=(--api-token "$API_TOKEN")
 fi
 
-exec "$IROHA_BIN" "${args[@]}" "$@"
+exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
 "#
-    .to_owned()
+    .replace("{prelude}", prelude)
 }
 
 fn http_service_server_mjs(service_name: &str) -> String {
@@ -18044,6 +18827,14 @@ iroha app soracloud build-and-sync --container ./container_manifest.json --servi
 iroha app soracloud build-and-sync --container ./container_manifest.json --service ./service_manifest.json
 ```
 
+The root scripts resolve `IROHA_CLI_BIN`, `IROHA_BIN`,
+`IROHA_CARGO_TARGET_DIR/.../iroha`, `CARGO_TARGET_DIR/.../iroha`,
+`IROHA_MANIFEST_PATH`, and finally `PATH` `iroha`, so hosted-service
+workspaces can target a local `iroha_cli` checkout without requiring a
+globally installed wrapper. If you are driving the fallback through
+`IROHA_MANIFEST_PATH`, set `IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to
+keep Cargo package and artifact state isolated from other local builds.
+
 ## Lease volume contract
 
 The generated service expects these runtime environment variables:
@@ -18202,6 +18993,10 @@ function normalizeProxyTarget(envName: string, fallback: string) {
   return value.endsWith("/") ? value.slice(0, -1) : value;
 }
 
+function rewriteApiPrefix(path: string) {
+  return path.replace(/^\/api/, "");
+}
+
 const liveProxyTarget = normalizeProxyTarget(
   "SORACLOUD_LIVE_DEV_PROXY_TARGET",
   "http://127.0.0.1:8787"
@@ -18218,35 +19013,43 @@ export default defineConfig({
     proxy: {
       "/api/auth": {
         target: vaultProxyTarget,
-        changeOrigin: true
+        changeOrigin: true,
+        rewrite: rewriteApiPrefix
       },
       "/api/v1/user": {
         target: vaultProxyTarget,
-        changeOrigin: true
+        changeOrigin: true,
+        rewrite: rewriteApiPrefix
       },
       "/api/v1/health": {
         target: liveProxyTarget,
-        changeOrigin: true
+        changeOrigin: true,
+        rewrite: rewriteApiPrefix
       },
       "/api/v1/search": {
         target: liveProxyTarget,
-        changeOrigin: true
+        changeOrigin: true,
+        rewrite: rewriteApiPrefix
       },
       "/api/v1/airports": {
         target: liveProxyTarget,
-        changeOrigin: true
+        changeOrigin: true,
+        rewrite: rewriteApiPrefix
       },
       "/api/v1/filters": {
         target: liveProxyTarget,
-        changeOrigin: true
+        changeOrigin: true,
+        rewrite: rewriteApiPrefix
       },
       "/api/v1/luxury": {
         target: liveProxyTarget,
-        changeOrigin: true
+        changeOrigin: true,
+        rewrite: rewriteApiPrefix
       },
       "/api/v1/links": {
         target: liveProxyTarget,
-        changeOrigin: true
+        changeOrigin: true,
+        rewrite: rewriteApiPrefix
       }
     }
   }
@@ -18500,7 +19303,7 @@ fn split_app_vault_build_sh() -> String {
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${{BASH_SOURCE[0]}}")" && pwd)"
 OUTPUT_DIR="$SCRIPT_DIR/build"
 SOURCE_FILE="$SCRIPT_DIR/contract/vault_api.ko"
 BYTECODE_FILE="$OUTPUT_DIR/vault-api.to"
@@ -18508,16 +19311,18 @@ CONTRACT_MANIFEST_FILE="$OUTPUT_DIR/vault-api.contract_manifest.json"
 
 mkdir -p "$OUTPUT_DIR"
 
-if [[ -n "${IROHA_MANIFEST_PATH:-}" ]]; then
-  IROHA_CARGO_MANIFEST="$IROHA_MANIFEST_PATH"
-elif REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; [[ -f "$REPO_ROOT/Cargo.toml" ]]; then
-  IROHA_CARGO_MANIFEST="$REPO_ROOT/Cargo.toml"
+if [[ -n "${KOTO_COMPILE_BIN:-}" ]]; then
+  KOTO_COMPILE=("${KOTO_COMPILE_BIN}")
+elif command -v koto_compile >/dev/null 2>&1; then
+  KOTO_COMPILE=("$(command -v koto_compile)")
+elif [[ -n "${IROHA_MANIFEST_PATH:-}" ]]; then
+  KOTO_COMPILE=(cargo run --manifest-path "$IROHA_MANIFEST_PATH" -p ivm --bin koto_compile --)
 else
-  echo "Unable to locate iroha/Cargo.toml. Set IROHA_MANIFEST_PATH to an iroha checkout." >&2
+  echo "Unable to locate koto_compile. Set KOTO_COMPILE_BIN or IROHA_MANIFEST_PATH." >&2
   exit 1
 fi
 
-cargo run --manifest-path "$IROHA_CARGO_MANIFEST" -p ivm --bin koto_compile -- \
+"${KOTO_COMPILE[@]}" \
   "$SOURCE_FILE" \
   --out "$BYTECODE_FILE" \
   --manifest-out "$CONTRACT_MANIFEST_FILE" \
@@ -18560,16 +19365,18 @@ if [[ ! -f "$MANIFEST_FILE" ]]; then
   exit 1
 fi
 
-if [[ -n "${IROHA_MANIFEST_PATH:-}" ]]; then
-  IROHA_CARGO_MANIFEST="$IROHA_MANIFEST_PATH"
-elif REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; [[ -f "$REPO_ROOT/Cargo.toml" ]]; then
-  IROHA_CARGO_MANIFEST="$REPO_ROOT/Cargo.toml"
+if [[ -n "${KOTO_COMPILE_BIN:-}" ]]; then
+  KOTO_COMPILE=("${KOTO_COMPILE_BIN}")
+elif command -v koto_compile >/dev/null 2>&1; then
+  KOTO_COMPILE=("$(command -v koto_compile)")
+elif [[ -n "${IROHA_MANIFEST_PATH:-}" ]]; then
+  KOTO_COMPILE=(cargo run --manifest-path "$IROHA_MANIFEST_PATH" -p ivm --bin koto_compile --)
 else
-  echo "Unable to locate iroha/Cargo.toml. Set IROHA_MANIFEST_PATH to an iroha checkout." >&2
+  echo "Unable to locate koto_compile. Set KOTO_COMPILE_BIN or IROHA_MANIFEST_PATH." >&2
   exit 1
 fi
 
-cargo run --manifest-path "$IROHA_CARGO_MANIFEST" -p ivm --bin koto_compile -- \
+"${KOTO_COMPILE[@]}" \
   "$SCRIPT_DIR/contract/vault_api.ko" \
   --out "$TMP_DIR/vault-api.to" \
   --manifest-out "$TMP_DIR/vault-api.contract_manifest.json" \
@@ -18793,73 +19600,78 @@ server.listen(PORT, "0.0.0.0", () => {{
 fn split_app_vault_contract_ko(app_name: &str) -> String {
     let contract_name = format!("{}_vault_api", normalized_contract_identifier(app_name));
     format!(
-        r#"kotoba 1;
+        r#"seiyaku {contract_name} {{
+  meta {{ abi_version: 1 }}
 
-kaisho {contract_name} {{
+  kotoage fn with_observed_height(payload: Json, observed_height: int) -> Json {{
+    return json_set_int(payload, name("observed_height"), observed_height);
+  }}
+
+  kotoage fn with_execution_sequence(payload: Json, execution_sequence: int, observed_height: int) -> Json {{
+    let payload = json_set_int(payload, name("sequence"), execution_sequence);
+    return with_observed_height(payload, observed_height);
+  }}
+
   kotoage fn serve_auth_me(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {{
-    return {{
+    let payload = json!{{
       authenticated: false,
-      wallet: null,
-      observed_height: observed_height
+      wallet: null
     }};
+    return with_observed_height(payload, observed_height);
   }}
 
   kotoage fn serve_user_preferences(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {{
-    return {{
-      preferences: {{}},
-      observed_height: observed_height
+    let payload = json!{{
+      preferences: {{}}
     }};
+    return with_observed_height(payload, observed_height);
   }}
 
   kotoage fn serve_saved_searches(_request_body: Blob, _request_meta: Json, observed_height: int) -> Json {{
-    return {{
-      saved_searches: [],
-      observed_height: observed_height
+    let payload = json!{{
+      saved_searches: []
     }};
+    return with_observed_height(payload, observed_height);
   }}
 
   kotoage fn issue_auth_challenge(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
-    return {{
-      accepted: true,
-      challenge_id: execution_sequence,
-      observed_height: observed_height
+    let payload = json!{{
+      accepted: true
     }};
+    let payload = json_set_int(payload, name("challenge_id"), execution_sequence);
+    return with_observed_height(payload, observed_height);
   }}
 
   kotoage fn complete_auth_login(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
-    return {{
+    let payload = json!{{
       accepted: true,
-      action: "login",
-      sequence: execution_sequence,
-      observed_height: observed_height
+      action: "login"
     }};
+    return with_execution_sequence(payload, execution_sequence, observed_height);
   }}
 
   kotoage fn close_auth_session(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
-    return {{
+    let payload = json!{{
       accepted: true,
-      action: "logout",
-      sequence: execution_sequence,
-      observed_height: observed_height
+      action: "logout"
     }};
+    return with_execution_sequence(payload, execution_sequence, observed_height);
   }}
 
   kotoage fn store_user_preferences(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
-    return {{
+    let payload = json!{{
       accepted: true,
-      action: "store_preferences",
-      sequence: execution_sequence,
-      observed_height: observed_height
+      action: "store_preferences"
     }};
+    return with_execution_sequence(payload, execution_sequence, observed_height);
   }}
 
   kotoage fn store_saved_search(_request_body: Blob, execution_sequence: int, observed_height: int) -> Json {{
-    return {{
+    let payload = json!{{
       accepted: true,
-      action: "store_saved_search",
-      sequence: execution_sequence,
-      observed_height: observed_height
+      action: "store_saved_search"
     }};
+    return with_execution_sequence(payload, execution_sequence, observed_height);
   }}
 }}
 "#
@@ -19006,12 +19818,13 @@ export VITE_DATA_MODE="${VITE_DATA_MODE:-local}"
 }
 
 fn split_app_build_and_sync_sh() -> String {
+    let prelude = iroha_shell_command_prelude();
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NPM_BIN="${NPM_BIN:-npm}"
-IROHA_BIN="${IROHA_BIN:-iroha}"
+{prelude}
 
 (
   cd "$SCRIPT_DIR/frontend"
@@ -19030,9 +19843,51 @@ IROHA_BIN="${IROHA_BIN:-iroha}"
   ./verify-build.sh
 )
 
-"$IROHA_BIN" app soracloud sync-manifests --app-manifest "$SCRIPT_DIR/app_manifest.json"
+"${IROHA_CMD[@]}" app soracloud sync-manifests --app-manifest "$SCRIPT_DIR/app_manifest.json"
 "#
-    .to_owned()
+    .replace("{prelude}", prelude)
+}
+
+fn split_app_doctor_sh() -> String {
+    let prelude = iroha_shell_command_prelude();
+    r#"#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+{prelude}
+
+"$SCRIPT_DIR/build-and-sync.sh"
+exec "${IROHA_CMD[@]}" app soracloud app doctor --manifest "$SCRIPT_DIR/app_manifest.json" "$@"
+"#
+    .replace("{prelude}", prelude)
+}
+
+fn split_app_release_sh() -> String {
+    let prelude = iroha_shell_command_prelude();
+    r#"#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+{prelude}
+
+: "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
+
+"$SCRIPT_DIR/doctor.sh"
+
+args=(
+  app soracloud app release
+  --manifest "$SCRIPT_DIR/app_manifest.json"
+  --torii-url "$TORII_URL"
+  --skip-build
+)
+
+if [[ -n "${API_TOKEN:-}" ]]; then
+  args+=(--api-token "$API_TOKEN")
+fi
+
+exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
+"#
+    .replace("{prelude}", prelude)
 }
 
 fn split_app_deploy_sh() -> String {
@@ -19040,37 +19895,23 @@ fn split_app_deploy_sh() -> String {
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IROHA_BIN="${IROHA_BIN:-iroha}"
 
-: "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
-
-"$SCRIPT_DIR/build-and-sync.sh"
-
-args=(
-  app soracloud app deploy
-  --manifest "$SCRIPT_DIR/app_manifest.json"
-  --torii-url "$TORII_URL"
-)
-
-if [[ -n "${API_TOKEN:-}" ]]; then
-  args+=(--api-token "$API_TOKEN")
-fi
-
-exec "$IROHA_BIN" "${args[@]}" "$@"
+exec "$SCRIPT_DIR/release.sh" "$@"
 "#
     .to_owned()
 }
 
 fn split_app_upgrade_sh() -> String {
+    let prelude = iroha_shell_command_prelude();
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IROHA_BIN="${IROHA_BIN:-iroha}"
+{prelude}
 
 : "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
 
-"$SCRIPT_DIR/build-and-sync.sh"
+"$SCRIPT_DIR/doctor.sh"
 
 args=(
   app soracloud app upgrade
@@ -19082,9 +19923,9 @@ if [[ -n "${API_TOKEN:-}" ]]; then
   args+=(--api-token "$API_TOKEN")
 fi
 
-exec "$IROHA_BIN" "${args[@]}" "$@"
+exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
 "#
-    .to_owned()
+    .replace("{prelude}", prelude)
 }
 
 fn split_app_readme(app_name: &str, package_name: &str) -> String {
@@ -19099,7 +19940,9 @@ This template provides:
 - `app_manifest.json` wiring the frontend plus both services together
 - `local-dev.sh` to boot the frontend plus both local API processes
 - `build-and-sync.sh` to rebuild every artifact and refresh manifest hashes
-- `deploy.sh` to run the full publish + deploy flow from one command
+- `doctor.sh` to rebuild every artifact and fail-close on the split-app release contract
+- `release.sh` to rebuild, validate, and then deploy-or-upgrade the full app
+- `deploy.sh` as a compatibility wrapper around `release.sh`
 - `upgrade.sh` to rebuild, resync, and submit the app-wide upgrade flow
 
 ## Local dev
@@ -19116,6 +19959,9 @@ The generated Vite config keeps `VITE_PUBLIC_API_BASE=/api` and proxies:
 - `/api/v1/search*`, `/api/v1/health`, `/api/v1/airports*`,
   `/api/v1/filters*`, `/api/v1/luxury*`, and `/api/v1/links*` to the live API
 - `/api/auth*` and `/api/v1/user*` to the vault dev shim
+
+Those local proxies strip the shared `/api` prefix before forwarding, matching
+the same hosted longest-prefix route behavior Torii applies in production.
 
 The CLI can resolve and run the same manifest-adjacent entrypoint:
 
@@ -19143,6 +19989,28 @@ iroha app soracloud app build-and-sync --manifest ./app_manifest.json --dry-run
 iroha app soracloud app build-and-sync --manifest ./app_manifest.json
 ```
 
+The root scripts resolve `IROHA_CLI_BIN`, `IROHA_BIN`,
+`IROHA_CARGO_TARGET_DIR/.../iroha`, `CARGO_TARGET_DIR/.../iroha`,
+`IROHA_MANIFEST_PATH`, and finally `PATH` `iroha`, so split-app workspaces can
+target a local `iroha_cli` checkout without requiring a globally installed
+wrapper. If you are driving the fallback through `IROHA_MANIFEST_PATH`, set
+`IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to keep Cargo package and
+artifact state isolated from other local builds.
+
+## Doctor the release contract
+
+```bash
+./doctor.sh
+iroha app soracloud app doctor --manifest ./app_manifest.json
+iroha app soracloud app doctor-workspace --manifest ./app_manifest.json --dry-run
+iroha app soracloud app doctor-workspace --manifest ./app_manifest.json
+```
+
+`app doctor` fail-closes on the split-plane production contract before you ship:
+CID-only frontend publication, same-origin `/api`, a hosted `Inrou` live plane,
+a deterministic `Ivm` vault plane, lease-backed live storage, vault-only
+auth/user bindings, and no cross-service route collisions.
+
 ## Inspect the local split-plane plan
 
 ```bash
@@ -19157,21 +20025,31 @@ CID gateway URL template for the frontend.
 ## Publish + deploy the mixed app
 
 ```bash
+TORII_URL=http://127.0.0.1:8080 ./release.sh
 TORII_URL=http://127.0.0.1:8080 ./deploy.sh
-iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
-iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
+iroha app soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha app soracloud app release --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
+iroha app soracloud app release-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha app soracloud app release-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
 ```
 
-`deploy.sh` rebuilds the frontend and both services, verifies the vault
+`doctor.sh` rebuilds the frontend and both services, verifies the vault
 bytecode, refreshes every manifest hash with `sync-manifests --app-manifest`,
-and then runs `iroha app soracloud app deploy` without manual pin registration
-or SSH-only steps.
+and then runs `iroha app soracloud app doctor`.
+
+`release.sh` runs `doctor.sh` first and then executes
+`iroha app soracloud app release` with deploy-or-upgrade semantics so one
+documented command handles the full mixed-app upsert path without manual pin
+registration or SSH-only steps. `deploy.sh` is kept as the compatibility
+wrapper for operators that already call `./deploy.sh`. The manifest-driven
+`app doctor-workspace` and `app release-workspace` commands resolve and run the
+same root scripts from `app_manifest.json`.
 
 Each service entry in the app manifest carries a `bundle_file`, so the sync
 step refreshes both `container.bundle_hash` and the referenced service
 container hash before deploy.
 
-Direct `iroha app soracloud app deploy` responses keep the root
+Direct `iroha app soracloud app release` responses keep the root
 `manifest_path`, root `hostname`, root `workspace_dir`, root
 `workspace_scripts`, the frontend publish projection, one manifest-derived
 child service entry per app service, and the top-level mixed `routes` split
@@ -19185,8 +20063,8 @@ iroha app soracloud app upgrade-workspace --manifest ./app_manifest.json --torii
 iroha app soracloud app upgrade-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
 ```
 
-`upgrade.sh` follows the same rebuild and manifest-refresh path, then submits
-`iroha app soracloud app upgrade`.
+`upgrade.sh` runs `doctor.sh` first so the same rebuild and validation path
+applies before `iroha app soracloud app upgrade`.
 
 Direct `iroha app soracloud app upgrade` responses keep the same root
 manifest/hostname/workspace metadata, frontend, service, and top-level
@@ -19410,12 +20288,13 @@ export SORACLOUD_SINGLE_API_DEV_PROXY_TARGET="${SORACLOUD_SINGLE_API_DEV_PROXY_T
 }
 
 fn single_api_build_and_sync_sh() -> String {
+    let prelude = iroha_shell_command_prelude();
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 NPM_BIN="${NPM_BIN:-npm}"
-IROHA_BIN="${IROHA_BIN:-iroha}"
+{prelude}
 
 (
   cd "$SCRIPT_DIR/web"
@@ -19429,17 +20308,18 @@ IROHA_BIN="${IROHA_BIN:-iroha}"
   ./verify-build.sh
 )
 
-"$IROHA_BIN" app soracloud sync-manifests --app-manifest "$SCRIPT_DIR/app_manifest.json"
+"${IROHA_CMD[@]}" app soracloud sync-manifests --app-manifest "$SCRIPT_DIR/app_manifest.json"
 "#
-    .to_owned()
+    .replace("{prelude}", prelude)
 }
 
 fn single_api_deploy_sh() -> String {
+    let prelude = iroha_shell_command_prelude();
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IROHA_BIN="${IROHA_BIN:-iroha}"
+{prelude}
 
 : "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
 
@@ -19455,17 +20335,18 @@ if [[ -n "${API_TOKEN:-}" ]]; then
   args+=(--api-token "$API_TOKEN")
 fi
 
-exec "$IROHA_BIN" "${args[@]}" "$@"
+exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
 "#
-    .to_owned()
+    .replace("{prelude}", prelude)
 }
 
 fn single_api_upgrade_sh() -> String {
+    let prelude = iroha_shell_command_prelude();
     r#"#!/usr/bin/env bash
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-IROHA_BIN="${IROHA_BIN:-iroha}"
+{prelude}
 
 : "${TORII_URL:?Set TORII_URL to the Torii base URL, for example http://127.0.0.1:8080}"
 
@@ -19481,9 +20362,9 @@ if [[ -n "${API_TOKEN:-}" ]]; then
   args+=(--api-token "$API_TOKEN")
 fi
 
-exec "$IROHA_BIN" "${args[@]}" "$@"
+exec "${IROHA_CMD[@]}" "${args[@]}" "$@"
 "#
-    .to_owned()
+    .replace("{prelude}", prelude)
 }
 
 fn single_api_app_readme(app_name: &str, package_name: &str) -> String {
@@ -19533,6 +20414,14 @@ iroha app soracloud app build-and-sync --manifest ./app_manifest.json
 `build-and-sync.sh` runs the frontend build, `services/api/./build.sh`, and
 `services/api/./verify-build.sh` before refreshing manifest hashes.
 
+The root scripts resolve `IROHA_CLI_BIN`, `IROHA_BIN`,
+`IROHA_CARGO_TARGET_DIR/.../iroha`, `CARGO_TARGET_DIR/.../iroha`,
+`IROHA_MANIFEST_PATH`, and finally `PATH` `iroha`, so single-API app
+workspaces can target a local `iroha_cli` checkout without requiring a
+globally installed wrapper. If you are driving the fallback through
+`IROHA_MANIFEST_PATH`, set `IROHA_CARGO_HOME` and `IROHA_CARGO_TARGET_DIR` to
+keep Cargo package and artifact state isolated from other local builds.
+
 The app manifest references `services/api/build/api-service.to`, so the app-wide
 sync path updates the bundle hash automatically.
 
@@ -19540,6 +20429,10 @@ sync path updates the bundle hash automatically.
 
 ```bash
 TORII_URL=http://127.0.0.1:8080 ./deploy.sh
+iroha app soracloud app doctor-workspace --manifest ./app_manifest.json --dry-run
+iroha app soracloud app doctor-workspace --manifest ./app_manifest.json
+iroha app soracloud app release-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
+iroha app soracloud app release-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
 iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080 --dry-run
 iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080
 ```
@@ -25148,6 +26041,8 @@ mod tests {
         assert!(dir.join("http-service/dev.sh").exists());
         assert!(dir.join("local-dev.sh").exists());
         assert!(dir.join("build-and-sync.sh").exists());
+        assert!(dir.join("doctor.sh").exists());
+        assert!(dir.join("release.sh").exists());
         assert!(dir.join("deploy.sh").exists());
         assert!(dir.join("upgrade.sh").exists());
         #[cfg(unix)]
@@ -25215,6 +26110,10 @@ mod tests {
         ));
         assert!(readme.contains("./local-dev.sh"));
         assert!(readme.contains("./build-and-sync.sh"));
+        assert!(readme.contains("IROHA_CLI_BIN"));
+        assert!(readme.contains("IROHA_MANIFEST_PATH"));
+        assert!(readme.contains("IROHA_CARGO_HOME"));
+        assert!(readme.contains("IROHA_CARGO_TARGET_DIR"));
         assert!(readme.contains(
             "iroha app soracloud local-dev --container ./container_manifest.json --service ./service_manifest.json"
         ));
@@ -25278,10 +26177,27 @@ mod tests {
         assert!(deploy_sh.contains("app soracloud deploy"));
         assert!(deploy_sh.contains("${BASH_SOURCE[0]}"));
         assert!(!deploy_sh.contains("${{BASH_SOURCE[0]}}"));
+        assert!(deploy_sh.contains("IROHA_CLI_BIN"));
+        assert!(deploy_sh.contains("IROHA_MANIFEST_PATH"));
+        assert!(deploy_sh.contains("IROHA_CARGO_HOME"));
+        assert!(deploy_sh.contains("IROHA_CARGO_TARGET_DIR"));
+        assert!(deploy_sh.contains("exec \"${IROHA_CMD[@]}\""));
+        let build_and_sync_sh =
+            fs::read_to_string(dir.join("build-and-sync.sh")).expect("read build-and-sync.sh");
+        assert!(build_and_sync_sh.contains("IROHA_CLI_BIN"));
+        assert!(build_and_sync_sh.contains("IROHA_MANIFEST_PATH"));
+        assert!(build_and_sync_sh.contains("IROHA_CARGO_HOME"));
+        assert!(build_and_sync_sh.contains("IROHA_CARGO_TARGET_DIR"));
+        assert!(build_and_sync_sh.contains("\"${IROHA_CMD[@]}\""));
         let upgrade_sh =
             fs::read_to_string(dir.join("upgrade.sh")).expect("read http-service upgrade.sh");
         assert!(upgrade_sh.contains("app soracloud upgrade"));
         assert!(upgrade_sh.contains("\"$SCRIPT_DIR/build-and-sync.sh\""));
+        assert!(upgrade_sh.contains("IROHA_CLI_BIN"));
+        assert!(upgrade_sh.contains("IROHA_MANIFEST_PATH"));
+        assert!(upgrade_sh.contains("IROHA_CARGO_HOME"));
+        assert!(upgrade_sh.contains("IROHA_CARGO_TARGET_DIR"));
+        assert!(upgrade_sh.contains("exec \"${IROHA_CMD[@]}\""));
         if bash_available() {
             run_bash_syntax_check(&dir.join("local-dev.sh"));
             run_bash_syntax_check(&dir.join("build-and-sync.sh"));
@@ -25524,6 +26440,20 @@ main().catch((error) => {
                 .build_and_sync
                 .as_deref()
                 .is_some_and(|path| path.ends_with("build-and-sync.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .doctor
+                .as_deref()
+                .is_some_and(|path| path.ends_with("doctor.sh"))
+        );
+        assert!(
+            output
+                .workspace_scripts
+                .release
+                .as_deref()
+                .is_some_and(|path| path.ends_with("release.sh"))
         );
         assert!(
             output
@@ -26462,8 +27392,14 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/upgrade-workspace-args.txt"
         let readme = fs::read_to_string(dir.join("README.md")).expect("read single-api readme");
         assert!(readme.contains("./local-dev.sh"));
         assert!(readme.contains("./build-and-sync.sh"));
+        assert!(readme.contains("IROHA_CLI_BIN"));
+        assert!(readme.contains("IROHA_MANIFEST_PATH"));
+        assert!(readme.contains("IROHA_CARGO_HOME"));
+        assert!(readme.contains("IROHA_CARGO_TARGET_DIR"));
         assert!(readme.contains("app local-dev --manifest ./app_manifest.json"));
         assert!(readme.contains("app build-and-sync --manifest ./app_manifest.json"));
+        assert!(readme.contains("app doctor-workspace --manifest ./app_manifest.json"));
+        assert!(readme.contains("app release-workspace --manifest ./app_manifest.json"));
         assert!(readme.contains("TORII_URL=http://127.0.0.1:8080 ./deploy.sh"));
         assert!(readme.contains(
             "iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080"
@@ -26494,6 +27430,18 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/upgrade-workspace-args.txt"
             fs::read_to_string(dir.join("upgrade.sh")).expect("read single-api upgrade.sh");
         assert!(upgrade_sh.contains("app soracloud app upgrade"));
         assert!(upgrade_sh.contains("\"$SCRIPT_DIR/build-and-sync.sh\""));
+        assert!(upgrade_sh.contains("IROHA_CLI_BIN"));
+        assert!(upgrade_sh.contains("IROHA_MANIFEST_PATH"));
+        assert!(upgrade_sh.contains("IROHA_CARGO_HOME"));
+        assert!(upgrade_sh.contains("IROHA_CARGO_TARGET_DIR"));
+        assert!(upgrade_sh.contains("exec \"${IROHA_CMD[@]}\""));
+        let build_and_sync_sh =
+            fs::read_to_string(dir.join("build-and-sync.sh")).expect("read build-and-sync.sh");
+        assert!(build_and_sync_sh.contains("IROHA_CLI_BIN"));
+        assert!(build_and_sync_sh.contains("IROHA_MANIFEST_PATH"));
+        assert!(build_and_sync_sh.contains("IROHA_CARGO_HOME"));
+        assert!(build_and_sync_sh.contains("IROHA_CARGO_TARGET_DIR"));
+        assert!(build_and_sync_sh.contains("\"${IROHA_CMD[@]}\""));
         if bash_available() {
             run_bash_syntax_check(&dir.join("local-dev.sh"));
             run_bash_syntax_check(&dir.join("build-and-sync.sh"));
@@ -26744,6 +27692,22 @@ main().catch((error) => {
                 0o111
             );
             assert_eq!(
+                fs::metadata(dir.join("doctor.sh"))
+                    .expect("doctor.sh metadata")
+                    .permissions()
+                    .mode()
+                    & 0o111,
+                0o111
+            );
+            assert_eq!(
+                fs::metadata(dir.join("release.sh"))
+                    .expect("release.sh metadata")
+                    .permissions()
+                    .mode()
+                    & 0o111,
+                0o111
+            );
+            assert_eq!(
                 fs::metadata(dir.join("deploy.sh"))
                     .expect("deploy.sh metadata")
                     .permissions()
@@ -26881,8 +27845,9 @@ main().catch((error) => {
 
         let vault_contract = fs::read_to_string(dir.join("services/vault/contract/vault_api.ko"))
             .expect("read vault contract");
-        assert!(vault_contract.contains("kaisho travel_ops_vault_api {"));
-        assert!(!vault_contract.contains("kaisho travel-ops_vault_api {"));
+        assert!(vault_contract.contains("seiyaku travel_ops_vault_api {"));
+        assert!(vault_contract.contains("meta { abi_version: 1 }"));
+        assert!(!vault_contract.contains("seiyaku travel-ops_vault_api {"));
         assert!(vault_contract.contains("serve_saved_searches"));
         assert!(vault_contract.contains("store_saved_search"));
         assert!(!vault_contract.contains("serve_auth_health"));
@@ -26903,6 +27868,8 @@ main().catch((error) => {
         assert!(frontend_vite.contains("\"/api/auth\""));
         assert!(frontend_vite.contains("\"/api/v1/user\""));
         assert!(frontend_vite.contains("\"/api/v1/search\""));
+        assert!(frontend_vite.contains("rewrite: rewriteApiPrefix"));
+        assert!(frontend_vite.contains("path.replace(/^\\/api/, \"\")"));
         let frontend_app =
             fs::read_to_string(dir.join("frontend/src/App.vue")).expect("read frontend app");
         assert!(
@@ -26947,8 +27914,19 @@ main().catch((error) => {
         assert!(app_readme.contains("./local-dev.sh"));
         assert!(app_readme.contains("app local-dev --manifest ./app_manifest.json"));
         assert!(app_readme.contains("./build-and-sync.sh"));
+        assert!(app_readme.contains("IROHA_CLI_BIN"));
+        assert!(app_readme.contains("IROHA_MANIFEST_PATH"));
+        assert!(app_readme.contains("IROHA_CARGO_HOME"));
+        assert!(app_readme.contains("IROHA_CARGO_TARGET_DIR"));
         assert!(app_readme.contains("app build-and-sync --manifest ./app_manifest.json"));
+        assert!(app_readme.contains("./doctor.sh"));
+        assert!(app_readme.contains("./release.sh"));
+        assert!(app_readme.contains("app doctor --manifest ./app_manifest.json"));
+        assert!(app_readme.contains("app release --manifest ./app_manifest.json"));
+        assert!(app_readme.contains("app doctor-workspace --manifest ./app_manifest.json"));
+        assert!(app_readme.contains("app release-workspace --manifest ./app_manifest.json"));
         assert!(app_readme.contains("TORII_URL=http://127.0.0.1:8080 ./deploy.sh"));
+        assert!(app_readme.contains("TORII_URL=http://127.0.0.1:8080 ./release.sh"));
         assert!(app_readme.contains(
             "iroha app soracloud app deploy-workspace --manifest ./app_manifest.json --torii-url http://127.0.0.1:8080"
         ));
@@ -26963,13 +27941,45 @@ main().catch((error) => {
         assert!(app_readme.contains("services/vault/container_manifest.json"));
         assert!(app_readme.contains("services/vault/service_manifest.json"));
         assert!(app_readme.contains("attach the same local `service_plan` projection"));
+        let build_and_sync_sh =
+            fs::read_to_string(dir.join("build-and-sync.sh")).expect("read build-and-sync.sh");
+        assert!(build_and_sync_sh.contains("IROHA_CLI_BIN"));
+        assert!(build_and_sync_sh.contains("IROHA_MANIFEST_PATH"));
+        assert!(build_and_sync_sh.contains("IROHA_CARGO_HOME"));
+        assert!(build_and_sync_sh.contains("IROHA_CARGO_TARGET_DIR"));
+        assert!(build_and_sync_sh.contains("\"${IROHA_CMD[@]}\""));
         let upgrade_sh =
             fs::read_to_string(dir.join("upgrade.sh")).expect("read split-app upgrade.sh");
         assert!(upgrade_sh.contains("app soracloud app upgrade"));
-        assert!(upgrade_sh.contains("\"$SCRIPT_DIR/build-and-sync.sh\""));
+        assert!(upgrade_sh.contains("\"$SCRIPT_DIR/doctor.sh\""));
+        assert!(upgrade_sh.contains("IROHA_CLI_BIN"));
+        assert!(upgrade_sh.contains("IROHA_MANIFEST_PATH"));
+        assert!(upgrade_sh.contains("IROHA_CARGO_HOME"));
+        assert!(upgrade_sh.contains("IROHA_CARGO_TARGET_DIR"));
+        assert!(upgrade_sh.contains("exec \"${IROHA_CMD[@]}\""));
+        let deploy_sh = fs::read_to_string(dir.join("deploy.sh")).expect("read split-app deploy.sh");
+        assert!(deploy_sh.contains("\"$SCRIPT_DIR/release.sh\""));
+        let doctor_sh = fs::read_to_string(dir.join("doctor.sh")).expect("read split-app doctor.sh");
+        assert!(doctor_sh.contains("\"$SCRIPT_DIR/build-and-sync.sh\""));
+        assert!(doctor_sh.contains("IROHA_CLI_BIN"));
+        assert!(doctor_sh.contains("IROHA_MANIFEST_PATH"));
+        assert!(doctor_sh.contains("IROHA_CARGO_HOME"));
+        assert!(doctor_sh.contains("IROHA_CARGO_TARGET_DIR"));
+        assert!(doctor_sh.contains("exec \"${IROHA_CMD[@]}\""));
+        let release_sh =
+            fs::read_to_string(dir.join("release.sh")).expect("read split-app release.sh");
+        assert!(release_sh.contains("\"$SCRIPT_DIR/doctor.sh\""));
+        assert!(release_sh.contains("app soracloud app release"));
+        assert!(release_sh.contains("IROHA_CLI_BIN"));
+        assert!(release_sh.contains("IROHA_MANIFEST_PATH"));
+        assert!(release_sh.contains("IROHA_CARGO_HOME"));
+        assert!(release_sh.contains("IROHA_CARGO_TARGET_DIR"));
+        assert!(release_sh.contains("exec \"${IROHA_CMD[@]}\""));
         if bash_available() {
             run_bash_syntax_check(&dir.join("local-dev.sh"));
             run_bash_syntax_check(&dir.join("build-and-sync.sh"));
+            run_bash_syntax_check(&dir.join("doctor.sh"));
+            run_bash_syntax_check(&dir.join("release.sh"));
             run_bash_syntax_check(&dir.join("deploy.sh"));
             run_bash_syntax_check(&dir.join("upgrade.sh"));
         }
@@ -27485,6 +28495,138 @@ printf 'ok' > "$SCRIPT_DIR/build-and-sync-ran.txt"
     }
 
     #[test]
+    fn app_doctor_workspace_split_app_dry_run_reports_manifest_adjacent_script() {
+        let dir = temp_dir("split_app_doctor_workspace_dry_run");
+        AppInitArgs {
+            output_dir: dir.clone(),
+            app_name: "travel_ops".to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template: AppInitTemplate::SplitApp,
+            overwrite: false,
+        }
+        .run()
+        .expect("split-app init should succeed");
+
+        let output = AppDoctorWorkspaceArgs {
+            manifest: dir.join("app_manifest.json"),
+            dry_run: true,
+        }
+        .run()
+        .expect("app doctor-workspace dry-run should succeed");
+
+        assert_eq!(output.mode, "dry_run");
+        assert_eq!(output.hostname, "travel-ops.sora");
+        assert!(output.manifest_path.ends_with("app_manifest.json"));
+        assert!(output.workspace_dir.contains("split_app_doctor_workspace_dry_run"));
+        assert!(output
+            .workspace_scripts
+            .doctor
+            .as_deref()
+            .is_some_and(|path| path.ends_with("doctor.sh")));
+        assert!(output
+            .workspace_scripts
+            .release
+            .as_deref()
+            .is_some_and(|path| path.ends_with("release.sh")));
+        assert_eq!(output.script_name, "doctor.sh");
+        assert_eq!(output.command, vec!["./doctor.sh".to_owned()]);
+        assert!(output.script_path.ends_with("doctor.sh"));
+        assert!(output.has_mixed_planes);
+        assert_eq!(output.hosted_http_service_count, 1);
+        assert_eq!(output.deterministic_service_count, 1);
+        assert_eq!(output.services.len(), 2);
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("doctor-workspace"))
+        );
+    }
+
+    #[test]
+    fn app_release_workspace_executes_manifest_adjacent_script() {
+        if !bash_available() {
+            return;
+        }
+
+        let dir = temp_dir("single_api_release_workspace_run");
+        AppInitArgs {
+            output_dir: dir.clone(),
+            app_name: "travel_ops".to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template: AppInitTemplate::SingleApi,
+            overwrite: false,
+        }
+        .run()
+        .expect("single-api init should succeed");
+
+        let release_script = dir.join("release.sh");
+        fs::write(
+            &release_script,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+printf '%s' "${TORII_URL:-}" > "$SCRIPT_DIR/app-release-workspace-torii.txt"
+printf '%s' "${API_TOKEN:-}" > "$SCRIPT_DIR/app-release-workspace-token.txt"
+printf '%s\n' "$@" > "$SCRIPT_DIR/app-release-workspace-args.txt"
+"#,
+        )
+        .expect("write app release-workspace script");
+        mark_template_file_executable(&release_script)
+            .expect("mark app release-workspace executable");
+
+        let output = AppReleaseWorkspaceArgs {
+            manifest: dir.join("app_manifest.json"),
+            torii_url: Some("http://127.0.0.1:8080".to_owned()),
+            api_token: Some("top-secret".to_owned()),
+            timeout_secs: 29,
+            dry_run: false,
+        }
+        .run()
+        .expect("app release-workspace execution should succeed");
+
+        assert_eq!(output.mode, "completed");
+        assert_eq!(output.hostname, "travel-ops.sora");
+        assert!(output.workspace_dir.contains("single_api_release_workspace_run"));
+        assert!(output
+            .workspace_scripts
+            .doctor
+            .as_deref()
+            .is_some_and(|path| path.ends_with("doctor.sh")));
+        assert!(output
+            .workspace_scripts
+            .release
+            .as_deref()
+            .is_some_and(|path| path.ends_with("release.sh")));
+        assert_eq!(output.exit_status, Some(0));
+        assert_eq!(output.script_name, "release.sh");
+        assert_eq!(output.torii_url, "http://127.0.0.1:8080");
+        assert!(output.uses_api_token);
+        assert_eq!(output.services.len(), 1);
+        assert_eq!(
+            fs::read_to_string(dir.join("app-release-workspace-torii.txt"))
+                .expect("read app release-workspace torii"),
+            "http://127.0.0.1:8080"
+        );
+        assert_eq!(
+            fs::read_to_string(dir.join("app-release-workspace-token.txt"))
+                .expect("read app release-workspace token"),
+            "top-secret"
+        );
+        let args = fs::read_to_string(dir.join("app-release-workspace-args.txt"))
+            .expect("read app release-workspace args");
+        assert!(args.contains("--timeout-secs"));
+        assert!(args.contains("29"));
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("release-workspace completed"))
+        );
+    }
+
+    #[test]
     fn app_deploy_workspace_split_app_dry_run_reports_manifest_adjacent_script() {
         let dir = temp_dir("split_app_deploy_workspace_dry_run");
         AppInitArgs {
@@ -27637,6 +28779,237 @@ printf '%s\n' "$@" > "$SCRIPT_DIR/app-upgrade-workspace-args.txt"
                 .iter()
                 .any(|note| note.contains("upgrade completed"))
         );
+    }
+
+    #[test]
+    fn app_doctor_validates_split_app_release_contract() {
+        let dir = temp_dir("split_app_doctor");
+        AppInitArgs {
+            output_dir: dir.clone(),
+            app_name: "travel_ops".to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template: AppInitTemplate::SplitApp,
+            overwrite: false,
+        }
+        .run()
+        .expect("split-app init should succeed");
+
+        fs::create_dir_all(dir.join("frontend/dist")).expect("create frontend dist");
+        fs::write(
+            dir.join("frontend/dist/index.html"),
+            "<!doctype html><title>Travel Ops</title>",
+        )
+        .expect("write frontend index");
+        fs::create_dir_all(dir.join("services/live/build")).expect("create live build dir");
+        fs::create_dir_all(dir.join("services/vault/build")).expect("create vault build dir");
+        fs::write(
+            dir.join("services/live/build/live-api.tgz"),
+            b"doctor-live-bundle",
+        )
+        .expect("write live bundle");
+        fs::write(
+            dir.join("services/vault/build/vault-api.to"),
+            b"doctor-vault-bundle",
+        )
+        .expect("write vault bundle");
+
+        let output = AppDoctorArgs {
+            manifest: dir.join("app_manifest.json"),
+        }
+        .run()
+        .expect("doctor should succeed");
+
+        assert!(output.ok, "doctor should pass on the scaffolded split-app contract");
+        assert_eq!(output.hostname, "travel-ops.sora");
+        assert!(output.has_mixed_planes);
+        assert_eq!(output.hosted_http_service_count, 1);
+        assert_eq!(output.deterministic_service_count, 1);
+        assert!(
+            output
+                .checks
+                .iter()
+                .any(|check| check.name == "frontend_publish_mode" && check.status == "pass")
+        );
+        assert!(
+            output
+                .checks
+                .iter()
+                .any(|check| check.name == "live_storage_plane" && check.status == "pass")
+        );
+        assert!(
+            output
+                .checks
+                .iter()
+                .any(|check| check.name == "vault_surface" && check.status == "pass")
+        );
+        assert!(
+            output
+                .routes
+                .iter()
+                .any(|route| route.service_name == "travel-ops_vault"
+                    && route.path == "/api/auth/challenge")
+        );
+    }
+
+    #[test]
+    fn app_release_dry_run_reports_build_and_upsert_plan() {
+        let dir = temp_dir("split_app_release_dry_run");
+        AppInitArgs {
+            output_dir: dir.clone(),
+            app_name: "travel_ops".to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template: AppInitTemplate::SplitApp,
+            overwrite: false,
+        }
+        .run()
+        .expect("split-app init should succeed");
+
+        let output = AppReleaseArgs {
+            manifest: dir.join("app_manifest.json"),
+            torii_url: Some("http://127.0.0.1:8080".to_owned()),
+            api_token: Some("token".to_owned()),
+            timeout_secs: 41,
+            skip_build: false,
+            dry_run: true,
+        }
+        .run(
+            &AccountId::new(KeyPair::random().public_key().clone()),
+            &KeyPair::random(),
+        )
+        .expect("release dry-run should succeed");
+
+        assert_eq!(output.mode, "dry_run");
+        assert_eq!(output.release_mode, "deploy_or_upgrade_on_conflict");
+        assert_eq!(output.torii_url, "http://127.0.0.1:8080");
+        assert!(output.uses_api_token);
+        assert!(!output.skip_build);
+        assert!(output.release_response.is_none());
+        assert_eq!(output.plan.hostname, "travel-ops.sora");
+        assert!(output.plan.has_mixed_planes);
+        assert!(
+            output
+                .build_and_sync
+                .as_ref()
+                .is_some_and(|build| build.mode == "dry_run")
+        );
+        assert!(
+            output
+                .notes
+                .iter()
+                .any(|note| note.contains("deploy-then-upgrade-on-conflict"))
+        );
+    }
+
+    #[test]
+    fn app_release_runs_build_and_then_deploys_split_app() {
+        if !bash_available() {
+            return;
+        }
+
+        let dir = temp_dir("split_app_release_run");
+        AppInitArgs {
+            output_dir: dir.clone(),
+            app_name: "travel_ops".to_owned(),
+            app_version: "1.0.0".to_owned(),
+            template: AppInitTemplate::SplitApp,
+            overwrite: false,
+        }
+        .run()
+        .expect("split-app init should succeed");
+
+        let build_script = dir.join("build-and-sync.sh");
+        fs::write(
+            &build_script,
+            r#"#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+mkdir -p "$SCRIPT_DIR/frontend/dist" "$SCRIPT_DIR/services/live/build" "$SCRIPT_DIR/services/vault/build"
+printf '<!doctype html><title>Travel Ops</title>' > "$SCRIPT_DIR/frontend/dist/index.html"
+printf 'release-live-bundle' > "$SCRIPT_DIR/services/live/build/live-api.tgz"
+printf 'release-vault-bundle' > "$SCRIPT_DIR/services/vault/build/vault-api.to"
+"#,
+        )
+        .expect("write release build script");
+        mark_template_file_executable(&build_script).expect("mark release build script executable");
+
+        let status_payload =
+            mock_control_plane_status_payload(&["travel-ops_live", "travel-ops_vault"]);
+        let draft_response = norito::json!({ "tx_instructions": [] });
+        let server = MockHttpServer::start(BTreeMap::from([
+            (
+                "/v1/sorafs/pin/register".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&norito::json!({ "ok": true }))
+                        .expect("encode pin register response"),
+                },
+            ),
+            (
+                "/v1/sorafs/storage/pin".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&norito::json!({ "manifest_id_hex": "beef" }))
+                        .expect("encode storage pin response"),
+                },
+            ),
+            (
+                "/v1/soracloud/deploy".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&draft_response).expect("encode deploy response"),
+                },
+            ),
+            (
+                "/v1/soracloud/status".to_owned(),
+                MockHttpResponse {
+                    content_type: "application/json",
+                    body: json::to_vec(&status_payload).expect("encode status response"),
+                },
+            ),
+        ]));
+
+        let key_pair = KeyPair::random();
+        let authority = AccountId::new(key_pair.public_key().clone());
+        install_mock_submission_config(&authority, &key_pair);
+        let output = AppReleaseArgs {
+            manifest: dir.join("app_manifest.json"),
+            torii_url: Some(server.base_url.clone()),
+            api_token: None,
+            timeout_secs: 5,
+            skip_build: false,
+            dry_run: false,
+        }
+        .run(&authority, &key_pair)
+        .expect("release should succeed");
+
+        assert_eq!(output.mode, "completed");
+        assert_eq!(output.release_mode, "Deploy");
+        assert_eq!(output.plan.hostname, "travel-ops.sora");
+        assert!(
+            output
+                .build_and_sync
+                .as_ref()
+                .is_some_and(|build| build.mode == "completed")
+        );
+        let release_response = output
+            .release_response
+            .as_ref()
+            .expect("release must include the mutation response");
+        assert!(release_response.has_mixed_planes);
+        assert_eq!(release_response.services.len(), 2);
+        assert!(
+            release_response
+                .published_static_site
+                .as_ref()
+                .is_some_and(|publication| publication.manifest_id_hex.as_deref() == Some("beef"))
+        );
+        let deploy_requests = server
+            .requests()
+            .into_iter()
+            .filter(|request| request.method == "POST" && request.path == "/v1/soracloud/deploy")
+            .count();
+        assert_eq!(deploy_requests, 2);
     }
 
     #[test]
