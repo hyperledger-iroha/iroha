@@ -2,7 +2,7 @@
 
 Last updated: 2026-04-14
 
-## 2026-04-14 Follow-up: host-agnostic Inrou now has a real PortableVm executor path, backend-neutral shared storage, and authoritative topology reporting
+## 2026-04-14 Follow-up: host-agnostic Inrou now uses LeaseFs + virtio-fs on PortableVm, with repo-native smoke entrypoints
 - `/Users/takemiyamakoto/dev/iroha/crates/irohad/src/soracloud_runtime.rs`
   now closes the remaining runtime-side work from the earlier dual-ISA Inrou
   contract rewrite:
@@ -13,9 +13,11 @@ Last updated: 2026-04-14
     unprivileged userspace, uses user-mode networking plus host-loopback
     forwarding, and applies the same health/entrypoint/bootstrap contract as
     Firecracker;
-  - shared replica data now flows through a backend-neutral mount layer:
+  - shared replica data now flows through a backend-neutral LeaseFs authority:
     Firecracker keeps the NFS transport adapter, while PortableVm exports the
-    same guest-visible semantics through virtio-9p shared mounts; and
+    same guest-visible semantics through `virtio-fs`; and
+  - PortableVm root storage now uses sparse `qemu-img` qcow2 overlays over the
+    immutable guest rootfs instead of copying raw ext4 roots on every replica;
   - allowlist networking on PortableVm now projects resolved hostname overlays
     into the guest so restricted user-mode networking still preserves expected
     name resolution.
@@ -29,22 +31,29 @@ Last updated: 2026-04-14
   active Inrou capability adverts, placed host count, hosted replica count,
   proxy-only validator count, and backend mix (`portable_vm` /
   `firecracker_kvm`).
-- Regression coverage added in:
+- Regression coverage and smoke entrypoints added in:
   - `/Users/takemiyamakoto/dev/iroha/crates/irohad/src/soracloud_runtime.rs`
-    for the portable 9p/allowlist cloud-init rendering path; and
+    for the portable virtio-fs/allowlist rendering path, qcow2 root overlays,
+    and the ignored PortableVm guest smoke, with the portable smoke scaffolding
+    now compiling on Linux, macOS, and Windows hosts instead of only Unix
+    shells; 
   - `/Users/takemiyamakoto/dev/iroha/crates/iroha_torii/src/lib.rs`
-    for the authoritative hosted-HTTP topology counters.
+    for the authoritative hosted-HTTP topology counters;
+  - `/Users/takemiyamakoto/dev/iroha/scripts/ci/run_inrou_portable_smoke.sh`,
+    `/Users/takemiyamakoto/dev/iroha/scripts/ci/run_inrou_linux_kvm_smoke.sh`,
+    `/Users/takemiyamakoto/dev/iroha/xtask/src/soracloud_inrou.rs`, and
+    `/Users/takemiyamakoto/dev/iroha/fixtures/soracloud/inrou_mixed_host_inventory.example.toml`
+    for backend-specific and mixed-host smoke orchestration.
 - Focused validation status for this slice:
   - `cargo fmt --all`
   - `CARGO_TARGET_DIR=/tmp/iroha-portable-check cargo check -p irohad --bin irohad --message-format short`
   - fresh-target exact-test builds completed successfully for:
-    - `CARGO_TARGET_DIR=/tmp/iroha-verify-irohad cargo test -p irohad --bin irohad build_inrou_user_data_projects_virtio9p_mounts_and_allowlist_overlay -- --exact`
+    - `CARGO_TARGET_DIR=/tmp/iroha-verify-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay -- --exact`
     - `CARGO_TARGET_DIR=/tmp/iroha-verify-torii cargo test -p iroha_torii soracloud_hosted_http_topology_section_reports_authoritative_counts -- --exact`
-  - on this macOS host, the compiled libtest binaries then hung before
-    emitting `--list` output or a final pass/fail line; sampling the stuck
-    Torii test binary points at pre-main `dyld` startup rather than a failure
-    inside the new test bodies, so the harness-startup hang is being treated
-    as an environment issue rather than a regression in the landed code.
+  - `CARGO_TARGET_DIR=/tmp/iroha-inrou-strict-check cargo check -p irohad --features embedded-soracloud-runtime --bin irohad --message-format short`
+    reached the Inrou runtime codepath and then stopped in an unrelated
+    existing `iroha_sccp` trait-derive failure, so full compile closure is
+    still blocked outside the touched hosted-runtime slice.
 
 ## 2026-04-14 Follow-up: same-height known-block missing-commit-QC stalls now hand off to canonical passive catch-up
 - `/Users/takemiyamakoto/dev/iroha/crates/iroha_core/src/sumeragi/main_loop.rs`

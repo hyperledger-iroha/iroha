@@ -252,35 +252,24 @@ For the example above, the service receives:
 The `_DIR` value is the materialized runtime path. The `_MOUNT_PATH` value is
 the logical mount path declared in the manifest.
 
-## Linux/KVM Inrou Smoke
+## Inrou Smoke
 
-The current local Inrou materialization backend is Linux/KVM only. Mixed-host
-validator fleets are still supported by materializing replicas only on
-Linux/KVM peers and proxying public hosted-HTTP traffic from other peers to the
-healthy Inrou hosts. The repo now ships an explicit Firecracker smoke harness
-for `HttpService + Inrou`:
+Inrou now supports both local backend classes: `FirecrackerKvm` on Linux/KVM
+and `PortableVm` everywhere else. Mixed-host validator fleets still proxy
+hosted HTTP through authoritatively placed healthy replicas, but local
+materialization is no longer restricted to Linux/KVM peers. The repo now ships
+dedicated smoke entrypoints for both local backend classes plus a mixed-host
+orchestrator:
 
 ```bash
-sudo \
-  IROHA_INROU_LINUX_KVM_KERNEL_IMAGE=/var/lib/inrou/vmlinux \
-  IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE=/var/lib/inrou/debian-slim.ext4 \
-  IROHA_INROU_LINUX_KVM_INITRD_IMAGE=/var/lib/inrou/initrd.img \
-  scripts/ci/run_inrou_linux_kvm_smoke.sh
+cargo xtask soracloud-inrou-smoke portable
+sudo cargo xtask soracloud-inrou-smoke firecracker
+cargo xtask soracloud-inrou-smoke mixed-host --inventory ./fixtures/soracloud/inrou_mixed_host_inventory.example.toml
 ```
 
-The harness runs four Linux-only unit checks first:
-
-- `build_inrou_user_data_projects_mounts_overlay_and_replica_env`
-- `write_inrou_firecracker_config_serializes_boot_source_drives_and_network`
-- `ensure_inrou_root_disk_copies_once_and_reuses_existing_rootfs`
-- `planned_inrou_tap_firewall_rules_keep_isolated_policy_private`
-
-It then runs the ignored end-to-end guest smokes:
-
-- `inrou_linux_kvm_smoke_boots_debian_guest_and_serves_healthcheck`
-- `inrou_linux_kvm_smoke_shares_service_volume_across_replicas_and_keeps_root_state_isolated`
-
-The command fails closed unless all of the following are true:
+PortableVm stays unprivileged and requires only native-ISA QEMU, `qemu-img`,
+`virtiofsd` (or `qemu-virtiofsd`), and `tar`. The Firecracker/KVM path keeps
+the Linux host prerequisites for tap networking and the NFS transport adapter:
 
 - host OS is Linux
 - the caller is root
@@ -289,17 +278,34 @@ The command fails closed unless all of the following are true:
 - `/proc/sys/net/ipv4/ip_forward = 1`
 - `firecracker`, `ip`, `iptables`, `tar`, `exportfs`, `rpc.nfsd`, `mount`,
   `chown`, and `mke2fs` or `mkfs.ext4` are on `PATH`
-- `IROHA_INROU_LINUX_KVM_KERNEL_IMAGE` points to a real kernel image
-- `IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE` points to a real Debian slim ext4 image
-- `IROHA_INROU_LINUX_KVM_INITRD_IMAGE`, when set, points to a real initrd image
 
-The smoke path materializes a real per-replica root disk, exports shared
-service volumes from the host over the private tap network, injects the
-declared SSH keys and bootstrap user-data overlay, mounts the shared storage
-through NFS inside the guest, and requires the guest healthcheck to answer
-before the test passes. The Debian slim guest image must already provide
-`mount.nfs` (for example via a preinstalled `nfs-common`) so shared storage
-still works when service egress is isolated.
+Portable smoke expects:
+
+- `IROHA_INROU_PORTABLE_KERNEL_IMAGE`
+- `IROHA_INROU_PORTABLE_ROOTFS_IMAGE`
+- optional `IROHA_INROU_PORTABLE_INITRD_IMAGE`
+
+Firecracker smoke expects:
+
+- `IROHA_INROU_LINUX_KVM_KERNEL_IMAGE`
+- `IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE`
+- optional `IROHA_INROU_LINUX_KVM_INITRD_IMAGE`
+
+Focused validation now covers both shared-storage transports:
+
+- `build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay`
+- `ensure_inrou_portable_root_disk_uses_qcow2_overlay_with_backing_file`
+- `build_inrou_user_data_projects_mounts_overlay_and_replica_env`
+- `write_inrou_firecracker_config_serializes_boot_source_drives_and_network`
+- `ensure_inrou_root_disk_copies_once_and_reuses_existing_rootfs`
+- `planned_inrou_tap_firewall_rules_keep_isolated_policy_private`
+
+The portable path mounts shared lease storage through `virtio-fs`. The
+Firecracker fast path keeps the backend-private NFS adapter, but both backends
+now expose the same guest-visible lease semantics through the LeaseFs
+authority. Mixed-host acceptance is expected to cover one Linux/KVM
+Firecracker validator, one non-Linux PortableVm validator, and one proxy-only
+validator that publishes zero hosted capacity.
 
 ## Recommended Hosted-Service Workflow
 

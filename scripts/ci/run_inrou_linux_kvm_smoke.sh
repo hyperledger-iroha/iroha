@@ -79,20 +79,20 @@ export CARGO_TARGET_DIR
 
 cd "$ROOT_DIR"
 
-echo "+ cargo test --locked -p irohad --bin irohad build_inrou_user_data_projects_mounts_overlay_and_replica_env -- --nocapture"
-cargo test --locked -p irohad --bin irohad build_inrou_user_data_projects_mounts_overlay_and_replica_env -- --nocapture
+echo "+ cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_mounts_overlay_and_replica_env -- --nocapture"
+cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_mounts_overlay_and_replica_env -- --nocapture
 
-echo "+ cargo test --locked -p irohad --bin irohad write_inrou_firecracker_config_serializes_boot_source_drives_and_network -- --nocapture"
-cargo test --locked -p irohad --bin irohad write_inrou_firecracker_config_serializes_boot_source_drives_and_network -- --nocapture
+echo "+ cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad write_inrou_firecracker_config_serializes_boot_source_drives_and_network -- --nocapture"
+cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad write_inrou_firecracker_config_serializes_boot_source_drives_and_network -- --nocapture
 
-echo "+ cargo test --locked -p irohad --bin irohad ensure_inrou_root_disk_copies_once_and_reuses_existing_rootfs -- --nocapture"
-cargo test --locked -p irohad --bin irohad ensure_inrou_root_disk_copies_once_and_reuses_existing_rootfs -- --nocapture
+echo "+ cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad ensure_inrou_root_disk_copies_once_and_reuses_existing_rootfs -- --nocapture"
+cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad ensure_inrou_root_disk_copies_once_and_reuses_existing_rootfs -- --nocapture
 
-echo "+ cargo test --locked -p irohad --bin irohad planned_inrou_tap_firewall_rules_keep_isolated_policy_private -- --nocapture"
-cargo test --locked -p irohad --bin irohad planned_inrou_tap_firewall_rules_keep_isolated_policy_private -- --nocapture
+echo "+ cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad planned_inrou_tap_firewall_rules_keep_isolated_policy_private -- --nocapture"
+cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad planned_inrou_tap_firewall_rules_keep_isolated_policy_private -- --nocapture
 
-echo "+ cargo test --locked -p irohad --bin irohad inrou_linux_kvm_smoke_boots_debian_guest_and_serves_healthcheck -- --ignored --nocapture"
-cargo test --locked -p irohad --bin irohad inrou_linux_kvm_smoke_boots_debian_guest_and_serves_healthcheck -- --ignored --nocapture
+echo "+ cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad inrou_linux_kvm_smoke_boots_debian_guest_and_serves_healthcheck -- --ignored --nocapture"
+cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad inrou_linux_kvm_smoke_boots_debian_guest_and_serves_healthcheck -- --ignored --nocapture
 
-echo "+ cargo test --locked -p irohad --bin irohad inrou_linux_kvm_smoke_shares_service_volume_across_replicas_and_keeps_root_state_isolated -- --ignored --nocapture"
-cargo test --locked -p irohad --bin irohad inrou_linux_kvm_smoke_shares_service_volume_across_replicas_and_keeps_root_state_isolated -- --ignored --nocapture
+echo "+ cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad inrou_linux_kvm_smoke_shares_service_volume_across_replicas_and_keeps_root_state_isolated -- --ignored --nocapture"
+cargo test --locked -p irohad --features embedded-soracloud-runtime --bin irohad inrou_linux_kvm_smoke_shares_service_volume_across_replicas_and_keeps_root_state_isolated -- --ignored --nocapture

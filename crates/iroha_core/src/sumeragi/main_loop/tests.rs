@@ -50194,7 +50194,7 @@ async fn frontier_stall_reanchors_body_present_known_block_commit_qc_repair() {
 
 #[tokio::test(flavor = "current_thread")]
 async fn frontier_stall_reanchors_stale_vote_backed_owner_and_clears_non_actionable_same_height_dependencies()
-{
+ {
     let _guard = super::status::missing_block_fetch_test_guard();
     super::status::reset_missing_block_fetch_counters_for_tests();
 
@@ -50317,7 +50317,10 @@ async fn frontier_stall_reanchors_stale_vote_backed_owner_and_clears_non_actiona
         "stale body-present vote-backed frontier ownership should hand off to passive catch-up"
     );
     assert!(
-        !actor.pending.missing_block_requests.contains_key(&block_hash),
+        !actor
+            .pending
+            .missing_block_requests
+            .contains_key(&block_hash),
         "non-actionable same-height missing-block markers should be cleared before passive handoff"
     );
     assert!(

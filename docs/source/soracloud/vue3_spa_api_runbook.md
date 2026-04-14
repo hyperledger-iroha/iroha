@@ -131,27 +131,28 @@ iroha app soracloud secret-status --container ./container_manifest.json --servic
 iroha app soracloud rollback --container ./container_manifest.json --service ./service_manifest.json --torii-url http://127.0.0.1:8080
 ```
 
-Before treating a hosted-HTTP release as complete, run the Linux/KVM Firecracker
-smoke on a real host with the same guest asset class you plan to publish:
+Before treating a hosted-HTTP release as complete, run both backend-specific
+smokes and the mixed-host placement gate with the same guest asset class you
+plan to publish:
 
 ```bash
-sudo \
-  IROHA_INROU_LINUX_KVM_KERNEL_IMAGE=/var/lib/inrou/vmlinux \
-  IROHA_INROU_LINUX_KVM_ROOTFS_IMAGE=/var/lib/inrou/debian-slim.ext4 \
-  IROHA_INROU_LINUX_KVM_INITRD_IMAGE=/var/lib/inrou/initrd.img \
-  scripts/ci/run_inrou_linux_kvm_smoke.sh
+cargo xtask soracloud-inrou-smoke portable
+sudo cargo xtask soracloud-inrou-smoke firecracker
+cargo xtask soracloud-inrou-smoke mixed-host --inventory ./fixtures/soracloud/inrou_mixed_host_inventory.example.toml
 ```
 
-That harness validates the real `HttpService + Inrou` path, not the local
-`dev.sh` shim. The local materialization backend still runs only on
-Linux/KVM peers; validators on other host OSes stay in the network and proxy
-hosted-HTTP traffic to healthy Inrou peers instead of trying to boot replicas
-locally. The harness also exercises the shared-volume path through the private
-host/guest network, so the Linux host needs `exportfs` and `rpc.nfsd`
-available alongside Firecracker, and the Debian slim guest image needs a
-working `mount.nfs` client path so the shared volume still mounts under
-isolated egress. The ignored guest suite now covers both single-replica boot
-and the two-replica shared-volume/root-isolation path.
+That validation path exercises the real `HttpService + Inrou` runtime, not the
+local `dev.sh` shim. `PortableVm` mounts shared lease storage through
+`virtio-fs` in unprivileged userspace, while the Linux/KVM fast path keeps the
+Firecracker NFS transport adapter behind the same LeaseFs authority. The mixed
+gate is expected to cover one Linux Firecracker host, one non-Linux
+PortableVm host, and one proxy-only validator that publishes zero hosted
+capacity while still proxying routed hosted-HTTP traffic correctly.
+
+Portable smoke uses `IROHA_INROU_PORTABLE_KERNEL_IMAGE`,
+`IROHA_INROU_PORTABLE_ROOTFS_IMAGE`, and optional
+`IROHA_INROU_PORTABLE_INITRD_IMAGE`. Firecracker smoke uses the corresponding
+`IROHA_INROU_LINUX_KVM_*` environment variables.
 
 The same `--container` plus `--service` manifest pair also works for other
 service-bound Soracloud commands such as `hf-deploy`, `hf-status`, `hf-lease-renew`,

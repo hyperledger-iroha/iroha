@@ -5797,7 +5797,11 @@ mod sccp_message_backend_tests {
         assert!(!ton.production_ready);
         assert_eq!(
             ton.disabled_reason.as_deref(),
-            Some(iroha_sccp::SCCP_PRODUCTION_DISABLED_REASON_V1)
+            iroha_sccp::sccp_lane_disabled_reason_for_domain(iroha_sccp::SCCP_DOMAIN_TON)
+        );
+        assert_eq!(
+            ton.destination_rollout.verifier_plan,
+            iroha_sccp::SccpDestinationVerifierPlanV1::TonContractNativeRecursive
         );
     }
 
@@ -5842,7 +5846,11 @@ mod sccp_message_backend_tests {
         assert!(!ton.production_ready);
         assert_eq!(
             ton.disabled_reason.as_deref(),
-            Some(iroha_sccp::SCCP_PRODUCTION_DISABLED_REASON_V1)
+            iroha_sccp::sccp_lane_disabled_reason_for_domain(iroha_sccp::SCCP_DOMAIN_TON)
+        );
+        assert_eq!(
+            ton.destination_rollout.verifier_plan,
+            iroha_sccp::SccpDestinationVerifierPlanV1::TonContractNativeRecursive
         );
     }
 

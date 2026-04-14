@@ -1090,6 +1090,56 @@ pub enum SccpDestinationVerifierPlanV1 {
     SubstrateRuntimeNativeRecursive,
 }
 
+impl SccpDestinationVerifierPlanV1 {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unknown => "Unknown",
+            Self::EvmGroth16Bn254Adapter => "EvmGroth16Bn254Adapter",
+            Self::SolanaProgramNativeRecursive => "SolanaProgramNativeRecursive",
+            Self::TonContractNativeRecursive => "TonContractNativeRecursive",
+            Self::TronContractNativeRecursive => "TronContractNativeRecursive",
+            Self::SubstrateRuntimeNativeRecursive => "SubstrateRuntimeNativeRecursive",
+        }
+    }
+}
+
+impl core::str::FromStr for SccpDestinationVerifierPlanV1 {
+    type Err = &'static str;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "Unknown" => Ok(Self::Unknown),
+            "EvmGroth16Bn254Adapter" => Ok(Self::EvmGroth16Bn254Adapter),
+            "SolanaProgramNativeRecursive" => Ok(Self::SolanaProgramNativeRecursive),
+            "TonContractNativeRecursive" => Ok(Self::TonContractNativeRecursive),
+            "TronContractNativeRecursive" => Ok(Self::TronContractNativeRecursive),
+            "SubstrateRuntimeNativeRecursive" => Ok(Self::SubstrateRuntimeNativeRecursive),
+            _ => Err("unsupported SCCP destination verifier plan"),
+        }
+    }
+}
+
+#[cfg(feature = "std")]
+impl norito::json::JsonSerialize for SccpDestinationVerifierPlanV1 {
+    fn json_serialize(&self, out: &mut String) {
+        norito::json::write_json_string(self.as_str(), out);
+    }
+}
+
+#[cfg(feature = "std")]
+impl norito::json::JsonDeserialize for SccpDestinationVerifierPlanV1 {
+    fn json_deserialize(
+        parser: &mut norito::json::Parser<'_>,
+    ) -> Result<Self, norito::json::Error> {
+        let value = parser.parse_string()?;
+        value.parse().map_err(|_| {
+            norito::json::Error::Message(format!(
+                "unsupported SCCP destination verifier plan `{value}`"
+            ))
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[cfg_attr(
     feature = "std",
@@ -1656,9 +1706,7 @@ pub fn sccp_anchor_governance_v1() -> SccpAnchorGovernanceV1 {
     SccpAnchorGovernanceV1::SoraParliament
 }
 
-fn sccp_destination_verifier_plan_for_domain(
-    domain: u32,
-) -> Option<SccpDestinationVerifierPlanV1> {
+fn sccp_destination_verifier_plan_for_domain(domain: u32) -> Option<SccpDestinationVerifierPlanV1> {
     match domain {
         SCCP_DOMAIN_ETH | SCCP_DOMAIN_BSC => {
             Some(SccpDestinationVerifierPlanV1::EvmGroth16Bn254Adapter)
@@ -1724,9 +1772,7 @@ pub fn sccp_destination_rollout_for_domain(domain: u32) -> Option<SccpDestinatio
     })
 }
 
-fn sccp_lane_disabled_reason_for_plan(
-    plan: SccpDestinationVerifierPlanV1,
-) -> &'static str {
+fn sccp_lane_disabled_reason_for_plan(plan: SccpDestinationVerifierPlanV1) -> &'static str {
     match plan {
         SccpDestinationVerifierPlanV1::EvmGroth16Bn254Adapter => {
             "disabled until the immutable EVM Groth16/bn254 SCCP verifier and Sora Parliament anchors are live for this lane"
@@ -5355,8 +5401,11 @@ mod tests {
             assert!(!manifest.production_ready);
             assert_eq!(
                 manifest.disabled_reason.as_deref(),
-                Some(SCCP_PRODUCTION_DISABLED_REASON_V1)
+                sccp_lane_disabled_reason_for_domain(domain)
             );
+            assert!(!manifest.destination_rollout.immutable_verifier_ready);
+            assert!(!manifest.destination_rollout.anchors_ready);
+            assert!(!manifest.destination_rollout.blockers.is_empty());
         }
     }
 
@@ -5793,6 +5842,23 @@ mod tests {
     }
 
     #[test]
+    fn destination_rollout_json_roundtrip_preserves_verifier_plan() {
+        let rollout =
+            sccp_destination_rollout_for_domain(SCCP_DOMAIN_TON).expect("ton destination rollout");
+        let json_value = norito::json::to_value(&rollout).expect("rollout json value");
+        let json = norito::json::to_string(&json_value).expect("rollout json");
+        let decoded: SccpDestinationRolloutV1 =
+            norito::json::from_str(&json).expect("decoded rollout");
+
+        assert_eq!(
+            decoded.verifier_plan,
+            SccpDestinationVerifierPlanV1::TonContractNativeRecursive
+        );
+        assert_eq!(decoded.blockers, rollout.blockers);
+        assert_eq!(decoded, rollout);
+    }
+
+    #[test]
     fn proof_manifest_helpers_cover_all_core_remote_domains() {
         let manifests = sccp_proof_manifests_v1();
         assert_eq!(manifests.len(), SCCP_CORE_REMOTE_DOMAINS.len());
@@ -5847,7 +5913,11 @@ mod tests {
         assert!(!eth.production_ready);
         assert_eq!(
             eth.disabled_reason.as_deref(),
-            Some(SCCP_PRODUCTION_DISABLED_REASON_V1)
+            sccp_lane_disabled_reason_for_domain(SCCP_DOMAIN_ETH)
+        );
+        assert_eq!(
+            eth.destination_rollout.verifier_plan,
+            SccpDestinationVerifierPlanV1::EvmGroth16Bn254Adapter
         );
     }
 
@@ -6052,7 +6122,11 @@ mod tests {
         assert!(!manifest.production_ready);
         assert_eq!(
             manifest.disabled_reason.as_deref(),
-            Some(SCCP_PRODUCTION_DISABLED_REASON_V1)
+            sccp_lane_disabled_reason_for_domain(SCCP_DOMAIN_ETH)
+        );
+        assert_eq!(
+            manifest.destination_rollout.verifier_plan,
+            SccpDestinationVerifierPlanV1::EvmGroth16Bn254Adapter
         );
     }
 

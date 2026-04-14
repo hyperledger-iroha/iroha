@@ -35060,7 +35060,11 @@ pub(crate) mod tests_runtime_handlers {
         assert!(!ton.production_ready);
         assert_eq!(
             ton.disabled_reason.as_deref(),
-            Some(iroha_sccp::SCCP_PRODUCTION_DISABLED_REASON_V1)
+            iroha_sccp::sccp_lane_disabled_reason_for_domain(iroha_sccp::SCCP_DOMAIN_TON)
+        );
+        assert_eq!(
+            ton.destination_rollout.verifier_plan,
+            iroha_sccp::SccpDestinationVerifierPlanV1::TonContractNativeRecursive
         );
 
         let norito_response = routing::handle_v1_sccp_capabilities(Some(HeaderValue::from_static(
@@ -35136,7 +35140,11 @@ pub(crate) mod tests_runtime_handlers {
         assert!(!ton.production_ready);
         assert_eq!(
             ton.disabled_reason.as_deref(),
-            Some(iroha_sccp::SCCP_PRODUCTION_DISABLED_REASON_V1)
+            iroha_sccp::sccp_lane_disabled_reason_for_domain(iroha_sccp::SCCP_DOMAIN_TON)
+        );
+        assert_eq!(
+            ton.destination_rollout.verifier_plan,
+            iroha_sccp::SccpDestinationVerifierPlanV1::TonContractNativeRecursive
         );
 
         let norito_response = routing::handle_v1_sccp_manifests(Some(HeaderValue::from_static(

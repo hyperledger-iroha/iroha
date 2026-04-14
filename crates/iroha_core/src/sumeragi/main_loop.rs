@@ -6943,6 +6943,37 @@ impl Actor {
         true
     }
 
+    fn seed_frontier_recovery_for_frontier_stall(
+        &mut self,
+        frontier_height: u64,
+        view: u64,
+        now: Instant,
+    ) -> bool {
+        if self.frontier_recovery_exists_at_height(frontier_height) {
+            return false;
+        }
+
+        let window = self.frontier_recovery_window();
+        let elapsed = saturating_mul_duration(window, 2);
+        let started_at = now.checked_sub(elapsed).unwrap_or(now);
+        let dependency_progress_at =
+            self.same_height_no_proposal_storm_dependency_progress_at(frontier_height);
+        self.frontier_recovery = Some(FrontierRecoveryState {
+            frontier_height,
+            phase: FrontierRecoveryPhase::CatchUp,
+            entered_at: started_at,
+            last_progress_at: started_at,
+            last_dependency_progress_at: dependency_progress_at,
+            last_action_at: None,
+            no_progress_windows: 2,
+            cleanup_done: false,
+            last_view: view,
+            last_rotation_view: None,
+            last_cause: "frontier_stall",
+        });
+        true
+    }
+
     fn blocking_pending_blocks_len(&self) -> usize {
         let now = Instant::now();
         let tip_height = self.state.committed_height();
@@ -26264,8 +26295,8 @@ impl Actor {
         let ttl = self
             .recovery_missing_block_height_ttl()
             .max(Duration::from_millis(1));
-        let cleared_non_actionable_frontier_dependencies =
-            self.clear_non_actionable_missing_dependencies_for_height(
+        let cleared_non_actionable_frontier_dependencies = self
+            .clear_non_actionable_missing_dependencies_for_height(
                 frontier_height,
                 committed_height,
                 now,
@@ -26305,10 +26336,9 @@ impl Actor {
                 && now.saturating_duration_since(slot.observed_at) >= ttl
                 && now.saturating_duration_since(slot.timers.last_progress_at) >= ttl
         });
-        let stalled_frontier_requests =
-            stalled_missing_block_requests
-                .saturating_add(stalled_known_block_commit_qc_requests)
-                .saturating_add(usize::from(stalled_vote_backed_frontier_owner));
+        let stalled_frontier_requests = stalled_missing_block_requests
+            .saturating_add(stalled_known_block_commit_qc_requests)
+            .saturating_add(usize::from(stalled_vote_backed_frontier_owner));
         if stalled_frontier_requests == 0 {
             self.clear_frontier_stall_reset_window_gate_for_height(frontier_height);
             return cleared_non_actionable_frontier_dependencies;
@@ -26350,11 +26380,11 @@ impl Actor {
                 .keys()
                 .any(|(height, _)| *height > prune_threshold);
         if !has_far_future_state {
-            if stalled_known_block_commit_qc_requests > 0 || stalled_vote_backed_frontier_owner {
-                // Once the exact-height payload is already local, repeated same-slot repair or
-                // vote-backed ownership no longer adds information. Reanchor to the canonical
-                // committed edge instead of letting the stale branch keep ownership indefinitely.
-                let mut requested_pull = self.request_range_pull_from_anchor(
+            let mut requested_pull = false;
+            if stalled_frontier_requests > 0 {
+                // Reanchor same-height stalls to the canonical committed edge before escalating
+                // any in-slot or unified frontier controller action.
+                requested_pull = self.request_range_pull_from_anchor(
                     frontier_height,
                     "frontier_stall_reset",
                     now,
@@ -26366,6 +26396,22 @@ impl Actor {
                         now,
                     );
                 }
+            }
+            if stalled_missing_block_requests > 0 {
+                let view = self
+                    .phase_tracker
+                    .current_view(frontier_height)
+                    .unwrap_or(0);
+                let seeded_recovery =
+                    self.seed_frontier_recovery_for_frontier_stall(frontier_height, view, now);
+                if requested_pull || seeded_recovery {
+                    return true;
+                }
+            }
+            if stalled_known_block_commit_qc_requests > 0 || stalled_vote_backed_frontier_owner {
+                // Once the exact-height payload is already local, repeated same-slot repair or
+                // vote-backed ownership no longer adds information. Reanchor to the canonical
+                // committed edge instead of letting the stale branch keep ownership indefinitely.
                 if requested_pull {
                     return true;
                 }
@@ -26383,10 +26429,12 @@ impl Actor {
                 false,
                 now,
             );
-            return !matches!(advance, FrontierRecoveryAdvance::None)
+            return requested_pull
+                || !matches!(advance, FrontierRecoveryAdvance::None)
                 || self.frontier_recovery.is_some_and(|state| {
                     state.frontier_height == frontier_height
-                        && self.frontier_catchup_has_unresolved_dependency(frontier_height)
+                        && state.phase == FrontierRecoveryPhase::CatchUp
+                        && state.last_cause == "frontier_stall"
                 });
         }
 
@@ -30887,6 +30935,22 @@ impl Actor {
                 } else {
                     ViewChangeCause::MissingQc
                 };
+                if pre_reset_frontier_reanchor_unresolved_in_window
+                    && matches!(direct_cause, ViewChangeCause::MissingQc)
+                    && !self.try_reserve_missing_qc_height_stall_rotation_window(
+                        height,
+                        direct_cause,
+                        now,
+                    )
+                {
+                    debug!(
+                        height,
+                        view = current_view,
+                        committed_height,
+                        "suppressing same-height idle view-change while in-window frontier reanchor remains unresolved"
+                    );
+                    return false;
+                }
                 debug!(
                     height,
                     view = current_view,
@@ -31022,6 +31086,22 @@ impl Actor {
                 } else {
                     ViewChangeCause::MissingQc
                 };
+            if pre_reset_frontier_reanchor_unresolved_in_window
+                && matches!(direct_cause, ViewChangeCause::MissingQc)
+                && !self.try_reserve_missing_qc_height_stall_rotation_window(
+                    height,
+                    direct_cause,
+                    now,
+                )
+            {
+                debug!(
+                    height,
+                    view = current_view,
+                    committed_height,
+                    "suppressing same-height idle view-change while in-window frontier reanchor remains unresolved"
+                );
+                return false;
+            }
             debug!(
                 height,
                 view = current_view,

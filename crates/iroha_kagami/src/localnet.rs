@@ -75,7 +75,7 @@ pub struct LocalnetOptions {
     pub out_dir: PathBuf,
     /// Additional wonderland accounts to pre-register beyond Alice.
     pub extra_accounts: u16,
-    /// Extra asset specs to register and optionally mint.
+    /// Additional asset specs to register and optionally mint on top of the built-in localnet asset set.
     pub assets: Vec<AssetSpec>,
     /// Optional override for consensus block time (milliseconds).
     /// If unset alongside `commit_time_ms`, a fast localnet pipeline is injected.
@@ -571,7 +571,8 @@ pub struct Args {
     /// Extra accounts to pre-register (in wonderland).
     #[arg(long, default_value_t = 0)]
     extra_accounts: u16,
-    /// Register a sample asset and mint to the default account.
+    /// Register the optional sample asset and mint to the default account.
+    /// The built-in offline-cash asset is always emitted.
     #[arg(long, default_value_t = false)]
     sample_asset: bool,
     /// Override the consensus block time (milliseconds) in generated manifests/configs.
@@ -2035,8 +2036,11 @@ fn extend_genesis(
             let alias = alias_literal
                 .parse::<AssetDefinitionAlias>()
                 .wrap_err("invalid asset definition alias")?;
-            builder =
-                builder.append_instruction(SetAssetDefinitionAlias::bind(asset_def.clone(), alias, None));
+            builder = builder.append_instruction(SetAssetDefinitionAlias::bind(
+                asset_def.clone(),
+                alias,
+                None,
+            ));
         }
         if asset.quantity > 0 {
             builder = builder.append_instruction(Mint::asset_numeric(
@@ -2847,7 +2851,7 @@ mod tests {
     };
     use iroha_data_model::{
         block::{consensus::PROTO_VERSION, decode_framed_signed_block},
-        isi::SetParameter,
+        isi::{GrantBox, MintBox, SetParameter, TransferBox},
         parameter::{
             Parameter,
             system::{
@@ -3030,6 +3034,207 @@ mod tests {
         let source =
             TomlSource::from_file(temp.path().join("peer0.toml")).expect("read generated config");
         actual::Root::from_toml_source(source).expect("generated config must parse");
+    }
+
+    #[test]
+    fn generated_localnet_bootstraps_builtin_offline_cash_asset_and_permissions() {
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("offline-cash-bootstrap".to_owned()),
+            bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29080,
+            base_p2p_port: 33337,
+            out_dir: PathBuf::from("unused"),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        let manifest = localnet_genesis_for_opts(&opts);
+        let offline_asset_id =
+            AssetDefinitionId::parse_address_literal(LOCALNET_OFFLINE_CASH_ASSET_ID)
+                .expect("offline cash asset id");
+        let offline_alias = LOCALNET_OFFLINE_CASH_ASSET_ALIAS
+            .parse::<AssetDefinitionAlias>()
+            .expect("offline cash alias");
+        let client_account_id = localnet_client_account_id();
+        let expected_mint_destination =
+            AssetId::new(offline_asset_id.clone(), client_account_id.clone());
+
+        let has_definition = manifest.instructions().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<Register<AssetDefinition>>()
+                .is_some_and(|register| register.object().id == offline_asset_id)
+        });
+        assert!(
+            has_definition,
+            "localnet must register the built-in offline-cash asset"
+        );
+
+        let has_alias_binding = manifest.instructions().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<SetAssetDefinitionAlias>()
+                .is_some_and(|set_alias| {
+                    set_alias.asset_definition_id() == &offline_asset_id
+                        && set_alias.alias().as_ref() == Some(&offline_alias)
+                })
+        });
+        assert!(
+            has_alias_binding,
+            "localnet must bind the built-in offline-cash alias"
+        );
+
+        let has_initial_mint = manifest.instructions().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<MintBox>()
+                .is_some_and(|mint| match mint {
+                    MintBox::Asset(mint_asset) => {
+                        mint_asset.destination() == &expected_mint_destination
+                    }
+                    _ => false,
+                })
+        });
+        assert!(
+            has_initial_mint,
+            "localnet must mint the built-in offline-cash asset to the client signer"
+        );
+
+        let has_owner_transfer = manifest.instructions().any(|instruction| {
+            instruction
+                .as_any()
+                .downcast_ref::<TransferBox>()
+                .is_some_and(|transfer| match transfer {
+                    TransferBox::AssetDefinition(transfer_asset) => {
+                        transfer_asset.object() == &offline_asset_id
+                            && transfer_asset.destination() == &client_account_id
+                    }
+                    _ => false,
+                })
+        });
+        assert!(
+            has_owner_transfer,
+            "localnet must transfer offline-cash asset ownership to the client signer"
+        );
+
+        let mut has_alias_manage = false;
+        let mut has_manifest_publish = false;
+        for instruction in manifest.instructions() {
+            let Some(grant) = instruction.as_any().downcast_ref::<GrantBox>() else {
+                continue;
+            };
+            let GrantBox::Permission(grant_permission) = grant else {
+                continue;
+            };
+            if grant_permission.destination() != &client_account_id {
+                continue;
+            }
+            match grant_permission.object().name().as_ref() {
+                "CanManageAccountAlias" => has_alias_manage = true,
+                "CanPublishSpaceDirectoryManifest" => has_manifest_publish = true,
+                _ => {}
+            }
+        }
+        assert!(
+            has_alias_manage,
+            "localnet client signer must be able to manage account aliases for onboarding"
+        );
+        assert!(
+            has_manifest_publish,
+            "localnet client signer must be able to publish onboarding manifests"
+        );
+    }
+
+    #[test]
+    fn generated_peer_config_enables_offline_cash_bootstrap_services() {
+        let temp = tempfile::tempdir().expect("make temp dir");
+        let opts = LocalnetOptions {
+            build_line: BuildLine::Iroha3,
+            sora_profile: None,
+            perf_profile: None,
+            peers: NonZeroU16::new(4).expect("non-zero"),
+            seed: Some("offline-cash-config".to_owned()),
+            bind_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            public_host: DEFAULT_PUBLIC_HOST.to_owned(),
+            base_api_port: 29080,
+            base_p2p_port: 33337,
+            out_dir: temp.path().to_path_buf(),
+            extra_accounts: 0,
+            assets: Vec::new(),
+            block_time_ms: None,
+            commit_time_ms: None,
+            redundant_send_r: None,
+            consensus_mode: SumeragiConsensusMode::Npos,
+            next_consensus_mode: None,
+            mode_activation_height: None,
+        };
+
+        generate_localnet(&opts, &mut BufWriter::new(Vec::new())).expect("generate localnet files");
+
+        let peer_cfg: toml::Value = toml::from_str(
+            &fs::read_to_string(temp.path().join("peer0.toml"))
+                .expect("read generated peer config"),
+        )
+        .expect("parse peer config");
+
+        let client_account_id = localnet_client_account_literal(None);
+        let onboarding = peer_cfg
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .and_then(|torii| torii.get("onboarding"))
+            .and_then(toml::Value::as_table)
+            .expect("torii.onboarding table");
+        assert_eq!(
+            onboarding.get("authority").and_then(toml::Value::as_str),
+            Some(client_account_id.as_str())
+        );
+
+        let offline_issuer = peer_cfg
+            .get("torii")
+            .and_then(toml::Value::as_table)
+            .and_then(|torii| torii.get("offline_issuer"))
+            .and_then(toml::Value::as_table)
+            .expect("torii.offline_issuer table");
+        assert_eq!(
+            offline_issuer
+                .get("operator_authority")
+                .and_then(toml::Value::as_str),
+            Some(client_account_id.as_str())
+        );
+
+        let settlement_offline = peer_cfg
+            .get("settlement")
+            .and_then(toml::Value::as_table)
+            .and_then(|settlement| settlement.get("offline"))
+            .and_then(toml::Value::as_table)
+            .expect("settlement.offline table");
+        assert_eq!(
+            settlement_offline
+                .get("skip_platform_attestation")
+                .and_then(toml::Value::as_bool),
+            Some(true)
+        );
+        let escrow_accounts = settlement_offline
+            .get("escrow_accounts")
+            .and_then(toml::Value::as_table)
+            .expect("settlement.offline.escrow_accounts table");
+        assert_eq!(
+            escrow_accounts
+                .get(LOCALNET_OFFLINE_CASH_ASSET_ID)
+                .and_then(toml::Value::as_str),
+            Some(client_account_id.as_str())
+        );
     }
 
     #[test]

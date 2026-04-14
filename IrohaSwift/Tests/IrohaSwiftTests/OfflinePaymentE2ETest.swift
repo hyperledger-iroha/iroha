@@ -37,7 +37,9 @@ final class OfflinePaymentE2ETest: XCTestCase {
         return URL(string: env)!
     }()
 
-    private static let assetDefinitionId = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+    private static let assetAlias = "usd#wonderland"
+    private static let expectedAssetDefinitionId = "7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
+    private static let expectedAssetName = "usd"
     private static let probeTimeout: TimeInterval = 2
     private static let cliEnvKey = "IROHA_CLI_PATH"
     private static let clientConfigEnvKey = "IROHA_CLIENT_CONFIG"
@@ -72,6 +74,7 @@ final class OfflinePaymentE2ETest: XCTestCase {
 
     private var client: ToriiClient!
     private var mintContext: MintContext!
+    private var assetDefinitionId: String!
 
     // MARK: - Lifecycle
 
@@ -97,6 +100,8 @@ final class OfflinePaymentE2ETest: XCTestCase {
         } catch {
             throw XCTSkip("Iroha node unreachable at \(Self.nodeURL): \(error)")
         }
+
+        assetDefinitionId = try await resolveOfflineCashAssetDefinitionId()
     }
 
     // MARK: - Test
@@ -587,7 +592,7 @@ final class OfflinePaymentE2ETest: XCTestCase {
         let proof = try makeDeviceProof(identity: identity, challengeHashHex: challengeHash)
         let request = ToriiOfflineCashSetupRequest(
             accountId: accountId,
-            assetDefinitionId: Self.assetDefinitionId,
+            assetDefinitionId: assetDefinitionId,
             deviceBinding: binding,
             deviceProof: proof
         )
@@ -617,7 +622,7 @@ final class OfflinePaymentE2ETest: XCTestCase {
             operationId: UUID().uuidString,
             lineageId: lineageId,
             accountId: accountId,
-            assetDefinitionId: Self.assetDefinitionId,
+            assetDefinitionId: assetDefinitionId,
             amount: amount,
             deviceBinding: binding,
             deviceProof: proof
@@ -758,7 +763,6 @@ final class OfflinePaymentE2ETest: XCTestCase {
     // MARK: - Account registration & minting
 
     private func registerAndFundAccount(accountId: String) async throws {
-        // Register via Torii onboard (ignore conflict if already exists)
         let alias = "e2e-\(UUID().uuidString.prefix(8))@universal"
         let request = ToriiAccountOnboardingRequest(
             alias: alias,
@@ -767,18 +771,19 @@ final class OfflinePaymentE2ETest: XCTestCase {
         do {
             _ = try await client.registerAccount(request)
         } catch {
-            // Ignore if already registered
-            print("Registration note: \(error)")
+            if try await accountExists(accountId: accountId) {
+                print("Onboarding note: \(error)")
+            } else {
+                throw Self.setupFailure("Account onboarding failed for \(accountId): \(error)")
+            }
         }
 
-        // Wait for registration to commit
-        try await Task.sleep(nanoseconds: 3_000_000_000)
+        try await waitForAccount(accountId: accountId)
 
-        // Mint via CLI
         let process = Process()
         process.executableURL = mintContext.cliURL
         process.arguments = ["--config", mintContext.configURL.path, "ledger", "asset", "mint",
-                             "--definition-alias", "usd#wonderland",
+                             "--definition", assetDefinitionId,
                              "--account", accountId,
                              "--quantity", "100"]
         let pipe = Pipe()
@@ -788,9 +793,61 @@ final class OfflinePaymentE2ETest: XCTestCase {
         process.waitUntilExit()
         let output = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
         print("Mint output: \(output) exit: \(process.terminationStatus)")
+        if process.terminationStatus != 0 {
+            throw Self.setupFailure(
+                "Mint failed for \(accountId) with exit \(process.terminationStatus): \(output)"
+            )
+        }
 
         // Wait for mint to commit
         try await Task.sleep(nanoseconds: 3_000_000_000)
+    }
+
+    private func resolveOfflineCashAssetDefinitionId() async throws -> String {
+        guard let resolution = try await client.resolveAssetAlias(Self.assetAlias) else {
+            throw Self.setupFailure(
+                "Offline-cash alias \(Self.assetAlias) is not bound on \(Self.nodeURL.absoluteString)"
+            )
+        }
+        guard resolution.assetDefinitionId == Self.expectedAssetDefinitionId else {
+            throw Self.setupFailure(
+                "Offline-cash alias \(Self.assetAlias) resolved to \(resolution.assetDefinitionId), expected \(Self.expectedAssetDefinitionId)"
+            )
+        }
+        guard resolution.assetName == Self.expectedAssetName else {
+            throw Self.setupFailure(
+                "Offline-cash alias \(Self.assetAlias) resolved asset name \(resolution.assetName), expected \(Self.expectedAssetName)"
+            )
+        }
+        return resolution.assetDefinitionId
+    }
+
+    private func waitForAccount(accountId: String,
+                                timeoutSeconds: TimeInterval = 8,
+                                pollIntervalNanoseconds: UInt64 = 250_000_000) async throws {
+        let deadline = Date().addingTimeInterval(timeoutSeconds)
+        while Date() < deadline {
+            if try await accountExists(accountId: accountId) {
+                return
+            }
+            try await Task.sleep(nanoseconds: pollIntervalNanoseconds)
+        }
+        throw Self.setupFailure("Account \(accountId) was not visible after onboarding")
+    }
+
+    private func accountExists(accountId: String) async throws -> Bool {
+        do {
+            _ = try await client.getExplorerAccountQr(accountId: accountId)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private static func setupFailure(_ message: String) -> NSError {
+        NSError(domain: "OfflinePaymentE2ETest",
+                code: 1,
+                userInfo: [NSLocalizedDescriptionKey: message])
     }
 
     private static func resolveMintContext() throws -> MintContext {

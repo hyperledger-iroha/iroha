@@ -113,6 +113,7 @@ mod offline_topup;
 mod poseidon_bench;
 mod sm;
 mod sns;
+mod soracloud_inrou;
 mod soradns;
 mod sorafs;
 mod soranet;
@@ -257,6 +258,9 @@ enum CommandKind {
     },
     SorafsGatewayProbe {
         options: Box<sorafs::GatewayProbeOptions>,
+    },
+    SoracloudInrouSmoke {
+        mode: soracloud_inrou::CommandMode,
     },
     SorafsGatewayCli {
         command: Box<sorafs::GatewayCliCommand>,
@@ -1340,6 +1344,9 @@ fn entrypoint() -> Result<(), Box<dyn Error>> {
         CommandKind::SorafsGatewayProbe { options } => {
             sorafs::run_gateway_probe(*options)?;
         }
+        CommandKind::SoracloudInrouSmoke { mode } => {
+            soracloud_inrou::run(mode)?;
+        }
         CommandKind::SorafsGatewayCli { command } => {
             sorafs::run_gateway_cli(*command)?;
         }
@@ -1975,6 +1982,53 @@ where
 
     match cmd.as_str() {
         "-h" | "--help" => Ok(CommandKind::Help),
+        "soracloud-inrou-smoke" => {
+            let Some(mode) = args.next() else {
+                return Err(
+                    "soracloud-inrou-smoke requires a mode (portable|firecracker|mixed-host)"
+                        .into(),
+                );
+            };
+            match mode.as_str() {
+                "portable" => Ok(CommandKind::SoracloudInrouSmoke {
+                    mode: soracloud_inrou::CommandMode::Portable,
+                }),
+                "firecracker" => Ok(CommandKind::SoracloudInrouSmoke {
+                    mode: soracloud_inrou::CommandMode::Firecracker,
+                }),
+                "mixed-host" => {
+                    let mut inventory: Option<PathBuf> = None;
+                    let mut pending = args.peekable();
+                    while let Some(arg) = pending.next() {
+                        match arg.as_str() {
+                            "--inventory" => {
+                                let Some(path) = pending.next() else {
+                                    return Err("expected path after --inventory".into());
+                                };
+                                inventory = Some(normalize_path(Path::new(&path))?);
+                            }
+                            flag => {
+                                return Err(
+                                    format!("unknown flag for soracloud-inrou-smoke mixed-host: {flag}")
+                                        .into(),
+                                );
+                            }
+                        }
+                    }
+                    let inventory = inventory.ok_or_else(|| {
+                        "soracloud-inrou-smoke mixed-host requires --inventory <path>"
+                            .to_string()
+                    })?;
+                    Ok(CommandKind::SoracloudInrouSmoke {
+                        mode: soracloud_inrou::CommandMode::MixedHost { inventory },
+                    })
+                }
+                other => Err(format!(
+                    "unknown soracloud-inrou-smoke mode `{other}` (expected portable|firecracker|mixed-host)"
+                )
+                .into()),
+            }
+        }
         "offline-pos-provision" => {
             let mut spec_path: Option<PathBuf> = None;
             let mut output_root: Option<PathBuf> = None;
@@ -11566,6 +11620,12 @@ fn parse_rollout_artifact_spec(spec: &str) -> Result<(String, String), Box<dyn E
 
 fn print_usage() {
     eprintln!("xtask usage:");
+    eprintln!(
+        "  cargo xtask soracloud-inrou-smoke <portable|firecracker|mixed-host> [--inventory <path>]"
+    );
+    eprintln!(
+        "    Run the hosted-HTTP Inrou smoke harness for PortableVm, Firecracker/KVM, or a mixed-host inventory gate."
+    );
     eprintln!("  cargo xtask openapi [--output <path>] [--allow-stub]");
     eprintln!(
         "    Generate the Torii OpenAPI spec from a live Torii router. Defaults to docs/portal/static/openapi/torii.json; use --allow-stub only for emergency stub output"

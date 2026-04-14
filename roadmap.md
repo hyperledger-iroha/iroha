@@ -74,14 +74,17 @@ features.
   - pin the same public-safe defaults and route limits on the shipped public
     Taira profile without downstream wrapper tuning.
 
-Latest sync (2026-04-14 host-agnostic Inrou redesign is now closed in tree):
-the earlier Inrou open-work item is no longer an open code gap. The public
-dual-ISA contract, backend-neutral executor model, `PortableVm` userspace QEMU
-path, Linux/KVM `FirecrackerKvm` preference, authoritative host capability /
-placement records, proxy-only zero-capacity adverts, backend-neutral shared
-filesystem semantics, and authoritative Torii placed-replica routing/status
-reporting are now all in tree. Remaining mixed-host acceptance is operational
-validation on real hosts rather than additional repository implementation work.
+Latest sync (2026-04-14 host-agnostic Inrou redesign now uses strict LeaseFs + virtio-fs and repo-native smoke commands):
+the earlier Inrou storage/harness gap is now materially smaller in-tree. The
+public dual-ISA contract, backend-neutral executor model, `PortableVm`
+userspace QEMU path, Linux/KVM `FirecrackerKvm` preference, authoritative host
+capability / placement records, proxy-only zero-capacity adverts,
+backend-neutral shared filesystem authority, authoritative Torii
+placed-replica routing/status reporting, repo-native backend smoke commands,
+and a mixed-host inventory gate are now all present. The portable smoke/test
+scaffolding also now compiles on Linux, macOS, and Windows hosts instead of
+only Unix hosts. Remaining work is the real multi-host acceptance run plus
+clearing unrelated compile blockers outside the hosted-runtime slice.
 
 - shipped in:
   - `/Users/takemiyamakoto/dev/iroha/crates/iroha_data_model/src/soracloud.rs`
@@ -96,12 +99,20 @@ validation on real hosts rather than additional repository implementation work.
   - `npm run test:unit -- tests/soracloudTonIndexerManifest.test.ts tests/soracloudTonIndexerBundle.test.ts`
   - `CARGO_TARGET_DIR=/tmp/iroha-portable-check cargo check -p irohad --bin irohad --message-format short`
   - fresh-target exact-test builds completed for:
-    - `CARGO_TARGET_DIR=/tmp/iroha-verify-irohad cargo test -p irohad --bin irohad build_inrou_user_data_projects_virtio9p_mounts_and_allowlist_overlay -- --exact`
+    - `CARGO_TARGET_DIR=/tmp/iroha-verify-irohad cargo test -p irohad --features embedded-soracloud-runtime --bin irohad build_inrou_user_data_projects_virtiofs_mounts_and_allowlist_overlay -- --exact`
     - `CARGO_TARGET_DIR=/tmp/iroha-verify-torii cargo test -p iroha_torii soracloud_hosted_http_topology_section_reports_authoritative_counts -- --exact`
-  - on this macOS host, the compiled libtest binaries then hung during
-    harness startup before printing `--list` output or a final result line, so
-    the closing verification is compile-complete but still missing clean
-    runtime harness output in this environment.
+  - `CARGO_TARGET_DIR=/tmp/iroha-inrou-strict-check cargo check -p irohad --features embedded-soracloud-runtime --bin irohad --message-format short`
+    now reaches the new hosted-runtime path and then stops in an unrelated
+    existing `iroha_sccp` derive failure, so final compile closure is still
+    blocked outside the Inrou slice
+- open work after this slice:
+  - execute `cargo xtask soracloud-inrou-smoke portable` on a real non-Linux
+    validator host with publish-grade guest assets;
+  - execute `cargo xtask soracloud-inrou-smoke firecracker` on a real
+    Linux/KVM host;
+  - run the mixed-host inventory gate against one Firecracker host, one
+    PortableVm host, and one proxy-only validator, and capture the resulting
+    placement-health evidence.
 
 Latest sync (2026-04-14 SCCP proof inspection surfaces now expose bound open-verify metadata):
 the SCCP inspection path now surfaces the bound open-verify envelope metadata

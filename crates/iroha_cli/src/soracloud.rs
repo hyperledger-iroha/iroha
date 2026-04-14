@@ -18023,10 +18023,17 @@ are bundled alongside the app and become available inside the Soracloud bundle
 at `/inrou/*`.
 
 Before deploy, replace the placeholder `ssh_authorized_keys` entry in
-`container_manifest.json` and add a Linux kernel plus Debian rootfs image at:
+`container_manifest.json` and add dual-ISA guest assets at:
 
-- `http-service/inrou/vmlinux`
-- `http-service/inrou/rootfs.ext4`
+- `http-service/inrou/x86_64/vmlinux`
+- `http-service/inrou/x86_64/rootfs.ext4`
+- `http-service/inrou/aarch64/vmlinux`
+- `http-service/inrou/aarch64/rootfs.ext4`
+
+Optional initrd images live at:
+
+- `http-service/inrou/x86_64/initrd.img`
+- `http-service/inrou/aarch64/initrd.img`
 
 ## Build + sync manifests
 
@@ -18115,13 +18122,18 @@ fn http_service_inrou_assets_readme() -> String {
 
 Place the boot assets for this hosted HTTP service here before deploy:
 
-- `vmlinux`: Linux kernel image used by Firecracker
-- `rootfs.ext4`: Debian slim guest root filesystem image
+- `x86_64/vmlinux`: Linux kernel image for native `x86_64` guests
+- `x86_64/rootfs.ext4`: Debian slim guest root filesystem image for `x86_64`
+- `aarch64/vmlinux`: Linux kernel image for native `aarch64` guests
+- `aarch64/rootfs.ext4`: Debian slim guest root filesystem image for `aarch64`
+- optional `x86_64/initrd.img` and `aarch64/initrd.img`
 
 The generated container manifest references these bundle paths:
 
-- `/inrou/vmlinux`
-- `/inrou/rootfs.ext4`
+- `/inrou/x86_64/vmlinux`
+- `/inrou/x86_64/rootfs.ext4`
+- `/inrou/aarch64/vmlinux`
+- `/inrou/aarch64/rootfs.ext4`
 
 Replace the placeholder `ssh_authorized_keys` entry in `container_manifest.json`
 with a real public key before admission.

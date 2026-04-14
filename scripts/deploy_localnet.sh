@@ -22,7 +22,7 @@ usage() {
 Usage: deploy_localnet.sh [OPTIONS]
 
 Builds `kagami`, `irohad`, and `iroha`, generates a fresh localnet, starts peers,
-waits for readiness, and optionally registers an asset definition.
+waits for readiness, and verifies the built-in offline-cash asset alias.
 
 Options:
   --iroha-dir <DIR>          Workspace root (default: repo root)
@@ -49,10 +49,11 @@ Options:
   --fast-no-incremental      With --fast, set CARGO_INCREMENTAL=0
   --release                  Build and run release binaries
   --no-build                 Skip cargo build and require prebuilt binaries
-  --no-sample-asset          Do not include kagami's sample asset
-  --asset-id <ID>            Canonical Base58 asset definition id to register (default: 7EAD8EFYUx1aVKZPUU1fyKvr8dF1)
-  --asset-name <NAME>        Asset definition name to register (default: USD)
-  --skip-asset-register      Skip asset definition registration
+  --no-sample-asset          Do not include kagami's extra sample asset
+  --asset-id <ID>            Built-in offline-cash asset id to verify (default: 7EAD8EFYUx1aVKZPUU1fyKvr8dF1)
+  --asset-name <NAME>        Built-in offline-cash asset name to verify (default: usd)
+  --asset-alias <ALIAS>      Built-in offline-cash alias to verify (default: usd#wonderland)
+  --skip-asset-check         Skip built-in offline-cash verification
   --telemetry-profile <NAME> Set telemetry_profile in generated peer configs (e.g., extended)
   --timeout <SECS>           Seconds to wait for readiness (default: 30)
   --force                    Remove existing out-dir before regenerating
@@ -98,8 +99,9 @@ PUBLIC_HOST="127.0.0.1"
 PROFILE="debug"
 SAMPLE_ASSET=true
 ASSET_ID="7EAD8EFYUx1aVKZPUU1fyKvr8dF1"
-ASSET_NAME="USD"
-SKIP_ASSET_REGISTER=false
+ASSET_NAME="usd"
+ASSET_ALIAS="usd#wonderland"
+SKIP_ASSET_CHECK=false
 TELEMETRY_PROFILE=""
 TIMEOUT_SECS=30
 FORCE=false
@@ -237,8 +239,12 @@ while [[ $# -gt 0 ]]; do
       ASSET_NAME="$2"
       shift 2
       ;;
-    --skip-asset-register)
-      SKIP_ASSET_REGISTER=true
+    --asset-alias)
+      ASSET_ALIAS="$2"
+      shift 2
+      ;;
+    --skip-asset-check|--skip-asset-register)
+      SKIP_ASSET_CHECK=true
       shift
       ;;
     --telemetry-profile)
@@ -421,14 +427,20 @@ cd "$IROHA_DIR"
 if [[ "$SKIP_TOOL_BUILD" == "true" ]]; then
   echo "Skipping Iroha tool build; using existing binaries."
 elif [[ "$PROFILE" == "release" ]]; then
-  "${cargo_runner[@]}" -- build --release --bin kagami --bin irohad --bin iroha
+  "${cargo_runner[@]}" build --release --bin kagami --bin irohad --bin iroha
 else
-  "${cargo_runner[@]}" -- build --bin kagami --bin irohad --bin iroha
+  "${cargo_runner[@]}" build --bin kagami --bin irohad --bin iroha
 fi
 
 KAGAMI_BIN="${KAGAMI_BIN:-"$TARGET_DIR/$PROFILE/kagami"}"
 IROHAD_BIN="${IROHAD_BIN:-"$TARGET_DIR/$PROFILE/irohad"}"
 CLI_BIN="${IROHA_CLI_BIN:-"$TARGET_DIR/$PROFILE/iroha"}"
+for bin_path in "$KAGAMI_BIN" "$IROHAD_BIN" "$CLI_BIN"; do
+  if [[ ! -x "$bin_path" ]]; then
+    echo "Required binary is missing or not executable: $bin_path" >&2
+    exit 1
+  fi
+done
 
 echo "Generating localnet in $OUT_DIR..."
 KAGAMI_ARGS=(
@@ -782,12 +794,42 @@ else
 fi
 
 CFG="$OUT_DIR/client.toml"
-if [[ "$SKIP_ASSET_REGISTER" != true ]]; then
+if [[ "$SKIP_ASSET_CHECK" != true ]]; then
   echo ""
-  echo "Registering asset definition $ASSET_ID..."
-  "$CLI_BIN" --config "$CFG" asset definition register --id "$ASSET_ID" --name "$ASSET_NAME" --scale 0
+  echo "Verifying built-in offline-cash alias $ASSET_ALIAS..."
+  asset_alias_request="$(printf '{\"alias\":\"%s\"}' "$ASSET_ALIAS")"
+  asset_alias_response="$(
+    curl -sf --connect-timeout "$CURL_TIMEOUT_SECS" --max-time "$CURL_TIMEOUT_SECS" \
+      -H "Content-Type: application/json" \
+      -d "$asset_alias_request" \
+      "http://$PUBLIC_HOST_URL:$BASE_API_PORT/v1/assets/aliases/resolve"
+  )" || {
+    echo "Failed to resolve built-in offline-cash alias $ASSET_ALIAS." >&2
+    exit 1
+  }
+  ASSET_ALIAS_RESPONSE="$asset_alias_response" \
+  "$PYTHON_BIN" - "$ASSET_ID" "$ASSET_NAME" "$ASSET_ALIAS" <<'PY'
+import json
+import os
+import sys
+
+expected_id, expected_name, expected_alias = sys.argv[1:4]
+payload = json.loads(os.environ["ASSET_ALIAS_RESPONSE"])
+actual_id = payload.get("asset_definition_id")
+actual_name = payload.get("asset_name")
+actual_alias = payload.get("alias")
+if actual_id != expected_id:
+    raise SystemExit(f"expected asset_definition_id {expected_id}, got {actual_id}")
+if actual_name != expected_name:
+    raise SystemExit(f"expected asset_name {expected_name}, got {actual_name}")
+if actual_alias != expected_alias:
+    raise SystemExit(f"expected alias {expected_alias}, got {actual_alias}")
+PY
 fi
 
 echo ""
 echo "Iroha localnet is running in $OUT_DIR."
+echo "CLI binary: $CLI_BIN"
+echo "Client config: $CFG"
+echo "Built-in offline cash: $ASSET_NAME ($ASSET_ID) alias $ASSET_ALIAS"
 echo "To stop: cd $OUT_DIR && ./stop.sh"

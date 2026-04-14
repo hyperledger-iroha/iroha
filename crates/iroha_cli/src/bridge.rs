@@ -179,11 +179,12 @@ fn render_sccp_capabilities_summary(capabilities: &SccpCapabilities) -> String {
         .iter()
         .map(|counterparty| {
             format!(
-                "{}({}:{}:{}:{})",
+                "{}({}:{}:{}:{}:{})",
                 counterparty.chain,
                 counterparty.domain,
                 counterparty.counterparty_account_codec_key,
                 counterparty.verifier_backend.key.as_str(),
+                render_sccp_destination_rollout_summary(&counterparty.destination_rollout),
                 if counterparty.production_ready {
                     "ready"
                 } else {
@@ -217,7 +218,7 @@ fn render_sccp_manifests_summary(manifests: &SccpProofManifestSet) -> String {
     )];
     lines.extend(manifests.manifests.iter().map(|manifest| {
         format!(
-            "chain={} domain={} backend={} verifier_backend={} registry={} security={:?} anchors={:?} binding={} finality={:?} verifier={:?} codec={} ready={} submit={}",
+            "chain={} domain={} backend={} verifier_backend={} registry={} security={:?} anchors={:?} binding={} finality={:?} verifier={:?} codec={} rollout={} ready={} submit={}",
             manifest.chain,
             manifest.counterparty_domain,
             manifest.message_backend,
@@ -229,11 +230,21 @@ fn render_sccp_manifests_summary(manifests: &SccpProofManifestSet) -> String {
             manifest.finality_model,
             manifest.verifier_target,
             manifest.counterparty_account_codec_key,
+            render_sccp_destination_rollout_summary(&manifest.destination_rollout),
             manifest.production_ready,
             render_sccp_submission_template_summary(&manifest.submission_template)
         )
     }));
     lines.join("\n")
+}
+
+fn render_sccp_destination_rollout_summary(
+    rollout: &iroha_sccp::SccpDestinationRolloutV1,
+) -> String {
+    format!(
+        "{:?}/verifier_live={}/anchors_live={}",
+        rollout.verifier_plan, rollout.immutable_verifier_ready, rollout.anchors_ready
+    )
 }
 
 fn render_sccp_artifact_summary(
@@ -666,9 +677,17 @@ mod tests {
                     registry_backend: "bridge/sccp/registry-v1/ton".to_owned(),
                     counterparty_account_codec: iroha_sccp::SCCP_CODEC_TON_RAW,
                     counterparty_account_codec_key: "ton_raw".to_owned(),
+                    destination_rollout: iroha_sccp::sccp_destination_rollout_for_domain(
+                        iroha_sccp::SCCP_DOMAIN_TON,
+                    )
+                    .expect("ton destination rollout"),
                     production_ready: false,
                     disabled_reason: Some(
-                        iroha_sccp::SCCP_PRODUCTION_DISABLED_REASON_V1.to_owned(),
+                        iroha_sccp::sccp_lane_disabled_reason_for_domain(
+                            iroha_sccp::SCCP_DOMAIN_TON,
+                        )
+                        .expect("ton disabled reason")
+                        .to_owned(),
                     ),
                 },
                 SccpCounterpartyCapability {
@@ -682,9 +701,17 @@ mod tests {
                     registry_backend: "bridge/sccp/registry-v1/eth".to_owned(),
                     counterparty_account_codec: iroha_sccp::SCCP_CODEC_EVM_HEX,
                     counterparty_account_codec_key: "evm_hex".to_owned(),
+                    destination_rollout: iroha_sccp::sccp_destination_rollout_for_domain(
+                        iroha_sccp::SCCP_DOMAIN_ETH,
+                    )
+                    .expect("eth destination rollout"),
                     production_ready: false,
                     disabled_reason: Some(
-                        iroha_sccp::SCCP_PRODUCTION_DISABLED_REASON_V1.to_owned(),
+                        iroha_sccp::sccp_lane_disabled_reason_for_domain(
+                            iroha_sccp::SCCP_DOMAIN_ETH,
+                        )
+                        .expect("eth disabled reason")
+                        .to_owned(),
                     ),
                 },
             ],
